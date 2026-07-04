@@ -1,0 +1,66 @@
+.pairing-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 4px 0;
+}
+
+.pairing-title {
+  margin: 0;
+  font-size: 1.1rem;
+  color: var(--aura-charcoal);
+}
+
+.pairing-hint {
+  margin: 0;
+  font-size: 0.85rem;
+  color: rgba(39, 38, 34, 0.6);
+}
+
+.pairing-code-input {
+  font-size: 1.4rem;
+  letter-spacing: 0.15em;
+  text-align: center;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(39, 38, 34, 0.2);
+  background: #fff;
+  color: var(--aura-charcoal);
+}
+
+.pairing-device-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.8rem;
+  color: rgba(39, 38, 34, 0.7);
+}
+
+.pairing-device-input {
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(39, 38, 34, 0.2);
+  background: #fff;
+  color: var(--aura-charcoal);
+}
+
+.pairing-error {
+  margin: 0;
+  color: #b3261e;
+  font-size: 0.85rem;
+}
+
+.pairing-screen button {
+  padding: 10px;
+  border-radius: 8px;
+  border: none;
+  background: var(--aura-accent);
+  color: #fff;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pairing-screen button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
