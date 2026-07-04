@@ -1,24 +1,29 @@
 import { invoke } from "@tauri-apps/api/core";
 import { fetch } from "@tauri-apps/plugin-http";
+import { hostname } from "@tauri-apps/plugin-os";
 import { auth } from "./firebase";
 import { logError } from "./log";
+import { pairingCodeLength, pairingErrorCopy } from "./pairingCopy";
+import { rawPairingCode } from "./pairingCodeFormat";
 
 export const API_BASE_URL = "https://juno-backend-620715294422.us-central1.run.app";
 
+const CLAIM_TIMEOUT_MS = 15_000;
+
 /** Thrown when an authenticated call has no session, or the backend rejects
- * the ID token — callers must route back to the pairing screen, not retry. */
+ * the ID token; callers must route back to the sign-in form, not retry. */
 export class AuthRequiredError extends Error {}
 
 /**
  * Per the auth contract: a missing/expired session at any authenticated call
- * routes back to the pairing screen rather than failing silently.
+ * routes back to the sign-in form rather than failing silently.
  */
 export async function routeToDashboardForExpiredSession(): Promise<void> {
   await invoke("set_session_cached", { hasSession: false }).catch((err) =>
     logError("routeToDashboardForExpiredSession: set_session_cached", err),
   );
-  await invoke("switch_mode", { mode: "dashboard" }).catch((err) =>
-    logError("routeToDashboardForExpiredSession: switch_mode", err),
+  await invoke("summon").catch((err) =>
+    logError("routeToDashboardForExpiredSession: summon", err),
   );
 }
 
@@ -51,7 +56,7 @@ export async function authFetch(
   return response;
 }
 
-export type PairingErrorKind = "network" | "invalid_or_expired";
+export type PairingErrorKind = "bad_length" | "network" | "invalid_or_expired" | "timeout" | "other";
 
 export class PairingError extends Error {
   kind: PairingErrorKind;
@@ -63,34 +68,52 @@ export class PairingError extends Error {
 }
 
 /**
- * Claims an 8-char pairing code shown on the phone. Never surfaces why a code
- * failed (expired vs. wrong vs. already claimed) — only that it did.
+ * Claims an 8-char pairing code shown on the phone. The device name is sent
+ * silently from the OS hostname (no user-editable field, matching the
+ * source app) - never surfaces why a code failed (expired vs. wrong vs.
+ * already claimed), only that it did.
  */
-export async function claimPairingCode(
-  code: string,
-  deviceName: string,
-): Promise<string> {
+export async function claimPairingCode(code: string): Promise<string> {
+  const raw = rawPairingCode(code);
+  if (raw.length !== pairingCodeLength) {
+    throw new PairingError("bad_length", pairingErrorCopy.badLength);
+  }
+
+  const deviceName = await hostname().catch((err) => {
+    logError("claimPairingCode: hostname", err);
+    return null;
+  });
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), CLAIM_TIMEOUT_MS);
+
   let response: Response;
   try {
     response = await fetch(`${API_BASE_URL}/devices/pair/claim`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code, device_name: deviceName }),
+      body: JSON.stringify({ code: raw, device_name: deviceName ?? "" }),
+      signal: controller.signal,
     });
-  } catch {
-    throw new PairingError(
-      "network",
-      "Couldn't reach Aura. Check your connection and try again.",
-    );
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new PairingError("timeout", pairingErrorCopy.timeout);
+    }
+    throw new PairingError("network", pairingErrorCopy.network);
+  } finally {
+    clearTimeout(timeoutId);
   }
 
+  if (response.status === 400) {
+    throw new PairingError("invalid_or_expired", pairingErrorCopy.invalidOrExpired);
+  }
   if (!response.ok) {
-    throw new PairingError(
-      "invalid_or_expired",
-      "That code is expired or wrong. Try again.",
-    );
+    throw new PairingError("other", pairingErrorCopy.otherFailure);
   }
 
-  const data = (await response.json()) as { custom_token: string };
+  const data = (await response.json()) as { custom_token?: string };
+  if (!data.custom_token) {
+    throw new PairingError("other", pairingErrorCopy.otherFailure);
+  }
   return data.custom_token;
 }

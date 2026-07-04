@@ -1,0 +1,112 @@
+.onboarding-flow {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  width: 100%;
+}
+
+.onboarding-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+  max-width: 460px;
+}
+
+.onboarding-step-get-app {
+  flex-direction: row;
+  align-items: flex-start;
+  text-align: left;
+  gap: 20px;
+}
+
+.onboarding-qr-card {
+  flex-shrink: 0;
+  padding: 8px;
+  border-radius: 20px;
+  background: #fff;
+}
+
+.onboarding-get-app-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+}
+
+.onboarding-heading {
+  margin: 0;
+  font-family: var(--font-title);
+  font-weight: 600;
+  font-size: 20px;
+  color: var(--glass-text-bright);
+}
+
+.onboarding-body {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: 14px;
+  color: var(--glass-text-dim);
+}
+
+.onboarding-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--glass-text-dim);
+}
+
+.onboarding-primary-button {
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 14px;
+  padding: 12px 28px;
+  border-radius: var(--button-radius);
+  border: none;
+  background: var(--glass-accent);
+  color: #0a0a0a;
+  cursor: pointer;
+}
+
+.onboarding-link-button {
+  background: none;
+  border: none;
+  font-size: 12px;
+  color: var(--glass-text-dim);
+  cursor: pointer;
+  padding: 4px;
+}
+
+.onboarding-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.onboarding-progress-dots {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: var(--pill-nav-radius);
+  background: var(--glass-field-fill);
+}
+
+.onboarding-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  border: none;
+  padding: 0;
+  background: var(--glass-border-flat);
+  cursor: pointer;
+}
+
+.onboarding-dot-active {
+  background: var(--glass-accent);
+}
+
+.onboarding-new-here {
+  font-size: 11px;
+}

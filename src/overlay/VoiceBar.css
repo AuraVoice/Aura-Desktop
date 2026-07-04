@@ -1,0 +1,87 @@
+.voice-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+  padding: 0 16px;
+  box-sizing: border-box;
+}
+
+.voice-bar-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  flex-shrink: 0;
+}
+
+.voice-bar-caption {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: var(--glass-text-bright);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.voice-bar-caption-error {
+  color: var(--glass-danger);
+}
+
+.voice-bar-divider {
+  width: 1px;
+  height: 18px;
+  background: var(--glass-border-flat);
+  flex-shrink: 0;
+}
+
+.voice-bar-confirm {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 100%;
+  padding: 0 16px;
+  box-sizing: border-box;
+}
+
+.voice-bar-confirm-text {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-body);
+  font-size: 12px;
+  color: var(--glass-text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.voice-bar-confirm-cancel,
+.voice-bar-confirm-signout {
+  flex-shrink: 0;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 8px 16px;
+  border-radius: var(--button-radius);
+  border: none;
+  cursor: pointer;
+}
+
+.voice-bar-confirm-cancel {
+  background: var(--glass-field-fill);
+  color: var(--glass-text-bright);
+}
+
+.voice-bar-confirm-signout {
+  background: var(--glass-danger);
+  color: #1a0d0a;
+}
+
+.voice-bar-confirm-cancel:disabled,
+.voice-bar-confirm-signout:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

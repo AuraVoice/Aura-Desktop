@@ -14,8 +14,8 @@
       {
         "label": "main",
         "title": "Aura Desktop",
-        "width": 250,
-        "height": 250,
+        "width": 560,
+        "height": 400,
         "decorations": false,
         "transparent": true,
         "shadow": false,

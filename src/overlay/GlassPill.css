@@ -1,0 +1,45 @@
+.glass-pill {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 100%;
+  padding: 0 12px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  box-sizing: border-box;
+}
+
+.glass-pill-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.glass-pill-caption {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: var(--glass-text-bright);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.glass-pill-sight-indicator {
+  flex-shrink: 0;
+  display: inline-flex;
+  color: var(--glass-accent-lerp-white);
+  filter: drop-shadow(0 0 4px var(--glass-accent-glow));
+}
+
+.glass-pill-sight-indicator svg {
+  width: 14px;
+  height: 14px;
+}

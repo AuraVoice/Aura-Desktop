@@ -1,0 +1,32 @@
+.glass-surface {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  border-radius: var(--glass-corner-radius);
+  background:
+    linear-gradient(to bottom, var(--glass-sheen), transparent 25%),
+    var(--glass-surface-fill);
+  color: var(--glass-text-bright);
+  text-shadow: var(--glass-text-shadow);
+  overflow: hidden;
+  box-sizing: border-box;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Gradient-stroke border (top brighter than bottom) via a masked ring, since
+   a plain CSS `border` can't render a gradient stroke directly. */
+.glass-surface::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(to bottom, var(--glass-border-top), var(--glass-border-bottom));
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
