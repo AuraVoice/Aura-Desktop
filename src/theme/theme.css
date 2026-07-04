@@ -1,0 +1,34 @@
+/* Design tokens ported verbatim from the Flutter app's DesktopGlassColors
+   (lib/core/theme/desktop_glass_theme.dart) and AppColors
+   (lib/core/theme/app_colors.dart). Values are the source of truth; don't
+   "round" or "simplify" them without re-checking the Flutter source. */
+:root {
+  --glass-surface-fill: rgba(16, 16, 20, 0.85); /* #101014 @ 0xD9 */
+  --glass-sheen: rgba(255, 255, 255, 0.08); /* 0x14 */
+  --glass-border-top: rgba(255, 255, 255, 0.22); /* 0x38 */
+  --glass-border-bottom: rgba(255, 255, 255, 0.09); /* 0x16 */
+  --glass-border-flat: rgba(255, 255, 255, 0.19); /* 0x30 - small elements/chips/fields */
+  --glass-field-fill: rgba(255, 255, 255, 0.08); /* 0x14 */
+  --glass-text-bright: rgba(255, 255, 255, 0.97); /* 0xF7 */
+  --glass-text-dim: rgba(255, 255, 255, 0.66); /* 0xA8 */
+  --glass-icon-idle: rgba(255, 255, 255, 0.76); /* 0xC2 */
+  --glass-danger: #ff8a75;
+  --glass-tooltip-bg: rgba(28, 28, 34, 0.92); /* 0xEB */
+  --glass-text-shadow: 0 1px 8px rgba(0, 0, 0, 0.4);
+  --glass-corner-radius: 60px;
+
+  --glass-accent: #1ec8b0; /* AppColors.accentBase - matches the old --aura-accent */
+  --glass-accent-lerp-white: #74ddce; /* Color.lerp(accentBase, white, 0.38), used on the dark overlay */
+  --glass-accent-glow: rgba(116, 221, 206, 0.7);
+
+  --field-radius: 20px; /* input fields, QR card */
+  --chip-radius: 10px; /* keycap hint chips */
+  --pill-nav-radius: 12px; /* progress-dots container, tooltip */
+  --button-radius: 999px; /* StadiumBorder -> fully rounded */
+
+  --font-title: "Outfit", sans-serif;
+  --font-body: "PlusJakartaSans", sans-serif;
+  --font-mono: "GeistMono", monospace;
+
+  color-scheme: dark;
+}

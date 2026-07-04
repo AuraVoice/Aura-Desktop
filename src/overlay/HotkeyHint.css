@@ -1,0 +1,29 @@
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hotkey-hint-keys {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* Deliberately a near-invisible "clear glass" chip, not a raised/embossed
+   key: near-invisible fill + a thin bright hairline edge only. */
+.hotkey-keycap {
+  padding: 3px 7px;
+  background: var(--glass-field-fill);
+  border-radius: var(--chip-radius);
+  border: 1px solid var(--glass-border-top);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 1.2;
+  color: var(--glass-text-bright);
+}
+
+.hotkey-hint-action {
+  font-size: 11px;
+  color: var(--glass-text-dim);
+}

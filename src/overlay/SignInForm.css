@@ -1,0 +1,120 @@
+.sign-in-form {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.sign-in-fields {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+
+.sign-in-prompt {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: var(--glass-text-dim);
+  text-align: center;
+}
+
+.sign-in-code-input {
+  width: 220px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 22px;
+  letter-spacing: 4px;
+  padding: 10px 14px;
+  border-radius: var(--field-radius);
+  border: 1px solid var(--glass-border-flat);
+  background: var(--glass-field-fill);
+  color: var(--glass-text-bright);
+}
+
+.sign-in-email-input,
+.sign-in-password-input {
+  width: 300px;
+  font-family: var(--font-body);
+  font-size: 14px;
+  padding: 10px 14px;
+  border-radius: var(--field-radius);
+  border: 1px solid var(--glass-border-flat);
+  background: var(--glass-field-fill);
+  color: var(--glass-text-bright);
+}
+
+.sign-in-code-input::placeholder,
+.sign-in-email-input::placeholder,
+.sign-in-password-input::placeholder {
+  color: var(--glass-text-dim);
+}
+
+.sign-in-code-input:focus,
+.sign-in-email-input:focus,
+.sign-in-password-input:focus {
+  outline: none;
+  border-color: var(--glass-accent-lerp-white);
+}
+
+.sign-in-error {
+  margin: 0;
+  font-size: 12px;
+  color: var(--glass-danger);
+  text-align: center;
+}
+
+.sign-in-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.sign-in-submit {
+  font-family: var(--font-body);
+  font-weight: 600;
+  font-size: 14px;
+  padding: 12px 28px;
+  border-radius: var(--button-radius);
+  border: none;
+  background: var(--glass-accent);
+  color: #0a0a0a;
+  cursor: pointer;
+}
+
+.sign-in-submit:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.sign-in-mode-toggle {
+  background: none;
+  border: none;
+  font-size: 12px;
+  color: var(--glass-text-dim);
+  cursor: pointer;
+  padding: 4px;
+}
+
+.sign-in-legal {
+  display: flex;
+  align-items: center;
+}
+
+.sign-in-legal-link {
+  background: none;
+  border: none;
+  font-size: 11px;
+  color: var(--glass-text-dim);
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.sign-in-legal-separator {
+  font-size: 11px;
+  color: var(--glass-text-dim);
+  margin: 0 4px;
+}

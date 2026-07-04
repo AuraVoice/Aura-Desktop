@@ -1,13 +1,7 @@
-import {
-  createContext,
-  useContext,
-  useEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
-import { onAuthStateChanged, type User } from "firebase/auth";
+import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
+import { onAuthStateChanged, signOut, type User } from "firebase/auth";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { auth } from "../lib/firebase";
 import { logError } from "../lib/log";
 
@@ -24,35 +18,20 @@ const AuthContext = createContext<AuthContextValue>({
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [initializing, setInitializing] = useState(true);
-  const previousUserRef = useRef<User | null>(null);
-  const hasResolvedInitialRef = useRef(false);
 
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (nextUser) => {
-      invoke("set_session_cached", { hasSession: nextUser !== null }).catch(
-        (err) => logError("AuthProvider: set_session_cached", err),
+      invoke("set_session_cached", { hasSession: nextUser !== null }).catch((err) =>
+        logError("AuthProvider: set_session_cached", err),
+      );
+      // Setup/Bar is a pure mirror of live auth state now (OverlayRoot's own
+      // content decision already reads useAuth() directly) - this only
+      // drives Rust's window sizing, so it's safe to push unconditionally on
+      // every callback, including the first, unlike the old two-mode design.
+      invoke("set_panel_variant", { variant: nextUser ? "bar" : "setup" }).catch((err) =>
+        logError("AuthProvider: set_panel_variant", err),
       );
 
-      // Only force a mode transition on an actual sign-in/sign-out edge, not
-      // on the initial state resolution — a cold start with a valid cached
-      // session is already showing avatar mode via Rust's own startup check,
-      // and forcing it again here would fight an explicitly-opened dashboard.
-      if (hasResolvedInitialRef.current) {
-        const wasSignedIn = previousUserRef.current !== null;
-        const isSignedIn = nextUser !== null;
-        if (wasSignedIn && !isSignedIn) {
-          invoke("switch_mode", { mode: "dashboard" }).catch((err) =>
-            logError("AuthProvider: switch_mode(dashboard)", err),
-          );
-        } else if (!wasSignedIn && isSignedIn) {
-          invoke("switch_mode", { mode: "avatar" }).catch((err) =>
-            logError("AuthProvider: switch_mode(avatar)", err),
-          );
-        }
-      }
-
-      previousUserRef.current = nextUser;
-      hasResolvedInitialRef.current = true;
       setUser(nextUser);
       setInitializing(false);
     });
@@ -60,11 +39,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return unsubscribe;
   }, []);
 
-  return (
-    <AuthContext.Provider value={{ user, initializing }}>
-      {children}
-    </AuthContext.Provider>
-  );
+  // Ctrl+Shift+D: sign out immediately, bypassing VoiceBar's usual confirm step.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen("sign-out-requested", () => {
+      signOut(auth).catch((err) => logError("AuthProvider: sign-out-requested", err));
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch((err) => logError("AuthProvider: listen sign-out-requested", err));
+    return () => unlisten?.();
+  }, []);
+
+  return <AuthContext.Provider value={{ user, initializing }}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth() {

@@ -1,0 +1,40 @@
+.bar-icon-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: transparent;
+  color: var(--glass-icon-idle);
+  opacity: 0.8;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: opacity 0.12s ease;
+}
+
+.bar-icon-button:hover {
+  background: var(--glass-field-fill);
+  opacity: 1;
+}
+
+.bar-icon-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.bar-icon-button-active {
+  color: var(--glass-accent-lerp-white);
+  opacity: 1;
+}
+
+.bar-icon-button-danger {
+  color: var(--glass-danger);
+  opacity: 1;
+}
+
+.bar-icon-button svg {
+  width: 18px;
+  height: 18px;
+}

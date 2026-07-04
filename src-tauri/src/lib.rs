@@ -1,36 +1,84 @@
 mod auth_cache;
 mod hotkeys;
 mod logging;
+mod overlay;
 mod screenshot;
 mod tray;
 mod updater;
-mod window_mode;
+mod win_focus;
 
 use log::error;
-use tauri::{AppHandle, Manager, State, WindowEvent};
+use tauri::{AppHandle, Manager, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
-use window_mode::{ModeState, WindowMode};
 
-/// Lets the frontend pull the authoritative current mode on mount, in case it
-/// missed the `mode-changed` event emitted during Rust-side startup.
+use overlay::{OnboardingStep, OverlaySnapshot, OverlayStateHandle, PanelVariant};
+
 #[tauri::command]
-fn current_mode(state: State<ModeState>) -> WindowMode {
-    *state.0.lock().unwrap()
+fn current_overlay_state(app: AppHandle) -> OverlaySnapshot {
+    overlay::snapshot(&app)
 }
 
-/// Lets the frontend drive an explicit mode transition (e.g. after a
-/// successful pairing, or when an authenticated call finds the session gone).
 #[tauri::command]
-fn switch_mode(app: AppHandle, mode: WindowMode) {
-    window_mode::apply_mode(&app, mode);
+fn esc_pressed(app: AppHandle) {
+    overlay::esc_pressed(&app);
 }
 
-/// Mirrors the frontend's Firebase auth state into Rust so the next hotkey
-/// press or cold start can decide avatar-vs-dashboard without waiting on the
-/// webview.
+#[tauri::command]
+fn set_voice_active(app: AppHandle, active: bool) {
+    overlay::set_voice_active(&app, active);
+}
+
+#[tauri::command]
+fn set_panel_variant(app: AppHandle, variant: PanelVariant) {
+    overlay::set_panel_variant(&app, variant);
+}
+
+#[tauri::command]
+fn set_onboarding_step(app: AppHandle, step: OnboardingStep) {
+    overlay::set_onboarding_step(&app, step);
+}
+
+#[tauri::command]
+fn pill_activated(app: AppHandle) {
+    overlay::pill_activated(&app);
+}
+
+#[tauri::command]
+fn minimize_to_pill(app: AppHandle) {
+    overlay::minimize_to_pill(&app);
+}
+
 #[tauri::command]
 fn set_session_cached(app: AppHandle, has_session: bool) {
     auth_cache::set_cached_session(&app, has_session);
+}
+
+/// Called when an authenticated request finds the session gone (expired/
+/// revoked token). Rust-side callers (tray, second-instance) call
+/// `overlay::summon` directly; this is the JS-callable equivalent for that
+/// one case where the frontend itself needs to force the panel visible.
+#[tauri::command]
+fn summon(app: AppHandle) {
+    overlay::summon(&app);
+}
+
+#[tauri::command]
+fn point_at(
+    app: AppHandle,
+    target_x: f64,
+    target_y: f64,
+    monitor_x: f64,
+    monitor_y: f64,
+    monitor_w: f64,
+    monitor_h: f64,
+    label: String,
+) {
+    overlay::point_at(&app, target_x, target_y, monitor_x, monitor_y, monitor_w, monitor_h, &label);
+}
+
+#[tauri::command]
+fn cancel_pointing(app: AppHandle) {
+    overlay::cancel_pointing(&app);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -38,15 +86,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(logging::plugin())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            // Second launch: focus the existing window instead of spawning a duplicate.
-            if let Some(window) = app.get_webview_window("main") {
-                if let Err(e) = window.show() {
-                    error!("single-instance: failed to show window: {e}");
-                }
-                if let Err(e) = window.set_focus() {
-                    error!("single-instance: failed to focus window: {e}");
-                }
-            }
+            overlay::summon(app);
         }))
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -63,34 +103,40 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_http::init())
-        .manage(ModeState::default())
+        .manage(OverlayStateHandle::default())
         .invoke_handler(tauri::generate_handler![
-            current_mode,
-            switch_mode,
+            current_overlay_state,
+            esc_pressed,
+            set_voice_active,
+            set_panel_variant,
+            set_onboarding_step,
+            pill_activated,
+            minimize_to_pill,
             set_session_cached,
-            screenshot::capture_screenshot
+            summon,
+            point_at,
+            cancel_pointing,
+            screenshot::capture_cursor_display_with_geometry
         ])
         .setup(|app| {
             logging::install_panic_hook();
 
             let handle = app.handle().clone();
-            app.global_shortcut()
-                .register(hotkeys::smart_toggle_shortcut())?;
-            app.global_shortcut()
-                .register(hotkeys::open_dashboard_shortcut())?;
+            app.global_shortcut().register(hotkeys::summon_shortcut())?;
+            app.global_shortcut().register(hotkeys::sign_out_shortcut())?;
+            app.global_shortcut().register(hotkeys::screen_sight_shortcut())?;
 
             tray::build(app.handle())?;
 
             if let Some(window) = app.get_webview_window("main") {
+                let moved_handle = handle.clone();
                 window.on_window_event(move |event| {
                     if let WindowEvent::Moved(position) = event {
-                        if let Some(win) = handle.get_webview_window("main") {
+                        if let Some(win) = moved_handle.get_webview_window("main") {
                             match win.scale_factor() {
                                 Ok(scale) => {
                                     let logical = position.to_logical::<f64>(scale);
-                                    window_mode::persist_avatar_position_if_avatar(
-                                        &handle, logical.x, logical.y,
-                                    );
+                                    overlay::capture_user_position(&moved_handle, logical.x, logical.y);
                                 }
                                 Err(e) => error!("failed to read window scale factor: {e}"),
                             }
@@ -99,8 +145,18 @@ pub fn run() {
                 });
             }
 
-            let startup_mode = window_mode::resolve_startup_mode(app.handle());
-            window_mode::apply_mode(app.handle(), startup_mode);
+            // Pre-seed panel_variant from the last-known auth state so the
+            // very first summon sizes/shows the right panel immediately,
+            // rather than booting into Setup and flashing to Bar a frame
+            // later once the webview's own auth listener resolves.
+            let initial_variant = if auth_cache::has_cached_session(app.handle()) {
+                PanelVariant::Bar
+            } else {
+                PanelVariant::Setup
+            };
+            overlay::load_persisted_center(app.handle());
+            overlay::set_panel_variant(app.handle(), initial_variant);
+            overlay::summon(app.handle());
 
             let updater_handle = app.handle().clone();
             tauri::async_runtime::spawn(updater::check_for_updates(updater_handle));

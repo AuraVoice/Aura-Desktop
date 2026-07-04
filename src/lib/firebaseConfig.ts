@@ -1,5 +1,5 @@
 // Copied from the `windows` FirebaseOptions block in the sibling Aura
-// (Flutter) project's lib/firebase_options.dart — Flutter's Windows target
+// (Flutter) project's lib/firebase_options.dart. Flutter's Windows target
 // uses the Web SDK config too, so the same values apply here.
 export const firebaseConfig = {
   apiKey: "AIzaSyDrA4TpUuZpIcLq9vkuU_V89dGWmzROznM",

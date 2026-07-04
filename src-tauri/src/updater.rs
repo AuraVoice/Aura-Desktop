@@ -5,7 +5,7 @@ use tauri_plugin_updater::UpdaterExt;
 /// Checks the update feed once at startup and logs every outcome durably.
 /// TODO: once a real update feed/host exists, revisit whether its manifest
 /// format carries a staged/percentage rollout field the client should
-/// respect before installing — the standard Tauri updater protocol has no
+/// respect before installing, since the standard Tauri updater protocol has no
 /// built-in support for that, so it would need custom handling here.
 pub async fn check_for_updates(app: AppHandle) {
     info!("update check: starting");

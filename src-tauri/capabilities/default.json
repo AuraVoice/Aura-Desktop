@@ -5,13 +5,16 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "core:window:allow-start-dragging",
     "opener:default",
     "os:allow-hostname",
     "log:default",
+    "store:default",
     {
       "identifier": "http:default",
       "allow": [
-        { "url": "https://juno-backend-620715294422.us-central1.run.app/*" }
+        { "url": "https://juno-backend-620715294422.us-central1.run.app/*" },
+        { "url": "https://us.i.posthog.com/*" }
       ]
     }
   ]
