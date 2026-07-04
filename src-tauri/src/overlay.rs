@@ -15,7 +15,15 @@ const CENTER_Y_KEY: &str = "overlay_center_y";
 const BAR_WIDTH: f64 = 520.0;
 const BAR_HEIGHT: f64 = 64.0;
 const PILL_WIDTH: f64 = 280.0;
-const PILL_HEIGHT: f64 = 400.0;
+// Canvas height is sized to the model's own aspect ratio (modelHalfWidth /
+// modelHalfHeight = 0.83 / 1.0 in AvatarPill.tsx), not a round number: when
+// frameCamera() there picks max(distanceForHeight, distanceForWidth), any
+// aspect ratio taller than the model's own leaves the non-binding (height)
+// axis with margin to spare, which rendered as dead transparent space
+// between Buddy's feet and the caption below. 280 / 0.83 (canvas) + ~36
+// (caption's own padding + line-height) ~= 374. Keep this in sync with
+// AvatarPill.tsx's modelHalfWidth/modelHalfHeight if either changes.
+const PILL_HEIGHT: f64 = 374.0;
 const SETUP_WIDTH: f64 = 600.0;
 const SETUP_HEIGHT: f64 = 340.0;
 const TOP_MARGIN: f64 = 48.0;
@@ -226,10 +234,19 @@ fn emit_overlay_changed(app: &AppHandle) {
 /// Applies the current state to the real window: resizes/repositions/shows or
 /// hides it, then notifies the frontend. No-ops if presentation/variant are
 /// unchanged from what's already applied.
+///
+/// Never holds the state lock across a `window.*` call below. `set_position`
+/// can synchronously re-enter this same mutex on this same thread (Windows
+/// delivers `WM_MOVE` to the window procedure before `SetWindowPos` returns,
+/// and that's wired to `capture_user_position`, which locks this mutex too) -
+/// `std::sync::Mutex` isn't reentrant, so holding the guard across it
+/// self-deadlocks the thread permanently. Every state read/write here is its
+/// own short-lived lock instead.
 pub fn apply(app: &AppHandle) {
     let (Some(handle), Some(window)) = (state_handle(app), main_window(app)) else {
         return;
     };
+
     let mut state = handle.0.lock().unwrap();
 
     let unchanged = state.applied_presentation == Some(state.presentation)
@@ -239,22 +256,26 @@ pub fn apply(app: &AppHandle) {
     }
 
     if state.presentation == OverlayPresentation::Hidden {
-        if let Err(e) = window.hide() {
-            error!("overlay::apply: failed to hide window: {e}");
-        }
         state.applied_presentation = Some(state.presentation);
         state.applied_variant = Some(state.panel_variant);
         drop(state);
+        if let Err(e) = window.hide() {
+            error!("overlay::apply: failed to hide window: {e}");
+        }
         emit_overlay_changed(app);
         return;
     }
 
+    let presentation = state.presentation;
+    let panel_variant = state.panel_variant;
     let size = size_for(&state);
     let position = position_for(&state, &window, size);
-
     state.applying_bounds = true;
+    drop(state);
+
     let result = window.set_size(size).and_then(|_| window.set_position(position));
-    state.applying_bounds = false;
+
+    handle.0.lock().unwrap().applying_bounds = false;
 
     if let Err(e) = result {
         error!("overlay::apply: failed to resize/reposition window: {e}");
@@ -264,13 +285,24 @@ pub fn apply(app: &AppHandle) {
     if let Err(e) = window.show() {
         error!("overlay::apply: failed to show window: {e}");
     }
-    if state.presentation == OverlayPresentation::Panel {
+    // Belt-and-suspenders alongside cancel_pointing's own reset: apply() is
+    // the sole path back to a normal (non-Pointing) presentation from
+    // anywhere - summon/hotkey/sign-out can all reach here while the window
+    // is still click-through from a point_at() takeover, not just
+    // cancel_pointing's own flow. Never actually a no-op cost since it's
+    // already false in the common case.
+    if let Err(e) = window.set_ignore_cursor_events(false) {
+        error!("overlay::apply: failed to restore cursor events: {e}");
+    }
+    if presentation == OverlayPresentation::Panel {
         win_focus::force_foreground(&window);
     }
 
-    state.applied_presentation = Some(state.presentation);
-    state.applied_variant = Some(state.panel_variant);
-    drop(state);
+    {
+        let mut state = handle.0.lock().unwrap();
+        state.applied_presentation = Some(presentation);
+        state.applied_variant = Some(panel_variant);
+    }
     emit_overlay_changed(app);
 }
 
@@ -451,6 +483,17 @@ pub fn point_at(
     if let Err(e) = result {
         error!("overlay::point_at: failed to take over monitor: {e}");
     }
+
+    // Without this, the frontend's own `presentation` state (only ever
+    // updated by this event) never becomes "pointing", so OverlayRoot never
+    // mounts PointingOverlay - which means its listener for "pointing-target"
+    // below is never attached, and more importantly, the setTimeout inside it
+    // that calls cancel_pointing after TOTAL_HOLD_MS never gets scheduled.
+    // With no other call site for cancel_pointing anywhere in the app, that
+    // left this fullscreen, click-through takeover with no way to ever end -
+    // unclickable (by design, for the flight animation) and unrecoverable via
+    // any hotkey (hotkey_pressed's match has a bare `_ => {}` for Pointing).
+    emit_overlay_changed(app);
 
     // Window-relative: the window now exactly covers the target monitor, so
     // the frontend just needs where within its own bounds to fly to.

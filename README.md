@@ -56,7 +56,7 @@ Rust owns the window: geometry, global hotkeys, tray, and stealing OS focus. Rea
 | `overlay/GlassSurface.tsx` | Shared translucent surface, the whole-window drag region |
 | `overlay/SetupPanel.tsx`, `OnboardingFlow.tsx`, `SignInForm.tsx` | Signed-out flow: welcome → QR code → pairing code or email sign-in |
 | `overlay/VoiceBar.tsx` | Signed-in bar: mic, screen-sight eye, sign-out |
-| `overlay/GlassPill.tsx` | Collapsed "pill" presentation (see note below) |
+| `overlay/AvatarPill.tsx` | Collapsed "pill" presentation: Buddy rendered as a 3D character (three.js, lazy-loaded) with an idle animation, instead of the old text bar |
 | `overlay/PointingOverlay.tsx` | PointerBuddy flight animation (orb → ring → label) |
 | `overlay/useVoiceBar.ts` | LiveKit `Room` lifecycle + call status state machine |
 | `overlay/useScreenSight.ts` | Arm/disarm + capture/stream/point flow |
@@ -78,17 +78,9 @@ stateDiagram-v2
     Panel --> Pointing: point_at (screen-sight "element.point")
     Pointing --> Panel: cancel_pointing (after ~3.4s hold)
 
+    Panel --> Pill: VoiceBar minimize button, call still live (minimize_to_pill)
     Pill --> Panel: click/tap the pill (pill_activated)
     Pill --> Hidden: call ends while collapsed (set_voice_active false)
-
-    note right of Pill
-        The UI supports it (GlassPill.tsx renders
-        it, sizing exists in overlay.rs) but nothing
-        in overlay.rs currently transitions
-        presentation INTO Pill - it's unreachable
-        today. Flag this if you're touching the
-        state machine.
-    end note
 ```
 
 `Panel` also carries a **variant**, `setup` or `bar`, driven by Firebase auth state (`AuthProvider.tsx` calls `set_panel_variant` on every `onAuthStateChanged`, and `lib.rs` pre-seeds it from the cached auth flag at cold start so the first `summon()` sizes the right panel immediately).
@@ -105,6 +97,7 @@ stateDiagram-v2
 | `set_panel_variant` | `variant: "setup" \| "bar"` | Switches panel content + resizes |
 | `set_onboarding_step` | `step: "welcome" \| "getApp" \| "link"` | Tracks onboarding progress in Rust |
 | `pill_activated` | – | Pill → Panel |
+| `minimize_to_pill` | – | Panel → Pill, only while a call is live |
 | `set_session_cached` | `hasSession: bool` | Persists the auth flag used for cold-start panel choice |
 | `summon` | – | Bring the panel to front, or open it |
 | `point_at` | `targetX, targetY, monitorX, monitorY, monitorW, monitorH, label` | Fullscreen click-through takeover for PointerBuddy |
@@ -121,9 +114,30 @@ stateDiagram-v2
 | `screen-sight-hotkey` | – | Ctrl+Alt+S |
 | `pointing-target` | `{ x, y, label }` (window-relative) | `point_at` |
 
-**Over the LiveKit data channel** (backend agent ↔ desktop, JSON, not a Tauri event): `session.ready`, `session.state`, `assistant.text.delta`/`final`, `user.text.delta`/`final`, `error`/`session.error`, `session.ended`, `element.point`.
+**Over the LiveKit data channel** (backend agent → desktop, JSON, not a Tauri event): only
+`error`/`session.error` and `element.point` are ever actually sent - confirmed by grepping every
+`publish_data` call in the backend. Everything else voice state comes from native LiveKit
+primitives, not the data channel - see below.
 
 ## Voice session flow
+
+Join detection, agent state, and captions all ride on native LiveKit signals, not a custom JSON
+protocol - `useVoiceBar.ts` used to wait for backend-sent `session.ready`/`session.state`/
+`assistant.text.*`/`user.text.*` messages that are never actually published (dead code in the
+backend's own `protocol.py`), which is why the join watchdog would eventually fire no matter how
+long the timeout was. The real signals:
+
+- **Agent joined**: `RoomEvent.ParticipantConnected` where `participant.isAgent` - plus an explicit
+  scan of `room.remoteParticipants` right after `connect()` resolves, since that event does not
+  fire retroactively for a participant already in the room (which the agent usually is, having
+  joined within ~1s of the room being created).
+- **Agent state** (listening/thinking/speaking): `RoomEvent.ParticipantAttributesChanged` reading
+  the `lk.agent.state` participant attribute.
+- **Captions**: `RoomEvent.TranscriptionReceived` (LiveKit's native transcription/text-stream
+  feature).
+- **Agent produced real output**: the agent's audio track subscribing (`RoomEvent.TrackSubscribed`,
+  which is also where `track.attach()` happens so it's actually audible) or a transcription
+  segment - either clears the silence watchdog.
 
 ```mermaid
 sequenceDiagram
@@ -142,8 +156,11 @@ sequenceDiagram
     Backend-->>Hook: { token, url, room }
     Hook->>LK: Room.connect(url, token)
     Hook->>LK: setMicrophoneEnabled(true)
+    Note over Hook: status = "ready" (synthesized locally, nothing over the wire signals this)
+    LK-->>Hook: ParticipantConnected (agent, or already present) - clears join watchdog
     loop call is live
-        LK-->>Hook: DataReceived (session.state / assistant.text.delta / ...)
+        LK-->>Hook: ParticipantAttributesChanged (lk.agent.state) -> status
+        LK-->>Hook: TranscriptionReceived -> assistantCaption
         Hook->>Bar: status, assistantCaption
     end
     User->>Bar: click mic again (or Esc / Ctrl+Alt+B)
@@ -152,7 +169,16 @@ sequenceDiagram
     Hook->>Rust: invoke set_voice_active(false)
 ```
 
-Two client-side watchdogs turn a hung/silent call into a visible error instead of an endless spinner: a 30s join timeout (no `session.ready` yet) and a 15s silence timeout (no text deltas), both in `useVoiceBar.ts`. Every transition into the error state is written to the durable app log (room name + code) via `enterErrorState`, so a repeated failure can be cross-referenced against backend/LiveKit logs after the fact.
+Two client-side watchdogs turn a hung/silent call into a visible error instead of an endless
+spinner: a 30s join timeout (no agent participant yet) and a 15s silence timeout (no track/
+transcription activity), both in `useVoiceBar.ts`. Every transition into the error state is
+written to the durable app log (room name + code) via `enterErrorState`, so a repeated failure
+can be cross-referenced against backend/LiveKit logs after the fact. A failed call also
+auto-retries with exponential backoff (2s/4s/8s, 3 attempts, skipped for mic-access errors that
+need the user to fix something in OS settings) before falling back to the manual "tap to retry"
+UI, and every session-lifecycle event (`voice_session_started`, `voice_first_response`,
+`voice_error`, `voice_retry_attempt`/`voice_retry_exhausted`, `voice_session_ended`) is reported to
+PostHog via `src/lib/analytics.ts` - the same project the Flutter app reports to.
 
 ## Screen-sight flow
 
@@ -221,6 +247,17 @@ Fast checks (safe to run without asking):
 cd src-tauri && cargo check   # Rust compiles, no binary produced
 npx tsc --noEmit              # TypeScript type-checks
 ```
+
+### Regenerating the avatar model
+
+`src/assets/models/buddy.glb` (the model `AvatarPill.tsx` loads) is a committed, optimized build artifact, not something edited directly. Its source lives in `Avatars/` at the repo root (gitignored - large FBX/intermediate GLB files, not meant for git). To regenerate after a source change:
+
+1. Convert FBX → GLB with [`FBX2glTF`](https://github.com/facebookincubator/FBX2glTF) (`--binary --pbr-metallic-roughness`) if starting from a raw `.fbx`, or skip straight to step 2 if already GLB with animations merged in.
+2. Optimize with `@gltf-transform/cli`: `gltf-transform optimize <in>.glb buddy.glb --compress draco --texture-size 1024 --texture-compress webp` (add `--simplify false` if the mesh is already decimated - re-simplifying an already-decimated mesh degrades it further for no reason).
+3. Sanity-check with `gltf-transform inspect buddy.glb` before committing - confirm the animation clips you expect are actually present with a real (non-zero) duration, not just a bind pose. A tool's own conversion log isn't proof of this; the last time this ran, `FBX2glTF`'s log line looked fine but the baked "animation" was actually a single static frame.
+4. Copy the result to `src/assets/models/buddy.glb`.
+
+`AvatarPill.tsx` plays whichever clip is named `"Idle"`, falling back to the first clip in the file if none matches.
 
 Config worth knowing about:
 - `src-tauri/tauri.conf.json` - window geometry/decorations, updater endpoint.

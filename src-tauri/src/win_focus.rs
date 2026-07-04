@@ -1,54 +1,91 @@
+use std::thread;
+
 use log::{error, warn};
 use tauri::WebviewWindow;
 use windows::Win32::Foundation::HWND;
-use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
-use windows::Win32::UI::WindowsAndMessaging::{
-    BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId, SetForegroundWindow,
-};
+use windows::Win32::UI::Input::KeyboardAndMouse::{SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_MENU};
+use windows::Win32::UI::WindowsAndMessaging::{BringWindowToTop, SetForegroundWindow};
 
-/// Windows denies a plain `SetForegroundWindow` call while another process
-/// currently owns the foreground - exactly the case every time this overlay
-/// is summoned by a global hotkey. The fix (the same one the Flutter app's
-/// own native window-effects channel uses) is to briefly attach this
-/// process's input queue to the current foreground window's thread, which
-/// grants the foreground-change permission for the duration of the call.
+/// Forces the overlay to the foreground - every summon fights Windows'
+/// restriction that only the process the user is currently working in may
+/// call `SetForegroundWindow` (see the Microsoft Learn remarks on that
+/// function).
+///
+/// This used to attach this process's input queue to the current foreground
+/// window's thread (`AttachThreadInput`) to borrow its permission, the same
+/// trick the Flutter sibling's native window-effects channel used. Don't
+/// reintroduce that: Microsoft's own guidance is that two threads' input
+/// queues should never be attached unless they were designed to cooperate,
+/// because once attached, input handling on one thread can become
+/// synchronous with the other - if the foreground thread is ever slow to
+/// pump its queue, the calling thread can hang waiting on it.
+/// (https://devblogs.microsoft.com/oldnewthing/20080801-00/?p=21393/,
+/// https://aloiskraus.wordpress.com/2018/02/19/the-mysterious-ui-hang-which-resolved-itself-after-20s/)
+/// That's exactly what was freezing this window whenever it was summoned
+/// over another app.
+///
+/// Instead, this taps (and immediately releases) Alt via `SendInput` right
+/// before `SetForegroundWindow` - satisfies the documented "the calling
+/// process received the last input event" exception
+/// (https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow)
+/// without ever sharing an input queue with another process.
+///
+/// The Win32 calls still run on a spawned thread rather than inline: even
+/// though the deadlock above is gone, `SetForegroundWindow` is still a
+/// cross-process OS call with no documented time bound, so it stays off
+/// whatever thread is servicing this window's own message pump.
 pub fn force_foreground(window: &WebviewWindow) {
     let Ok(hwnd) = window.hwnd() else {
         error!("win_focus::force_foreground: failed to get HWND");
         return;
     };
+    // HWND wraps a raw pointer and so isn't Send, but it's an opaque handle
+    // value the OS looks up in its own table - never dereferenced as memory
+    // on our side - so carrying the bare integer across the thread boundary
+    // and reconstructing HWND from it on the other side is sound.
+    let raw = hwnd.0 as isize;
 
-    if try_set_foreground(hwnd) {
-        return;
-    }
-
-    // One retry: the foreground window can change between our first read and
-    // the attach/detach pair below, so a single immediate retry is cheap
-    // insurance rather than assuming the first failure is final.
-    if !try_set_foreground(hwnd) {
-        warn!("win_focus::force_foreground: OS denied foreground focus; Esc is inactive until the panel is clicked");
-    }
+    thread::spawn(move || {
+        let hwnd = HWND(raw as *mut core::ffi::c_void);
+        if !try_set_foreground(hwnd) {
+            warn!("win_focus::force_foreground: OS denied foreground focus; Esc is inactive until the panel is clicked");
+        }
+    });
 }
 
 fn try_set_foreground(hwnd: HWND) -> bool {
+    tap_alt_key();
     unsafe {
-        let foreground = GetForegroundWindow();
-        let current_thread = GetCurrentThreadId();
-        let foreground_thread = GetWindowThreadProcessId(foreground, None);
-
-        let attached = if !foreground.is_invalid() && foreground.0 != hwnd.0 {
-            AttachThreadInput(current_thread, foreground_thread, true).as_bool()
-        } else {
-            false
-        };
-
         let _ = BringWindowToTop(hwnd);
-        let result = SetForegroundWindow(hwnd);
+        SetForegroundWindow(hwnd).as_bool()
+    }
+}
 
-        if attached {
-            let _ = AttachThreadInput(current_thread, foreground_thread, false);
-        }
+/// Synthesizes an Alt key-down immediately followed by a key-up. Never
+/// forwarded anywhere as a real keystroke - `SendInput` only makes it count
+/// as "the last input event", which is all `SetForegroundWindow` checks for.
+fn tap_alt_key() {
+    let mut key_down = INPUT::default();
+    key_down.r#type = INPUT_KEYBOARD;
+    key_down.Anonymous.ki = KEYBDINPUT {
+        wVk: VK_MENU,
+        wScan: 0,
+        dwFlags: Default::default(),
+        time: 0,
+        dwExtraInfo: 0,
+    };
 
-        result.as_bool()
+    let mut key_up = INPUT::default();
+    key_up.r#type = INPUT_KEYBOARD;
+    key_up.Anonymous.ki = KEYBDINPUT {
+        wVk: VK_MENU,
+        wScan: 0,
+        dwFlags: KEYEVENTF_KEYUP,
+        time: 0,
+        dwExtraInfo: 0,
+    };
+
+    unsafe {
+        SendInput(&[key_down, key_up], core::mem::size_of::<INPUT>() as i32);
     }
 }
