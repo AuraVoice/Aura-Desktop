@@ -44,6 +44,11 @@ fn pill_activated(app: AppHandle) {
 }
 
 #[tauri::command]
+fn minimize_to_pill(app: AppHandle) {
+    overlay::minimize_to_pill(&app);
+}
+
+#[tauri::command]
 fn set_session_cached(app: AppHandle, has_session: bool) {
     auth_cache::set_cached_session(&app, has_session);
 }
@@ -106,6 +111,7 @@ pub fn run() {
             set_panel_variant,
             set_onboarding_step,
             pill_activated,
+            minimize_to_pill,
             set_session_cached,
             summon,
             point_at,

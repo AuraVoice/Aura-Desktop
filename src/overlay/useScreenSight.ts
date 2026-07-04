@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Room, RoomEvent } from "livekit-client";
+import { Room, RoomEvent, type Participant, type TranscriptionSegment } from "livekit-client";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { logError } from "../lib/log";
@@ -15,7 +15,7 @@ interface ScreenFrameGeometry {
   jpegHeightPx: number;
 }
 
-interface VoiceServerEvent {
+interface ElementPointEvent {
   type: string;
   payload?: Record<string, unknown>;
 }
@@ -28,6 +28,10 @@ const GEOMETRY_HEADER_LEN = 4 * 7;
 
 function isSessionLive(status: VoiceSessionStatus): boolean {
   return status === "ready" || status === "listening" || status === "processing" || status === "speaking";
+}
+
+function isTerminalStatus(status: VoiceSessionStatus): boolean {
+  return status === "disconnected" || status === "ended" || status === "error";
 }
 
 function parseCapturedFrame(buffer: ArrayBuffer): { geometry: ScreenFrameGeometry; bytes: Uint8Array } {
@@ -63,11 +67,14 @@ function screenPointFor(geometry: ScreenFrameGeometry, jpegX: number, jpegY: num
 /**
  * Push-to-look, never ambient: the user arms this per session (hotkey or eye
  * button), one frame goes out on arm and one at the start of each spoken
- * turn. Direct port of `screen_sight_service.dart`.
+ * turn. Direct port of `screen_sight_service.dart`, translated onto the real
+ * LiveKit signals it actually listens to (its own already-translated event
+ * stream) rather than the raw wire protocol.
  */
 export function useScreenSight(room: Room | null, status: VoiceSessionStatus) {
   const [armed, setArmed] = useState(false);
   const capturedThisTurnRef = useRef(false);
+  const sessionReadyCapturedRef = useRef(false);
   const frameCounterRef = useRef(0);
   const sentGeometryRef = useRef<Map<string, ScreenFrameGeometry>>(new Map());
   const armedRef = useRef(armed);
@@ -149,68 +156,93 @@ export function useScreenSight(room: Room | null, status: VoiceSessionStatus) {
     return () => unlisten?.();
   }, [toggleArmed]);
 
+  // Auto-capture the instant the session becomes live - covers arming the
+  // hotkey while the call is still dialing. `status` is already the
+  // correctly-translated signal (useVoiceBar synthesizes "ready" locally on
+  // connect, mirroring Flutter's local session.ready), so there's no need to
+  // listen for anything over the wire for this.
+  useEffect(() => {
+    try {
+      if (status === "ready" && !sessionReadyCapturedRef.current) {
+        sessionReadyCapturedRef.current = true;
+        if (armedRef.current) void captureAndSend("session.ready");
+      } else if (isTerminalStatus(status)) {
+        sessionReadyCapturedRef.current = false;
+        disarm();
+      }
+    } catch (err) {
+      logError("useScreenSight: session-status effect", err);
+    }
+  }, [status, captureAndSend, disarm]);
+
   useEffect(() => {
     if (!room) return;
 
-    function handleEvent(event: VoiceServerEvent) {
-      switch (event.type) {
-        case "session.ready":
-          if (armedRef.current) void captureAndSend("session.ready");
-          break;
-        case "user.text.delta":
-          if (armedRef.current && !capturedThisTurnRef.current) {
-            capturedThisTurnRef.current = true;
-            void captureAndSend("turn");
-          }
-          break;
-        case "user.text.final":
-          capturedThisTurnRef.current = false;
-          break;
-        case "element.point": {
-          const payload = event.payload;
-          const x = payload?.x;
-          const y = payload?.y;
-          if (typeof x !== "number" || typeof y !== "number") break;
-          const frameId = typeof payload?.frame_id === "string" ? payload.frame_id : "";
-          const values = Array.from(sentGeometryRef.current.values());
-          const geometry = sentGeometryRef.current.get(frameId) ?? values[values.length - 1];
-          if (!geometry) break;
-          const label = typeof payload?.label === "string" ? payload.label.trim() : "";
-          const point = screenPointFor(geometry, x, y);
-          invoke("point_at", {
-            targetX: point.x,
-            targetY: point.y,
-            monitorX: point.monitorX,
-            monitorY: point.monitorY,
-            monitorW: point.monitorWidth,
-            monitorH: point.monitorHeight,
-            label,
-          }).catch((err) => logError("useScreenSight: point_at", err));
-          break;
-        }
-        case "session.ended":
-        case "error":
-        case "session.error":
-          disarm();
-          break;
-        default:
-          break;
+    function handleElementPoint(event: ElementPointEvent) {
+      try {
+        const payload = event.payload;
+        const x = payload?.x;
+        const y = payload?.y;
+        if (typeof x !== "number" || typeof y !== "number") return;
+        const frameId = typeof payload?.frame_id === "string" ? payload.frame_id : "";
+        const values = Array.from(sentGeometryRef.current.values());
+        const geometry = sentGeometryRef.current.get(frameId) ?? values[values.length - 1];
+        if (!geometry) return;
+        const label = typeof payload?.label === "string" ? payload.label.trim() : "";
+        const point = screenPointFor(geometry, x, y);
+        invoke("point_at", {
+          targetX: point.x,
+          targetY: point.y,
+          monitorX: point.monitorX,
+          monitorY: point.monitorY,
+          monitorW: point.monitorWidth,
+          monitorH: point.monitorHeight,
+          label,
+        }).catch((err) => logError("useScreenSight: point_at", err));
+      } catch (err) {
+        logError("useScreenSight: handleElementPoint", err);
       }
     }
 
+    // Only genuinely real message on this data channel that useScreenSight
+    // cares about - session.ready/user.text.*/session.ended never arrive
+    // (see useVoiceBar.ts), element.point does.
     function onDataReceived(payload: Uint8Array) {
       try {
-        handleEvent(JSON.parse(new TextDecoder().decode(payload)));
+        const event = JSON.parse(new TextDecoder().decode(payload)) as ElementPointEvent;
+        if (event.type === "element.point") handleElementPoint(event);
       } catch {
         // not JSON - not one of ours, ignore
       }
     }
 
+    // Turn-start/turn-end - LiveKit's native transcription feature, not a
+    // data message, mirroring how useVoiceBar.ts drives its own captions.
+    function onTranscriptionReceived(segments: TranscriptionSegment[], participant?: Participant) {
+      try {
+        if (!participant?.isLocal) return;
+        for (const seg of segments) {
+          if (!seg.final) {
+            if (armedRef.current && !capturedThisTurnRef.current) {
+              capturedThisTurnRef.current = true;
+              void captureAndSend("turn");
+            }
+          } else {
+            capturedThisTurnRef.current = false;
+          }
+        }
+      } catch (err) {
+        logError("useScreenSight: onTranscriptionReceived", err);
+      }
+    }
+
     room.on(RoomEvent.DataReceived, onDataReceived);
+    room.on(RoomEvent.TranscriptionReceived, onTranscriptionReceived);
     return () => {
       room.off(RoomEvent.DataReceived, onDataReceived);
+      room.off(RoomEvent.TranscriptionReceived, onTranscriptionReceived);
     };
-  }, [room, captureAndSend, disarm]);
+  }, [room, captureAndSend]);
 
   return { armed, toggleArmed };
 }

@@ -50,6 +50,7 @@ export const bar = {
   openMicSettingsTooltip: "Open mic settings",
   screenSightOnTooltip: "Stop letting Buddy see your screen",
   screenSightOffTooltip: "Let Buddy see your screen (Ctrl+Alt+S)",
+  minimizeTooltip: "Minimize (keeps the call going)",
   micTryAgainTooltip: "Try again",
   micEndCallTooltip: "End the conversation",
   micTalkTooltip: "Talk to Buddy",

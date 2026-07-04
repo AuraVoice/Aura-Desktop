@@ -14,8 +14,8 @@ const CENTER_Y_KEY: &str = "overlay_center_y";
 
 const BAR_WIDTH: f64 = 520.0;
 const BAR_HEIGHT: f64 = 64.0;
-const PILL_WIDTH: f64 = 320.0;
-const PILL_HEIGHT: f64 = 56.0;
+const PILL_WIDTH: f64 = 280.0;
+const PILL_HEIGHT: f64 = 400.0;
 const SETUP_WIDTH: f64 = 600.0;
 const SETUP_HEIGHT: f64 = 340.0;
 const TOP_MARGIN: f64 = 48.0;
@@ -331,6 +331,23 @@ pub fn esc_pressed(app: &AppHandle) {
 
 pub fn pill_activated(app: &AppHandle) {
     set_presentation(app, OverlayPresentation::Panel);
+}
+
+/// VoiceBar's minimize button: collapses the panel to the small pill without
+/// ending the call. Only takes effect while a call is actually live and the
+/// panel is showing - `Pill` is only ever meant to be reached while
+/// `voice_active` is true, matching the `set_voice_active` guard that sends
+/// Pill straight to Hidden once the call ends.
+pub fn minimize_to_pill(app: &AppHandle) {
+    let should_minimize = state_handle(app)
+        .map(|h| {
+            let state = h.0.lock().unwrap();
+            state.voice_active && state.presentation == OverlayPresentation::Panel
+        })
+        .unwrap_or(false);
+    if should_minimize {
+        set_presentation(app, OverlayPresentation::Pill);
+    }
 }
 
 /// Ctrl+Shift+D: a deliberate, non-Flutter-parity power-user shortcut. Tells

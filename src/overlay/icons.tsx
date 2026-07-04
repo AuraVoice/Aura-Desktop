@@ -48,6 +48,14 @@ export function SettingsIcon() {
   );
 }
 
+export function MinimizeIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor">
+      <path d="M6 19h12v2H6z" />
+    </svg>
+  );
+}
+
 export function SignOutIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="currentColor">

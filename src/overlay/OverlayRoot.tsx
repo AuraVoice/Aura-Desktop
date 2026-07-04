@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useAuth } from "../state/AuthProvider";
@@ -7,10 +7,13 @@ import { useEscHotkey } from "./useEscHotkey";
 import { useVoiceBar } from "./useVoiceBar";
 import { useScreenSight } from "./useScreenSight";
 import { GlassSurface } from "./GlassSurface";
-import { GlassPill } from "./GlassPill";
 import { VoiceBar } from "./VoiceBar";
 import { SetupPanel } from "./SetupPanel";
 import { PointingOverlay } from "./PointingOverlay";
+
+// Lazy: keeps three.js out of the overlay's startup bundle - only fetched
+// the first time the pill is actually reached.
+const AvatarPill = lazy(() => import("./AvatarPill").then((m) => ({ default: m.AvatarPill })));
 
 type OverlayPresentation = "hidden" | "panel" | "pill" | "pointing";
 type PanelVariant = "setup" | "bar";
@@ -66,9 +69,9 @@ export function OverlayRoot() {
 
   if (presentation === "pill") {
     return (
-      <GlassSurface>
-        <GlassPill voice={voice} screenSight={screenSight} />
-      </GlassSurface>
+      <Suspense fallback={null}>
+        <AvatarPill voice={voice} screenSight={screenSight} />
+      </Suspense>
     );
   }
 

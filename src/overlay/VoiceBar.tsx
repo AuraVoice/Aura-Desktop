@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { signOut } from "firebase/auth";
+import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { auth } from "../lib/firebase";
 import { bar as copy, signOut as signOutCopy } from "../lib/copy";
 import { logError } from "../lib/log";
-import { EndCallIcon, EyeIcon, EyeOffIcon, MicIcon, RefreshIcon, SettingsIcon, SignOutIcon } from "./icons";
+import { EndCallIcon, EyeIcon, EyeOffIcon, MicIcon, MinimizeIcon, RefreshIcon, SettingsIcon, SignOutIcon } from "./icons";
 import { BarIconButton } from "./BarIconButton";
 import type { VoiceBarState } from "./useVoiceBar";
 import iconUrl from "../assets/icons/Aura-Icon.png";
@@ -32,6 +33,10 @@ export function VoiceBar({ voice, screenSight }: VoiceBarProps) {
     } else {
       void voice.startSession();
     }
+  }
+
+  function handleMinimize() {
+    invoke("minimize_to_pill").catch((err) => logError("VoiceBar: minimize_to_pill", err));
   }
 
   const micTooltip = isError ? copy.micTryAgainTooltip : isLive ? copy.micEndCallTooltip : copy.micTalkTooltip;
@@ -83,6 +88,12 @@ export function VoiceBar({ voice, screenSight }: VoiceBarProps) {
       >
         {screenSight.armed ? <EyeIcon /> : <EyeOffIcon />}
       </BarIconButton>
+
+      {isLive && (
+        <BarIconButton title={copy.minimizeTooltip} onClick={handleMinimize}>
+          <MinimizeIcon />
+        </BarIconButton>
+      )}
 
       <BarIconButton title={micTooltip} onClick={handleMicClick} danger={isLive}>
         {isError ? <RefreshIcon /> : isLive ? <EndCallIcon /> : <MicIcon />}
