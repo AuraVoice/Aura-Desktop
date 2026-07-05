@@ -29,5 +29,5 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Aura Desktop v__VERSION__"
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
