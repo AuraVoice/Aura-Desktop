@@ -3,13 +3,21 @@ import { invoke } from "@tauri-apps/api/core";
 import { Store } from "@tauri-apps/plugin-store";
 import QRCode from "react-qr-code";
 import { onboarding as copy, desktopOnboardingSeenKey, getAuraAppUrl } from "../lib/copy";
-import { logError } from "../lib/log";
+import { logError, logInfo } from "../lib/log";
 import { SignInForm, type Mode as SignInMode } from "./SignInForm";
 import "./OnboardingFlow.css";
 
 type Step = "welcome" | "getApp" | "link";
 const STEPS: Step[] = ["welcome", "getApp", "link"];
 const OVERLAY_STORE_PATH = "overlay-window.json";
+// This store file is shared with overlay.rs's window-position persistence,
+// which writes to it on every WindowEvent::Moved - a burst of which fires
+// exactly when SetupPanel first mounts post-sign-out (the Bar->Setup
+// resize). That contention can stretch this store read well past the "one
+// frame" the blank-render fallback below was sized for, so this is a hard
+// upper bound on how long the overlay can stay blank waiting on it, not the
+// expected common case.
+const STORE_LOAD_TIMEOUT_MS = 300;
 
 function WelcomeStep({
   onNext,
@@ -63,23 +71,53 @@ export function OnboardingFlow() {
   const [resolved, setResolved] = useState(false);
   const [initialSignInMode, setInitialSignInMode] = useState<SignInMode>("pairing");
   const storeRef = useRef<Store | null>(null);
+  const forcedRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
+    const startedAt = Date.now();
+
+    // Hard upper bound on the blank render below: if the store read is
+    // contended (see OVERLAY_STORE_PATH's comment), default to the sign-in
+    // screen rather than leaving the overlay blank indefinitely. Biased
+    // toward "link" (skip welcome) rather than "welcome" - a user reaching
+    // this component post-sign-out has, by definition, already onboarded
+    // once, and "New here?" is still one click away if this guess is ever
+    // wrong for a genuinely first-run case.
+    const timeoutId = setTimeout(() => {
+      if (cancelled) return;
+      forcedRef.current = true;
+      logInfo(
+        "OnboardingFlow: load store",
+        `timed out after ${STORE_LOAD_TIMEOUT_MS}ms, defaulting to link step`,
+      );
+      setStep("link");
+      setResolved(true);
+    }, STORE_LOAD_TIMEOUT_MS);
+
     Store.load(OVERLAY_STORE_PATH)
       .then(async (store) => {
         storeRef.current = store;
         const seen = await store.get<boolean>(desktopOnboardingSeenKey);
         if (cancelled) return;
+        clearTimeout(timeoutId);
+        logInfo("OnboardingFlow: load store", `resolved seen=${Boolean(seen)} in ${Date.now() - startedAt}ms`);
+        // The timeout above already forced a render - a late resolution
+        // only gets logged (so the real duration is auditable), not applied,
+        // since re-driving step/resolved now could stomp on-screen
+        // navigation the user has already made.
+        if (forcedRef.current) return;
         if (seen) setStep("link");
         setResolved(true);
       })
       .catch((err) => {
+        clearTimeout(timeoutId);
         logError("OnboardingFlow: load store", err);
-        if (!cancelled) setResolved(true);
+        if (!cancelled && !forcedRef.current) setResolved(true);
       });
     return () => {
       cancelled = true;
+      clearTimeout(timeoutId);
     };
   }, []);
 

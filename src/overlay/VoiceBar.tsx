@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { auth } from "../lib/firebase";
 import { bar as copy, signOut as signOutCopy } from "../lib/copy";
-import { logError } from "../lib/log";
+import { logError, logInfo } from "../lib/log";
 import { EndCallIcon, EyeIcon, EyeOffIcon, MicIcon, MinimizeIcon, RefreshIcon, SettingsIcon, SignOutIcon } from "./icons";
 import { BarIconButton } from "./BarIconButton";
 import type { VoiceBarState } from "./useVoiceBar";
@@ -71,6 +71,7 @@ export function VoiceBar({ voice, screenSight }: VoiceBarProps) {
       setSignOutStuck(true);
     }, SIGN_OUT_STUCK_TIMEOUT_MS);
 
+    const startedAt = Date.now();
     try {
       // Ends any live call (and its telemetry) explicitly, before Firebase
       // sign-out, instead of leaving it to the unmount-cleanup fire-and-forget
@@ -79,7 +80,9 @@ export function VoiceBar({ voice, screenSight }: VoiceBarProps) {
       // caught+logged internally), so this can't short-circuit the try block
       // before signOut(auth) runs.
       await voice.endSession();
+      logInfo("VoiceBar: signOut", `endSession resolved in ${Date.now() - startedAt}ms`);
       await signOut(auth);
+      logInfo("VoiceBar: signOut", `signOut(auth) resolved, total ${Date.now() - startedAt}ms`);
       // AuthProvider's auth-state listener pushes set_panel_variant("setup"),
       // which swaps this component out - nothing else to do here on success.
       clearSignOutTimeout();
