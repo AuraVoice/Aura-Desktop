@@ -1,6 +1,7 @@
 use std::sync::Mutex;
+use std::time::Instant;
 
-use log::error;
+use log::{error, info};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewWindow};
 use tauri_plugin_store::StoreExt;
@@ -255,14 +256,19 @@ pub fn apply(app: &AppHandle) {
         return;
     }
 
+    let started_at = Instant::now();
+
     if state.presentation == OverlayPresentation::Hidden {
+        let from = (state.applied_presentation, state.applied_variant);
         state.applied_presentation = Some(state.presentation);
         state.applied_variant = Some(state.panel_variant);
         drop(state);
+        info!("overlay::apply: hiding (from {from:?})");
         if let Err(e) = window.hide() {
             error!("overlay::apply: failed to hide window: {e}");
         }
         emit_overlay_changed(app);
+        info!("overlay::apply: hide complete in {:?}", started_at.elapsed());
         return;
     }
 
@@ -272,6 +278,8 @@ pub fn apply(app: &AppHandle) {
     let position = position_for(&state, &window, size);
     state.applying_bounds = true;
     drop(state);
+
+    info!("overlay::apply: applying presentation={presentation:?} variant={panel_variant:?}");
 
     let result = window.set_size(size).and_then(|_| window.set_position(position));
 
@@ -295,7 +303,7 @@ pub fn apply(app: &AppHandle) {
         error!("overlay::apply: failed to restore cursor events: {e}");
     }
     if presentation == OverlayPresentation::Panel {
-        win_focus::force_foreground(&window);
+        win_focus::force_foreground(app, &window);
     }
 
     {
@@ -304,6 +312,10 @@ pub fn apply(app: &AppHandle) {
         state.applied_variant = Some(panel_variant);
     }
     emit_overlay_changed(app);
+    info!(
+        "overlay::apply: presentation={presentation:?} variant={panel_variant:?} applied in {:?}",
+        started_at.elapsed()
+    );
 }
 
 fn set_presentation(app: &AppHandle, presentation: OverlayPresentation) {
@@ -350,7 +362,7 @@ pub fn summon(app: &AppHandle) {
     if already_panel {
         if let Some(window) = main_window(app) {
             let _ = window.show();
-            win_focus::force_foreground(&window);
+            win_focus::force_foreground(app, &window);
         }
         return;
     }

@@ -12,6 +12,7 @@ use tauri::{AppHandle, Manager, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 use overlay::{OnboardingStep, OverlaySnapshot, OverlayStateHandle, PanelVariant};
+use win_focus::ForegroundGeneration;
 
 #[tauri::command]
 fn current_overlay_state(app: AppHandle) -> OverlaySnapshot {
@@ -104,6 +105,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_http::init())
         .manage(OverlayStateHandle::default())
+        .manage(ForegroundGeneration::default())
         .invoke_handler(tauri::generate_handler![
             current_overlay_state,
             esc_pressed,

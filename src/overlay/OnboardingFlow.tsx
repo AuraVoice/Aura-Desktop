@@ -4,14 +4,22 @@ import { Store } from "@tauri-apps/plugin-store";
 import QRCode from "react-qr-code";
 import { onboarding as copy, desktopOnboardingSeenKey, getAuraAppUrl } from "../lib/copy";
 import { logError } from "../lib/log";
-import { SignInForm } from "./SignInForm";
+import { SignInForm, type Mode as SignInMode } from "./SignInForm";
 import "./OnboardingFlow.css";
 
 type Step = "welcome" | "getApp" | "link";
 const STEPS: Step[] = ["welcome", "getApp", "link"];
 const OVERLAY_STORE_PATH = "overlay-window.json";
 
-function WelcomeStep({ onNext, onSkipToLink }: { onNext: () => void; onSkipToLink: () => void }) {
+function WelcomeStep({
+  onNext,
+  onSkipToLink,
+  onGoogleSignup,
+}: {
+  onNext: () => void;
+  onSkipToLink: () => void;
+  onGoogleSignup: () => void;
+}) {
   return (
     <div className="onboarding-step">
       <h2 className="onboarding-heading">{copy.welcome.heading}</h2>
@@ -22,6 +30,9 @@ function WelcomeStep({ onNext, onSkipToLink }: { onNext: () => void; onSkipToLin
       </button>
       <button type="button" className="onboarding-link-button" onClick={onSkipToLink}>
         {copy.welcome.skipLink}
+      </button>
+      <button type="button" className="onboarding-link-button" onClick={onGoogleSignup}>
+        {copy.welcome.googleSignupLink}
       </button>
     </div>
   );
@@ -50,6 +61,7 @@ function GetAppStep({ onNext, onBack }: { onNext: () => void; onBack: () => void
 export function OnboardingFlow() {
   const [step, setStep] = useState<Step>("welcome");
   const [resolved, setResolved] = useState(false);
+  const [initialSignInMode, setInitialSignInMode] = useState<SignInMode>("pairing");
   const storeRef = useRef<Store | null>(null);
 
   useEffect(() => {
@@ -90,12 +102,28 @@ export function OnboardingFlow() {
   return (
     <div className="onboarding-flow">
       {step === "welcome" && (
-        <WelcomeStep onNext={() => setStep("getApp")} onSkipToLink={() => setStep("link")} />
+        <WelcomeStep
+          onNext={() => setStep("getApp")}
+          onSkipToLink={() => {
+            setInitialSignInMode("pairing");
+            setStep("link");
+          }}
+          onGoogleSignup={() => {
+            setInitialSignInMode("google");
+            setStep("link");
+          }}
+        />
       )}
       {step === "getApp" && (
-        <GetAppStep onNext={() => setStep("link")} onBack={() => setStep("welcome")} />
+        <GetAppStep
+          onNext={() => {
+            setInitialSignInMode("pairing");
+            setStep("link");
+          }}
+          onBack={() => setStep("welcome")}
+        />
       )}
-      {step === "link" && <SignInForm />}
+      {step === "link" && <SignInForm initialMode={initialSignInMode} />}
 
       <div className="onboarding-footer">
         <div className="onboarding-progress-dots">
