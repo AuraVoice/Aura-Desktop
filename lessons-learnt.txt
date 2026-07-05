@@ -1,0 +1,425 @@
+LESSONS LEARNT
+==============
+
+Date: 2026-07-03
+Problem: Aura Desktop window showed "Aura Desktop (Not Responding)" in the title bar during use.
+Issue: capture_cursor_display_with_geometry (src-tauri/src/screenshot.rs) was a synchronous
+(non-async) Tauri command. Tauri executes non-async commands directly on the main thread, the
+same thread that pumps the native window's message loop. This command did blocking screen
+capture (xcap DXGI capture), RGBA-to-RGB conversion, JPEG encoding (pure-Rust, CPU-only), and
+base64 encoding, all synchronously. On 4K/multi-monitor/high-DPI setups, and especially in debug
+builds, this took long enough (multiple seconds) that Windows flagged the window as hung. It
+could repeat every spoken turn of a voice session while screen-sight was armed (useScreenSight.ts
+calls it on arm, on session.ready, and on every user.text.delta).
+Solution: Made capture_cursor_display_with_geometry async and moved the actual capture/encode
+work into tauri::async_runtime::spawn_blocking, so it runs on a blocking worker thread instead of
+the main thread. Also replaced the base64 JSON round trip with a raw tauri::ipc::Response: a
+28-byte little-endian geometry header followed directly by the JPEG bytes, read on the frontend
+via DataView/ArrayBuffer instead of atob-decoding a base64 string. Removed the now-unused base64
+crate dependency from Cargo.toml.
+Justification: Tauri's own docs state commands without the async keyword run on the main thread
+and can freeze the UI; async commands (or spawn_blocking for CPU-bound work) are the documented
+fix. The base64 round trip was pure waste, since Rust encoded to base64 only for JS to immediately
+decode it back to raw bytes for LiveKit; a raw IPC response skips both the encode/decode CPU cost
+and the ~33% payload bloat base64 adds. Verified with `cargo check` and `npx tsc --noEmit`, both
+clean.
+
+Date: 2026-07-03
+Problem: A user hit "Buddy's taking too long to pick up" 5 times in a row with no way to tell
+whether it was a backend/agent dispatch failure or a LiveKit account-tier limit, because nothing
+about the failure was ever recorded anywhere.
+Issue: useVoiceBar.ts's enterErrorState (the single funnel for all error transitions - join
+timeout, silence timeout, and the backend's own session.error event) only updated React state for
+the UI. logError (lib/log.ts), which exists specifically to write durable, post-hoc-inspectable
+entries to the app's log file, was wired into just one of four error-producing paths (the
+try/catch around fetchVoiceToken/Room.connect) - the three watchdog/event-driven paths logged
+nothing. The room name returned by fetchVoiceToken was also fetched and discarded, so even a
+manual repro had no ID to cross-reference against backend/LiveKit logs. Separately, the join
+timeout (15s, briefly 20s) was too short to distinguish "agent is just slow to dispatch" from
+"agent never joined".
+Solution: Added a logError call inside enterErrorState capturing the error code, the LiveKit room
+name (now threaded through via a ref set when fetchVoiceToken resolves), and the message. Bumped
+AGENT_JOIN_TIMEOUT_MS to 30s.
+Justification: A durable logger that only covers one of four ways into the same error state isn't
+a logging gap so much as a blind spot - it made the exact failure mode a user reported completely
+unrecoverable after the fact. Threading the room name through costs nothing at call time and turns
+a vague repro report into a room ID that can be grepped directly in juno-backend/LiveKit Cloud
+logs. 30s gives a legitimately slow agent dispatch room to succeed without meaningfully changing
+the felt latency of a real hang. Verified with `npx tsc --noEmit`, clean.
+
+Date: 2026-07-04
+Problem: The LiveKit dashboard showed the backend agent joining every voice session
+(Participants: 2 on every row), yet nearly every session still ended in "Buddy's taking too long
+to pick up" within 1-2 minutes - only one session out of eight ran long enough to be a real
+conversation.
+Issue: In useVoiceBar.ts's startSession, the AGENT_JOIN_TIMEOUT_MS setTimeout was armed
+immediately after creating the Room object - before fetchVoiceToken() (a network round trip) and
+Room.connect() (a WebRTC handshake) even ran. A captured log showed that setup alone consuming
+~3s of the budget before the agent had any chance to respond, and the agent cannot signal
+readiness in a room the client hasn't joined yet.
+Solution: Moved the joinWatchdogRef arm to fire only after `await newRoom.connect(url, token)`
+resolves, so the full timeout window is spent solely waiting on the agent instead of also covering
+our own token-fetch/connect setup.
+Justification: Counting connect-time against the agent's patience budget only shrinks the real
+waiting window with no possible benefit, since the agent cannot possibly respond before the room
+exists for it to join. This alone doesn't explain the bulk of the failures, though - LiveKit
+session durations (1-2 min, matching the client's own timeout-then-teardown) point to the agent's
+own startup latency chronically exceeding the client's patience, which is a backend/infra concern
+(e.g. Cloud Run cold starts for the agent worker) outside this repo's reach. Verified with
+`npx tsc --noEmit`, clean.
+
+Date: 2026-07-03
+Problem: The pill presentation needed to become a rendered 3D character (buddy-rigged.fbx)
+instead of a text bar, but the raw source asset was completely unusable as shipped: 33MB, a
+500,821-vertex / 607,366-triangle mesh with two 2048x2048 textures, and its one baked "animation"
+turned out to be duration=0 (a single static pose, not a loop) when inspected with `gltf-transform
+inspect` - film-asset quality, not real-time-UI quality, and with no actual idle animation at all.
+Issue: FBX2glTF's own console log ("Animation mixamo.com: [0 - 0]") was the only signal available
+before authoritative inspection, and easy to misread as a tool quirk rather than what it actually
+was: zero baked keyframes beyond a bind pose. Separately, three.js's DRACOLoader.js resolves its
+decoder files via module-level `new URL('../libs/draco/draco_decoder.wasm', import.meta.url)`
+constants - Vite bundles these automatically and correctly out of the box, so manually copying the
+decoder into public/ and calling setDecoderPath() was redundant (and didn't even dedupe anything,
+since DRACOLoader.js also unconditionally evaluates a second `gltf/`-variant constant regardless of
+which path ends up used).
+Solution: Used the user-provided Avatars/ directory (separately Mixamo-retargeted Idle/Wave/Walk
+clips already merged onto an already-decimated ~50k-vertex mesh) instead of reprocessing the raw
+33MB FBX. Ran `gltf-transform optimize` (webp textures at 1024px, Draco geometry compression, no
+further simplification since the mesh was already decimated) to take that 13.46MB intermediate
+down to 1.28MB with all three real animations intact - verified via `gltf-transform inspect`
+post-optimization, not just trusted. Removed the manual public/draco/ copy and setDecoderPath()
+call in favor of DRACOLoader's own Vite-friendly defaults. Added `assetsInclude: ["**/*.glb"]` to
+vite.config.ts and a `declare module "*.glb"` ambient type, since .glb isn't in Vite's default
+recognized-asset list. AvatarPill.tsx is lazy-loaded from OverlayRoot.tsx so three.js's bundle cost
+isn't paid until the pill is actually reached.
+Justification: A console log from a decade-old conversion tool isn't proof of anything - the
+duration=0 finding only became trustworthy once corroborated by a dedicated inspector, and it
+changed the plan (from "the FBX already has an idle loop" to "get one from Mixamo and retarget
+it"). Reusing the user's already-retargeted/decimated intermediate instead of reprocessing the raw
+FBX avoided redoing real work (animation retargeting, mesh decimation) that had already been done
+correctly. Verified with `cargo check`, `npx tsc --noEmit`, and a full `npm run build` (confirms
+the .glb import and Draco decoder actually resolve at build time, not just type-check).
+
+Date: 2026-07-04
+Problem: Voice calls never worked on desktop at all - every attempt showed "Buddy's taking too
+long to pick up" after the full timeout, even though the LiveKit dashboard confirmed the agent
+joined the room and published audio almost instantly, and the user confirmed Flutter's own
+Windows desktop build (same machine, same network, same backend) worked perfectly. Days of
+tuning the client-side timeout (15s -> 20s -> 30s) and auditing LiveKit/network/backend never
+moved the needle, because none of it was the actual bug.
+Issue: useVoiceBar.ts (and useScreenSight.ts) waited for a custom JSON protocol over LiveKit's
+RoomEvent.DataReceived - message types `session.ready`, `session.state` (nested under
+`event.payload.state`), `assistant.text.delta`/`assistant.text.final`, `user.text.delta`/
+`user.text.final`. Grepping the actual backend (`../Aura/backend/src/shared/protocol.py` and
+every `publish_data` call in the codebase) proved these are never sent - `protocol.py`'s message
+classes are imported nowhere else at all (dead code), and the real agent communicates exclusively
+through native LiveKit primitives: participant kind (`ParticipantKind.AGENT`) for join detection,
+the `lk.agent.state` participant attribute for listening/thinking/speaking state, and the native
+Transcription API for captions. Confirmed by reading the actual working Flutter client
+(`voice_session_service.dart`): its own `'session.ready'` is a purely local event synthesized on
+room-connect, never received from the network - the desktop port had mistaken Flutter's internal,
+already-translated event vocabulary for the literal wire protocol, then built a DataReceived
+parser to consume messages that don't exist. Also found empirically that `RoomEvent.
+ParticipantConnected` never fires for a participant already in the room when `connect()`
+resolves (only for participants joining afterward) - relevant because the agent was already
+present in every failed test, so relying solely on the live-join event would have kept missing it
+even after fixing the protocol misunderstanding.
+Solution: Rewired both hooks' event handling onto the real signals: `ParticipantConnected`
+(+ an explicit `room.remoteParticipants` scan for an already-present agent right after connect)
+clears the join watchdog, `ParticipantAttributesChanged` reading `lk.agent.state` drives status,
+`TranscriptionReceived` drives captions and the silence watchdog, `TrackSubscribed` audio marks
+the agent as having responded. `session.error` (the one message type actually confirmed real via
+`errors.py`'s `publish_client_error`) is the only case kept on `DataReceived`. Also added,
+per follow-up request: automatic retry with exponential backoff (2s/4s/8s, 3 attempts, skipped
+for mic-access codes that need user action) driven off a `lastErrorCode` state + effect rather
+than a direct call from `enterErrorState` (avoids a circular useCallback dependency); try/catch
+around every event handler body and `.catch()` on every fire-and-forget async call, so one bad
+event can't cascade or produce an unhandled rejection; and PostHog telemetry
+(`src/lib/analytics.ts`, plain HTTP POST reusing the Flutter app's own project token/host, since
+Flutter's own Windows build hits the identical "no SDK for this platform" wall and already solved
+it the same way) for `voice_session_started`/`voice_first_response`/`voice_error`/
+`voice_retry_attempt`/`voice_retry_exhausted`/`voice_session_ended`.
+Justification: No amount of client-side timeout tuning could ever have fixed this, since the
+exit condition itself was unreachable - the fix isn't "wait long enough," it's "wait for
+something that actually happens." Verifying against the real backend source and a working
+reference client, rather than continuing to reason from the desktop code's own (wrong)
+assumptions, is what actually found it after multiple sessions of plausible-but-wrong theories
+(LiveKit free-tier limits, Cloud Run cold starts, network/firewall differences). Retry/logging/
+telemetry are separately justified: the user had to manually retry more than 5 times during this
+investigation with a log file that showed nothing, because logging coverage had gaps and nothing
+retried on its own - auto-retry with backoff and telemetry mean the next occurrence of any
+failure (known or new) is both less disruptive and independently diagnosable without a live
+debugging session. Verified with `npx tsc --noEmit`, clean.
+
+Date: 2026-07-03
+Problem: Aura Desktop froze completely ("Not Responding" in Task Manager, required killing the
+process to recover) whenever the overlay was summoned via Ctrl+Alt+B while a different app
+currently owned the foreground. Happened with any foreground app, not just certain ones.
+Issue: Two separate bugs stacked in the summon path. (1) overlay::apply() (overlay.rs) held the
+OverlayState mutex across window.set_size()/set_position(), but Windows delivers WM_MOVE to the
+window procedure synchronously, before SetWindowPos returns, and lib.rs's WindowEvent::Moved
+handler calls capture_user_position(), which locks that same mutex - a real position change
+re-entered a std::sync::Mutex from the same thread that already held it. The standard library
+documents this as unspecified and possibly deadlocking; on this thread it deadlocked permanently,
+matching "stays frozen, needs a kill" exactly. (2) win_focus::force_foreground() used
+AttachThreadInput to borrow the current foreground window's permission to call
+SetForegroundWindow, running inline on the same thread (and, before fix 1, while still holding
+that same mutex). Microsoft's own guidance, and multiple documented production incidents, warn
+that attaching two threads' input queues makes their message handling synchronous with each
+other - if the other app's thread is ever slow to service its queue, the calling thread hangs
+waiting on it.
+Solution: Restructured apply() so every state read/write is its own short-lived lock, with the
+guard always dropped before any window.* call. Replaced AttachThreadInput in win_focus.rs with a
+SendInput-synthesized Alt tap (satisfies SetForegroundWindow's documented "calling process
+received the last input event" exception without ever sharing an input queue with another
+process), and moved the remaining Win32 calls onto a spawned thread so even a slow
+SetForegroundWindow call can no longer block the thread servicing the overlay's own window.
+Removed the now-unused Win32_System_Threading Cargo feature.
+Justification: The mutex fix is a plain, verifiable Rust concurrency bug, confirmed against the
+std docs, and unique to apply() - point_at()/cancel_pointing() already scoped their locks
+correctly, so this wasn't a systemic pattern across the module. The AttachThreadInput removal is
+grounded in Raymond Chen's "The Old New Thing" warning against attaching input queues, a
+documented production hang with the identical mechanism, and the official Microsoft docs on
+SetForegroundWindow's exception list, which is what the SendInput trick exploits instead of
+sharing a queue. Verified with `cargo check`, clean, no warnings.
+
+Date: 2026-07-04
+Problem: Arming screen-sight and having the agent point at something took the window fullscreen
+and click-through (correct, for the PointerBuddy flight animation) and then never gave it back -
+no hotkey, click, or Esc did anything, and the process had to be killed to recover.
+Issue: overlay::point_at() mutates OverlayState.presentation to Pointing and resizes/click-throughs
+the window directly, bypassing apply()'s normal flow (deliberately, per its own comment) - but it
+only ever emitted "pointing-target", never "overlay-changed". OverlayRoot.tsx's own presentation
+state (which gates whether <PointingOverlay/> renders at all) is only ever updated by receiving
+"overlay-changed", so it never became "pointing" and PointingOverlay never mounted. The only call
+to cancel_pointing anywhere in the codebase is a setTimeout inside PointingOverlay's own effect -
+so with the component never mounted, nothing was ever going to call cancel_pointing, and the
+takeover had no exit. Compounding it: hotkey_pressed()'s match has a bare `_ => {}` for Pointing (an
+intentional "ignore mid-flight" - not itself the bug, but it meant Ctrl+Alt+B couldn't rescue a
+stuck session either), and apply() itself never reset ignore_cursor_events - only cancel_pointing()
+did - so even a successful escape via some other path (e.g. sign-out) would have left the window
+click-through.
+Solution: Added the missing emit_overlay_changed(app) call in point_at(), so the frontend actually
+learns presentation is "pointing", mounts PointingOverlay, and its built-in auto-cancel timer gets
+scheduled like it was always meant to. Also made apply() unconditionally call
+set_ignore_cursor_events(false) whenever it applies a normal (non-Hidden) presentation, as a
+second, independent guarantee that click-through can never survive a return to Panel/Pill
+regardless of which path got us there.
+Justification: This wasn't a race or a timing fluke - point_at() and OverlayRoot.tsx were grepped
+side by side and the missing emit is the entire explanation, with zero other call sites for
+cancel_pointing anywhere in the app to fall back on. The apply() reset is deliberately redundant
+with cancel_pointing's own reset: a single missed notification should never again be able to strand
+the window in an unrecoverable, unclickable, un-dismissable state - that failure mode is bad enough
+to warrant a second independent guarantee rather than trusting one call site to always fire.
+Verified with `cargo check`, clean, no warnings.
+
+Date: 2026-07-04
+Problem: The pill's 3D avatar (AvatarPill.tsx) was broken through three unrelated failures in
+sequence: it never appeared at all (just the caption, forever, no error anywhere); once it loaded,
+the character was clipped with a large dead gap before the caption; and there was no way to click
+back out to the panel. Confirmed fully fixed and working in the running app.
+Issue: Three independent bugs, each one only findable by actually inspecting the object/environment
+rather than reasoning about it on paper.
+(1) DRACOLoader.js resolves its decoder file paths via `new URL('../libs/draco/...',
+import.meta.url)` inside its own module. Under Vite dev mode, once esbuild's dependency
+pre-bundler moves DRACOLoader.js into node_modules/.vite/deps/, that relative path resolves to
+nothing - the fetch 404s, Vite's dev-server fallback serves index.html in its place, and that HTML
+gets fed into the decoder Worker as JS and thrown as `Uncaught SyntaxError: Unexpected token '<'`.
+DRACOLoader never wires up `worker.onerror`, so the crash is invisible everywhere - not the
+terminal, not the app's log file, only the browser's own console - and `GLTFLoader.load()` just
+hangs forever with neither onLoad nor onError ever firing. Confirmed by building a throwaway
+standalone page (debug-avatar.html/src/debug/avatarDebug.ts) that hit the identical silent hang
+with plain three.js, proving the bug lived in the loading path, not AvatarPill.tsx's React/Tauri
+glue. A prior lessons-learnt entry (2026-07-03) claiming Vite handles this "automatically and
+correctly out of the box" was only ever verified via `npm run build` (Rollup) - a different
+pipeline from `npm run dev`/`tauri dev` (esbuild), which is what actually broke.
+(2) The clickable avatar-pill element was a `<div role="button" tabIndex={0}>`, not a real
+`<button>`. This repo's drag-region rule (CLAUDE.md) only auto-excludes real inputs/buttons/links
+from the "deep" region Tauri makes draggable - an ARIA-role div doesn't qualify, so clicks were
+being swallowed as window-drag attempts instead of ever firing onClick.
+(3) Two rounds of pure camera-trigonometry changes (removing a deliberate tilt, retuning the
+pill's aspect ratio) made no visible difference, because the camera was never the actual bug.
+Building a second, more faithful debug harness (debug-pill.html/src/debug/pillDebug.ts, mirroring
+AvatarPill.tsx's exact camera code and real 280x374 dimensions) and drawing the model's bind-pose
+(T-pose) bounding box as a wireframe showed the camera fit that box exactly as designed - but the
+actual "Idle" animation doesn't render at the bind pose at all. Measuring a live Box3 of the posed,
+animating mesh (min=(-0.558,-0.008,-0.440), max=(0.524,1.991,0.562)) against the bind pose's box
+(min=(-0.83,-1.0,-0.47), max=(0.83,1.0,0.47)) showed the same total height (~2.0) but the whole
+character sitting about one full unit higher - feet near y=0 instead of y=-1, head near y=2 instead
+of y=1. All animation `.scale` tracks were confirmed at (1,1,1), ruling out a bad scale keyframe;
+this is the retargeted Idle clip's root bone sitting at the wrong height relative to the mesh's own
+centered-at-origin convention, most likely a leftover ground-plane-vs-centered-origin mismatch from
+the external Mixamo retargeting pass (2026-07-03 entry above). The camera was correctly framing a
+pose that's never actually on screen.
+Solution: (1) Imported the exact decoder files DRACOLoader would have used
+(three/examples/jsm/libs/draco/draco_wasm_wrapper.js, draco_decoder.wasm) via Vite's `?url` suffix
+and passed them to `dracoLoader.setDecoderPath({ js, wasm })`, sidestepping DRACOLoader's own
+import.meta.url computation entirely - correct in both dev and build regardless of Vite's bundling
+decisions. (2) Changed the pill's root element to a real `<button type="button">` with matching CSS
+resets. (3) In AvatarPill.tsx, after starting the Idle clip, evaluate its first frame immediately
+(`mixer.update(0)` + `gltf.scene.updateMatrixWorld(true)`, since neither the mixer nor a render has
+run yet), take a real Box3 of the POSED scene, recenter the loaded scene on that box's real vertical
+center (`gltf.scene.position.y -= centerY`), and derive modelHalfWidth/modelHalfHeight from the real
+measured extents instead of hardcoded bind-pose constants (which now only serve as the one-frame
+fallback before the real measurement lands) - then re-run the same frameCamera() fitting logic
+(unchanged) with the corrected values. Also replaced a one-time canvas.clientWidth/clientHeight
+read at mount with a ResizeObserver driving camera.aspect/renderer.setSize, since that effect fires
+the instant Suspense resolves, immediately after Rust has just resized the native window and before
+the canvas's own flex layout is guaranteed to have settled - a real fix for a real, independent
+sizing race, not what caused the framing bug above.
+Justification: Every wrong turn here came from reasoning about the problem instead of looking at
+it. The Draco failure was invisible in every log this app has, because a Worker's own parse-time
+exception isn't routed through any onError callback - only a standalone repro outside the Tauri
+webview surfaced the actual browser console error. The framing failure survived two rounds of
+correct-looking camera trigonometry because the trigonometry was never wrong - the target it was
+fitting was. Building (and rebuilding, more faithfully each time) a throwaway harness that mirrors
+the real component's exact code and dimensions, then actually measuring the object - a live Box3, a
+dump of animation scale tracks - rather than trusting the static GLB's bind pose, is what found the
+one-unit vertical offset; no amount of further angle-guessing would have surfaced it. Verified with
+`npx tsc --noEmit` and `cargo check`, both clean, and confirmed visually in the running app.
+
+Date: 2026-07-04
+Problem: Clicking "Sign out" left the confirm screen stuck on "Signing out..." for about a minute
+with both buttons disabled and no way out short of killing the process.
+Issue: The app's own durable log file captured the real cause as its last two lines before the
+stall: a win_focus::force_foreground WARN, then a Rust panic 64 seconds later in tao's Windows
+event-loop runner ("cannot move state from Destroyed") - almost exactly matching the reported
+freeze length. force_foreground() (called from overlay::apply() on every transition into the panel
+presentation, sign-out's bar->setup switch included) spawns a brand-new, completely untracked OS
+thread on every call that performs BringWindowToTop/SetForegroundWindow against a raw HWND with,
+per its own existing comment, "no documented time bound." Nothing stopped a thread delayed by OS
+scheduling, or queued behind a slow prior call, from still running against a window whose state had
+already moved on - exactly the shape of failure that produces tao's panic. Same two files
+(win_focus.rs/overlay.rs) as the 2026-07-03 "froze completely, required killing the process" entry
+below, but a different race than the AttachThreadInput hang and mutex-reentrancy deadlock that entry
+fixed. Separately, VoiceBar.tsx's sign-out confirm screen had no timeout of its own - once
+`signingOut` was true, both buttons were disabled with the only way out being an external event
+(AuthProvider's onAuthStateChanged flipping the panel) that had no bound, so any delay in that
+chain - this one or a future one - left the user with zero recourse. It also didn't end an active
+voice call before signing out, letting the LiveKit room fall through to the unmount-cleanup
+fire-and-forget disconnect instead of the deliberate endSession() path.
+Solution: Added an independent `.manage()`-ed AtomicU64 generation counter (ForegroundGeneration,
+in win_focus.rs) that force_foreground() claims before spawning its thread; the thread re-checks its
+generation is still current before touching any Win32 API and bails out otherwise. Deliberately not
+folded into OverlayState's existing Mutex, since that mutex has a documented reentrancy hazard
+already (set_position re-enters it via WM_MOVE) and a plain atomic sidesteps that entirely. Added
+start/elapsed info! logging to overlay::apply() so a future occurrence is diagnosable from the log
+file alone. In VoiceBar.tsx, added an 8-second stuck-timeout (armed before both endSession() and
+signOut(auth)) that re-enables a relabeled "Dismiss" button if the panel never switches away in
+time, and made handleConfirmSignOut call voice.endSession() before signOut(auth).
+Justification: All RMW/load operations on one AtomicU64 share a single total modification order
+regardless of Ordering, so a stale thread's captured generation is reliably invalidated the instant
+a newer call increments it - verified this reasoning rather than assuming it. Confirmed AppHandle is
+Send + Sync + 'static directly from the vendored tauri/tauri-runtime 2.11.x source (not assumed),
+and that this codebase already relies on that exact fact today (lib.rs's
+tauri::async_runtime::spawn(updater_handle) call), so cloning it into win_focus's spawned thread is
+precedented, not a new risk. The UI timeout is a defense-in-depth fix that stands on its own
+regardless of whether the generation counter fully eliminates the underlying race: a confirm screen
+with no timeout on an external event is a latent bug the instant that event is ever late, for any
+reason, now or later. Verified with `cargo check` and `npx tsc --noEmit`, both clean.
+
+Date: 2026-07-04
+Problem: The newly-added "Sign in with Google" flow was completely unreachable through normal
+navigation, and separately, cancelling the Google consent popup left the desktop silently waiting
+for the full ~10-minute session TTL instead of surfacing the cancellation.
+Issue: SignInForm.tsx's pairing and email modes toggle to each other but neither had a button into
+google mode - the only entry point was a link on OnboardingFlow.tsx's first-run welcome step, which
+is skipped forever once desktop_onboarding_seen is persisted true (confirmed already true on the
+test machine, from earlier testing). Separately, in Aura-Web, AuthPageClient.tsx's catch block for
+signInWithPopup only called the already-built POST /api/auth/fail (which flips the desktop's polled
+session doc so the wait ends immediately) for the account-exists and generic-error branches - the
+auth/popup-closed-by-user, auth/cancelled-popup-request, and auth/popup-blocked branches only set
+local component state and never reported the failure back, even though /api/auth/fail already had a
+"popup_blocked" reason in its allowlist ready to use.
+Solution: Added a "New here? Sign up with Google" toggle button to both the pairing and email mode
+screens in SignInForm.tsx, reachable regardless of which mode the user lands on. In Aura-Web, added
+the missing reportFailure() calls for the cancelled/popup-blocked branches, added "cancelled" to
+AUTH_FAIL_REASONS (it would otherwise have silently collapsed to "other" at the schema layer), and
+added a matching test case. On the desktop side, gave webAuthCopy.ts distinct "cancelled"/
+"popupBlocked" messages instead of lumping a deliberate user cancel under "Something went sideways."
+Justification: A shipped entry point with zero reachable path to it is as good as not shipped -
+this wasn't a UI polish issue, the feature was unreachable in the built product the moment
+onboarding was marked seen, which happens after the very first run. Untangling the cancel-reporting
+gap required reading the actual AuthPageClient.tsx catch block rather than assuming the existing
+/api/auth/fail route meant every failure path already used it. Verified with `npx tsc --noEmit`
+(Aura-Desktop) and `npx vitest run` (52 passed) + `npm run build` (Aura-Web), all clean.
+
+Date: 2026-07-05
+Problem: Clicking "Sign in with Google"/"Sign up with Google" on desktop never completes - the
+browser opens, but sign-in never finishes, and the app's own durable log file (Aura Desktop.log)
+showed zero trace of the attempt across three separate app launches: no start failure, no poll
+error, nothing.
+Issue: This feature spans three repos (Aura-Desktop opens the browser and polls; the Python backend
+issues/tracks the session code; Aura-Web hosts the actual Google sign-in page and relays the result
+back). Live testing (`curl` against the real endpoints, not just reading source) showed
+`POST https://juno-backend-.../devices/web-auth/start` returns 200 with a real code - the backend
+half is live - but `GET https://auravoiceapp.com/auth?session=...` returns a plain 404. Aura-Web's
+`src/app/auth/` and `src/app/api/auth/` (the page and the /complete + /fail routes) exist on disk
+but are untracked in git (`git log --all` shows zero history for them) and Aura-Web ships via a
+git-triggered deploy (per its own CLAUDE.md: `/ship` -> push -> platform build), so they were never
+pushed and never deployed. The backend route IS live only because `backend/deploy.sh` builds its
+image via a plain `docker build` against the local working directory (confirmed via `.dockerignore`
+and deploy.sh), which doesn't care about git state at all - the two repos in the same feature deploy
+through fundamentally different mechanisms, and nothing surfaced that mismatch. Separately, the
+desktop side has no bug at all here: `startWebAuth()` and every poll to `/devices/web-auth/status`
+return normal 200 responses (the code IS valid, the session IS pending) the entire time, so none of
+useWebAuthSignIn.ts's existing logError call sites (which only cover thrown/network errors) ever
+fired - the code was "correctly" waiting on a browser leg that could never complete, for the full
+10-minute server TTL, with nothing to report until then, and even the terminal "expired" state
+itself was never logged before this fix.
+Solution: Added logInfo/trackEvent calls to every terminal state in useWebAuthSignIn.ts (started,
+completed, expired - both client-deadline and specific status from `/status` - failed with reason,
+cancelled), mirroring useVoiceBar.ts's existing PostHog funnel pattern
+(voice_session_started/voice_error/etc.) so a 100%-expiry funnel like this one would show up on a
+dashboard within minutes instead of surfacing only as a user complaint. The actual production fix
+(committing and deploying Aura-Web's auth page/routes) is a cross-repo deploy action left for the
+user to explicitly trigger, not done here.
+Justification: No amount of reading Aura-Desktop's own source could have found this, since the bug
+isn't in this repo - confirming against the live production endpoints (a 200 vs. a 404) is what
+actually proved it, the same lesson as the 2026-07-04 voice-protocol entry (verify against the real
+system, not just plausible-looking source). The telemetry gap compounds independently of this one
+incident: the existing logError-only coverage means any future break in this same handshake (an
+Aura-Web outage, a backend regression, a Firestore rule change) would again be invisible until
+someone manually reproduces it - the new funnel events make that class of failure visible
+immediately instead of requiring another live investigation. Verified with `npx tsc --noEmit`,
+clean.
+
+Date: 2026-07-05
+Problem: Clicking "Sign out" showed a fully blank overlay for 5-8 seconds before the sign-in screen
+finally appeared "in a regular way" - not the expected "Signing out..." confirm text the whole
+time, an actually empty window.
+Issue: SetupPanel (shown once `user` flips to null) renders OnboardingFlow, which mounts for the
+first time all session exactly at that moment (it's never mounted while signed in) and gates its
+entire render on `if (!resolved) return null` while it awaits `Store.load("overlay-window.json")` +
+`store.get(desktopOnboardingSeenKey)` - a real, literal blank render, not a stuck spinner. The
+comment above that line already flagged the assumption: "render nothing for the one frame before
+the seen-flag resolves." That assumption breaks down because `overlay-window.json` is the exact
+same store file overlay.rs's `persist_center`/`capture_user_position` write to on every
+`WindowEvent::Moved` - and the Bar->Setup resize that's part of this same sign-out transition fires
+a burst of those move events at the exact moment OnboardingFlow's freshly-mounted read is going
+through the same underlying store. Two unrelated concerns (window-position persistence, an
+onboarding-seen flag) sharing one store file, contended hardest at the one moment both are busiest,
+turned "one frame" into several seconds. VoiceBar's own sign-out path (`endSession()` then
+`signOut(auth)`) had zero timing instrumentation either, so there was no way to independently
+confirm how much of the delay was that vs. the store read.
+Solution: Added a 300ms hard-timeout fallback in OnboardingFlow's store-load effect - if the store
+hasn't resolved by then, default to the "link" (sign-in) step and stop blocking the render,
+biased toward skipping "welcome" since reaching this component post-sign-out already implies a
+completed onboarding ("New here?" is still one click away if that guess is ever wrong). A late
+real resolution after the timeout only logs its actual elapsed time, it no longer mutates
+step/resolved (avoids stomping navigation the user already made in that window). Also added
+logInfo timing around both `endSession()` and `signOut(auth)` in VoiceBar.tsx's
+handleConfirmSignOut, matching the pattern already used elsewhere in this file
+(SIGN_OUT_STUCK_TIMEOUT_MS's own reasoning) so a future slow sign-out shows exactly which step ate
+the time instead of requiring another live investigation. Did not split the shared store file
+(the actual root contention) since existing installed users already have
+`desktop_onboarding_seen: true` persisted in `overlay-window.json` specifically - moving that key to
+a new file would silently reset onboarding-seen for everyone already in beta, a real migration cost
+that deserves its own explicit decision rather than being folded into a bug fix.
+Justification: The 300ms bound makes the reported symptom's severity structurally impossible
+regardless of the exact cause of store contention - this is more robust than chasing the precise
+root cause of a single I/O stall, which can vary by disk, AV scanning, or Windows Defender in ways
+no fix here can fully control. The timing logs are the direct fix for the actual gap this
+investigation hit: neither of the two real culprits under discussion (store contention, sign-out
+step latency) had any instrumentation before this, so the theory could only be argued from static
+code reading, not proven from a captured timestamp. Verified with `npx tsc --noEmit`, clean.
