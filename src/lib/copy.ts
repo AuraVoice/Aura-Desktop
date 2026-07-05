@@ -3,6 +3,7 @@
 export const getAuraAppUrl = "https://auravoiceapp.com/app";
 export const privacyUrl = "https://auravoiceapp.com/privacy";
 export const termsUrl = "https://auravoiceapp.com/terms";
+export const webAuthUrl = "https://auravoiceapp.com/auth";
 
 export const onboarding = {
   welcome: {
@@ -11,6 +12,7 @@ export const onboarding = {
     trayHint: "Buddy lives in your system tray. Press Ctrl+Alt+B anytime to bring it back.",
     button: "Get set up",
     skipLink: "Already have Aura? Link now",
+    googleSignupLink: "New here? Sign up with Google",
   },
   getApp: {
     heading: "First, grab Aura on your phone",
@@ -33,8 +35,13 @@ export const signIn = {
   submitPairingBusy: "Linking...",
   switchToPairing: "Link with your phone instead",
   switchToEmail: "Use email & password instead",
+  switchToGoogle: "Continue with Google instead",
   privacyLabel: "Privacy",
   termsLabel: "Terms",
+  googlePrompt: "Sign in or create your Aura account with Google",
+  submitGoogleSignInIdle: "Sign in with Google",
+  submitGoogleIdle: "Sign up with Google",
+  switchFromGoogleToPairing: "Have the phone app instead? Link it",
 } as const;
 
 export const hotkeyHints = {
@@ -64,6 +71,8 @@ export const signOut = {
   confirmIdle: "Sign out",
   confirmBusy: "Signing out...",
   error: "Couldn't sign out. Try again.",
+  stuck: "Still working on it. You can keep using Buddy while this finishes.",
+  dismiss: "Dismiss",
 } as const;
 
 export const desktopOnboardingSeenKey = "desktop_onboarding_seen";

@@ -1,10 +1,25 @@
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
-use log::{error, warn};
-use tauri::WebviewWindow;
+use log::{error, info, warn};
+use tauri::{AppHandle, Manager, WebviewWindow};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::Input::KeyboardAndMouse::{SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_MENU};
 use windows::Win32::UI::WindowsAndMessaging::{BringWindowToTop, SetForegroundWindow};
+
+/// Monotonically increasing "which `force_foreground` call is the latest"
+/// counter. Deliberately its own `.manage()`-ed newtype, NOT a field on
+/// `overlay::OverlayState` - that struct's `Mutex` must never be locked from
+/// a spawned thread the way this one is (see `overlay::apply`'s reentrancy
+/// note), and a plain atomic sidesteps that hazard entirely since it never
+/// blocks or re-enters anything.
+pub struct ForegroundGeneration(pub AtomicU64);
+
+impl Default for ForegroundGeneration {
+    fn default() -> Self {
+        Self(AtomicU64::new(0))
+    }
+}
 
 /// Forces the overlay to the foreground - every summon fights Windows'
 /// restriction that only the process the user is currently working in may
@@ -34,7 +49,14 @@ use windows::Win32::UI::WindowsAndMessaging::{BringWindowToTop, SetForegroundWin
 /// though the deadlock above is gone, `SetForegroundWindow` is still a
 /// cross-process OS call with no documented time bound, so it stays off
 /// whatever thread is servicing this window's own message pump.
-pub fn force_foreground(window: &WebviewWindow) {
+///
+/// Because that thread has no documented time bound, a call queued behind a
+/// slow prior one (or just delayed by OS scheduling) can still be sitting
+/// around long after a newer transition has superseded it. `ForegroundGeneration`
+/// guards against that: each call claims a strictly increasing number before
+/// spawning, and the spawned thread re-checks that number is still current
+/// before touching any Win32 API, bailing out otherwise.
+pub fn force_foreground(app: &AppHandle, window: &WebviewWindow) {
     let Ok(hwnd) = window.hwnd() else {
         error!("win_focus::force_foreground: failed to get HWND");
         return;
@@ -45,7 +67,26 @@ pub fn force_foreground(window: &WebviewWindow) {
     // and reconstructing HWND from it on the other side is sound.
     let raw = hwnd.0 as isize;
 
+    // Claim this call's generation before spawning. Whichever call's
+    // fetch_add executes last (all RMW ops on one AtomicU64 are totally
+    // ordered) permanently invalidates every earlier caller's number, so a
+    // thread that finally wakes up after being superseded can tell.
+    let my_generation = app
+        .try_state::<ForegroundGeneration>()
+        .map(|gen_state| gen_state.0.fetch_add(1, Ordering::Relaxed) + 1)
+        .unwrap_or(0);
+
+    let app = app.clone();
+
     thread::spawn(move || {
+        if let Some(gen_state) = app.try_state::<ForegroundGeneration>() {
+            if gen_state.0.load(Ordering::Relaxed) != my_generation {
+                info!(
+                    "win_focus::force_foreground: superseded by a newer call before running (generation {my_generation}); skipping"
+                );
+                return;
+            }
+        }
         let hwnd = HWND(raw as *mut core::ffi::c_void);
         if !try_set_foreground(hwnd) {
             warn!("win_focus::force_foreground: OS denied foreground focus; Esc is inactive until the panel is clicked");

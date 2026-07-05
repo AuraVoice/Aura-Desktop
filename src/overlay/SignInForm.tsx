@@ -4,20 +4,23 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { auth } from "../lib/firebase";
 import { claimPairingCode, PairingError } from "../lib/api";
 import { signIn as copy, privacyUrl, termsUrl } from "../lib/copy";
+import { webAuthCopy } from "../lib/webAuthCopy";
 import { formatPairingCodeForDisplay, rawPairingCode } from "../lib/pairingCodeFormat";
 import { pairingCodeLength, pairingErrorCopy } from "../lib/pairingCopy";
 import { logError } from "../lib/log";
+import { useWebAuthSignIn } from "./useWebAuthSignIn";
 import "./SignInForm.css";
 
-type Mode = "pairing" | "email";
+export type Mode = "pairing" | "email" | "google";
 
-export function SignInForm() {
-  const [mode, setMode] = useState<Mode>("pairing");
+export function SignInForm({ initialMode = "pairing" }: { initialMode?: Mode }) {
+  const [mode, setMode] = useState<Mode>(initialMode);
   const [code, setCode] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const webAuth = useWebAuthSignIn();
 
   function switchMode(next: Mode) {
     setMode(next);
@@ -82,7 +85,7 @@ export function SignInForm() {
 
   return (
     <div className="sign-in-form">
-      {mode === "pairing" ? (
+      {mode === "pairing" && (
         <form className="sign-in-fields" onSubmit={handlePairingSubmit}>
           <p className="sign-in-prompt">{copy.pairingPrompt}</p>
           <input
@@ -106,9 +109,13 @@ export function SignInForm() {
             <button type="button" className="sign-in-mode-toggle" onClick={() => switchMode("email")}>
               {copy.switchToEmail}
             </button>
+            <button type="button" className="sign-in-mode-toggle" onClick={() => switchMode("google")}>
+              {copy.switchToGoogle}
+            </button>
           </div>
         </form>
-      ) : (
+      )}
+      {mode === "email" && (
         <form className="sign-in-fields" onSubmit={handleEmailSubmit}>
           <p className="sign-in-prompt">{copy.emailPrompt}</p>
           <input
@@ -140,8 +147,87 @@ export function SignInForm() {
             <button type="button" className="sign-in-mode-toggle" onClick={() => switchMode("pairing")}>
               {copy.switchToPairing}
             </button>
+            <button type="button" className="sign-in-mode-toggle" onClick={() => switchMode("google")}>
+              {copy.switchToGoogle}
+            </button>
           </div>
         </form>
+      )}
+      {mode === "google" && (
+        <div className="sign-in-fields">
+          {webAuth.state.phase === "idle" && (
+            <>
+              <p className="sign-in-prompt">{copy.googlePrompt}</p>
+              <div className="sign-in-actions">
+                <button type="button" className="sign-in-submit" onClick={() => void webAuth.start()}>
+                  {copy.submitGoogleSignInIdle}
+                </button>
+                <button type="button" className="sign-in-mode-toggle" onClick={() => void webAuth.start()}>
+                  {copy.submitGoogleIdle}
+                </button>
+                <button
+                  type="button"
+                  className="sign-in-mode-toggle"
+                  onClick={() => switchMode("pairing")}
+                >
+                  {copy.switchFromGoogleToPairing}
+                </button>
+              </div>
+            </>
+          )}
+          {(webAuth.state.phase === "opening" ||
+            webAuth.state.phase === "waiting" ||
+            webAuth.state.phase === "signing_in") && (
+            <>
+              <p className="sign-in-prompt">
+                {webAuth.state.phase === "opening" ? webAuthCopy.opening : webAuthCopy.waiting}
+              </p>
+              <div className="sign-in-actions">
+                <button type="button" className="sign-in-mode-toggle" onClick={webAuth.cancel}>
+                  {webAuthCopy.cancel}
+                </button>
+              </div>
+            </>
+          )}
+          {webAuth.state.phase === "expired" && (
+            <>
+              <p className="sign-in-error">{webAuthCopy.expired}</p>
+              <div className="sign-in-actions">
+                <button type="button" className="sign-in-submit" onClick={() => void webAuth.start()}>
+                  {webAuthCopy.tryAgain}
+                </button>
+              </div>
+            </>
+          )}
+          {webAuth.state.phase === "failed" && (
+            <>
+              <p className="sign-in-error">
+                {webAuth.state.reason === "account_exists_different_credential"
+                  ? webAuthCopy.accountExistsDifferentCredential
+                  : webAuth.state.reason === "cancelled"
+                    ? webAuthCopy.cancelled
+                    : webAuth.state.reason === "popup_blocked"
+                      ? webAuthCopy.popupBlocked
+                      : webAuthCopy.otherFailure}
+              </p>
+              <div className="sign-in-actions">
+                <button type="button" className="sign-in-submit" onClick={() => void webAuth.start()}>
+                  {webAuthCopy.tryAgain}
+                </button>
+              </div>
+            </>
+          )}
+          {webAuth.state.phase === "error" && (
+            <>
+              <p className="sign-in-error">{webAuthCopy.otherFailure}</p>
+              <div className="sign-in-actions">
+                <button type="button" className="sign-in-submit" onClick={() => void webAuth.start()}>
+                  {webAuthCopy.tryAgain}
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       )}
       <div className="sign-in-legal">
         <button type="button" className="sign-in-legal-link" onClick={() => void openUrl(privacyUrl)}>
