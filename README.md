@@ -54,15 +54,21 @@ Rust owns the window: geometry, global hotkeys, tray, and stealing OS focus. Rea
 | `state/AuthProvider.tsx` | Firebase `onAuthStateChanged` listener; mirrors session state into Rust |
 | `overlay/OverlayRoot.tsx` | Reads overlay state from Rust, picks which presentation to render |
 | `overlay/GlassSurface.tsx` | Shared translucent surface, the whole-window drag region |
-| `overlay/SetupPanel.tsx`, `OnboardingFlow.tsx`, `SignInForm.tsx` | Signed-out flow: welcome → QR code → pairing code or email sign-in |
-| `overlay/VoiceBar.tsx` | Signed-in bar: mic, screen-sight eye, sign-out |
+| `overlay/SetupPanel.tsx`, `OnboardingFlow.tsx`, `SignInForm.tsx` | Signed-out flow: welcome → QR code → pairing code, email, or Google sign-in |
+| `overlay/useWebAuthSignIn.ts` | Browser-based Google sign-in/sign-up handshake: request a session code, open the system browser to Aura-Web, poll until it completes |
+| `overlay/VoiceBar.tsx` | Signed-in bar: mic, screen-sight eye, minimize, sign-out |
+| `overlay/BarIconButton.tsx`, `overlay/icons.tsx` | Shared icon-button chrome and the icon set VoiceBar renders it with |
+| `overlay/HotkeyHint.tsx` | Renders a keycap + action label pair (used for the hotkey hints shown in the setup flow) |
 | `overlay/AvatarPill.tsx` | Collapsed "pill" presentation: Buddy rendered as a 3D character (three.js, lazy-loaded) with an idle animation, instead of the old text bar |
 | `overlay/PointingOverlay.tsx` | PointerBuddy flight animation (orb → ring → label) |
 | `overlay/useVoiceBar.ts` | LiveKit `Room` lifecycle + call status state machine |
 | `overlay/useScreenSight.ts` | Arm/disarm + capture/stream/point flow |
 | `overlay/useEscHotkey.ts` | Esc collapses the overlay |
-| `lib/api.ts`, `lib/voice.ts`, `lib/firebase.ts` | Backend and Firebase clients |
+| `lib/api.ts`, `lib/voice.ts`, `lib/firebase.ts`, `lib/firebaseConfig.ts` | Backend and Firebase clients |
+| `lib/copy.ts`, `lib/pairingCopy.ts`, `lib/pairingCodeFormat.ts`, `lib/voiceErrorCopy.ts`, `lib/webAuthCopy.ts` | UI copy and formatting, ported verbatim from the Flutter app where applicable |
 | `lib/log.ts` | Durable error logging to the app's log file |
+| `lib/analytics.ts` | PostHog event tracking (plain HTTP POST, same project as the Flutter app) |
+| `debug/avatarDebug.ts`, `debug/pillDebug.ts` | Standalone Vite pages (`debug-avatar.html`, `debug-pill.html`) for iterating on `AvatarPill.tsx`'s loader/camera code outside Tauri - see [`CLAUDE.md`](./CLAUDE.md) |
 
 ## The overlay state machine
 
@@ -228,7 +234,38 @@ sequenceDiagram
     Note over Form: SetupPanel swaps for VoiceBar
 ```
 
-Email/password sign-in is the fallback path in the same `SignInForm`, skipping the pairing/backend hop straight to `signInWithEmailAndPassword`.
+Email/password sign-in is a second path in the same `SignInForm`, skipping the pairing/backend hop straight to `signInWithEmailAndPassword`.
+
+A third path, "Sign in/up with Google," is a device-authorization-style handshake spanning three repos - Aura-Desktop opens the browser and polls, `juno-backend` issues and tracks the session code, and Aura-Web hosts the actual Google sign-in page:
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Form as SignInForm (React)
+    participant Hook as useWebAuthSignIn
+    participant Backend as juno-backend
+    participant Browser as System browser
+    participant Web as Aura-Web (auravoiceapp.com/auth)
+    participant FB as Firebase Auth
+
+    User->>Form: click "Sign in/up with Google"
+    Form->>Hook: start()
+    Hook->>Backend: POST /devices/web-auth/start
+    Backend-->>Hook: { code, expiresInSeconds }
+    Hook->>Browser: openUrl(auravoiceapp.com/auth?session=code)
+    Browser->>Web: loads the Google sign-in page
+    User->>Web: picks an account (in the browser, not the overlay)
+    Web->>Backend: reports success/failure for that code
+    loop poll every 2s until deadline
+        Hook->>Backend: POST /devices/web-auth/status { code }
+        Backend-->>Hook: pending | completed | expired | failed
+    end
+    Hook->>FB: signInWithCustomToken(customToken)
+    Note over Hook: never force-focuses the window - the\nconfirmation lives in the browser tab
+    FB-->>Form: AuthProvider's onAuthStateChanged takes it from here
+```
+
+The desktop side never touches Google credentials directly - `pollWebAuthStatusOnce` only ever sees a terminal status (`completed`/`expired`/`failed`/`not_found`) or a Firebase custom token, the same posture as `claimPairingCode`. This flow spans three independently-deployed repos, which has its own failure mode - see [`CLAUDE.md`](./CLAUDE.md).
 
 ## Workflows
 
@@ -261,7 +298,7 @@ npx tsc --noEmit              # TypeScript type-checks
 
 Config worth knowing about:
 - `src-tauri/tauri.conf.json` - window geometry/decorations, updater endpoint.
-- `src-tauri/capabilities/default.json` - the IPC permission allowlist; `http:default` is scoped to `juno-backend`'s origin only, nothing else can be fetched from the webview.
+- `src-tauri/capabilities/default.json` - the IPC permission allowlist; `http:default` only allows fetches to `juno-backend` and PostHog's capture endpoint (`us.i.posthog.com`, used by `lib/analytics.ts`), nothing else can be fetched from the webview. The Google sign-in flow's browser leg goes through `opener:default` (`openUrl`, opens the system browser) instead, which isn't subject to this scope at all.
 
 ## Known issues / design constraints
 
