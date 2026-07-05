@@ -24,3 +24,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+.gstack/
+
+# Source/intermediate 3D avatar files (FBX + unoptimized GLB) - only the
+# optimized src/assets/models/buddy.glb is meant to live in git.
+/Avatars/
+/buddy-rigged.fbx
+/buddy-rigged.fbm/
