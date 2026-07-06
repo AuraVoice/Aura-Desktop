@@ -1,4 +1,4 @@
-use log::error;
+use log::{error, warn};
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
@@ -16,10 +16,13 @@ pub fn has_cached_session(app: &AppHandle) -> bool {
             return false;
         }
     };
-    store
-        .get(HAS_SESSION_KEY)
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false)
+    match store.get(HAS_SESSION_KEY) {
+        None => false, // expected on first run - no session cached yet
+        Some(value) => value.as_bool().unwrap_or_else(|| {
+            warn!("has_cached_session: {HAS_SESSION_KEY} present but not a bool: {value:?}");
+            false
+        }),
+    }
 }
 
 pub fn set_cached_session(app: &AppHandle, has_session: bool) {

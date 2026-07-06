@@ -93,6 +93,11 @@ impl Default for OverlayState {
     }
 }
 
+/// Every `.lock()` on this recovers from poisoning via `unwrap_or_else(|e|
+/// e.into_inner())` rather than `.unwrap()`: a `std::sync::Mutex` stays
+/// poisoned forever once any critical section panics while holding it, so a
+/// single panic anywhere in this file would otherwise brick every future
+/// overlay operation for the rest of the process's life.
 pub struct OverlayStateHandle(pub Mutex<OverlayState>);
 
 impl Default for OverlayStateHandle {
@@ -116,8 +121,12 @@ pub fn load_persisted_center(app: &AppHandle) {
     let (Some(handle), Some(window)) = (state_handle(app), main_window(app)) else {
         return;
     };
-    let Ok(store) = app.store(OVERLAY_STORE) else {
-        return;
+    let store = match app.store(OVERLAY_STORE) {
+        Ok(store) => store,
+        Err(e) => {
+            error!("load_persisted_center: failed to open store: {e}");
+            return;
+        }
     };
     let (Some(x), Some(y)) = (
         store.get(CENTER_X_KEY).and_then(|v| v.as_f64()),
@@ -139,14 +148,17 @@ pub fn load_persisted_center(app: &AppHandle) {
         .unwrap_or(false);
 
     if on_screen {
-        handle.0.lock().unwrap().user_center = Some((x, y));
+        handle.0.lock().unwrap_or_else(|e| e.into_inner()).user_center = Some((x, y));
     }
 }
 
 fn persist_center(app: &AppHandle, x: f64, y: f64) {
-    if let Ok(store) = app.store(OVERLAY_STORE) {
-        store.set(CENTER_X_KEY, serde_json::json!(x));
-        store.set(CENTER_Y_KEY, serde_json::json!(y));
+    match app.store(OVERLAY_STORE) {
+        Ok(store) => {
+            store.set(CENTER_X_KEY, serde_json::json!(x));
+            store.set(CENTER_Y_KEY, serde_json::json!(y));
+        }
+        Err(e) => error!("persist_center: failed to open store: {e}"),
     }
 }
 
@@ -217,7 +229,7 @@ pub fn snapshot(app: &AppHandle) -> OverlaySnapshot {
             panel_variant: PanelVariant::Setup,
         };
     };
-    let state = handle.0.lock().unwrap();
+    let state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
     OverlaySnapshot {
         presentation: state.presentation,
         panel_variant: state.panel_variant,
@@ -248,7 +260,7 @@ pub fn apply(app: &AppHandle) {
         return;
     };
 
-    let mut state = handle.0.lock().unwrap();
+    let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
 
     let unchanged = state.applied_presentation == Some(state.presentation)
         && state.applied_variant == Some(state.panel_variant);
@@ -283,7 +295,7 @@ pub fn apply(app: &AppHandle) {
 
     let result = window.set_size(size).and_then(|_| window.set_position(position));
 
-    handle.0.lock().unwrap().applying_bounds = false;
+    handle.0.lock().unwrap_or_else(|e| e.into_inner()).applying_bounds = false;
 
     if let Err(e) = result {
         error!("overlay::apply: failed to resize/reposition window: {e}");
@@ -307,7 +319,7 @@ pub fn apply(app: &AppHandle) {
     }
 
     {
-        let mut state = handle.0.lock().unwrap();
+        let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
         state.applied_presentation = Some(presentation);
         state.applied_variant = Some(panel_variant);
     }
@@ -320,14 +332,22 @@ pub fn apply(app: &AppHandle) {
 
 fn set_presentation(app: &AppHandle, presentation: OverlayPresentation) {
     if let Some(handle) = state_handle(app) {
-        handle.0.lock().unwrap().presentation = presentation;
+        handle.0.lock().unwrap_or_else(|e| e.into_inner()).presentation = presentation;
     }
     apply(app);
 }
 
+/// Whether a voice call is currently live - used by the updater to avoid
+/// ever installing a downloaded update out from under an active call.
+pub fn is_voice_active(app: &AppHandle) -> bool {
+    state_handle(app)
+        .map(|h| h.0.lock().unwrap_or_else(|e| e.into_inner()).voice_active)
+        .unwrap_or(false)
+}
+
 fn hide_ending_voice(app: &AppHandle) {
     let voice_active = state_handle(app)
-        .map(|h| h.0.lock().unwrap().voice_active)
+        .map(|h| h.0.lock().unwrap_or_else(|e| e.into_inner()).voice_active)
         .unwrap_or(false);
     if voice_active {
         if let Some(window) = main_window(app) {
@@ -335,7 +355,7 @@ fn hide_ending_voice(app: &AppHandle) {
         }
     }
     if let Some(handle) = state_handle(app) {
-        handle.0.lock().unwrap().voice_active = false;
+        handle.0.lock().unwrap_or_else(|e| e.into_inner()).voice_active = false;
     }
     set_presentation(app, OverlayPresentation::Hidden);
 }
@@ -343,7 +363,7 @@ fn hide_ending_voice(app: &AppHandle) {
 /// Ctrl+Alt+B: hidden/pill -> panel, panel -> hidden (ending any live voice
 /// session first). Ignored mid-pointing-flight.
 pub fn hotkey_pressed(app: &AppHandle) {
-    let presentation = state_handle(app).map(|h| h.0.lock().unwrap().presentation);
+    let presentation = state_handle(app).map(|h| h.0.lock().unwrap_or_else(|e| e.into_inner()).presentation);
     match presentation {
         Some(OverlayPresentation::Hidden) | Some(OverlayPresentation::Pill) => {
             set_presentation(app, OverlayPresentation::Panel)
@@ -357,7 +377,7 @@ pub fn hotkey_pressed(app: &AppHandle) {
 /// refocus it if it's already showing.
 pub fn summon(app: &AppHandle) {
     let already_panel = state_handle(app)
-        .map(|h| h.0.lock().unwrap().presentation == OverlayPresentation::Panel)
+        .map(|h| h.0.lock().unwrap_or_else(|e| e.into_inner()).presentation == OverlayPresentation::Panel)
         .unwrap_or(false);
     if already_panel {
         if let Some(window) = main_window(app) {
@@ -385,7 +405,7 @@ pub fn pill_activated(app: &AppHandle) {
 pub fn minimize_to_pill(app: &AppHandle) {
     let should_minimize = state_handle(app)
         .map(|h| {
-            let state = h.0.lock().unwrap();
+            let state = h.0.lock().unwrap_or_else(|e| e.into_inner());
             state.voice_active && state.presentation == OverlayPresentation::Panel
         })
         .unwrap_or(false);
@@ -411,7 +431,7 @@ pub fn set_voice_active(app: &AppHandle, active: bool) {
         return;
     };
     let presentation = {
-        let mut state = handle.0.lock().unwrap();
+        let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
         state.voice_active = active;
         state.presentation
     };
@@ -424,14 +444,14 @@ pub fn set_voice_active(app: &AppHandle, active: bool) {
 
 pub fn set_panel_variant(app: &AppHandle, variant: PanelVariant) {
     if let Some(handle) = state_handle(app) {
-        handle.0.lock().unwrap().panel_variant = variant;
+        handle.0.lock().unwrap_or_else(|e| e.into_inner()).panel_variant = variant;
     }
     apply(app);
 }
 
 pub fn set_onboarding_step(app: &AppHandle, step: OnboardingStep) {
     if let Some(handle) = state_handle(app) {
-        handle.0.lock().unwrap().onboarding_step = step;
+        handle.0.lock().unwrap_or_else(|e| e.into_inner()).onboarding_step = step;
     }
 }
 
@@ -443,14 +463,14 @@ pub fn capture_user_position(app: &AppHandle, x: f64, y: f64) {
         return;
     };
     let center = {
-        let state = handle.0.lock().unwrap();
+        let state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
         if state.applying_bounds || state.presentation == OverlayPresentation::Hidden {
             return;
         }
         let size = size_for(&state);
         (x + size.width / 2.0, y + size.height / 2.0)
     };
-    handle.0.lock().unwrap().user_center = Some(center);
+    handle.0.lock().unwrap_or_else(|e| e.into_inner()).user_center = Some(center);
     persist_center(app, center.0, center.1);
 }
 
@@ -472,7 +492,7 @@ pub fn point_at(
     };
 
     {
-        let mut state = handle.0.lock().unwrap();
+        let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
         if state.pre_pointing.is_none() {
             state.pre_pointing = Some((state.presentation, state.panel_variant));
         }
@@ -490,7 +510,7 @@ pub fn point_at(
         .and_then(|_| window.set_ignore_cursor_events(true))
         .and_then(|_| window.show());
 
-    handle.0.lock().unwrap().applying_bounds = false;
+    handle.0.lock().unwrap_or_else(|e| e.into_inner()).applying_bounds = false;
 
     if let Err(e) = result {
         error!("overlay::point_at: failed to take over monitor: {e}");
@@ -529,14 +549,18 @@ pub fn cancel_pointing(app: &AppHandle) {
     };
 
     {
-        let mut state = handle.0.lock().unwrap();
+        let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
         if state.presentation != OverlayPresentation::Pointing {
             return;
         }
-        let (presentation, variant) = state
-            .pre_pointing
-            .take()
-            .unwrap_or((OverlayPresentation::Hidden, PanelVariant::Setup));
+        let (presentation, variant) = state.pre_pointing.take().unwrap_or_else(|| {
+            error!(
+                "overlay::cancel_pointing: pre_pointing was None, falling back to Hidden/Setup \
+                 - point_at should always populate this first, so this indicates a regression \
+                 in point_at's call sites"
+            );
+            (OverlayPresentation::Hidden, PanelVariant::Setup)
+        });
         state.presentation = presentation;
         state.panel_variant = variant;
     }

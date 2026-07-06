@@ -2,14 +2,26 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Store } from "@tauri-apps/plugin-store";
 import QRCode from "react-qr-code";
-import { onboarding as copy, desktopOnboardingSeenKey, getAuraAppUrl } from "../lib/copy";
+import {
+  onboarding as copy,
+  consent as consentCopy,
+  desktopOnboardingSeenKey,
+  desktopConsentAcceptedKey,
+  getAuraAppUrl,
+  overlayStorePath,
+  privacyUrl,
+  termsUrl,
+} from "../lib/copy";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { exit } from "@tauri-apps/plugin-process";
+import { setTelemetryEnabled } from "../lib/analytics";
+import { initSentryIfEnabled } from "../lib/sentry";
 import { logError, logInfo } from "../lib/log";
 import { SignInForm, type Mode as SignInMode } from "./SignInForm";
 import "./OnboardingFlow.css";
 
 type Step = "welcome" | "getApp" | "link";
 const STEPS: Step[] = ["welcome", "getApp", "link"];
-const OVERLAY_STORE_PATH = "overlay-window.json";
 // This store file is shared with overlay.rs's window-position persistence,
 // which writes to it on every WindowEvent::Moved - a burst of which fires
 // exactly when SetupPanel first mounts post-sign-out (the Bar->Setup
@@ -18,6 +30,44 @@ const OVERLAY_STORE_PATH = "overlay-window.json";
 // upper bound on how long the overlay can stay blank waiting on it, not the
 // expected common case.
 const STORE_LOAD_TIMEOUT_MS = 300;
+
+function ConsentStep({ onAccept }: { onAccept: () => void }) {
+  const [ageConfirmed, setAgeConfirmed] = useState(false);
+
+  return (
+    <div className="onboarding-step">
+      <h2 className="onboarding-heading">{consentCopy.heading}</h2>
+      <p className="onboarding-body">{consentCopy.body}</p>
+      <div className="onboarding-legal-links">
+        <button type="button" className="onboarding-link-button" onClick={() => void openUrl(privacyUrl)}>
+          {consentCopy.privacyLabel}
+        </button>
+        <button type="button" className="onboarding-link-button" onClick={() => void openUrl(termsUrl)}>
+          {consentCopy.termsLabel}
+        </button>
+      </div>
+      <label className="onboarding-age-check">
+        <input
+          type="checkbox"
+          checked={ageConfirmed}
+          onChange={(e) => setAgeConfirmed(e.target.checked)}
+        />
+        {consentCopy.ageLabel}
+      </label>
+      <button
+        type="button"
+        className="onboarding-primary-button"
+        disabled={!ageConfirmed}
+        onClick={onAccept}
+      >
+        {consentCopy.accept}
+      </button>
+      <button type="button" className="onboarding-link-button" onClick={() => void exit(0)}>
+        {consentCopy.quit}
+      </button>
+    </div>
+  );
+}
 
 function WelcomeStep({
   onNext,
@@ -69,6 +119,7 @@ function GetAppStep({ onNext, onBack }: { onNext: () => void; onBack: () => void
 export function OnboardingFlow() {
   const [step, setStep] = useState<Step>("welcome");
   const [resolved, setResolved] = useState(false);
+  const [consentAccepted, setConsentAccepted] = useState(false);
   const [initialSignInMode, setInitialSignInMode] = useState<SignInMode>("pairing");
   const storeRef = useRef<Store | null>(null);
   const forcedRef = useRef(false);
@@ -78,7 +129,7 @@ export function OnboardingFlow() {
     const startedAt = Date.now();
 
     // Hard upper bound on the blank render below: if the store read is
-    // contended (see OVERLAY_STORE_PATH's comment), default to the sign-in
+    // contended (see overlayStorePath's comment), default to the sign-in
     // screen rather than leaving the overlay blank indefinitely. Biased
     // toward "link" (skip welcome) rather than "welcome" - a user reaching
     // this component post-sign-out has, by definition, already onboarded
@@ -95,11 +146,13 @@ export function OnboardingFlow() {
       setResolved(true);
     }, STORE_LOAD_TIMEOUT_MS);
 
-    Store.load(OVERLAY_STORE_PATH)
+    Store.load(overlayStorePath)
       .then(async (store) => {
         storeRef.current = store;
         const seen = await store.get<boolean>(desktopOnboardingSeenKey);
+        const accepted = await store.get<boolean>(desktopConsentAcceptedKey);
         if (cancelled) return;
+        setConsentAccepted(Boolean(accepted));
         clearTimeout(timeoutId);
         logInfo("OnboardingFlow: load store", `resolved seen=${Boolean(seen)} in ${Date.now() - startedAt}ms`);
         // The timeout above already forced a render - a late resolution
@@ -133,9 +186,29 @@ export function OnboardingFlow() {
     }
   }, [step, resolved]);
 
+  function acceptConsent() {
+    storeRef.current?.set(desktopConsentAcceptedKey, true).catch((err) =>
+      logError("OnboardingFlow: persist consent", err),
+    );
+    // Flip immediately in-memory so telemetry starts this session too, not
+    // just after the next launch - App.tsx's own startup read covers future
+    // launches, this covers the one where consent was just given.
+    setTelemetryEnabled(true);
+    initSentryIfEnabled(true);
+    setConsentAccepted(true);
+  }
+
   // Render nothing for the one frame before the seen-flag resolves, avoiding
   // a welcome-screen flash for returning users.
   if (!resolved) return null;
+
+  if (!consentAccepted) {
+    return (
+      <div className="onboarding-flow">
+        <ConsentStep onAccept={acceptConsent} />
+      </div>
+    );
+  }
 
   return (
     <div className="onboarding-flow">

@@ -110,3 +110,22 @@
 .onboarding-new-here {
   font-size: 11px;
 }
+
+.onboarding-legal-links {
+  display: flex;
+  gap: 12px;
+}
+
+.onboarding-age-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--glass-text-dim);
+  cursor: pointer;
+}
+
+.onboarding-primary-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

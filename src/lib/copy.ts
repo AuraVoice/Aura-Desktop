@@ -1,9 +1,21 @@
 /** Verbatim UI copy ported from the Flutter app's desktop screens/widgets. Don't paraphrase - these strings are already product-tuned. */
 
+export const overlayStorePath = "overlay-window.json";
+
 export const getAuraAppUrl = "https://auravoiceapp.com/app";
 export const privacyUrl = "https://auravoiceapp.com/privacy";
 export const termsUrl = "https://auravoiceapp.com/terms";
 export const webAuthUrl = "https://auravoiceapp.com/auth";
+
+export const consent = {
+  heading: "Before we get started",
+  body: "Aura Desktop uses your voice (and, only while you explicitly turn on screen sight, your screen) to power Buddy. By continuing, you agree to Aura's Privacy Policy and Terms of Service, including the desktop addendum covering screen sight, the global hotkeys, and telemetry.",
+  ageLabel: "I confirm I am 18 years of age or older",
+  privacyLabel: "Privacy Policy",
+  termsLabel: "Terms of Service",
+  accept: "I agree, continue",
+  quit: "Quit",
+} as const;
 
 export const onboarding = {
   welcome: {
@@ -62,6 +74,8 @@ export const bar = {
   micEndCallTooltip: "End the conversation",
   micTalkTooltip: "Talk to Buddy",
   signOutTooltip: "Sign out",
+  sendFeedbackTooltip: "Send feedback",
+  feedbackSentTooltip: "Opened your email client",
 } as const;
 
 export const signOut = {
@@ -76,3 +90,9 @@ export const signOut = {
 } as const;
 
 export const desktopOnboardingSeenKey = "desktop_onboarding_seen";
+// Deliberately its own key, not folded into desktopOnboardingSeenKey above -
+// they gate different things (has the onboarding tour been shown vs. has the
+// user affirmatively accepted ToS/Privacy/telemetry), and lessons-learnt.txt
+// already has one incident from two concerns sharing state in this same store
+// file. Telemetry is enabled/disabled by this same flag - see analytics.ts.
+export const desktopConsentAcceptedKey = "desktop_consent_accepted";

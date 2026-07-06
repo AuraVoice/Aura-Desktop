@@ -45,3 +45,11 @@
   min-height: 0;
   overflow-y: auto;
 }
+
+.setup-panel-version {
+  flex-shrink: 0;
+  align-self: center;
+  font-size: 10px;
+  color: var(--glass-text-dim);
+  opacity: 0.6;
+}

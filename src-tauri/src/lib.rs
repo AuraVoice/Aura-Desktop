@@ -3,6 +3,7 @@ mod hotkeys;
 mod logging;
 mod overlay;
 mod screenshot;
+mod sentry_setup;
 mod tray;
 mod updater;
 mod win_focus;
@@ -82,8 +83,39 @@ fn cancel_pointing(app: AppHandle) {
     overlay::cancel_pointing(&app);
 }
 
+#[tauri::command]
+fn install_pending_update(app: AppHandle) -> Result<bool, String> {
+    updater::install_pending_update(&app)
+}
+
+/// Reads the last `count` lines of the durable app log, for the in-app
+/// feedback button to attach - file IO, so this is async per this repo's own
+/// main-thread-blocking rule rather than reading inline.
+#[tauri::command]
+async fn read_recent_log_lines(app: AppHandle, count: usize) -> Result<Vec<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        // Matches tauri-plugin-log's own LogDir{file_name: None} naming:
+        // <app_log_dir>/<cargo package name>.log (see logging.rs's plugin()).
+        let path = app
+            .path()
+            .app_log_dir()
+            .map_err(|e| e.to_string())?
+            .join("aura-desktop.log");
+        let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let lines: Vec<String> = content.lines().map(String::from).collect();
+        let start = lines.len().saturating_sub(count);
+        Ok(lines[start..].to_vec())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Held for the whole process lifetime (run() doesn't return until the app
+    // exits) - dropping it early would flush and disable the client.
+    let _sentry_guard = sentry_setup::init();
+
     tauri::Builder::default()
         .plugin(logging::plugin())
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
@@ -106,6 +138,7 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .manage(OverlayStateHandle::default())
         .manage(ForegroundGeneration::default())
+        .manage(updater::PendingUpdate::default())
         .invoke_handler(tauri::generate_handler![
             current_overlay_state,
             esc_pressed,
@@ -118,6 +151,8 @@ pub fn run() {
             summon,
             point_at,
             cancel_pointing,
+            install_pending_update,
+            read_recent_log_lines,
             screenshot::capture_cursor_display_with_geometry
         ])
         .setup(|app| {
