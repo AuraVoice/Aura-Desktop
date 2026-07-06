@@ -13,7 +13,7 @@ const OVERLAY_STORE: &str = "overlay-window.json";
 const CENTER_X_KEY: &str = "overlay_center_x";
 const CENTER_Y_KEY: &str = "overlay_center_y";
 
-const BAR_WIDTH: f64 = 520.0;
+const BAR_WIDTH: f64 = 600.0;
 const BAR_HEIGHT: f64 = 64.0;
 const PILL_WIDTH: f64 = 280.0;
 // Canvas height is sized to the model's own aspect ratio (modelHalfWidth /

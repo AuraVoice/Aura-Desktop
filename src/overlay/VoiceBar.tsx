@@ -3,11 +3,10 @@ import { signOut } from "firebase/auth";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { auth } from "../lib/firebase";
-import { bar as copy, signOut as signOutCopy } from "../lib/copy";
+import { bar as copy, signOut as signOutCopy, hotkeyHints } from "../lib/copy";
 import { logError, logInfo } from "../lib/log";
-import { CheckIcon, EndCallIcon, EyeIcon, EyeOffIcon, FeedbackIcon, MicIcon, MinimizeIcon, RefreshIcon, SettingsIcon, SignOutIcon } from "./icons";
+import { AvatarIcon, IncognitoOffIcon, IncognitoOnIcon, RefreshIcon, SettingsIcon, SignOutIcon, WaveformIcon } from "./icons";
 import { BarIconButton } from "./BarIconButton";
-import { sendFeedback } from "../lib/feedback";
 import type { VoiceBarState } from "./useVoiceBar";
 import iconUrl from "../assets/icons/Aura-Icon.png";
 import "./VoiceBar.css";
@@ -30,9 +29,7 @@ export function VoiceBar({ voice, screenSight }: VoiceBarProps) {
   const [signingOut, setSigningOut] = useState(false);
   const [signOutError, setSignOutError] = useState<string | null>(null);
   const [signOutStuck, setSignOutStuck] = useState(false);
-  const [feedbackSent, setFeedbackSent] = useState(false);
   const signOutTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const feedbackBusyRef = useRef(false);
 
   const isLive = LIVE_STATUSES.has(voice.status);
   const isError = voice.status === "error";
@@ -60,23 +57,6 @@ export function VoiceBar({ voice, screenSight }: VoiceBarProps) {
 
   function handleMinimize() {
     invoke("minimize_to_pill").catch((err) => logError("VoiceBar: minimize_to_pill", err));
-  }
-
-  // Debounced via the ref (not just disabling the button, which would still
-  // race a second click landing before the first re-render) so a rapid
-  // double-click can't open two mail composers.
-  function handleSendFeedback() {
-    if (feedbackBusyRef.current) return;
-    feedbackBusyRef.current = true;
-    sendFeedback(voice.status)
-      .then(() => {
-        setFeedbackSent(true);
-        setTimeout(() => setFeedbackSent(false), 3000);
-      })
-      .catch((err) => logError("VoiceBar: sendFeedback", err))
-      .finally(() => {
-        feedbackBusyRef.current = false;
-      });
   }
 
   const micTooltip = isError ? copy.micTryAgainTooltip : isLive ? copy.micEndCallTooltip : copy.micTalkTooltip;
@@ -161,33 +141,29 @@ export function VoiceBar({ voice, screenSight }: VoiceBarProps) {
       )}
 
       <BarIconButton
+        className="voice-bar-eye"
         title={screenSight.armed ? copy.screenSightOnTooltip : copy.screenSightOffTooltip}
+        shortcut={hotkeyHints.screenSight.keys}
         active={screenSight.armed}
         onClick={screenSight.toggleArmed}
       >
-        {screenSight.armed ? <EyeIcon /> : <EyeOffIcon />}
+        {screenSight.armed ? <IncognitoOnIcon /> : <IncognitoOffIcon />}
+        <span className="bar-icon-button-dot" aria-hidden="true" />
       </BarIconButton>
 
       {isLive && (
         <BarIconButton title={copy.minimizeTooltip} onClick={handleMinimize}>
-          <MinimizeIcon />
+          <AvatarIcon />
         </BarIconButton>
       )}
 
-      <BarIconButton
-        title={feedbackSent ? copy.feedbackSentTooltip : copy.sendFeedbackTooltip}
-        onClick={handleSendFeedback}
-      >
-        {feedbackSent ? <CheckIcon /> : <FeedbackIcon />}
-      </BarIconButton>
-
-      <BarIconButton title={micTooltip} onClick={handleMicClick} danger={isLive}>
-        {isError ? <RefreshIcon /> : isLive ? <EndCallIcon /> : <MicIcon />}
+      <BarIconButton className="voice-bar-mic" title={micTooltip} onClick={handleMicClick} active={isLive}>
+        {isError ? <RefreshIcon /> : <WaveformIcon />}
       </BarIconButton>
 
       <span className="voice-bar-divider" />
 
-      <BarIconButton title={copy.signOutTooltip} onClick={handleOpenConfirm}>
+      <BarIconButton title={copy.signOutTooltip} onClick={handleOpenConfirm} danger>
         <SignOutIcon />
       </BarIconButton>
     </div>

@@ -5,7 +5,7 @@ import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
 import { invoke } from "@tauri-apps/api/core";
 import { bar as copy } from "../lib/copy";
 import { logError } from "../lib/log";
-import { EyeIcon } from "./icons";
+import { IncognitoOnIcon } from "./icons";
 import type { VoiceBarState } from "./useVoiceBar";
 import modelUrl from "../assets/models/buddy.glb";
 import dracoWasmWrapperUrl from "three/examples/jsm/libs/draco/draco_wasm_wrapper.js?url";
@@ -200,7 +200,7 @@ export function AvatarPill({ voice, screenSight }: AvatarPillProps) {
     >
       {screenSight.armed && (
         <span className="avatar-pill-sight-indicator">
-          <EyeIcon />
+          <IncognitoOnIcon />
         </span>
       )}
       <canvas ref={canvasRef} className="avatar-pill-canvas" />

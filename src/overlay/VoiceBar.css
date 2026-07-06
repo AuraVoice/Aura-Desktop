@@ -1,11 +1,40 @@
 .voice-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   width: 100%;
   height: 100%;
   padding: 0 16px;
   box-sizing: border-box;
+}
+
+/* Waveform bars scale from their own center, not the SVG viewport origin. */
+.voice-bar-mic svg rect {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.voice-bar-mic.bar-icon-button-active svg rect {
+  animation: voice-bar-wave-pulse 0.9s ease-in-out infinite;
+}
+
+.voice-bar-mic.bar-icon-button-active svg rect:nth-child(1) { animation-delay: -0.15s; }
+.voice-bar-mic.bar-icon-button-active svg rect:nth-child(2) { animation-delay: -0.6s; }
+.voice-bar-mic.bar-icon-button-active svg rect:nth-child(3) { animation-delay: -0.3s; }
+.voice-bar-mic.bar-icon-button-active svg rect:nth-child(4) { animation-delay: -0.75s; }
+.voice-bar-mic.bar-icon-button-active svg rect:nth-child(5) { animation-delay: -0.3s; }
+.voice-bar-mic.bar-icon-button-active svg rect:nth-child(6) { animation-delay: -0.6s; }
+.voice-bar-mic.bar-icon-button-active svg rect:nth-child(7) { animation-delay: -0.15s; }
+
+@keyframes voice-bar-wave-pulse {
+  0%, 100% { transform: scaleY(0.5); }
+  50% { transform: scaleY(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-bar-mic.bar-icon-button-active svg rect {
+    animation: none;
+  }
 }
 
 .voice-bar-icon {

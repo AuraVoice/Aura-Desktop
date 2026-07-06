@@ -1,17 +1,20 @@
 .bar-icon-button {
+  position: relative;
+  box-sizing: border-box;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  border: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 32%;
+  border: 1px solid transparent;
   background: transparent;
   color: var(--glass-icon-idle);
   opacity: 0.8;
   cursor: pointer;
   flex-shrink: 0;
-  transition: opacity 0.12s ease;
+  padding: 0;
+  transition: opacity 0.12s ease, background-color 0.12s ease, color 0.15s ease, border-color 0.15s ease;
 }
 
 .bar-icon-button:hover {
@@ -27,6 +30,8 @@
 .bar-icon-button-active {
   color: var(--glass-accent-lerp-white);
   opacity: 1;
+  background: rgba(116, 221, 206, 0.16);
+  border-color: rgba(116, 221, 206, 0.38);
 }
 
 .bar-icon-button-danger {
@@ -35,6 +40,28 @@
 }
 
 .bar-icon-button svg {
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
+}
+
+/** Small persistent dot, opt-in per button via a child span, only visible
+ * while the button is in its active state (e.g. screen sight armed). */
+.bar-icon-button-dot {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--glass-accent-lerp-white);
+  box-shadow: 0 0 4px var(--glass-accent-glow);
+  opacity: 0;
+  transform: scale(0.6);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  pointer-events: none;
+}
+
+.bar-icon-button-active .bar-icon-button-dot {
+  opacity: 1;
+  transform: scale(1);
 }

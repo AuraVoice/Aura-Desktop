@@ -1,41 +1,9 @@
 /** Small inline icon set for the bar/pill - no icon font/library dependency needed for this handful of glyphs. */
 
-export function MicIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3zm5-3c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z" />
-    </svg>
-  );
-}
-
 export function RefreshIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="currentColor">
       <path d="M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z" />
-    </svg>
-  );
-}
-
-export function EndCallIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08a.996.996 0 0 1-.29-.7c0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.71l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28-.79-.74-1.69-1.36-2.67-1.85-.33-.16-.56-.51-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z" />
-    </svg>
-  );
-}
-
-export function EyeIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zm0 12.5c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z" />
-    </svg>
-  );
-}
-
-export function EyeOffIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="currentColor">
-      <path d="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46C3.08 8.3 1.78 10.02 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27zM7.53 9.8l1.55 1.55c-.05.21-.08.42-.08.65 0 1.66 1.34 3 3 3 .22 0 .44-.03.65-.08l1.55 1.55c-.67.33-1.41.53-2.2.53-2.76 0-5-2.24-5-5 0-.79.2-1.53.53-2.2zm4.31-.78 3.15 3.15.02-.16c0-1.66-1.34-3-3-3l-.17.01z" />
     </svg>
   );
 }
@@ -48,34 +16,81 @@ export function SettingsIcon() {
   );
 }
 
-export function MinimizeIcon() {
+/** Blank shades over a hat when off (private, incognito), two small pupils
+ * appear inside the same lenses when armed (watching). One silhouette, only
+ * the eyes change, since the toggle is really "is Buddy watching or not." */
+export function IncognitoOffIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="currentColor">
-      <path d="M6 19h12v2H6z" />
+    <svg viewBox="0 0 24 24">
+      <path d="M5 11A7 6 0 0 1 19 11Z" fill="currentColor" />
+      <rect x="3" y="10.2" width="18" height="2" rx="1" fill="currentColor" />
+      <path
+        fillRule="evenodd"
+        clipRule="evenodd"
+        d="M7.9 12.6H16.1A3.4 3.4 0 0 1 19.5 16V17A3.4 3.4 0 0 1 16.1 20.4H7.9A3.4 3.4 0 0 1 4.5 17V16A3.4 3.4 0 0 1 7.9 12.6Z M6.9 16.3a1.7 1.7 0 1 0 3.4 0 1.7 1.7 0 1 0 -3.4 0Z M13.7 16.3a1.7 1.7 0 1 0 3.4 0 1.7 1.7 0 1 0 -3.4 0Z"
+        fill="currentColor"
+      />
     </svg>
   );
 }
 
-export function FeedbackIcon() {
+export function IncognitoOnIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="currentColor">
-      <path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-7 12h-2v-2h2v2zm0-4h-2V6h2v4z" />
+    <svg viewBox="0 0 24 24">
+      <path d="M5 11A7 6 0 0 1 19 11Z" fill="currentColor" />
+      <rect x="3" y="10.2" width="18" height="2" rx="1" fill="currentColor" />
+      <path
+        fillRule="evenodd"
+        clipRule="evenodd"
+        d="M7.9 12.6H16.1A3.4 3.4 0 0 1 19.5 16V17A3.4 3.4 0 0 1 16.1 20.4H7.9A3.4 3.4 0 0 1 4.5 17V16A3.4 3.4 0 0 1 7.9 12.6Z M6.9 16.3a1.7 1.7 0 1 0 3.4 0 1.7 1.7 0 1 0 -3.4 0Z M13.7 16.3a1.7 1.7 0 1 0 3.4 0 1.7 1.7 0 1 0 -3.4 0Z"
+        fill="currentColor"
+      />
+      <circle cx="8.6" cy="16.3" r="0.85" fill="currentColor" />
+      <circle cx="15.4" cy="16.3" r="0.85" fill="currentColor" />
     </svg>
   );
 }
 
-export function CheckIcon() {
+/** Seven bar level meter. Same glyph for idle and live, VoiceBar.css animates
+ * the bars and recolors them while a call is live instead of swapping to a
+ * separate "end call" pictogram. */
+export function WaveformIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="currentColor">
-      <path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z" />
+      <rect x="0.4" y="8" width="2.2" height="8" rx="1.1" />
+      <rect x="3.9" y="4.5" width="2.2" height="15" rx="1.1" />
+      <rect x="7.4" y="6.5" width="2.2" height="11" rx="1.1" />
+      <rect x="10.9" y="2" width="2.2" height="20" rx="1.1" />
+      <rect x="14.4" y="6.5" width="2.2" height="11" rx="1.1" />
+      <rect x="17.9" y="4.5" width="2.2" height="15" rx="1.1" />
+      <rect x="21.4" y="8" width="2.2" height="8" rx="1.1" />
+    </svg>
+  );
+}
+
+/** Head and shoulders mark for the minimize button, matching what it actually
+ * does: collapses the bar to the floating avatar on screen while the call
+ * keeps going. */
+export function AvatarIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor">
+      <circle cx="12" cy="8" r="4.2" />
+      <path d="M4 20A8 7 0 0 1 20 20Z" />
     </svg>
   );
 }
 
 export function SignOutIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="currentColor">
-      <path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.58L17 17l5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z" />
+    <svg viewBox="0 0 24 24">
+      <circle cx="7" cy="4.5" r="2" fill="currentColor" />
+      <path d="M7.2 7.2L9.8 12.5" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
+      <path d="M9.8 12.5L11.8 15L11.3 19" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M9.8 12.5L7 15.5L4.2 16" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M7.5 8L11.8 9" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+      <path d="M7 7.8L4.3 8.8L2.5 7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M14 2.5H20.5V21.5H14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M12.5 6H18M15 3.3L18 6L15 8.7" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
