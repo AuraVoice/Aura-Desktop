@@ -63,6 +63,18 @@
   color: var(--glass-accent);
 }
 
+/* The update chip stays accent-tinted with its dot always on - it signals
+   "something is waiting for you", not an active/inactive toggle state. */
+.bar-icon-button.voice-bar-update {
+  color: var(--glass-accent-lerp-white);
+  opacity: 1;
+}
+
+.voice-bar-update .bar-icon-button-dot {
+  opacity: 1;
+  transform: scale(1);
+}
+
 .voice-bar-divider {
   width: 1px;
   height: 18px;
@@ -92,7 +104,8 @@
 }
 
 .voice-bar-confirm-cancel,
-.voice-bar-confirm-signout {
+.voice-bar-confirm-signout,
+.voice-bar-confirm-update {
   flex-shrink: 0;
   font-family: var(--font-body);
   font-size: 12px;
@@ -113,8 +126,14 @@
   color: #1a0d0a;
 }
 
+.voice-bar-confirm-update {
+  background: var(--glass-accent);
+  color: #04211c;
+}
+
 .voice-bar-confirm-cancel:disabled,
-.voice-bar-confirm-signout:disabled {
+.voice-bar-confirm-signout:disabled,
+.voice-bar-confirm-update:disabled {
   opacity: 0.6;
   cursor: default;
 }

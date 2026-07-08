@@ -37,6 +37,11 @@ fn set_panel_variant(app: AppHandle, variant: PanelVariant) {
 }
 
 #[tauri::command]
+fn set_draft_card_open(app: AppHandle, open: bool) {
+    overlay::set_draft_card_open(&app, open);
+}
+
+#[tauri::command]
 fn set_onboarding_step(app: AppHandle, step: OnboardingStep) {
     overlay::set_onboarding_step(&app, step);
 }
@@ -82,11 +87,6 @@ fn point_at(
 #[tauri::command]
 fn cancel_pointing(app: AppHandle) {
     overlay::cancel_pointing(&app);
-}
-
-#[tauri::command]
-fn install_pending_update(app: AppHandle) -> Result<bool, String> {
-    updater::install_pending_update(&app)
 }
 
 /// Reads the last `count` lines of the durable app log, for the in-app
@@ -143,14 +143,17 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .manage(OverlayStateHandle::default())
         .manage(ForegroundGeneration::default())
         .manage(updater::PendingUpdate::default())
+        .manage(updater::UpdatedNotice::default())
         .invoke_handler(tauri::generate_handler![
             current_overlay_state,
             esc_pressed,
             set_voice_active,
             set_panel_variant,
+            set_draft_card_open,
             set_onboarding_step,
             pill_activated,
             minimize_to_pill,
@@ -158,7 +161,9 @@ pub fn run() {
             summon,
             point_at,
             cancel_pointing,
-            install_pending_update,
+            updater::install_update,
+            updater::pending_update_version,
+            updater::just_updated_version,
             read_recent_log_lines,
             screenshot::capture_cursor_display_with_geometry
         ])
@@ -216,17 +221,29 @@ pub fn run() {
             overlay::load_persisted_center(app.handle());
             overlay::set_panel_variant(app.handle(), initial_variant);
 
+            // Present right after a user-initiated update restart. The update
+            // relaunch reuses the original args, so a boot-launched instance
+            // would otherwise come back hidden after the user clicked
+            // "Restart now" - the marker overrides the --autostart quiet
+            // start below. The caption only claims a version we're actually
+            // running: a marker left by a failed install doesn't match.
+            let just_updated = updater::take_just_updated_marker(app.handle());
+            if just_updated.as_deref() == Some(env!("CARGO_PKG_VERSION")) {
+                *app.state::<updater::UpdatedNotice>().0.lock().unwrap_or_else(|e| e.into_inner()) =
+                    just_updated.clone();
+            }
+
             // Launched by Windows at login (the autostart entry passes
             // --autostart): stay tray-only instead of popping the panel over
             // whatever the user is signing in to do. Manual launches keep the
             // summon-on-start behavior; the hotkey and tray still summon.
             let is_boot_launch = std::env::args().any(|arg| arg == "--autostart");
-            if !is_boot_launch {
+            if !is_boot_launch || just_updated.is_some() {
                 overlay::summon(app.handle());
             }
 
             let updater_handle = app.handle().clone();
-            tauri::async_runtime::spawn(updater::check_for_updates(updater_handle));
+            tauri::async_runtime::spawn(updater::run_update_loop(updater_handle));
 
             Ok(())
         })

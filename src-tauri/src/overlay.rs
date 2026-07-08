@@ -28,6 +28,10 @@ const PILL_HEIGHT: f64 = 374.0;
 const SETUP_WIDTH: f64 = 600.0;
 const SETUP_HEIGHT: f64 = 340.0;
 const TOP_MARGIN: f64 = 48.0;
+// Extra window height below the bar for the Buddy Drafts card (card + gap).
+// The card itself scrolls internally for long drafts, so this stays one fixed
+// number instead of per-draft window resizes. Keep in sync with DraftCard.css.
+const DRAFT_CARD_HEIGHT: f64 = 232.0;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -70,9 +74,14 @@ pub struct OverlayState {
     panel_variant: PanelVariant,
     onboarding_step: OnboardingStep,
     voice_active: bool,
+    // Whether the Buddy Drafts card is showing under the bar; React owns the
+    // card's content and drives this flag via the set_draft_card_open command,
+    // Rust only grows/shrinks the window for it (Panel+Bar only).
+    draft_card_open: bool,
     user_center: Option<(f64, f64)>,
     applied_presentation: Option<OverlayPresentation>,
     applied_variant: Option<PanelVariant>,
+    applied_draft_card: Option<bool>,
     applying_bounds: bool,
     pre_pointing: Option<(OverlayPresentation, PanelVariant)>,
 }
@@ -84,9 +93,11 @@ impl Default for OverlayState {
             panel_variant: PanelVariant::Setup,
             onboarding_step: OnboardingStep::Welcome,
             voice_active: false,
+            draft_card_open: false,
             user_center: None,
             applied_presentation: None,
             applied_variant: None,
+            applied_draft_card: None,
             applying_bounds: false,
             pre_pointing: None,
         }
@@ -209,12 +220,27 @@ fn default_position(window: &WebviewWindow, size: LogicalSize<f64>) -> LogicalPo
     )
 }
 
+/// Whether the current state renders the draft card below the bar (the only
+/// place it exists; Pill/Setup/Pointing ignore the flag entirely).
+fn draft_card_showing(state: &OverlayState) -> bool {
+    state.draft_card_open
+        && state.presentation == OverlayPresentation::Panel
+        && state.panel_variant == PanelVariant::Bar
+}
+
 fn position_for(
     state: &OverlayState,
     window: &WebviewWindow,
     size: LogicalSize<f64>,
 ) -> LogicalPosition<f64> {
     match state.user_center {
+        // user_center always means the BAR's center: with the draft card open
+        // the window is taller, but anchoring the top edge at cy - BAR_HEIGHT/2
+        // keeps the bar pinned in place and grows the card downward instead of
+        // re-centering the whole window around it.
+        Some((cx, cy)) if draft_card_showing(state) => {
+            LogicalPosition::new(cx - size.width / 2.0, cy - BAR_HEIGHT / 2.0)
+        }
         Some((cx, cy)) => LogicalPosition::new(cx - size.width / 2.0, cy - size.height / 2.0),
         None => default_position(window, size),
     }
@@ -223,7 +249,13 @@ fn position_for(
 fn size_for(state: &OverlayState) -> LogicalSize<f64> {
     match (state.presentation, state.panel_variant) {
         (OverlayPresentation::Pill, _) => LogicalSize::new(PILL_WIDTH, PILL_HEIGHT),
-        (OverlayPresentation::Panel, PanelVariant::Bar) => LogicalSize::new(BAR_WIDTH, BAR_HEIGHT),
+        (OverlayPresentation::Panel, PanelVariant::Bar) => {
+            if state.draft_card_open {
+                LogicalSize::new(BAR_WIDTH, BAR_HEIGHT + DRAFT_CARD_HEIGHT)
+            } else {
+                LogicalSize::new(BAR_WIDTH, BAR_HEIGHT)
+            }
+        }
         (OverlayPresentation::Panel, PanelVariant::Setup) => {
             LogicalSize::new(SETUP_WIDTH, SETUP_HEIGHT)
         }
@@ -272,7 +304,8 @@ pub fn apply(app: &AppHandle) {
     let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
 
     let unchanged = state.applied_presentation == Some(state.presentation)
-        && state.applied_variant == Some(state.panel_variant);
+        && state.applied_variant == Some(state.panel_variant)
+        && state.applied_draft_card == Some(state.draft_card_open);
     if unchanged {
         return;
     }
@@ -283,6 +316,7 @@ pub fn apply(app: &AppHandle) {
         let from = (state.applied_presentation, state.applied_variant);
         state.applied_presentation = Some(state.presentation);
         state.applied_variant = Some(state.panel_variant);
+        state.applied_draft_card = Some(state.draft_card_open);
         drop(state);
         info!("overlay::apply: hiding (from {from:?})");
         if let Err(e) = window.hide() {
@@ -295,6 +329,7 @@ pub fn apply(app: &AppHandle) {
 
     let presentation = state.presentation;
     let panel_variant = state.panel_variant;
+    let draft_card_open = state.draft_card_open;
     let size = size_for(&state);
     let position = position_for(&state, &window, size);
     state.applying_bounds = true;
@@ -331,6 +366,7 @@ pub fn apply(app: &AppHandle) {
         let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
         state.applied_presentation = Some(presentation);
         state.applied_variant = Some(panel_variant);
+        state.applied_draft_card = Some(draft_card_open);
     }
     emit_overlay_changed(app);
     info!(
@@ -458,6 +494,16 @@ pub fn set_panel_variant(app: &AppHandle, variant: PanelVariant) {
     apply(app);
 }
 
+/// Buddy Drafts card visibility, driven by React (useDraftCard). Only changes
+/// window geometry in Panel+Bar; the flag is remembered across presentations
+/// so a draft that arrives mid-pill still has its space once the panel is back.
+pub fn set_draft_card_open(app: &AppHandle, open: bool) {
+    if let Some(handle) = state_handle(app) {
+        handle.0.lock().unwrap_or_else(|e| e.into_inner()).draft_card_open = open;
+    }
+    apply(app);
+}
+
 pub fn set_onboarding_step(app: &AppHandle, step: OnboardingStep) {
     if let Some(handle) = state_handle(app) {
         handle.0.lock().unwrap_or_else(|e| e.into_inner()).onboarding_step = step;
@@ -477,7 +523,14 @@ pub fn capture_user_position(app: &AppHandle, x: f64, y: f64) {
             return;
         }
         let size = size_for(&state);
-        (x + size.width / 2.0, y + size.height / 2.0)
+        // With the draft card open, user_center must keep meaning "the bar's
+        // center" (matching position_for's anchoring), or a drag while the
+        // card is showing would shift the bar the moment the card closes.
+        if draft_card_showing(&state) {
+            (x + size.width / 2.0, y + BAR_HEIGHT / 2.0)
+        } else {
+            (x + size.width / 2.0, y + size.height / 2.0)
+        }
     };
     handle.0.lock().unwrap_or_else(|e| e.into_inner()).user_center = Some(center);
     persist_center(app, center.0, center.1);
