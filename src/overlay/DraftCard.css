@@ -23,11 +23,27 @@
 }
 
 /* The card is a second glass surface: same tokens, gentler corner radius (the
-   60px pill radius reads wrong on a 220px-tall box). */
+   60px pill radius reads wrong on a 220px-tall box). The mount animation makes
+   the instant Rust window resize read as one smooth downward expansion: the
+   window itself is transparent, so all the eye sees is the card sliding out
+   from under the bar. Starting at opacity 0 also hides the 1-2 frames where
+   React has mounted the card but the IPC resize hasn't landed yet. */
 .glass-surface.draft-card {
   flex: 1 1 auto;
   min-height: 0;
   border-radius: 28px;
+  animation: draft-card-enter 0.22s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+
+@keyframes draft-card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
 }
 
 .draft-card-inner {
@@ -182,6 +198,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .glass-surface.draft-card,
   .draft-card-shimmer span,
   .draft-card-spinner {
     animation: none;

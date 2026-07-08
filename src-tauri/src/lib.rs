@@ -96,12 +96,15 @@ fn cancel_pointing(app: AppHandle) {
 async fn read_recent_log_lines(app: AppHandle, count: usize) -> Result<Vec<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         // Matches tauri-plugin-log's own LogDir{file_name: None} naming:
-        // <app_log_dir>/<cargo package name>.log (see logging.rs's plugin()).
+        // <app_log_dir>/<product name>.log ("Aura Desktop.log" - see
+        // logging.rs's plugin()). Derived from package_info() rather than
+        // hardcoded so a productName change can't silently break this again.
+        let file_name = format!("{}.log", app.package_info().name);
         let path = app
             .path()
             .app_log_dir()
             .map_err(|e| e.to_string())?
-            .join("aura-desktop.log");
+            .join(file_name);
         let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
         let lines: Vec<String> = content.lines().map(String::from).collect();
         let start = lines.len().saturating_sub(count);
@@ -117,11 +120,21 @@ pub fn run() {
     // exits) - dropping it early would flush and disable the client.
     let _sentry_guard = sentry_setup::init();
 
-    tauri::Builder::default()
-        .plugin(logging::plugin())
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+    let mut builder = tauri::Builder::default().plugin(logging::plugin());
+
+    // Release-only: dev and installed builds share the same com.aura.desktop
+    // single-instance key, and autostart keeps the installed app alive in the
+    // tray. Registering this in a debug build makes `npm run tauri dev`
+    // forward its launch to that old instance and exit - the panel that pops
+    // up is the installed binary, not the code being worked on (cost a full
+    // debugging cycle to spot; see lessons-learnt.txt 2026-07-08).
+    if !cfg!(debug_assertions) {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             overlay::summon(app);
-        }))
+        }));
+    }
+
+    builder
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
