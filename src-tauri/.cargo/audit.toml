@@ -1,0 +1,17 @@
+[advisories]
+ignore = [
+    # RUSTSEC-2026-0194 / RUSTSEC-2026-0195: quick-xml DoS (quadratic duplicate
+    # attribute checking, unbounded namespace allocation) when parsing
+    # attacker-supplied XML. Both remaining vulnerable copies sit behind xcap's
+    # Linux-only capture backends and only ever run at build time on trusted,
+    # bundled protocol definition files:
+    #   - quick-xml 0.30.0: build-dependency of xcb 1.7.0 (X11 code generator)
+    #   - quick-xml 0.39.4: wayland-scanner 0.31.10 (proc-macro codegen)
+    # Neither compiles on Windows (the only shipped target today), and neither
+    # parses runtime input on any target. No patched xcb / wayland-scanner
+    # releases exist yet (checked 2026-07-07). Drop these ignores once
+    # `cargo update xcb wayland-scanner` resolves them to quick-xml >= 0.41 -
+    # the app-facing copy (via plist / tauri-utils) is already on 0.41.0.
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+]
