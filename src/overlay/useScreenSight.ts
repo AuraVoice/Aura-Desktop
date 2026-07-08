@@ -22,6 +22,10 @@ interface ElementPointEvent {
 
 const RETAINED_FRAME_GEOMETRY_COUNT = 4;
 
+// How long the "Saved to X" confirmation stays in the bar's caption before
+// yielding back to the normal assistant caption.
+const SAVED_CONFIRMATION_DURATION_MS = 3500;
+
 // Must match `GEOMETRY_HEADER_LEN` and `ScreenFrameGeometry::write_le` in
 // screenshot.rs - 7 little-endian 4-byte fields ahead of the raw JPEG bytes.
 const GEOMETRY_HEADER_LEN = 4 * 7;
@@ -32,6 +36,22 @@ function isSessionLive(status: VoiceSessionStatus): boolean {
 
 function isTerminalStatus(status: VoiceSessionStatus): boolean {
   return status === "disconnected" || status === "ended" || status === "error";
+}
+
+// invoke() only delivers a real ArrayBuffer while Tauri's custom-protocol IPC
+// channel is alive. A single failed fetch on that channel (a CSP connect-src
+// missing "ipc: http://ipc.localhost" did exactly this in the 0.1.4 build)
+// latches the whole session onto Tauri's postMessage fallback, where a raw
+// tauri::ipc::Response gets JSON-serialized into a plain number array instead.
+// Normalize the transport's shapes rather than handing DataView something it
+// throws on - see lessons-learnt.txt, 2026-07-07.
+function asArrayBuffer(raw: unknown): ArrayBuffer {
+  if (raw instanceof ArrayBuffer) return raw;
+  if (ArrayBuffer.isView(raw)) {
+    return raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) as ArrayBuffer;
+  }
+  if (Array.isArray(raw)) return Uint8Array.from(raw as number[]).buffer;
+  throw new Error(`capture returned ${Object.prototype.toString.call(raw)}, expected binary`);
 }
 
 function parseCapturedFrame(buffer: ArrayBuffer): { geometry: ScreenFrameGeometry; bytes: Uint8Array } {
@@ -73,10 +93,12 @@ function screenPointFor(geometry: ScreenFrameGeometry, jpegX: number, jpegY: num
  */
 export function useScreenSight(room: Room | null, status: VoiceSessionStatus) {
   const [armed, setArmed] = useState(false);
+  const [savedConfirmation, setSavedConfirmation] = useState<string | null>(null);
   const capturedThisTurnRef = useRef(false);
   const sessionReadyCapturedRef = useRef(false);
   const frameCounterRef = useRef(0);
   const sentGeometryRef = useRef<Map<string, ScreenFrameGeometry>>(new Map());
+  const savedConfirmationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const armedRef = useRef(armed);
   armedRef.current = armed;
 
@@ -85,7 +107,7 @@ export function useScreenSight(room: Room | null, status: VoiceSessionStatus) {
       if (!armedRef.current || !room) return;
       let buffer: ArrayBuffer;
       try {
-        buffer = await invoke<ArrayBuffer>("capture_cursor_display_with_geometry");
+        buffer = asArrayBuffer(await invoke("capture_cursor_display_with_geometry"));
       } catch (err) {
         logError(`useScreenSight: capture (${reason})`, err);
         return;
@@ -204,13 +226,30 @@ export function useScreenSight(room: Room | null, status: VoiceSessionStatus) {
       }
     }
 
-    // Only genuinely real message on this data channel that useScreenSight
+    // Backend confirmation that a screen_save.created write landed (see
+    // save_screen_item on the voice agent) - surfaced as a brief caption in
+    // the bar, not tied to capture/send in any way.
+    function handleScreenSaveCreated(event: ElementPointEvent) {
+      const payload = event.payload;
+      const collectionName = typeof payload?.collection_name === "string" ? payload.collection_name.trim() : "";
+      const title = typeof payload?.title === "string" ? payload.title.trim() : "";
+      const label = collectionName ? `Saved to ${collectionName}` : title ? `Saved "${title}"` : "Saved";
+      if (savedConfirmationTimeoutRef.current) clearTimeout(savedConfirmationTimeoutRef.current);
+      setSavedConfirmation(label);
+      savedConfirmationTimeoutRef.current = setTimeout(() => {
+        savedConfirmationTimeoutRef.current = null;
+        setSavedConfirmation(null);
+      }, SAVED_CONFIRMATION_DURATION_MS);
+    }
+
+    // Only genuinely real messages on this data channel that useScreenSight
     // cares about - session.ready/user.text.*/session.ended never arrive
-    // (see useVoiceBar.ts), element.point does.
+    // (see useVoiceBar.ts), element.point and screen_save.created do.
     function onDataReceived(payload: Uint8Array) {
       try {
         const event = JSON.parse(new TextDecoder().decode(payload)) as ElementPointEvent;
         if (event.type === "element.point") handleElementPoint(event);
+        else if (event.type === "screen_save.created") handleScreenSaveCreated(event);
       } catch {
         // not JSON - not one of ours, ignore
       }
@@ -241,8 +280,9 @@ export function useScreenSight(room: Room | null, status: VoiceSessionStatus) {
     return () => {
       room.off(RoomEvent.DataReceived, onDataReceived);
       room.off(RoomEvent.TranscriptionReceived, onTranscriptionReceived);
+      if (savedConfirmationTimeoutRef.current) clearTimeout(savedConfirmationTimeoutRef.current);
     };
   }, [room, captureAndSend]);
 
-  return { armed, toggleArmed };
+  return { armed, toggleArmed, savedConfirmation };
 }

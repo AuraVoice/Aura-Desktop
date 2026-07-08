@@ -1,4 +1,5 @@
 mod auth_cache;
+mod autostart;
 mod hotkeys;
 mod logging;
 mod overlay;
@@ -130,6 +131,12 @@ pub fn run() {
                 })
                 .build(),
         )
+        // The --autostart arg marks boot launches so setup below can skip the
+        // initial summon (see autostart.rs for the enable/disable policy).
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec!["--autostart"]),
+        ))
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_os::init())
@@ -158,10 +165,25 @@ pub fn run() {
         .setup(|app| {
             logging::install_panic_hook();
 
+            // tauri.conf.json's `skipTaskbar: true` keeps this off the Windows
+            // taskbar but has no macOS equivalent - Accessory is the matching
+            // policy there, hiding the Dock icon and Cmd+Tab entry so presence
+            // stays tray-icon-only on both platforms.
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
             let handle = app.handle().clone();
             app.global_shortcut().register(hotkeys::summon_shortcut())?;
             app.global_shortcut().register(hotkeys::sign_out_shortcut())?;
             app.global_shortcut().register(hotkeys::screen_sight_shortcut())?;
+
+            // Before tray::build so the "Start with Windows" checkbox reads
+            // the post-policy state. Release-only: a dev build would register
+            // target\debug\aura-desktop.exe into the developer's own Windows
+            // startup on every `tauri dev` run.
+            if !cfg!(debug_assertions) {
+                autostart::apply_startup_policy(app.handle());
+            }
 
             tray::build(app.handle())?;
 
@@ -193,7 +215,15 @@ pub fn run() {
             };
             overlay::load_persisted_center(app.handle());
             overlay::set_panel_variant(app.handle(), initial_variant);
-            overlay::summon(app.handle());
+
+            // Launched by Windows at login (the autostart entry passes
+            // --autostart): stay tray-only instead of popping the panel over
+            // whatever the user is signing in to do. Manual launches keep the
+            // summon-on-start behavior; the hotkey and tray still summon.
+            let is_boot_launch = std::env::args().any(|arg| arg == "--autostart");
+            if !is_boot_launch {
+                overlay::summon(app.handle());
+            }
 
             let updater_handle = app.handle().clone();
             tauri::async_runtime::spawn(updater::check_for_updates(updater_handle));

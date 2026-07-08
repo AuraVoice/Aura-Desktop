@@ -59,6 +59,10 @@
   color: var(--glass-danger);
 }
 
+.voice-bar-caption-saved {
+  color: var(--glass-accent);
+}
+
 .voice-bar-divider {
   width: 1px;
   height: 18px;

@@ -17,7 +17,19 @@ let initialized = false;
  * "is Sentry on" themselves. */
 export function initSentryIfEnabled(enabled: boolean): void {
   if (!enabled || initialized) return;
-  Sentry.init({ dsn: DSN, release: `aura-desktop@${packageJson.version}` });
+  // Dev sessions must not report: Vite dev mode transpiles without
+  // typechecking (a mid-edit bare identifier becomes a runtime
+  // ReferenceError) and HMR re-renders against stale fibers when a hook
+  // file's hook count changes - both land in the feed looking exactly like
+  // shipped-build crashes (NATIVE-1 and NATIVE-2 were this noise, see
+  // lessons-learnt.txt 2026-07-07). Dev errors already surface in the dev
+  // console where the developer is looking.
+  if (import.meta.env.DEV) return;
+  Sentry.init({
+    dsn: DSN,
+    release: `aura-desktop@${packageJson.version}`,
+    environment: import.meta.env.MODE,
+  });
   initialized = true;
 }
 

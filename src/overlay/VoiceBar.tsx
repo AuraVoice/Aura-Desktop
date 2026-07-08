@@ -5,7 +5,9 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { auth } from "../lib/firebase";
 import { bar as copy, signOut as signOutCopy, hotkeyHints } from "../lib/copy";
 import { logError, logInfo } from "../lib/log";
-import { AvatarIcon, IncognitoOffIcon, IncognitoOnIcon, RefreshIcon, SettingsIcon, SignOutIcon, WaveformIcon } from "./icons";
+import { sendFeedback } from "../lib/feedback";
+import { openDashboard } from "../lib/dashboardLink";
+import { AvatarIcon, DashboardIcon, FeedbackIcon, IncognitoOffIcon, IncognitoOnIcon, RefreshIcon, SettingsIcon, SignOutIcon, WaveformIcon } from "./icons";
 import { BarIconButton } from "./BarIconButton";
 import type { VoiceBarState } from "./useVoiceBar";
 import iconUrl from "../assets/icons/Aura-Icon.png";
@@ -13,7 +15,7 @@ import "./VoiceBar.css";
 
 interface VoiceBarProps {
   voice: VoiceBarState;
-  screenSight: { armed: boolean; toggleArmed: () => void };
+  screenSight: { armed: boolean; toggleArmed: () => void; savedConfirmation: string | null };
 }
 
 const LIVE_STATUSES = new Set(["connecting", "ready", "listening", "processing", "speaking"]);
@@ -30,10 +32,14 @@ export function VoiceBar({ voice, screenSight }: VoiceBarProps) {
   const [signOutError, setSignOutError] = useState<string | null>(null);
   const [signOutStuck, setSignOutStuck] = useState(false);
   const signOutTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [feedbackSending, setFeedbackSending] = useState(false);
+  const [feedbackJustSent, setFeedbackJustSent] = useState(false);
+  const feedbackSentTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const isLive = LIVE_STATUSES.has(voice.status);
   const isError = voice.status === "error";
-  const caption = voice.errorMessage ?? (voice.assistantCaption || "");
+  const isSavedConfirmation = !voice.errorMessage && !!screenSight.savedConfirmation;
+  const caption = voice.errorMessage ?? screenSight.savedConfirmation ?? (voice.assistantCaption || "");
 
   const clearSignOutTimeout = useCallback(() => {
     if (signOutTimeoutRef.current) {
@@ -46,6 +52,26 @@ export function VoiceBar({ voice, screenSight }: VoiceBarProps) {
   // already clears this itself. Covers VoiceBar unmounting (sign-out actually
   // succeeded) with the timer still pending.
   useEffect(() => clearSignOutTimeout, [clearSignOutTimeout]);
+
+  useEffect(
+    () => () => {
+      if (feedbackSentTimeoutRef.current) clearTimeout(feedbackSentTimeoutRef.current);
+    },
+    [],
+  );
+
+  function handleSendFeedback() {
+    if (feedbackSending) return;
+    setFeedbackSending(true);
+    sendFeedback(voice.status)
+      .then(() => {
+        setFeedbackJustSent(true);
+        if (feedbackSentTimeoutRef.current) clearTimeout(feedbackSentTimeoutRef.current);
+        feedbackSentTimeoutRef.current = setTimeout(() => setFeedbackJustSent(false), 2500);
+      })
+      .catch((err) => logError("VoiceBar: sendFeedback", err))
+      .finally(() => setFeedbackSending(false));
+  }
 
   function handleMicClick() {
     if (isLive) {
@@ -132,7 +158,12 @@ export function VoiceBar({ voice, screenSight }: VoiceBarProps) {
   return (
     <div className="voice-bar">
       <img src={iconUrl} alt="" className="voice-bar-icon" />
-      <span className={`voice-bar-caption${voice.errorMessage ? " voice-bar-caption-error" : ""}`} title={caption}>{caption}</span>
+      <span
+        className={`voice-bar-caption${voice.errorMessage ? " voice-bar-caption-error" : ""}${isSavedConfirmation ? " voice-bar-caption-saved" : ""}`}
+        title={caption}
+      >
+        {caption}
+      </span>
 
       {voice.showMicSettingsHint && (
         <BarIconButton title={copy.openMicSettingsTooltip} onClick={() => void openUrl("ms-settings:privacy-microphone")}>
@@ -162,6 +193,18 @@ export function VoiceBar({ voice, screenSight }: VoiceBarProps) {
       </BarIconButton>
 
       <span className="voice-bar-divider" />
+
+      <BarIconButton title={copy.openDashboardTooltip} onClick={() => void openDashboard()}>
+        <DashboardIcon />
+      </BarIconButton>
+
+      <BarIconButton
+        title={feedbackJustSent ? copy.feedbackSentTooltip : copy.sendFeedbackTooltip}
+        onClick={handleSendFeedback}
+        disabled={feedbackSending}
+      >
+        <FeedbackIcon />
+      </BarIconButton>
 
       <BarIconButton title={copy.signOutTooltip} onClick={handleOpenConfirm} danger>
         <SignOutIcon />

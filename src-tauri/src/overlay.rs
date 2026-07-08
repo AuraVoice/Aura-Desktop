@@ -158,7 +158,16 @@ fn persist_center(app: &AppHandle, x: f64, y: f64) {
             store.set(CENTER_X_KEY, serde_json::json!(x));
             store.set(CENTER_Y_KEY, serde_json::json!(y));
         }
-        Err(e) => error!("persist_center: failed to open store: {e}"),
+        // Silently no-ops today beyond this log line - reported to Sentry too so
+        // a real-world occurrence during beta is visible without a tester
+        // happening to also check their log file.
+        Err(e) => {
+            error!("persist_center: failed to open store: {e}");
+            sentry::capture_message(
+                &format!("persist_center: failed to open store: {e}"),
+                sentry::Level::Error,
+            );
+        }
     }
 }
 

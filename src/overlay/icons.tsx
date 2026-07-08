@@ -80,6 +80,40 @@ export function AvatarIcon() {
   );
 }
 
+export function TrashIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 7h16" />
+      <path d="M9 7V4.8c0-.44.36-.8.8-.8h4.4c.44 0 .8.36.8.8V7" />
+      <path d="M6 7l1 13.2c.03.44.4.8.85.8h8.3c.44 0 .82-.36.85-.8L18 7" />
+      <path d="M10 11v6M14 11v6" />
+    </svg>
+  );
+}
+
+export function FeedbackIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3" y="5" width="18" height="14" rx="2" />
+      <path d="M4 6.5l8 6.5 8-6.5" />
+    </svg>
+  );
+}
+
+/** 2x2 grid of rounded squares - same shape as Aura-Web's own dashboard
+ * sidebar "Overview" icon, so the tray/bar entry point and the page it
+ * opens visually agree on what "dashboard" means across both apps. */
+export function DashboardIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3.5" y="3.5" width="7" height="7" rx="1.5" />
+      <rect x="13.5" y="3.5" width="7" height="7" rx="1.5" />
+      <rect x="3.5" y="13.5" width="7" height="7" rx="1.5" />
+      <rect x="13.5" y="13.5" width="7" height="7" rx="1.5" />
+    </svg>
+  );
+}
+
 export function SignOutIcon() {
   return (
     <svg viewBox="0 0 24 24">

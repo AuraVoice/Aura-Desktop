@@ -6,6 +6,7 @@ export const getAuraAppUrl = "https://auravoiceapp.com/app";
 export const privacyUrl = "https://auravoiceapp.com/privacy";
 export const termsUrl = "https://auravoiceapp.com/terms";
 export const webAuthUrl = "https://auravoiceapp.com/auth";
+export const dashboardUrl = "https://auravoiceapp.com/dashboard";
 
 export const consent = {
   heading: "Before we get started",
@@ -76,6 +77,7 @@ export const bar = {
   signOutTooltip: "Sign out",
   sendFeedbackTooltip: "Send feedback",
   feedbackSentTooltip: "Opened your email client",
+  openDashboardTooltip: "Open dashboard",
 } as const;
 
 export const signOut = {

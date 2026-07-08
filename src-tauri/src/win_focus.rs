@@ -1,10 +1,17 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 
-use log::{error, info, warn};
-use tauri::{AppHandle, Manager, WebviewWindow};
+use log::error;
+#[cfg(target_os = "windows")]
+use log::{info, warn};
+use tauri::{AppHandle, WebviewWindow};
+#[cfg(target_os = "windows")]
+use tauri::Manager;
+#[cfg(target_os = "windows")]
 use windows::Win32::Foundation::HWND;
+#[cfg(target_os = "windows")]
 use windows::Win32::UI::Input::KeyboardAndMouse::{SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_MENU};
+#[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{BringWindowToTop, SetForegroundWindow};
 
 /// Monotonically increasing "which `force_foreground` call is the latest"
@@ -56,6 +63,7 @@ impl Default for ForegroundGeneration {
 /// guards against that: each call claims a strictly increasing number before
 /// spawning, and the spawned thread re-checks that number is still current
 /// before touching any Win32 API, bailing out otherwise.
+#[cfg(target_os = "windows")]
 pub fn force_foreground(app: &AppHandle, window: &WebviewWindow) {
     let Ok(hwnd) = window.hwnd() else {
         error!("win_focus::force_foreground: failed to get HWND");
@@ -94,6 +102,7 @@ pub fn force_foreground(app: &AppHandle, window: &WebviewWindow) {
     });
 }
 
+#[cfg(target_os = "windows")]
 fn try_set_foreground(hwnd: HWND) -> bool {
     tap_alt_key();
     unsafe {
@@ -105,6 +114,7 @@ fn try_set_foreground(hwnd: HWND) -> bool {
 /// Synthesizes an Alt key-down immediately followed by a key-up. Never
 /// forwarded anywhere as a real keystroke - `SendInput` only makes it count
 /// as "the last input event", which is all `SetForegroundWindow` checks for.
+#[cfg(target_os = "windows")]
 fn tap_alt_key() {
     let mut key_down = INPUT::default();
     key_down.r#type = INPUT_KEYBOARD;
@@ -128,5 +138,19 @@ fn tap_alt_key() {
 
     unsafe {
         SendInput(&[key_down, key_up], core::mem::size_of::<INPUT>() as i32);
+    }
+}
+
+/// macOS equivalent of the Windows dance above. macOS has no analogue of
+/// Windows' foreground-lock restriction - any process may raise its own
+/// window via a direct focus call, so none of the `SendInput`/
+/// `SetForegroundWindow`/generation-guard machinery above is needed here.
+/// `ForegroundGeneration` stays defined and `.manage()`-ed regardless of
+/// platform (see lib.rs) since it costs nothing idle; it's simply never read
+/// on this path.
+#[cfg(not(target_os = "windows"))]
+pub fn force_foreground(_app: &AppHandle, window: &WebviewWindow) {
+    if let Err(e) = window.set_focus() {
+        error!("win_focus::force_foreground: failed to focus window: {e}");
     }
 }

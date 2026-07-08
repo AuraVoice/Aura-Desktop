@@ -1,6 +1,6 @@
 [package]
 name = "aura-desktop"
-version = "0.1.4"
+version = "0.1.5"
 description = "Aura Desktop companion app"
 authors = ["Aura"]
 edition = "2021"
@@ -33,6 +33,13 @@ log = "0.4.33"
 tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2.3.1"
 tauri-plugin-http = "2.5.9"
-windows = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse"] }
+tauri-plugin-autostart = "2.5.1"
 sentry = { version = "0.34", default-features = false, features = ["backtrace", "contexts", "debug-images", "panic", "reqwest", "rustls"] }
+
+# Win32 bindings - only win_focus.rs uses this, and only on Windows. Scoping it
+# to a target-specific dependency table (rather than [dependencies]) keeps it
+# out of a macOS/Linux build entirely, since the crate itself only compiles
+# against those platforms' toolchains.
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse"] }
 

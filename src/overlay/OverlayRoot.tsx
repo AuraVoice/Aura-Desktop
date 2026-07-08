@@ -16,11 +16,9 @@ import { PointingOverlay } from "./PointingOverlay";
 const AvatarPill = lazy(() => import("./AvatarPill").then((m) => ({ default: m.AvatarPill })));
 
 type OverlayPresentation = "hidden" | "panel" | "pill" | "pointing";
-type PanelVariant = "setup" | "bar";
 
 interface OverlaySnapshot {
   presentation: OverlayPresentation;
-  panelVariant: PanelVariant;
 }
 
 export function OverlayRoot() {
@@ -43,7 +41,9 @@ export function OverlayRoot() {
     // Covers the race where Rust applies the startup presentation before
     // this listener attaches.
     invoke<OverlaySnapshot>("current_overlay_state")
-      .then((snapshot) => setPresentation(snapshot.presentation))
+      .then((snapshot) => {
+        setPresentation(snapshot.presentation);
+      })
       .catch((err) => logError("OverlayRoot: current_overlay_state", err));
 
     return () => unlisten?.();
