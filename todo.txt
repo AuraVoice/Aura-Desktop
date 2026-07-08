@@ -1,0 +1,508 @@
+AURA DESKTOP - BETA TO GA READINESS
+====================================
+Generated 2026-07-04 from a full audit of the current codebase (see README.md and
+lessons-learnt.txt for what already exists and what's already been fixed). This file is a
+living checklist, not a one-time document - update it as items land or new gaps surface,
+the same way lessons-learnt.txt tracks incidents.
+
+Priority legend:
+  P0 = blocks shipping ANY beta build, including a small closed group
+  P1 = blocks the public/EU-UK beta specifically (you chose public beta including EU/UK,
+       which pulls GDPR-driven items forward from "nice to have" to "must have before open")
+  P2 = harden before GA / can follow during beta
+
+Decisions already made (from your answers, so the items below assume these):
+  - Terms of Service / Privacy Policy: reuse the Aura mobile app's existing documents,
+    desktop gets a short addendum, not net-new legal documents.
+  - Crash reporting: add Sentry alongside the existing PostHog analytics.
+  - Beta audience: public/open, includes EU/UK users -> GDPR items are must-haves now.
+  - Bug reporting: in-app "send feedback" button.
+
+
+1. AUTOMATED TESTING (currently zero test files exist anywhere in src/ or src-tauri/src/)
+------------------------------------------------------------------------------------------
+[x] P0 - Add a PR-triggered CI workflow (lint + `tsc --noEmit` + `cargo check` + test suite
+    once it exists). Why: .github/workflows/release.yml only runs on `v*` tags and only
+    builds/publishes - nothing currently stops a broken commit from reaching main, let alone
+    a tag. Every other item in this file assumes a gate like this exists to enforce it.
+    DONE 2026-07-07: .github/workflows/ci.yml runs tsc --noEmit + cargo check + npm/cargo
+    audit on every PR and main push. No lint step yet, and the test-suite gate still
+    waits on the test items below.
+
+[x] P0 - Write a manual pre-release smoke-test script covering every flow in README.md's
+    diagrams: fresh pairing, email sign-in, voice call happy path, voice call join-timeout
+    and silence-timeout (can be forced by killing network mid-call), screen-sight arm/point,
+    pill minimize/restore, all three hotkeys, sign-out, tray menu, second-instance launch.
+    Why: given zero automated E2E today, this is the only thing standing between "cargo
+    check passed" and "the overlay actually works" until real E2E exists. Run it before
+    every tagged release without exception.
+    DONE 2026-07-07: SMOKE_TEST.md.
+
+[ ] P1 - Unit tests for src-tauri/src/overlay.rs's pure logic: size_for/position_for given
+    various states, hotkey_pressed's match arms, minimize_to_pill's guard condition,
+    capture_user_position's applying_bounds re-entrancy guard. Why: this file is the single
+    most incident-prone module per lessons-learnt.txt (five of seven logged incidents touch
+    it) and is pure enough (given a mocked AppHandle/state) to unit test without a real
+    window.
+
+[ ] P1 - Unit tests for the React hooks: useVoiceBar.ts's state machine (join timeout,
+    silence timeout, retry/backoff, error transitions) and useScreenSight.ts's arm/disarm
+    logic, using Vitest with mocked LiveKit Room and Tauri invoke/listen. Why: this is the
+    second most incident-prone area (three logged incidents), and the retry/backoff/watchdog
+    timing logic is exactly the kind of thing that regresses silently without a test pinning
+    the timeout values and transition order.
+
+[ ] P2 - Real end-to-end automation via tauri-driver + WebdriverIO (or Playwright driving
+    the Vite dev build with invoke/listen mocked at the boundary) covering the same flows as
+    the manual script above. Why: manual scripts don't scale past a small beta and drift out
+    of date; this is a real investment, so it's fine to build it during beta rather than
+    block launch on it, as long as the manual script (above) covers the gap until then.
+
+
+2. STATE MACHINE / MULTI-ENTRY-POINT EDGE CASES
+------------------------------------------------
+This is the "one screen, many ways in" audit. overlay.rs is reached from: the global hotkey,
+tray left-click, tray menu, second-instance launch (summon), Firebase auth state changes,
+voice session start/end, screen-sight's point_at/cancel_pointing, and Windows' own
+WindowEvent::Moved. Every pair of these that can fire close together is a real edge case.
+
+[ ] P0 - Fix or explicitly document the pre_pointing fallback in cancel_pointing: if
+    pre_pointing is somehow None when a pointing takeover ends, it falls back to
+    (Hidden, Setup) - losing the Bar variant for an already-signed-in user. Why: point_at
+    always sets pre_pointing if it's None, so this should be unreachable today, but there's
+    no test pinning that invariant and no logged warning if the fallback ever fires, so a
+    future change to point_at's call sites could silently regress a signed-in user back to
+    the setup-sized panel with no error anywhere to catch it.
+
+[ ] P0 - Decide and implement a recovery path for OverlayState mutex poisoning. Why: every
+    call site uses `.lock().unwrap()`; if any code path ever panics while holding that lock
+    (a Rust panic, not a Result::Err), every future `.lock().unwrap()` anywhere in the app
+    panics too, since a poisoned std::sync::Mutex stays poisoned forever. Given this repo's
+    own history (two logged incidents were mutex/thread deadlocks before being fixed), a
+    poisoned-lock permanent-freeze is the same failure class recurring in a new shape.
+    Minimum fix: use `.lock().unwrap_or_else(|e| e.into_inner())` at every call site so a
+    single panicked critical section can't brick the whole overlay for the rest of the
+    process's life.
+
+[x] P0 - Audit and log store I/O failures instead of silently defaulting. Why:
+    auth_cache.rs's has_cached_session returns `false` on any store-open error, which on a
+    transient disk/permissions error would show a signed-in user the pairing screen at cold
+    start (a confusing, support-ticket-generating false negative) with no log line to explain
+    why. overlay.rs's persist_center silently no-ops on store failure too. Both already call
+    `error!()` on the Rust side per logging.rs, but neither is currently instrumented as a
+    PostHog/Sentry event, so a real-world occurrence during beta would be invisible unless a
+    tester happens to also check their log file.
+    DONE 2026-07-07: auth_cache.rs, overlay.rs persist_center, and autostart.rs all report
+    store-open failures to Sentry now (v0.1.5), on top of the local error!() lines.
+
+[ ] P0 - Test and fix concurrent/racing trigger combinations explicitly (this is exactly the
+    shape of every incident in lessons-learnt.txt so far): hotkey pressed the instant
+    point_at's takeover starts; tray click or second-instance launch while a voice call is
+    mid-teardown; Ctrl+Shift+D fired during the pairing flow (before any session exists);
+    minimize_to_pill immediately followed by the call ending server-side (race between the
+    user's minimize click and set_voice_active(false)); rapid hotkey double-press faster than
+    apply()'s window calls can complete. Why: `hotkey_pressed`'s match has a bare `_ => {}`
+    for Pointing (deliberate) but every other combination above is either untested or only
+    incidentally correct because of the belt-and-suspenders fixes already logged - a
+    regression in any of those fixes reopens the exact bug class already paid for once.
+
+[ ] P1 - Multi-monitor/DPI edge cases: monitor unplugged or replugged mid-session (does
+    user_center recovery on next launch handle a since-changed arrangement correctly, not
+    just at cold start via load_persisted_center), DPI change while the app is visible
+    (Windows can hot-change scale factor when a window crosses monitors with different
+    scaling), and point_at's target monitor being disconnected between the agent's
+    element.point event and the takeover actually applying. Why: active_display_bounds
+    already has a documented triple-fallback (cursor monitor -> primary monitor -> hardcoded
+    1920x1080), which itself signals this class of failure was anticipated but not yet
+    tested end to end.
+
+[ ] P1 - Auth/session edge cases: Firebase token refresh failure while a call is live,
+    session revoked server-side mid-session, and sign-out fired from every entry point
+    (VoiceBar button, Ctrl+Shift+D, tray, OS shutdown/log-off) while a LiveKit call is
+    active - confirm each one tears down the LiveKit room cleanly rather than orphaning a
+    backend session. Why: AuthProvider.tsx's onAuthStateChanged handler assumes it always
+    fires promptly and doesn't currently guard against a stale user object mid-call; an
+    orphaned backend/LiveKit session on the failure path is a real cost (agent compute
+    running with nobody listening).
+
+[ ] P1 - App relaunch or crash while a call or screen-sight session is active: confirm state
+    recovers cleanly (Hidden/Panel per cached session, not some stale Pointing/Pill
+    leftover) and that the abandoned backend/LiveKit room gets cleaned up server-side rather
+    than lingering. Why: overlay-window.json and auth-state.json both persist across
+    restarts by design, but neither currently distinguishes "clean exit" from "crashed mid-
+    call," so a crash during Pointing could plausibly leave stale state that's only ever
+    been exercised via the normal apply()-mediated paths.
+
+[ ] P1 - Windows sleep/resume, lock/unlock, and fast user switching: verify the LiveKit
+    connection, mic capture, and overlay window all recover (or fail loudly with a retry, not
+    silently) across a sleep/resume cycle. Why: this is untested today and a very common real
+    -world interruption for a companion app that's expected to be running continuously in
+    the background.
+
+
+3. DEVICE / ENVIRONMENT COMPATIBILITY
+---------------------------------------
+[x] P0 - Detect a missing WebView2 runtime and prompt the user to install it (Microsoft's
+    Evergreen bootstrapper) instead of failing silently or crashing. Why: WebView2 isn't
+    preinstalled on every Windows image (especially older/locked-down corporate ones), and
+    this app has no functionality at all without it - a blank or crashing first launch for a
+    beta tester with no explanation is the worst possible first impression and the hardest
+    bug to get a useful report about.
+    DONE 2026-07-07: tauri.conf.json bundles the Evergreen bootstrapper
+    (webviewInstallMode: embedBootstrapper), so the installer handles it.
+
+[ ] P0 - Get a Windows code-signing certificate (Authenticode; EV strongly preferred, since
+    EV certs skip SmartScreen's reputation-building period that a plain OV cert still has to
+    earn one download at a time) and wire it into release.yml. Why: TAURI_SIGNING_PRIVATE_KEY
+    in release.yml signs update manifests for the Tauri updater, which is a completely
+    different key from an Authenticode code-signing certificate for the .exe/.msi itself -
+    right now the installer is very likely unsigned, which means every beta tester sees a
+    Windows SmartScreen "Unknown publisher" warning on first run, a significant beta-adoption
+    killer.
+
+[ ] P1 - Audio device edge cases: no microphone present at all, multiple mics with the OS
+    default changing mid-call, Bluetooth headset connect/disconnect mid-call, and another app
+    holding the mic in exclusive mode. Why: useVoiceBar.ts's retry logic already special-
+    cases "mic-access errors that need user action" per lessons-learnt.txt, but the specific
+    device-change-mid-call scenarios aren't confirmed handled, and a public beta will surface
+    every one of these within the first week.
+
+[ ] P1 - Corporate/managed-machine environments: global hotkey registration blocked by
+    endpoint policy, firewall blocking LiveKit's UDP/TURN fallback, and HTTP proxy
+    environments breaking TLS to the backend, PostHog, or Sentry. Why: capabilities/
+    default.json scopes the webview's http access tightly (good for security), but a
+    corporate TLS-inspecting proxy can still break every one of those calls in ways that look
+    like "the app is just broken" with no obvious cause from a support ticket alone.
+
+[ ] P1 - Keyboard layout edge cases: the three global hotkeys are defined by physical key
+    code (Code::KeyB/D/S per hotkeys.rs), which is layout-independent by design, but confirm
+    this is actually correct on non-US physical keyboard layouts (AZERTY, QWERTZ, etc), not
+    just non-US input methods on a US physical keyboard. Why: Tauri's global-shortcut plugin
+    maps Code variants to physical scan codes, which is the right choice for hotkeys meant to
+    be muscle memory regardless of layout, but it's unverified on non-US hardware today.
+
+[ ] P2 - GPU/driver variance: verify the three.js AvatarPill renders acceptably (or degrades
+    gracefully to a static frame/text fallback) on integrated GPUs, in a VM with no real GPU
+    (software/WARP rendering), and on old/unsupported GPU drivers. Why: the pill is a WebGL
+    scene rendered inside WebView2's own Chromium; a GPU that can't do WebGL well (or at all)
+    would currently just show a broken or invisible pill with no fallback path.
+
+[ ] P2 - Windows ARM64 and Remote Desktop / VM sessions. Why: lower priority than the above
+    since they're a small fraction of the likely beta population, but worth a pass before
+    GA - RDP sessions in particular sometimes change how always-on-top, click-through, and
+    global hotkeys behave.
+
+
+4. SECURITY / PRIVACY HARDENING
+----------------------------------
+[x] P0 - Replace `"csp": null` in src-tauri/tauri.conf.json's app.security block with a real
+    Content-Security-Policy. Why: `null` disables Tauri's webview CSP enforcement entirely;
+    Tauri's own docs recommend an explicit policy as a baseline hardening step, and this app
+    already has a known-good allowlist to build one from (capabilities/default.json's
+    http:default scope is already minimal - the CSP should mirror that same intent at the
+    webview-content level, not just the IPC level).
+    DONE 2026-07-07: real CSP shipped in tauri.conf.json (see lessons-learnt.txt 2026-07-07
+    for the ipc:/http://ipc.localhost connect-src gotcha it surfaced).
+
+[ ] P0 - Audit what's persisted in plaintext under %APPDATA% - auth-state.json,
+    overlay-window.json (both low-sensitivity: a boolean and window coordinates), and
+    whatever Firebase's own JS SDK persists inside the webview's local storage/IndexedDB
+    (likely ID/refresh tokens, which are sensitive). Why: a stolen or forensically-examined
+    laptop shouldn't hand over a live session; decide whether Firebase's own persistence
+    needs to move to something OS-backed (e.g. Windows Credential Manager) or whether
+    Firebase's own token-rotation/short-lived-ID-token model already makes this an acceptable
+    risk, and document that decision rather than leaving it unexamined.
+    PROGRESS 2026-07-07: PRIVACY_AUDIT.md documents all of this; the Firebase-persistence
+    decision (accept as-is vs Credential Manager) still needs your sign-off there.
+
+[x] P0 - Confirm the Windows uninstaller does not need to (or is documented to) leave auth
+    tokens, log files, and cached session data behind in %APPDATA% after uninstall. Why: this
+    directly affects what the Privacy Policy addendum can truthfully claim about data
+    lifecycle, and GDPR's data-minimization expectations extend to "what happens when the
+    user removes the app," not just "while it's running."
+    DONE 2026-07-07: documented in PRIVACY_AUDIT.md - the NSIS uninstaller leaves %APPDATA%
+    data behind; what the policy should promise about that is flagged there.
+
+[x] P1 - Add `cargo audit` and `npm audit` (or a maintained equivalent) as a CI step. Why: a
+    consumer-facing desktop app with auto-update and broad IPC access is a real supply-chain
+    target; catching a known-vulnerable dependency before it ships in a signed, auto-
+    installed update is much cheaper than after.
+    DONE 2026-07-07: ci.yml runs both; advisory ignores live in src-tauri/.cargo/audit.toml,
+    each with a written justification and removal condition.
+
+[ ] P1 - Re-confirm the hardcoded PostHog project token (src/lib/analytics.ts) and the
+    updater's minisign public key (tauri.conf.json) are the only "secrets" baked into the
+    shipped binary, and that both are genuinely meant to be public (they are, by each
+    system's own design - PostHog project tokens are client-safe, and a minisign public key
+    is meant to be distributed). Why: a quick, cheap check now versus discovering a real
+    secret was accidentally committed after a build has already shipped to the public.
+
+
+5. TERMS OF SERVICE / PRIVACY POLICY / GDPR-CCPA COMPLIANCE
+--------------------------------------------------------------
+Per your decision, desktop reuses the mobile app's existing legal documents plus a short
+addendum - but a public EU/UK beta makes the items below must-haves, not later work.
+
+[ ] P0 - Get the current ToS/Privacy Policy text/links from whoever owns them for the mobile
+    app, confirm they're current, and confirm they already cover an AI assistant that
+    processes voice audio (they should, since mobile already does this).
+
+[x] P0 - Write the desktop-specific addendum covering what mobile's docs don't: screen-sight
+    capture (what's captured - the monitor under the cursor, when - only on explicit arm/
+    turn-start, never ambient/timer-based per useScreenSight.ts, sent to whom, retained how
+    long), the three global hotkeys and their scope, local log file contents, and the
+    PostHog + Sentry telemetry described in section 7. Why: screen capture is meaningfully
+    different from anything the mobile app does and is exactly the kind of processing GDPR
+    requires specific disclosure for.
+    DONE 2026-07-07: drafted in LEGAL_ADDENDUM_DRAFT.md, pending legal review; the retention
+    placeholder stays open until the retention-policy item below is answered.
+
+[x] P0 - Add an explicit, affirmative first-run consent screen presenting the ToS/Privacy
+    Policy (plus addendum) that the user must accept before any capture or telemetry starts,
+    not a footer link they can ignore. Why: GDPR requires opt-in consent for EU/UK users
+    before non-essential processing begins, not opt-out after the fact - a footer link
+    satisfies neither the letter nor the spirit of that requirement.
+    DONE 2026-07-07: first-run consent step in OnboardingFlow.tsx blocks everything until
+    accepted; PostHog and Sentry both gate on it.
+
+[ ] P0 - Confirm Data Processing Agreements exist with every subprocessor that touches EU/UK
+    user data: Firebase/Google, LiveKit, PostHog, and (once added) Sentry. Why: GDPR requires
+    disclosing and contractually binding every subprocessor that handles EU personal data;
+    adding Sentry per your decision extends this list by one and needs the same diligence as
+    the existing three.
+
+[ ] P0 - Define and document a data retention policy for voice audio, screen frames,
+    transcripts, and log files, and confirm deletion actually happens on that schedule
+    server-side (out of this repo's direct control, but the desktop Privacy Policy addendum
+    is making a promise on the backend's behalf, so it needs to be a promise that's actually
+    true).
+
+[ ] P1 - Build (or document as a supported manual request path) a data export and account/
+    data deletion flow that actually reaches every subprocessor above, not just Firebase Auth.
+    Why: GDPR's right to erasure and right to data portability apply regardless of platform,
+    and "email support and we'll handle it manually" is an acceptable interim answer for a
+    beta as long as it's documented and actually honored - silence is not.
+
+[x] P1 - Gate PostHog and Sentry behind the same consent flag captured at first run (see
+    section 7's "single telemetry flag" item) rather than assuming implied consent. Why:
+    GDPR's consent requirement applies to analytics/crash-reporting identifiers the same way
+    it applies to any other tracking, and the two SDKs currently have no shared opt-out
+    mechanism to gate on.
+    DONE 2026-07-07: App.tsx reads one stored consent flag and drives both
+    setTelemetryEnabled and initSentryIfEnabled from it.
+
+[ ] P1 - Add a simple age/no-minors confirmation to onboarding if one doesn't already exist
+    upstream. Why: consent mechanics differ for minors under GDPR; a lightweight checkbox is
+    almost certainly sufficient given the product isn't marketed at children, but it needs to
+    exist rather than be silently assumed.
+
+[ ] P1 - Add or confirm an EULA covering acceptable use and a disclaimer/limitation of
+    liability for an AI assistant that can misinterpret voice commands or screen content.
+    Why: standard practice for any AI-assistant product, and cheap to add given mobile likely
+    already has equivalent language to extend.
+
+
+6. RELEASE MANAGEMENT / VERSIONING
+--------------------------------------
+[x] P0 - Add a release notes template (What's new / Fixed / Known issues / Rollback
+    instructions) attached to every GitHub release. Why: release.yml currently creates a
+    releaseDraft with no body content beyond the auto-generated title - a beta tester hitting
+    a bug has no way to check "is this already known" without asking you directly.
+    DONE 2026-07-07: RELEASE_NOTES_TEMPLATE.md.
+
+[x] P0 - Write and rehearse a rollback runbook: if a shipped version breaks the overlay,
+    voice, or auth, what's the actual process to stop the bleeding. Why: the Tauri updater's
+    endpoint always points at "latest," and updater.rs auto-downloads and installs on every
+    check with no staged rollout - a broken tagged release currently has no documented way to
+    un-ship itself short of publishing a fixed version and hoping everyone updates before
+    hitting the bug again. This is the single highest-blast-radius gap in the whole app: one
+    bad build reaches every active install automatically.
+    DONE 2026-07-07: ROLLBACK_RUNBOOK.md written; rehearse it once for real before the next
+    tagged release.
+
+[x] P0 - Decide the update UX: updater.rs silently downloads and installs with no user-
+    visible notice at all today. Why: a surprise relaunch mid-voice-call is a bad experience
+    at minimum and a genuine trust problem for beta users who don't expect the app to restart
+    itself unprompted; at minimum, show a "restart to apply update" notice instead of an
+    unannounced relaunch, and never install mid-call.
+    DONE 2026-07-07: updater.rs downloads in the background and waits for a tray "Restart
+    to install" click, deferring instead of installing mid-call.
+
+[ ] P1 - Separate a beta update channel from a stable one (e.g. a `-beta` tag suffix and a
+    second updater endpoint), so once GA opens, beta testers and general users aren't forced
+    onto the same build cadence. Why: without this, "beta" is just a label on the same
+    release train as everyone else, which removes your ability to test a build on a smaller
+    group before wider rollout.
+
+[ ] P2 - Investigate a real staged/percentage rollout mechanism, since the standard Tauri
+    updater protocol has no built-in support for this (already flagged as a TODO in
+    updater.rs). Why: meaningful engineering lift with no off-the-shelf answer in the
+    ecosystem; the rollback runbook above is the higher-leverage, lower-effort mitigation to
+    have in place first.
+
+
+7. TELEMETRY / OBSERVABILITY (adding Sentry per your decision)
+-------------------------------------------------------------------
+[x] P0 - Add a React error boundary around the app root. Why: App.tsx currently mounts
+    AuthProvider/OverlayRoot with no boundary at all - an uncaught render error anywhere in
+    the tree blanks the entire overlay with no fallback UI and, without Sentry wired into it,
+    no report either. This is the highest-value single addition in this whole section.
+    DONE 2026-07-07: ErrorBoundary.tsx wraps the app root and reports to Sentry via
+    captureException.
+
+[x] P0 - Wire up Sentry: a Rust panic hook (sentry-rust or equivalent) capturing native
+    crashes with symbols, and a JS/React exception capture integration reporting from the
+    error boundary above. Why: logging.rs's existing panic hook only writes a local log line
+    nobody but the affected user can see; today, a crash in the field is completely invisible
+    to you unless the tester proactively finds and sends their log file. For a public beta,
+    that's flying blind on the single most important signal (is it crashing, and for whom).
+    DONE 2026-07-07: sentry_setup.rs (native, panic hook) + lib/sentry.ts (webview, release
+    builds only) + ErrorBoundary capture; dev sessions excluded (lessons-learnt
+    2026-07-07). Symbol upload into release.yml is still the open P1 below.
+
+[x] P0 - Build one shared "telemetry enabled" flag that both PostHog and Sentry check, driven
+    by the consent screen in section 5. Why: two independent SDKs with two independent opt-
+    outs is both a compliance gap (see section 5) and a maintenance trap - a future change to
+    one will silently miss the other unless there's a single source of truth.
+    DONE 2026-07-07: single consent flag read once in App.tsx drives PostHog and Sentry
+    together.
+
+[ ] P1 - Extend event tracking beyond voice sessions (currently the only instrumented flow
+    per src/lib/analytics.ts) to: overlay presentation transitions, hotkey usage, screen-
+    sight arm/frame-sent counts, update check/install/failure outcomes, pairing/sign-in
+    success and failure rates. Why: right now you can see whether a voice call succeeded but
+    have no visibility into whether pairing is actually working, whether hotkeys are even
+    being discovered/used, or whether the auto-updater is silently failing for a subset of
+    users.
+
+[ ] P1 - Wire Sentry's debug-symbol upload into release.yml so crashes from tagged builds are
+    actually readable (real function names/line numbers), not raw addresses. Why: a crash
+    report with no symbols is barely more useful than no crash report at all.
+
+[ ] P1 - Set up dashboards and at least one alert threshold for beta (crash-free session
+    rate, voice call success rate, update adoption rate). Why: a beta with telemetry but no
+    one watching a dashboard or getting paged on a threshold breach is just data collection,
+    not observability - the point is to catch a regression before testers have to report it.
+
+[ ] P2 - Add durable-log hygiene: confirm log rotation/size caps exist so a long-running
+    session's log file doesn't grow unbounded, and confirm no verbatim transcript/screen-
+    content text ever lands in the durable log file (only metadata like room names and error
+    codes, per the existing pattern in useVoiceBar.ts). Why: the log file is exactly what
+    section 8's feedback bundler will attach and send off the user's machine - it needs to be
+    both bounded in size and free of anything sensitive by construction, not by hoping no one
+    ever logs the wrong thing.
+
+
+8. IN-APP FEEDBACK (per your decision: in-app button)
+----------------------------------------------------------
+[x] P0 - Add a "Send feedback" affordance reachable from the Bar/Pill chrome without ending a
+    live call, using a real <button> element per this repo's own drag-region rule (CLAUDE.md)
+    - not an ARIA-role div, which this exact codebase has already been bitten by once
+    (AvatarPill's click-swallowed-as-drag bug in lessons-learnt.txt).
+    DONE 2026-07-07: VoiceBar's feedback button (a real <button> via BarIconButton),
+    reachable during a live call.
+
+[x] P0 - Redact obvious secrets/tokens (Firebase ID/refresh tokens, LiveKit tokens) from the
+    bundled log before it leaves the machine. Why: the durable log file is about to be
+    submitted to you by design; anything sensitive that ends up in it needs to be stripped
+    before transmission, not after.
+    DONE 2026-07-07: feedback.ts redactSecrets strips JWT-shaped and key:value tokens from
+    the log tail before the mail composer opens.
+
+[x] P1 - Bundle app version, OS version, current overlay state, last N log lines, and
+    optional free-text into the submission, posted to a backend endpoint (needs a new
+    juno-backend route) or an email-compose fallback if that endpoint doesn't exist yet. Why:
+    a bug report with no version/OS/log context is far less actionable than one with it
+    attached automatically - this is the entire value of an in-app button over "just email
+    us."
+    DONE 2026-07-07: feedback.ts bundles version/OS/overlay state + redacted log tail into
+    a mail compose (the fallback path; no juno-backend route yet).
+
+[x] P2 - Add a submission confirmation UI and basic rate-limiting/debounce so repeat clicks
+    don't produce duplicate reports. Why: minor polish, not launch-blocking, but cheap to add
+    once the core flow exists.
+    DONE 2026-07-07: v0.1.5 VoiceBar - in-flight disable plus an "Opened your email
+    client" tooltip confirmation.
+
+
+9. ACCESSIBILITY
+-------------------
+[ ] P1 - Keyboard-only navigation audit: every actionable element (pairing code input, sign-
+    in form, mic button, minimize, sign-out) reachable and operable without a mouse. Why:
+    baseline accessibility expectation for any consumer app, and currently unverified given
+    this is a fully custom-drawn overlay, not standard OS chrome.
+
+[ ] P1 - Confirm every clickable element repo-wide uses a real <button>, not an ARIA-role div,
+    consistently - not just the one instance already fixed in AvatarPill.tsx. Why: this
+    repo's drag-region rule (CLAUDE.md) means this is simultaneously an accessibility issue
+    and a functional correctness issue (a div-with-role gets its clicks swallowed as a window
+    drag) - it needs a full sweep, not a single fix-on-discovery pattern.
+
+[ ] P2 - Screen reader pass (NVDA/Windows Narrator) confirming the current overlay state and
+    actionable buttons are announced sensibly. Why: lower priority than keyboard nav since a
+    borderless always-on-top overlay is an unusual screen-reader target to begin with, but
+    still worth a pass before GA.
+
+[ ] P2 - Windows high-contrast mode and text-scaling settings against the transparent/glass
+    visual design. Why: a translucent GlassSurface is exactly the kind of visual that can
+    become illegible or invisible under a high-contrast theme; worth a manual check.
+
+
+10. PERFORMANCE / RESOURCE USAGE
+------------------------------------
+[ ] P1 - Confirm the three.js render loop in AvatarPill actually pauses or throttles when the
+    Pill isn't visible (Hidden presentation, or window minimized/occluded), not just when the
+    component unmounts. Why: this is a background utility app expected to sit idle for most
+    of a user's session - an always-running WebGL render loop would be a real, easily-missed
+    CPU/battery cost that only shows up in a profiler, not in casual testing.
+
+[ ] P1 - Run a long-duration soak test (multi-hour idle + several voice calls) watching for
+    memory growth in LiveKit Room objects and three.js scene disposal. Why: useEffect cleanup
+    functions already exist per the current code, but a leak in a long-lived companion app
+    compounds silently over days, unlike a typical web app a user reloads constantly.
+
+[ ] P2 - Measure and set a startup-time budget from cold launch to first interactive Panel.
+    Why: the entire pitch of a hotkey-summoned overlay is instant availability; a slow cold
+    start undermines that premise even if everything else works correctly.
+
+
+11. OS INTEGRATION
+---------------------
+[x] P0 - Add an About/version display somewhere in the overlay UI (e.g. in the Setup panel or
+    behind a tray menu item). Why: right now there is no way for a beta tester to tell you
+    which build they're running without checking file properties manually - this is a five-
+    minute addition that materially improves every bug report you'll receive.
+    DONE 2026-07-07: tray menu version label, baked from Cargo.toml at compile time via
+    env!().
+
+[x] P1 - Decide on and, if wanted, implement launch-at-login (tauri-plugin-autostart isn't
+    currently in Cargo.toml). Why: most companion/assistant apps of this shape default to
+    launch-on-login; worth an explicit decision rather than a silent omission, with a way for
+    the user to disable it regardless of the default.
+    DONE 2026-07-07: v0.1.5 autostart.rs - default on, "Start with Windows" tray opt-out
+    persisted in settings.json, re-asserted each start (release builds only).
+
+[ ] P2 - Verify the tray icon renders correctly across taskbar "show hidden icons" states and
+    both Windows light/dark themes. Why: minor polish, but a wrong-colored or invisible tray
+    icon is the kind of first-impression bug a beta tester notices immediately and a
+    dashboard never will.
+
+
+12. BETA PROGRAM OPERATIONS
+-------------------------------
+[x] P0 - Write a beta tester onboarding doc: how to install, how to pair with the mobile app,
+    known issues at launch, and how to send feedback (links to section 8's in-app button).
+    Why: a public beta with no onboarding doc pushes all of that context onto you personally,
+    one tester at a time.
+    DONE 2026-07-07: BETA_ONBOARDING.md.
+
+[ ] P1 - Establish a way to reach active beta users if a critical bug is found mid-beta (an
+    in-app banner, since there's no messaging channel today beyond the update mechanism
+    itself). Why: without this, the only lever you have for a critical bug is "ship a fix and
+    hope people update," which per section 6 currently happens silently and on no fixed
+    schedule from the user's side.
+
+[ ] P1 - Define explicit beta-to-GA graduation criteria up front (e.g. crash-free session
+    rate above X%, no open P0/P1 bugs, N consecutive days without a new critical report).
+    Why: without a stated bar, "are we ready for GA" becomes a subjective judgment call made
+    under launch pressure instead of a pre-agreed, checkable condition.
