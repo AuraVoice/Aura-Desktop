@@ -29,6 +29,9 @@ You'll be asked to accept the Privacy Policy, Terms of Service, and a short desk
 - **Open Dashboard** (v0.1.5+): right-click the tray icon and pick "Open Dashboard", or click the dashboard button in the bar.
   Your browser opens the web dashboard already signed in; a one-time code handles the handoff, no second login.
 - During a call, minimize to the floating "pill" avatar and click it to bring the full panel back.
+- **Buddy Drafts** (v0.1.6+): with screen-sight armed (Ctrl+Alt+S) and an email or message on screen, just ask Buddy to draft a reply.
+  A card slides out under the bar with the draft; copy it with one click, or tap the chips (shorter, friendlier, more formal, ...) to refine it — the chips keep working even after the call ends.
+  Your drafts also show up in the web dashboard for 7 days, where you can delete them anytime.
 
 ## Known issues at launch
 

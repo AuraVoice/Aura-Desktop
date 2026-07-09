@@ -4,6 +4,12 @@ Tauri v2 + React 19 + TypeScript Windows companion app, a from-scratch rewrite o
 
 This file is working instructions for Claude Code in this repo. For the full architecture - diagrams, the IPC surface, session flows - see [`README.md`](./README.md). For the incident log behind the rules below, see [`lessons-learnt.txt`](./lessons-learnt.txt).
 
+## Cross-repo ecosystem map
+
+This client is one of three codebases in the Aura system, alongside Aura (mobile app + the shared `juno-backend`) and Aura-Web (marketing site + browser auth handoff).
+See [`../Aura/ECOSYSTEM.md`](../Aura/ECOSYSTEM.md) for how they fit together at a system level; this file and `README.md` already cover the desktop-specific detail, including the full three-repo Google sign-in sequence below.
+Update that shared file when a change here alters a cross-repo contract (a `/devices/*` or `/voice/token` call shape, the GitHub Releases update/download contract, or shared Firebase identity), not for internal-only changes.
+
 ## Architecture
 
 One borderless, transparent, always-on-top window (label `"main"`) that resizes/repositions itself between presentations, rather than separate windows per screen:
@@ -83,6 +89,7 @@ Fast, silent checks - fine to run directly, no need to ask:
 ### Touching the overlay state machine
 
 Changes to `OverlayPresentation`/`PanelVariant` or their transitions live in `overlay.rs` (`set_presentation`, `size_for`, `position_for`) with a matching render branch in `OverlayRoot.tsx`. Respect the optimistic-cache rule above. `Pill` renders `AvatarPill.tsx` (a lazy-loaded three.js scene, not `GlassPill.tsx` - deleted) and is reached via the `minimize_to_pill` command, which only fires while a call is live.
+The Panel+Bar presentation can also grow downward for the Buddy Drafts card: `useDraftCard.ts` drives the `set_draft_card_open` command, `overlay.rs` tracks it as `draft_card_open` (with its own `applied_draft_card` cache, same after-success rule), and the bar's top edge stays fixed while the window height changes.
 
 ## Working style
 
@@ -94,3 +101,23 @@ Changes to `OverlayPresentation`/`PanelVariant` or their transitions live in `ov
 - When a real bug or a non-obvious constraint gets found and fixed, log it in [`lessons-learnt.txt`](./lessons-learnt.txt) at the repo root: problem, issue, solution, justification, date.
 - when explaining a plan potray in examples and data flow rather than simple text.
 - NEVER Push code to github without me explicitly saying, this doesn't include a plan where you propose to push commits to git. Always advice me to push. 
+
+## Skill routing
+
+When the user's request matches an available skill, ALWAYS invoke it using the Skill
+tool as your FIRST action. Do NOT answer directly, do NOT use other tools first.
+The skill has specialized workflows that produce better results than ad-hoc answers.
+
+Key routing rules:
+- Product ideas, "is this worth building", brainstorming → invoke office-hours
+- Bugs, errors, "why is this broken", 500 errors → invoke investigate
+- Ship, deploy, push, create PR → invoke ship
+- QA, test the site, find bugs → invoke qa
+- Code review, check my diff → invoke review
+- Update docs after shipping → invoke document-release
+- Weekly retro → invoke retro
+- Design system, brand → invoke design-consultation
+- Visual audit, design polish → invoke design-review
+- Architecture review → invoke plan-eng-review
+- Save progress, checkpoint, resume → invoke checkpoint
+- Code quality, health check → invoke health

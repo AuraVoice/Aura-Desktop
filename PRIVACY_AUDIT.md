@@ -16,6 +16,10 @@ Neither of these is itself a live credential. Losing or forensically examining e
 
 Separately from the two files above, the Firebase JS SDK (`firebase/auth`, initialized in `src/lib/firebase.ts`) persists its own session state inside the webview's IndexedDB/localStorage, under the webview's data directory. This is standard Firebase Web SDK behavior — it's how `onAuthStateChanged` survives an app restart without asking you to sign in again. This **does** include Firebase ID and refresh tokens. This is genuinely sensitive: a stolen or forensically examined laptop could potentially use these to resume a signed-in session, subject to Firebase's own token-rotation and expiry rules (ID tokens are short-lived; the refresh token is longer-lived and is the more sensitive of the two).
 
+## What's persisted server-side: Buddy Drafts
+
+Not a local-disk finding, but it belongs in this audit because it's data derived from the user's screen that now leaves the device and persists. Since the drafts-persistence change (2026-07-08), the backend stores the latest version of every Buddy Draft in Firestore at `UserAura/{uid}/drafts/{draft_id}`: the draft text, the model-written context summary (screen-derived), the recipient hint, and channel/length/revision metadata. The screen frame itself is never stored. Written only by the backend (Admin SDK; the collection is deny-by-default to clients), surfaced in the web dashboard's Drafts feed where the user can delete any draft, and auto-deleted 7 days after the last edit via a Firestore TTL policy on `expires_at`. Logs and analytics still never carry draft text. This deliberately reversed the earlier "drafts are never persisted server-side" contract; `LEGAL_ADDENDUM_DRAFT.md`'s screen-sight section states the user-facing promise.
+
 ## Recommendation (needs your sign-off, not decided here)
 
 Two real options, not a false choice:

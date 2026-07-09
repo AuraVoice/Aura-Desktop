@@ -45,8 +45,8 @@ Rust owns the window: geometry, global hotkeys, tray, and stealing OS focus. Rea
 | `auth_cache.rs` | Persisted "has a session" flag, so cold start knows Setup vs. Bar before the webview's own Firebase listener resolves |
 | `autostart.rs` | Launch-at-login policy: on by default, opt-out persisted in `settings.json`, re-asserted on every start (release builds only); keeps the tray checkbox synced to the real registry state |
 | `logging.rs` | File + stdout logging, panic hook |
-| `sentry_setup.rs` | Rust-side Sentry init (native crash/error reporting; the React side has its own `lib/sentry.ts`) |
-| `updater.rs` | Checks the GitHub releases feed once at startup |
+| `sentry_setup.rs` | Rust-side Sentry init (native crash/error reporting; the React side has its own `lib/sentry.ts`); dev builds init with no DSN, so `tauri dev` crashes never reach the project |
+| `updater.rs` | Update lifecycle: checks the GitHub releases feed at startup and every 6 hours, downloads in the background, then gates the install on the user accepting the restart notice and on no voice call being live |
 
 **React (`src/`)**
 
@@ -67,8 +67,11 @@ Rust owns the window: geometry, global hotkeys, tray, and stealing OS focus. Rea
 | `overlay/useVoiceBar.ts` | LiveKit `Room` lifecycle + call status state machine |
 | `overlay/useScreenSight.ts` | Arm/disarm + capture/stream/point flow |
 | `overlay/useEscHotkey.ts` | Esc collapses the overlay |
+| `overlay/DraftCard.tsx`, `overlay/useDraftCard.ts` | Buddy Drafts card rendered below the bar: consumes the `draft.*` data-channel events, refine chips, copy button; drives `set_draft_card_open` so the window grows for it |
+| `overlay/useUpdateReady.ts` | Listens for the Rust `update-ready` event, exposes the "Restart to install vX.Y.Z" state to the bar, and shows the one-time "Updated to vX" caption after a restart |
 | `lib/api.ts`, `lib/voice.ts`, `lib/firebase.ts`, `lib/firebaseConfig.ts` | Backend and Firebase clients |
 | `lib/copy.ts`, `lib/pairingCopy.ts`, `lib/pairingCodeFormat.ts`, `lib/voiceErrorCopy.ts`, `lib/webAuthCopy.ts` | UI copy and formatting, ported verbatim from the Flutter app where applicable |
+| `lib/draft.ts` | Buddy Drafts client contract: the `draft.*` payload types and `POST /desktop/draft-outbound/refine` (mirrors the worker's data-channel payloads) |
 | `lib/dashboardLink.ts` | Mints a single-use code (`POST /devices/dashboard-link/start`) and opens the web dashboard already signed in; shared by the tray's "Open Dashboard" item and the bar's dashboard button |
 | `lib/feedback.ts` | "Send feedback" mail composer: app version, OS, overlay state, and a token-redacted log tail |
 | `lib/log.ts` | Durable error logging to the app's log file |

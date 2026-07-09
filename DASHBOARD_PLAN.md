@@ -2,6 +2,7 @@
 
 > **Status (2026-07-07)**: Workstream B shipped in v0.1.5 (`src/lib/dashboardLink.ts`, the tray's "Open Dashboard" item emitting `open-dashboard-requested`, the listener in `App.tsx`).
 > Two deltas from the plan below: the bar got its own dashboard button alongside the tray path, and the opened URL also carries the current `uid` so an already-signed-in browser can skip the claim (see the comment in `dashboardLink.ts` for why that's safe).
+> **Update (2026-07-08)**: the dashboard gained its first real content feed - Buddy Drafts persistence is code-complete across all three repos (backend writes the latest revision of each draft to Firestore with a 7-day TTL, Aura-Web renders a Drafts feed with delete), with deploys still pending: the one-time Firestore TTL-policy command and the worker (`lk agent deploy`).
 
 ## Context
 

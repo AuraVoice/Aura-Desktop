@@ -13,7 +13,8 @@ This addendum describes desktop-specific functionality not present in the mobile
 - **What is captured**: only the display (monitor) under your mouse cursor at the moment of capture — not your entire desktop, not other monitors, and not continuously.
 - **When it's captured**: only while you have explicitly armed screen-sight (Ctrl+Alt+S, or the eye icon) during an active voice session, and only at the moment the assistant needs to look at something during that turn. It is never captured ambiently, on a timer, or outside an active, explicitly-armed session.
 - **What happens to it**: the captured frame is sent to the assistant backend as part of the same voice session, to let the assistant understand and point at what's on your screen.
-- **Retention**: [PLACEHOLDER — needs a real answer from whoever owns the backend's data retention policy; see `PRIVACY_AUDIT.md` and `todo.txt` section 5's retention-policy item, which is out of this repo's control].
+- **Message drafts written from your screen**: if you ask the assistant to draft a message from what's on screen, the draft's text and a short model-written summary of what it's replying to are stored to your account so they appear in your web dashboard, where you can delete them at any time. Stored drafts are automatically deleted 7 days after you last edited them. The screen capture itself is not stored.
+- **Retention**: screen frames — [PLACEHOLDER — needs a real answer from whoever owns the backend's data retention policy; see `PRIVACY_AUDIT.md` and `todo.txt` section 5's retention-policy item, which is out of this repo's control]. Message drafts — 7 days after last edit, or immediately on deletion from the dashboard, as described above.
 
 ### Global hotkeys
 

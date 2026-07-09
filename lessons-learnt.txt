@@ -423,3 +423,290 @@ no fix here can fully control. The timing logs are the direct fix for the actual
 investigation hit: neither of the two real culprits under discussion (store contention, sign-out
 step latency) had any instrumentation before this, so the theory could only be argued from static
 code reading, not proven from a captured timestamp. Verified with `npx tsc --noEmit`, clean.
+
+Date: 2026-07-05
+Problem: While wiring up the Sentry Rust SDK almost installed a panic hook that would have silently discarded Sentry's own crash reporting.
+Issue: logging.rs's install_panic_hook already calls `std::panic::set_hook` unconditionally to
+write panics to the durable log file. `sentry::init()`'s default ClientOptions
+(default_integrations: true) also installs its own panic hook, at the point it's called, to report
+crashes to Sentry - and does so by capturing whatever hook was previously installed and chaining to
+it. Since sentry_setup::init() runs first (top of run(), before .setup()) and
+logging::install_panic_hook() runs second (inside .setup()), a naive `std::panic::set_hook` in the
+second call wholesale replaces the first hook rather than extending it - Sentry's hook (and its
+chain back to Rust's own default hook) would have been silently thrown away, so panics would still
+reach the local log file but never reach Sentry, with no error anywhere to say so. This is the same
+failure shape as incident 6 below (two things silently stepping on the same piece of global state),
+just via a panic hook instead of a mutex.
+Solution: Changed install_panic_hook to call `std::panic::take_hook()` first and chain to it
+(`previous(info)`) after its own log::error! line, instead of calling `set_hook` blind. Whatever was
+installed before this point - Sentry's hook if a DSN was configured, or Rust's own default hook if
+not - still runs, so both the local log line and Sentry's report happen for every panic regardless
+of which one (if either) got wired up first.
+Justification: Chaining via take_hook/set_hook is plain std library behavior with no dependency on
+sentry-rust's specific internal API surface, so it's correct regardless of ordering, regardless of
+whether a DSN is actually configured, and regardless of future changes to either crate's internals -
+more robust than trying to call a specific sentry-panic integration function directly, which would
+have made this file's correctness depend on knowing that function still exists in whatever sentry
+crate version is in use. Verified with `cargo check`, clean; full end-to-end confirmation (an actual
+event arriving in Sentry) still needs a real DSN and a forced panic in the built app, which is beyond
+what a compile check alone can confirm.
+
+Date: 2026-07-05
+Problem: Replacing `"csp": null` with a real Content-Security-Policy is exactly
+the kind of change that could silently break sign-in or voice calls the moment it ships, with no
+compile-time signal that anything was wrong.
+Issue: capabilities/default.json's http:default scope (the thing that looks like "the network
+allowlist" at a glance) only covers juno-backend and PostHog - it governs tauri-plugin-http's
+Rust-mediated fetch, not the webview's own native fetch/XHR/WebSocket calls, which Firebase's JS SDK
+and livekit-client both use directly. Neither of those is restricted by that scope today, and
+neither was going to be caught by a wrong CSP guess until a real sign-in or voice-call attempt failed
+in the field. Two specific facts were needed before writing connect-src with any confidence: (1)
+this app only ever calls signInWithCustomToken/signInWithEmailAndPassword (confirmed by grep - no
+popup/redirect methods), so only identitytoolkit.googleapis.com/securetoken.googleapis.com matter,
+not the authDomain (juno-2ea45.firebaseapp.com), which is never contacted; (2) the LiveKit room URL
+is fetched dynamically from juno-backend at runtime (useVoiceBar.ts) and isn't hardcoded anywhere in
+this repo, so it couldn't be discovered by reading code at all - confirmed with the user directly
+that it's a LiveKit Cloud project before scoping connect-src to *.livekit.cloud.
+Solution: Wrote the CSP's connect-src from those two confirmed facts rather than a guess, and
+separately added `ws://localhost:1420` to it - `tauri dev` loads the webview directly from Vite's
+dev server per `devUrl`, so without that entry the same CSP that hardens a production build would
+have broken this repo's own everyday `npm run tauri dev` hot-reload loop the next time anyone ran
+it.
+Justification: A CSP is exactly the kind of change where "compiles" and "typechecks" prove nothing -
+the failure mode is a silently-blocked network request with no error surfaced anywhere except a
+webview devtools console most people never open. Confirming the actual domains first, rather than
+writing a plausible-looking policy and finding out from a bug report, is the only way to make this
+kind of change with real confidence. Verified with `cargo check` (the config parses) and
+`npx tsc --noEmit`; actually exercising sign-in/voice/the avatar pill's Draco worker against this
+policy still needs `npm run tauri dev` run by hand, which is now the first item in SMOKE_TEST.md's
+"this pass's changes" section specifically because of this.
+
+Date: 2026-07-05
+Problem: While building an update-ready notice (todo.txt section 6 - never install mid-call, show a
+restart notice), the first design (a small banner stacked inside the existing GlassSurface content)
+would have risked visually breaking the Bar panel the moment it shipped.
+Issue: overlay.rs's size_for hardcodes BAR_HEIGHT at 64.0 - the window itself is a fixed-size,
+non-resizing borderless surface, not a normal browser page that grows to fit its content. VoiceBar's
+own layout (VoiceBar.css) already relies on exactly one available trick to fit a variable number of
+icon buttons in that space: a flex-shrink:0 row of fixed-size buttons plus one flex:1 caption that
+ellipsizes to absorb whatever width is left. That trick works for one more icon button in the same
+row (confirmed by reading VoiceBar.css/BarIconButton.css before adding the feedback button below);
+it does not generalize to a second stacked row, which would need real vertical space the 64px window
+has none of. This wasn't discovered by looking at a screenshot (screen capture of this window is
+already documented as unreliable) - it was caught by reading the actual CSS and Rust size constants
+before writing the notice, not after.
+Solution: Moved the update-ready notice to the tray menu (a dynamically relabeled, initially
+disabled MenuItem that becomes clickable once a download finishes) instead of in-overlay UI. Tray
+menus aren't constrained by the app's own window-sizing code at all, so this sidesteps the risk
+entirely rather than trying to make a banner fit. The feedback button (a separate, unrelated
+addition the same session) went into VoiceBar's existing icon row instead, specifically because that
+row was confirmed to already handle a variable button count via the ellipsis trick above.
+Justification: Given no way to visually verify a layout change against the real running overlay
+before shipping it, the safer choice when two implementations achieve the same requirement is the
+one that structurally cannot overflow a fixed-size window, rather than the one that looks correct on
+paper. Verified with `cargo check` and `npx tsc --noEmit`; visually confirming the Bar's layout with
+the new feedback button is included in SMOKE_TEST.md rather than assumed.
+
+Date: 2026-07-06
+Problem: A full beta-readiness audit against todo.txt found the "Send feedback" button described as
+already shipped (in this file's own 2026-07-05 entry above, SMOKE_TEST.md, and BETA_ONBOARDING.md)
+was not actually reachable anywhere in the running app.
+Issue: `src/lib/feedback.ts`'s `sendFeedback()` (redacted log tail, version/OS/state, mailto compose)
+and its `sendFeedbackTooltip`/`feedbackSentTooltip` copy in `copy.ts` were both fully implemented and
+correct, and the backend `read_recent_log_lines` command it depends on exists in `lib.rs` - but no
+component anywhere in `src/` imported `sendFeedback` or referenced either copy string. `VoiceBar.tsx`'s
+icon row had a screen-sight toggle, minimize, mic, and sign-out button, but no feedback button. This
+is the third instance of the exact same failure shape already logged twice in this file (the Google
+sign-in entry point with no reachable button, and AvatarPill's click-swallowed-as-drag bug): a feature
+built correctly in isolation with no verification that it's actually wired into the render tree a user
+can reach.
+Solution: Added a `FeedbackIcon` (icons.tsx) and a `BarIconButton` calling `sendFeedback(voice.status)`
+in `VoiceBar.tsx`'s existing icon row, grouped with sign-out after the divider (both are account/support
+utility actions, not call controls). Disabled the button while the send is in flight (covers the
+"basic rate-limiting" ask from todo.txt section 8 P2 at zero extra cost) and swaps its tooltip to the
+already-existing `feedbackSentTooltip` copy for 2.5s after it resolves, as a lightweight confirmation
+that fits this bar's 64px-tall constraint the same way BarIconButton's own native-title tooltip
+approach already does, rather than adding new stacked UI.
+Justification: The fix is the same lesson repeated a third time: verify a feature is actually reachable
+in the render tree, not just that its logic compiles and its copy exists. Placed in VoiceBar rather than
+the Pill, matching todo.txt section 8's own scope ("Bar/Pill chrome") loosely but consistent with this
+repo's existing pattern of keeping the Pill's chrome minimal (click-to-restore only) - a user needing to
+report a problem while minimized restores to Bar first, the same way they'd reach any other VoiceBar
+control. Verified with `npx tsc --noEmit`, clean. SMOKE_TEST.md already had a line asserting the feedback
+button is reachable and works - that line was untested/aspirational until this fix, and is now the check
+that actually catches a regression of this exact bug going forward.
+
+Date: 2026-07-07
+Problem: Sentry NATIVE-3, "TypeError: First argument to DataView constructor must be an ArrayBuffer",
+unhandled, from the first screen-sight capture in a production build - screen sight then stays dead
+for the rest of the session while every dev run of the identical code works fine.
+Issue: The hardened CSP shipped in 0.1.4 (commit da67c71) set connect-src without
+`ipc: http://ipc.localhost`. Tauri does not append its own IPC origins to a user-supplied CSP (its
+config docs show them as something you must include yourself), and the conf CSP only applies to
+production builds - dev loads from Vite's devUrl with no injected CSP, which is exactly why dev never
+reproduced it. In the shipped build the first invoke()'s fetch to http://ipc.localhost is CSP-blocked,
+and Tauri's injected ipc-protocol.js latches `customProtocolIpcFailed = true` for the whole session,
+silently rerouting all IPC through the postMessage fallback (one console warning, nothing durable).
+JSON responses survive that path, so the entire app appears healthy - but a raw-bytes response
+(tauri::ipc::Response, used only by capture_cursor_display_with_geometry) cannot travel over
+postMessage, so tauri 2.11.5's protocol.rs serde_json-serializes the Vec<u8> into a plain JSON number
+array. parseCapturedFrame handed that array to new DataView() and threw.
+Solution: Added `ipc: http://ipc.localhost` to connect-src in tauri.conf.json (the root cause), and
+made useScreenSight normalize the invoke result (ArrayBuffer / typed-array view / number array) via
+asArrayBuffer() before parsing (resilience), since the fallback latch is triggered by ANY rejected
+IPC fetch - one transient failure mid-session would otherwise convert every later capture into this
+same crash.
+Justification: Verified end to end in the vendored tauri 2.11.5 sources rather than guessed: the
+latch in scripts/ipc-protocol.js, the `can_use_channel_for_response = !custom_protocol_ipc_blocked`
+branch in src/ipc/protocol.rs, and format_callback.rs's serde_json serialization of Raw responses.
+The lesson generalizing past this bug: a Tauri CSP change can never be validated in dev - it only
+takes effect through the tauri protocol in a built app, so CSP edits need a production-build smoke
+test of at least one binary-IPC feature (screen sight) before shipping.
+
+Date: 2026-07-07
+Problem: Two of the first three issues in the Sentry feed (NATIVE-1 "ReferenceError: openUrl is not
+defined" in src/App, NATIVE-2 "Should have a queue. You are likely calling Hooks conditionally" in
+useScreenSight) were crashes that no shipped build can produce, and they burned a full investigation
+cycle to disprove.
+Issue: initSentryIfEnabled reported `npm run tauri dev` sessions into the same project with no
+environment tag, so feed entries are indistinguishable from user crashes. NATIVE-1 was a mid-edit
+state during the dashboard-link refactor: Vite dev transpiles without typechecking, so a
+not-yet-imported identifier compiles into a bare global reference that only explodes when the tray
+handler fires (a production Rollup build of the same code refuses to build at all). NATIVE-2 was
+React Fast Refresh re-rendering against a stale fiber right when this session's edit added a
+useState+useRef pair to useScreenSight during a live dev run - the committed code has a fixed,
+unconditional hook order in useVoiceBar, useScreenSight, and OverlayRoot (each verified), one React
+copy, and a clean tsc, so no real code path produces that error.
+Solution: initSentryIfEnabled now returns early under import.meta.env.DEV and tags
+environment: import.meta.env.MODE on what it does send. NATIVE-1 and NATIVE-2 should be resolved in
+Sentry as stale dev artifacts; NATIVE-3 resolves when the CSP fix ships.
+Justification: An error-feed is only useful while "unresolved" means "a user hit this". Dev-session
+errors already surface in the dev console at the moment they happen, attached to the code being
+edited; letting them also age into the production feed hours later manufactures fire drills like
+this one.
+
+Date: 2026-07-08
+Problem: Updates were undiscoverable - after the silent background download, the only signal was a
+relabeled item inside the tray icon's right-click menu, which Windows hides behind the overflow
+chevron by default. Realistically no user ever found it, so every install stayed on its first
+version forever, and the check ran once at startup while the app autostarts and lives for weeks.
+Issue: The plan to fix it ("install-on-quit like Chrome") died on verified platform facts from the
+vendored tauri-plugin-updater 2.10.1 sources: on Windows update.install() launches the NSIS
+installer and ends in std::process::exit(0) - it NEVER returns, no Tauri exit events run, and the
+app.request_restart() after it in tray.rs was unreachable dead code. The default Passive install
+mode hard-wires NSIS /P /R /UPDATE /ARGS <original args>: /R force-relaunches the app (so
+install-on-quit would resurrect an app the user deliberately quit - not overridable, /R is a
+managed arg), and /ARGS preserves --autostart, so a boot-launched instance relaunches HIDDEN after
+the user explicitly clicked "Restart now". On macOS install() is the opposite: an in-place bundle
+swap that returns Ok with the old process still running, needing an explicit restart, and it can
+raise an admin-password prompt when the bundle directory isn't user-writable.
+Solution: Three layers in updater.rs. (1) 6-hour re-check loop, since a startup-only check never
+even downloads updates for a long-running autostart app. (2) Startup auto-install (voice-gated,
+release-builds only - in dev it would install the production app over itself and kill `tauri dev`),
+with fallback to the visible-notice flow on failure. (3) A VoiceBar chip + inline restart confirm
+fed by an "update-ready" event plus a pending_update_version query command (the same race-covering
+idiom as overlay-changed/current_overlay_state). A just-updated marker file, written before install
+because on Windows there is no "after", forces a summon on the post-update relaunch (fixing the
+/ARGS --autostart hidden-relaunch trap) and drives a one-time "Updated to vX" caption, only shown
+when the marker version matches the running version so a failed install can't fake a success
+notice. Frontend sets "Restarting..." BEFORE invoking install_update since on Windows that invoke
+never resolves.
+Justification: Every platform claim above was read from the actual dependency source
+(~/.cargo/registry/.../tauri-plugin-updater-2.10.1/src/updater.rs lines 787-866 and 1217-1310,
+config.rs lines 14-46), not docs or memory - and that reading is what falsified the original
+install-on-quit design before it shipped. The generalizable lesson: updater code paths behave
+asymmetrically per-OS at the process-lifecycle level (does install() return? who restarts? can it
+prompt for credentials?), so any update-UX design must be validated against the plugin's per-OS
+install_inner implementations first, and code after update.install() must be treated as
+macOS/Linux-only.
+
+Date: 2026-07-08
+Problem: Buddy Drafts' first real test dictated the whole email out loud on the call ("Here's a
+draft for you: Subject: Application for AI Engineer Role...") instead of putting it in the
+desktop draft card.
+Issue: The voice LLM (gpt-4.1-mini) never called the draft_outbound_message tool. Worker logs
+proved the screen frame WAS injected into the turn and that the session made zero tool calls;
+a local find_function_tools check proved the tool WAS registered on BuddyAgent, so this was
+model behavior, not wiring. Two design choices invited the skip: the drafting instruction sat
+at the very end of a ~32K-token system prompt, and the tool's own description said "if the
+user did NOT say how long, do not call this yet - ask first". For a small tool-calling model
+that gate reads as permission to not call the tool, and since the screenshot was already in
+its context it just wrote the reply as speech.
+Solution: Rewrote the tool description to be the only permitted path ("The ONLY way to produce
+text the user will send... NEVER write, dictate, or speak message text yourself"), removed the
+ask-length-first gate (call immediately with length empty; the tool returns the exact one-line
+question to speak, then gets called again with the answer), and rewrote the voice prompt's
+drafting section as a hard rule carrying the observed failure verbatim as a wrong/right
+example pair. Worker redeploy (lk agent deploy) required to take effect.
+Justification: A tool description that gates calling on having complete arguments is, to a
+small model, an instruction to answer directly instead. Follow-up questions must come FROM the
+tool's return value, never stand between the model and the call, and prompts steering small
+models need the negative example of the exact failure, not just the positive rule. The
+diagnosis path (lk agent logs showing frame injected + zero tool calls + dictated
+agent-response preview) is the one-pass check for any future "it talked instead of acting" bug.
+
+Date: 2026-07-08
+Problem: The in-app feedback attachment command read_recent_log_lines always failed with
+file-not-found - it read <app_log_dir>/aura-desktop.log, but no such file ever exists.
+Issue: logging.rs registers tauri-plugin-log with LogDir { file_name: None }, and the plugin's
+default for a None file_name is the PRODUCT name from package_info() ("Aura Desktop"), not the
+cargo package name ("aura-desktop") the lib.rs comment claimed. The real file on disk is
+"Aura Desktop.log". Nothing surfaced this at compile time or in normal use - the command only
+runs when a user actually submits feedback, and its error just meant a silently missing
+attachment.
+Solution: Derive the file name at the call site from the same source the plugin uses:
+format!("{}.log", app.package_info().name), instead of hardcoding either spelling.
+Justification: Trading the wrong hardcode for the right hardcode would break again on any
+future productName change; reading package_info() keeps the command and the plugin agreeing by
+construction. Found by listing the actual log directory during the drafts investigation rather
+than trusting the comment. Verified with cargo check, clean.
+
+Date: 2026-07-08
+Problem: The Buddy Drafts card never appeared on screen during a live voice test even though
+the agent spoke "the draft is being displayed", and it looked exactly like an overlay
+rendering/layout bug in the new DraftCard code.
+Issue: The session was not running the new code at all. The installed 0.1.5 build (which
+predates the entire drafts feature) autostarts at boot and sits in the tray, and
+tauri_plugin_single_instance keys on com.aura.desktop for dev and release builds alike - so
+`npm run tauri dev` built the new code, forwarded its launch to the already-running old
+instance, summoned the OLD panel, and exited. The user was testing the installed binary while
+believing they were testing the dev build. The deployed backend already had the draft tool
+live, sent draft.generating/draft.created over the data channel, and the old client's generic
+DataReceived logger even logged them - then dropped them, having no draft code. The tell in
+the durable log: asset URLs on tauri.localhost (bundled production assets, hash
+index-Dk0KAWMX.js) instead of localhost:1420 (Vite dev server), plus zero overlay::apply or
+useDraftCard lines in the event window. Confirmed by grepping the installed exe: 0 hits for
+DraftCard/set_draft_card_open.
+Solution: Register tauri_plugin_single_instance only in release builds
+(if !cfg!(debug_assertions) around the .plugin() call in lib.rs), so a dev run always opens
+its own window even while the installed app is running.
+Justification: This is the client-side twin of the 2026-07-05 "code exists on disk does not
+mean the code is live" incident: a locally-correct checkout, a live backend, and a stale
+deployed artifact in between. The one-pass diagnosis for any future "feature silently absent"
+report: check the log's asset origin (tauri.localhost vs localhost:1420) and compare its
+index-*.js hash against dist/index.html, then grep the installed exe for a feature string.
+The dev-only guard removes the trap rather than documenting around it; the cost (two dev
+instances can coexist if launched twice) is harmless next to a silently-wrong test target.
+
+Date: 2026-07-08
+Problem: After the release-only single-instance fix above, `npm run tauri dev` stopped silently
+testing the wrong binary and started hard-crashing instead: panic at setup, "HotKey already
+registered: Ctrl+Alt+B", exit code 101, no window. Same panic also arrived in Sentry from an
+installed build.
+Issue: The three global_shortcut().register() calls in lib.rs setup used `?`, so any failure
+aborted the setup hook, which Tauri escalates to a process-killing panic (app.rs:1425). A
+registration fails whenever ANY other process already holds the combo system-wide: in dev
+that's the autostarted installed build sitting in the tray (guaranteed after every reboot);
+for an end user it's any app that claimed Ctrl+Alt+B first (AutoHotkey, OBS, etc.) - and since
+the app autostarts, that user's install dies at every boot with nothing on screen, forever.
+Solution: Hotkey registration is non-fatal in all builds: loop over the three shortcuts, log
+each failure and keep booting (tray access still works). Release builds additionally
+sentry::capture_message at Error level per lost hotkey; dev builds only log, since the
+dev-vs-installed collision is an expected local condition that would drown real Sentry signal.
+Justification: Fail fast on what makes the product wrong, degrade gracefully on what loses a
+convenience. A resident tray app that panics at boot over a lost hotkey trades a 95%-usable
+session (everything but the shortcut works) for a 0%-usable one, and the crash is invisible to
+the user. The Sentry event preserves the signal that used to come from the panic, per-hotkey
+and with the actual combo named. Dev-loop reminder this doesn't remove: while the installed
+app is alive, Ctrl+Alt+B still summons the OLD app - quit it from the tray before testing
+hotkey-driven flows. Verified with cargo check, clean.

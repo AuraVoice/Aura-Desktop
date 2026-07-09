@@ -31,3 +31,6 @@ dist-ssr
 /Avatars/
 /buddy-rigged.fbx
 /buddy-rigged.fbm/
+
+# Internal business strategy - this repo is public, keep it local only.
+/GROWTH_PLAN.md
