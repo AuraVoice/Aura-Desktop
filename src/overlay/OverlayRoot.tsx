@@ -6,10 +6,13 @@ import { logError } from "../lib/log";
 import { useEscHotkey } from "./useEscHotkey";
 import { useVoiceBar } from "./useVoiceBar";
 import { useScreenSight } from "./useScreenSight";
+import { useDraftCard } from "./useDraftCard";
 import { GlassSurface } from "./GlassSurface";
 import { VoiceBar } from "./VoiceBar";
 import { SetupPanel } from "./SetupPanel";
 import { PointingOverlay } from "./PointingOverlay";
+import { DraftCard } from "./DraftCard";
+import "./DraftCard.css";
 
 // Lazy: keeps three.js out of the overlay's startup bundle - only fetched
 // the first time the pill is actually reached.
@@ -26,7 +29,15 @@ export function OverlayRoot() {
   const [presentation, setPresentation] = useState<OverlayPresentation>("hidden");
   const voice = useVoiceBar();
   const screenSight = useScreenSight(voice.room, voice.status);
+  const draftCard = useDraftCard(voice.room, presentation);
+  const resetDraftCard = draftCard.reset;
   useEscHotkey();
+
+  // A draft can outlive its call, but never its session: signing out clears
+  // the card (and shrinks the window) without firing dismiss analytics.
+  useEffect(() => {
+    if (!user) resetDraftCard();
+  }, [user, resetDraftCard]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -75,9 +86,17 @@ export function OverlayRoot() {
     );
   }
 
+  // The card only ever renders under the signed-in bar. The wrapper column is
+  // always present so opening/closing the card never remounts VoiceBar (the
+  // GlassSurface keeps its tree position; only its height pinning toggles).
+  const showDraftCard = user !== null && draftCard.phase !== "idle";
+
   return (
-    <GlassSurface>
-      {user ? <VoiceBar voice={voice} screenSight={screenSight} /> : <SetupPanel />}
-    </GlassSurface>
+    <div className="overlay-column">
+      <GlassSurface className={showDraftCard ? "overlay-column-bar" : undefined}>
+        {user ? <VoiceBar voice={voice} screenSight={screenSight} /> : <SetupPanel />}
+      </GlassSurface>
+      {showDraftCard && <DraftCard card={draftCard} />}
+    </div>
   );
 }

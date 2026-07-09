@@ -3,13 +3,14 @@ import { signOut } from "firebase/auth";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { auth } from "../lib/firebase";
-import { bar as copy, signOut as signOutCopy, hotkeyHints } from "../lib/copy";
+import { bar as copy, signOut as signOutCopy, update as updateCopy, hotkeyHints } from "../lib/copy";
 import { logError, logInfo } from "../lib/log";
 import { sendFeedback } from "../lib/feedback";
 import { openDashboard } from "../lib/dashboardLink";
-import { AvatarIcon, DashboardIcon, FeedbackIcon, IncognitoOffIcon, IncognitoOnIcon, RefreshIcon, SettingsIcon, SignOutIcon, WaveformIcon } from "./icons";
+import { AvatarIcon, DashboardIcon, FeedbackIcon, IncognitoOffIcon, IncognitoOnIcon, RefreshIcon, SettingsIcon, SignOutIcon, UpdateIcon, WaveformIcon } from "./icons";
 import { BarIconButton } from "./BarIconButton";
 import type { VoiceBarState } from "./useVoiceBar";
+import { useUpdateReady } from "./useUpdateReady";
 import iconUrl from "../assets/icons/Aura-Icon.png";
 import "./VoiceBar.css";
 
@@ -35,11 +36,14 @@ export function VoiceBar({ voice, screenSight }: VoiceBarProps) {
   const [feedbackSending, setFeedbackSending] = useState(false);
   const [feedbackJustSent, setFeedbackJustSent] = useState(false);
   const feedbackSentTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [updatePrompt, setUpdatePrompt] = useState<"hidden" | "confirm" | "restarting" | "deferred" | "failed">("hidden");
+  const update = useUpdateReady();
 
   const isLive = LIVE_STATUSES.has(voice.status);
   const isError = voice.status === "error";
-  const isSavedConfirmation = !voice.errorMessage && !!screenSight.savedConfirmation;
-  const caption = voice.errorMessage ?? screenSight.savedConfirmation ?? (voice.assistantCaption || "");
+  const updatedNotice = update.updatedNotice ? updateCopy.updatedNotice(update.updatedNotice) : null;
+  const isSavedConfirmation = !voice.errorMessage && (!!screenSight.savedConfirmation || !!updatedNotice);
+  const caption = voice.errorMessage ?? screenSight.savedConfirmation ?? updatedNotice ?? (voice.assistantCaption || "");
 
   const clearSignOutTimeout = useCallback(() => {
     if (signOutTimeoutRef.current) {
@@ -83,6 +87,23 @@ export function VoiceBar({ voice, screenSight }: VoiceBarProps) {
 
   function handleMinimize() {
     invoke("minimize_to_pill").catch((err) => logError("VoiceBar: minimize_to_pill", err));
+  }
+
+  function handleInstallUpdate() {
+    // "Restarting..." goes up BEFORE the invoke: on Windows install() never
+    // returns (the process exits into the installer, which relaunches the
+    // app itself), so this promise only ever resolves on a deferral, an
+    // error, or a non-Windows install.
+    setUpdatePrompt("restarting");
+    invoke<boolean>("install_update")
+      .then((installed) => {
+        if (!installed) setUpdatePrompt("deferred");
+        // true: Rust is restarting the app - keep "Restarting..." on screen.
+      })
+      .catch((err) => {
+        logError("VoiceBar: install_update", err);
+        setUpdatePrompt("failed");
+      });
   }
 
   const micTooltip = isError ? copy.micTryAgainTooltip : isLive ? copy.micEndCallTooltip : copy.micTalkTooltip;
@@ -132,6 +153,26 @@ export function VoiceBar({ voice, screenSight }: VoiceBarProps) {
     setSigningOut(false);
     setSignOutStuck(false);
     setSignOutError(null);
+  }
+
+  if (updatePrompt !== "hidden") {
+    const busy = updatePrompt === "restarting";
+    const outcome = updatePrompt === "deferred" ? updateCopy.deferred : updatePrompt === "failed" ? updateCopy.failed : null;
+    return (
+      <div className="voice-bar voice-bar-confirm">
+        <span className="voice-bar-confirm-text">
+          {busy ? updateCopy.restarting : (outcome ?? updateCopy.confirm(update.version ?? ""))}
+        </span>
+        <button type="button" className="voice-bar-confirm-cancel" onClick={() => setUpdatePrompt("hidden")} disabled={busy}>
+          {outcome ? updateCopy.dismiss : updateCopy.later}
+        </button>
+        {!outcome && (
+          <button type="button" className="voice-bar-confirm-update" onClick={handleInstallUpdate} disabled={busy}>
+            {busy ? updateCopy.restartBusy : updateCopy.restartIdle}
+          </button>
+        )}
+      </div>
+    );
   }
 
   if (confirming) {
@@ -193,6 +234,17 @@ export function VoiceBar({ voice, screenSight }: VoiceBarProps) {
       </BarIconButton>
 
       <span className="voice-bar-divider" />
+
+      {update.version && !isLive && (
+        <BarIconButton
+          className="voice-bar-update"
+          title={updateCopy.chipTooltip(update.version)}
+          onClick={() => setUpdatePrompt("confirm")}
+        >
+          <UpdateIcon />
+          <span className="bar-icon-button-dot" aria-hidden="true" />
+        </BarIconButton>
+      )}
 
       <BarIconButton title={copy.openDashboardTooltip} onClick={() => void openDashboard()}>
         <DashboardIcon />

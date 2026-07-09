@@ -1,0 +1,234 @@
+/* OverlayRoot's panel layout: the bar keeps its own glass box and the draft
+   card floats below it in the transparent window. Heights must agree with
+   overlay.rs: BAR_HEIGHT 64 + gap 12 + card 220 = DRAFT_CARD_HEIGHT 232 extra. */
+
+.overlay-column {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  height: 100%;
+}
+
+.overlay-column > .glass-surface {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Only pinned to bar height while the card is showing; without the card the
+   single glass child just fills the window exactly as before. */
+.overlay-column > .glass-surface.overlay-column-bar {
+  flex: 0 0 64px;
+  height: 64px;
+}
+
+/* The card is a second glass surface: same tokens, gentler corner radius (the
+   60px pill radius reads wrong on a 220px-tall box). The mount animation makes
+   the instant Rust window resize read as one smooth downward expansion: the
+   window itself is transparent, so all the eye sees is the card sliding out
+   from under the bar. Starting at opacity 0 also hides the 1-2 frames where
+   React has mounted the card but the IPC resize hasn't landed yet. */
+.glass-surface.draft-card {
+  flex: 1 1 auto;
+  min-height: 0;
+  border-radius: 28px;
+  animation: draft-card-enter 0.22s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+
+@keyframes draft-card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.draft-card-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+  padding: 14px 18px 14px;
+  box-sizing: border-box;
+}
+
+.draft-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.draft-card-title {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--glass-text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.draft-card-header-error .draft-card-title {
+  color: var(--glass-danger);
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.bar-icon-button.draft-card-copied {
+  color: var(--glass-accent);
+  opacity: 1;
+}
+
+.draft-card-body-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.draft-card-text {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow-y: auto;
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--glass-text-bright);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  /* GlassSurface disables selection globally; the draft exists to be taken. */
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: text;
+  padding-right: 6px;
+}
+
+.draft-card-text::-webkit-scrollbar {
+  width: 6px;
+}
+
+.draft-card-text::-webkit-scrollbar-thumb {
+  background: var(--glass-border-flat);
+  border-radius: 3px;
+}
+
+.draft-card-text-refining {
+  opacity: 0.45;
+}
+
+.draft-card-spinner {
+  position: absolute;
+  top: calc(50% - 11px);
+  left: calc(50% - 11px);
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2.5px solid var(--glass-border-flat);
+  border-top-color: var(--glass-accent);
+  animation: draft-card-spin 0.8s linear infinite;
+}
+
+@keyframes draft-card-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.draft-card-error {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--glass-text-dim);
+}
+
+/* Generating skeleton: three pulsing lines where the text will land. */
+.draft-card-shimmer {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  justify-content: center;
+}
+
+.draft-card-shimmer span {
+  height: 12px;
+  border-radius: 6px;
+  background: var(--glass-field-fill);
+  animation: draft-card-pulse 1.2s ease-in-out infinite;
+}
+
+.draft-card-shimmer span:nth-child(1) {
+  width: 88%;
+}
+
+.draft-card-shimmer span:nth-child(2) {
+  width: 72%;
+  animation-delay: 0.15s;
+}
+
+.draft-card-shimmer span:nth-child(3) {
+  width: 55%;
+  animation-delay: 0.3s;
+}
+
+@keyframes draft-card-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .glass-surface.draft-card,
+  .draft-card-shimmer span,
+  .draft-card-spinner {
+    animation: none;
+  }
+}
+
+.draft-card-chips {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.draft-card-chip {
+  font-family: var(--font-body);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--glass-text-bright);
+  background: var(--glass-field-fill);
+  border: 1px solid var(--glass-border-flat);
+  border-radius: var(--button-radius);
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.draft-card-chip:hover:not(:disabled) {
+  background: var(--glass-sheen);
+}
+
+.draft-card-chip:disabled {
+  opacity: 0.35;
+  cursor: default;
+}

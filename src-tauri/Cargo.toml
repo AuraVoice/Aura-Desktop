@@ -34,6 +34,10 @@ tauri-plugin-updater = "2.10.1"
 tauri-plugin-process = "2.3.1"
 tauri-plugin-http = "2.5.9"
 tauri-plugin-autostart = "2.5.1"
+tauri-plugin-clipboard-manager = "2"
+# Only for time::sleep in updater.rs's re-check loop - tauri already pulls
+# tokio in, this just makes it directly usable.
+tokio = { version = "1", features = ["time"] }
 sentry = { version = "0.48", default-features = false, features = ["backtrace", "contexts", "debug-images", "panic", "reqwest", "rustls"] }
 
 # Win32 bindings - only win_focus.rs uses this, and only on Windows. Scoping it

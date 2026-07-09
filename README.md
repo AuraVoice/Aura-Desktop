@@ -36,27 +36,30 @@ Rust owns the window: geometry, global hotkeys, tray, and stealing OS focus. Rea
 | File | Owns |
 |---|---|
 | `main.rs` | Entry point; hides the console window in release builds |
-| `lib.rs` | Tauri builder: plugins, command registration, the `setup()` hook (register hotkeys, build tray, pre-seed panel variant, spawn update check) |
+| `lib.rs` | Tauri builder: plugins, command registration, the `setup()` hook (register hotkeys, apply the launch-at-login policy, build tray, pre-seed panel variant, spawn update check); skips the initial summon when Windows launches the app at login (the autostart entry passes `--autostart`) |
 | `overlay.rs` | The state machine: presentation/variant/voice/position, and `apply()` which pushes it onto the real window |
 | `hotkeys.rs` | The three global shortcuts and what each one does |
-| `win_focus.rs` | `AttachThreadInput` trick to force foreground focus (Windows blocks `SetForegroundWindow` otherwise) |
-| `tray.rs` | System tray icon + menu |
+| `win_focus.rs` | Forces foreground focus on Windows via a synthesized Alt tap + `SetForegroundWindow` (Windows denies that call while another app owns focus); plain `set_focus` fallback on non-Windows |
+| `tray.rs` | System tray icon + menu: Open Buddy, Open Dashboard, a "Start with Windows" checkbox, version label, update install, quit |
 | `screenshot.rs` | Screen-sight capture command (async, off the main thread, raw binary IPC response) |
 | `auth_cache.rs` | Persisted "has a session" flag, so cold start knows Setup vs. Bar before the webview's own Firebase listener resolves |
+| `autostart.rs` | Launch-at-login policy: on by default, opt-out persisted in `settings.json`, re-asserted on every start (release builds only); keeps the tray checkbox synced to the real registry state |
 | `logging.rs` | File + stdout logging, panic hook |
+| `sentry_setup.rs` | Rust-side Sentry init (native crash/error reporting; the React side has its own `lib/sentry.ts`) |
 | `updater.rs` | Checks the GitHub releases feed once at startup |
 
 **React (`src/`)**
 
 | File | Owns |
 |---|---|
-| `App.tsx` | Mounts `AuthProvider` around `OverlayRoot` |
+| `App.tsx` | Mounts `ErrorBoundary` + `AuthProvider` around `OverlayRoot`; top-level listeners for telemetry consent and the tray's `open-dashboard-requested` event |
+| `ErrorBoundary.tsx` | Error boundary around the app root; reports render crashes to Sentry |
 | `state/AuthProvider.tsx` | Firebase `onAuthStateChanged` listener; mirrors session state into Rust |
 | `overlay/OverlayRoot.tsx` | Reads overlay state from Rust, picks which presentation to render |
 | `overlay/GlassSurface.tsx` | Shared translucent surface, the whole-window drag region |
 | `overlay/SetupPanel.tsx`, `OnboardingFlow.tsx`, `SignInForm.tsx` | Signed-out flow: welcome → QR code → pairing code, email, or Google sign-in |
 | `overlay/useWebAuthSignIn.ts` | Browser-based Google sign-in/sign-up handshake: request a session code, open the system browser to Aura-Web, poll until it completes |
-| `overlay/VoiceBar.tsx` | Signed-in bar: mic, screen-sight eye, minimize, sign-out |
+| `overlay/VoiceBar.tsx` | Signed-in bar: mic, screen-sight toggle, minimize-to-pill, dashboard, feedback, sign-out |
 | `overlay/BarIconButton.tsx`, `overlay/icons.tsx` | Shared icon-button chrome and the icon set VoiceBar renders it with |
 | `overlay/HotkeyHint.tsx` | Renders a keycap + action label pair (used for the hotkey hints shown in the setup flow) |
 | `overlay/AvatarPill.tsx` | Collapsed "pill" presentation: Buddy rendered as a 3D character (three.js, lazy-loaded) with an idle animation, instead of the old text bar |
@@ -66,7 +69,10 @@ Rust owns the window: geometry, global hotkeys, tray, and stealing OS focus. Rea
 | `overlay/useEscHotkey.ts` | Esc collapses the overlay |
 | `lib/api.ts`, `lib/voice.ts`, `lib/firebase.ts`, `lib/firebaseConfig.ts` | Backend and Firebase clients |
 | `lib/copy.ts`, `lib/pairingCopy.ts`, `lib/pairingCodeFormat.ts`, `lib/voiceErrorCopy.ts`, `lib/webAuthCopy.ts` | UI copy and formatting, ported verbatim from the Flutter app where applicable |
+| `lib/dashboardLink.ts` | Mints a single-use code (`POST /devices/dashboard-link/start`) and opens the web dashboard already signed in; shared by the tray's "Open Dashboard" item and the bar's dashboard button |
+| `lib/feedback.ts` | "Send feedback" mail composer: app version, OS, overlay state, and a token-redacted log tail |
 | `lib/log.ts` | Durable error logging to the app's log file |
+| `lib/sentry.ts` | Sentry init for the webview side (consent-gated, disabled in dev sessions) |
 | `lib/analytics.ts` | PostHog event tracking (plain HTTP POST, same project as the Flutter app) |
 | `debug/avatarDebug.ts`, `debug/pillDebug.ts` | Standalone Vite pages (`debug-avatar.html`, `debug-pill.html`) for iterating on `AvatarPill.tsx`'s loader/camera code outside Tauri - see [`CLAUDE.md`](./CLAUDE.md) |
 
@@ -119,10 +125,12 @@ stateDiagram-v2
 | `sign-out-requested` | – | Ctrl+Shift+D |
 | `screen-sight-hotkey` | – | Ctrl+Alt+S |
 | `pointing-target` | `{ x, y, label }` (window-relative) | `point_at` |
+| `open-dashboard-requested` | – | Tray "Open Dashboard" click; `App.tsx` responds by minting a dashboard link and opening the browser |
 
 **Over the LiveKit data channel** (backend agent → desktop, JSON, not a Tauri event): only
-`error`/`session.error` and `element.point` are ever actually sent - confirmed by grepping every
-`publish_data` call in the backend. Everything else voice state comes from native LiveKit
+`error`/`session.error`, `element.point`, and `screen_save.created` (a saved-screen-item
+confirmation, shown briefly as a "Saved to ..." caption in the bar) are ever actually sent -
+confirmed by grepping every `publish_data` call in the backend. Everything else voice state comes from native LiveKit
 primitives, not the data channel - see below.
 
 ## Voice session flow
@@ -213,6 +221,8 @@ sequenceDiagram
 
 Push-to-look, never ambient: a frame is sent on arm, on `session.ready`, and once per spoken turn while armed - never on a timer or in the background (`useScreenSight.ts`).
 
+When the agent saves something it saw (a `screen_save.created` data-channel message), the bar's caption shows a brief "Saved to ..." confirmation before yielding back to the normal caption (`useScreenSight.ts` feeding `VoiceBar.tsx`).
+
 ## Pairing / sign-in flow
 
 ```mermaid
@@ -285,6 +295,8 @@ cd src-tauri && cargo check   # Rust compiles, no binary produced
 npx tsc --noEmit              # TypeScript type-checks
 ```
 
+CI (`.github/workflows/ci.yml`) runs those same two checks plus dependency audits (`npm audit --audit-level=high`, `cargo audit`) on every PR and push to `main`; `release.yml` builds and publishes tagged releases.
+
 ### Regenerating the avatar model
 
 `src/assets/models/buddy.glb` (the model `AvatarPill.tsx` loads) is a committed, optimized build artifact, not something edited directly. Its source lives in `Avatars/` at the repo root (gitignored - large FBX/intermediate GLB files, not meant for git). To regenerate after a source change:
@@ -299,6 +311,22 @@ npx tsc --noEmit              # TypeScript type-checks
 Config worth knowing about:
 - `src-tauri/tauri.conf.json` - window geometry/decorations, updater endpoint.
 - `src-tauri/capabilities/default.json` - the IPC permission allowlist; `http:default` only allows fetches to `juno-backend` and PostHog's capture endpoint (`us.i.posthog.com`, used by `lib/analytics.ts`), nothing else can be fetched from the webview. The Google sign-in flow's browser leg goes through `opener:default` (`openUrl`, opens the system browser) instead, which isn't subject to this scope at all.
+- `src-tauri/.cargo/audit.toml` - `cargo audit` advisory ignores, each with a written justification and the condition for removing it.
+
+## Project docs
+
+| Doc | What it's for |
+|---|---|
+| [`BETA_ONBOARDING.md`](./BETA_ONBOARDING.md) | Beta tester getting-started: install, pairing, hotkeys, sending feedback |
+| [`SMOKE_TEST.md`](./SMOKE_TEST.md) | Manual pre-release smoke test, run in full before every tagged release |
+| [`ROLLBACK_RUNBOOK.md`](./ROLLBACK_RUNBOOK.md) | What to do when a shipped build breaks: pull the release, fix, fast-follow |
+| [`RELEASE_NOTES_TEMPLATE.md`](./RELEASE_NOTES_TEMPLATE.md) | The What's new / Fixed / Known issues shape every GitHub release body uses |
+| [`PRIVACY_AUDIT.md`](./PRIVACY_AUDIT.md) | What's persisted under `%APPDATA%`, what survives uninstall, and the open Firebase-persistence decision |
+| [`LEGAL_ADDENDUM_DRAFT.md`](./LEGAL_ADDENDUM_DRAFT.md) | Draft desktop addendum to the ToS/Privacy Policy, pending legal review |
+| [`DASHBOARD_PLAN.md`](./DASHBOARD_PLAN.md) | The three-repo web dashboard plan (this repo's side shipped in v0.1.5) |
+| [`todo.txt`](./todo.txt) | Living beta-to-GA readiness checklist, updated as items land |
+| [`lessons-learnt.txt`](./lessons-learnt.txt) | Incident log: every non-obvious bug and the rule it produced |
+| [`CLAUDE.md`](./CLAUDE.md) | Working instructions for Claude Code in this repo |
 
 ## Known issues / design constraints
 

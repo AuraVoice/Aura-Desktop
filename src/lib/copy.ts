@@ -80,6 +80,38 @@ export const bar = {
   openDashboardTooltip: "Open dashboard",
 } as const;
 
+export const update = {
+  chipTooltip: (version: string) => `Update ready: restart to install v${version}`,
+  confirm: (version: string) => `Update v${version} is ready. Restart Buddy to install it?`,
+  later: "Later",
+  dismiss: "Dismiss",
+  restartIdle: "Restart now",
+  restartBusy: "Restarting...",
+  restarting: "Installing the update. Buddy will be right back.",
+  deferred: "Buddy is in a call. Try again after it ends.",
+  failed: "The update couldn't install. Buddy will retry in the background.",
+  updatedNotice: (version: string) => `Updated to v${version}. You're on the latest Buddy.`,
+} as const;
+
+export const draftCard = {
+  title: (channel: "email_reply" | "cold_dm") =>
+    channel === "cold_dm" ? "Draft · DM" : "Draft · Email reply",
+  copyTooltip: "Copy draft",
+  copiedTooltip: "Copied!",
+  dismissTooltip: "Dismiss draft",
+  generating: "Buddy's writing your draft...",
+  refineFailed: "Couldn't update that. Try again.",
+  failed: "That draft didn't come together. Ask Buddy to try again.",
+  quotaReached: "You've used today's free drafts. They reset tomorrow.",
+  chips: {
+    shorter: "Shorter",
+    longer: "Longer",
+    more_formal: "More formal",
+    warmer: "Warmer",
+    regenerate: "Regenerate",
+  },
+} as const;
+
 export const signOut = {
   warning: "Sign out of Aura on this device?",
   trigger: "Sign out",

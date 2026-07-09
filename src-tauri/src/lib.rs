@@ -37,6 +37,11 @@ fn set_panel_variant(app: AppHandle, variant: PanelVariant) {
 }
 
 #[tauri::command]
+fn set_draft_card_open(app: AppHandle, open: bool) {
+    overlay::set_draft_card_open(&app, open);
+}
+
+#[tauri::command]
 fn set_onboarding_step(app: AppHandle, step: OnboardingStep) {
     overlay::set_onboarding_step(&app, step);
 }
@@ -84,11 +89,6 @@ fn cancel_pointing(app: AppHandle) {
     overlay::cancel_pointing(&app);
 }
 
-#[tauri::command]
-fn install_pending_update(app: AppHandle) -> Result<bool, String> {
-    updater::install_pending_update(&app)
-}
-
 /// Reads the last `count` lines of the durable app log, for the in-app
 /// feedback button to attach - file IO, so this is async per this repo's own
 /// main-thread-blocking rule rather than reading inline.
@@ -96,12 +96,15 @@ fn install_pending_update(app: AppHandle) -> Result<bool, String> {
 async fn read_recent_log_lines(app: AppHandle, count: usize) -> Result<Vec<String>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         // Matches tauri-plugin-log's own LogDir{file_name: None} naming:
-        // <app_log_dir>/<cargo package name>.log (see logging.rs's plugin()).
+        // <app_log_dir>/<product name>.log ("Aura Desktop.log" - see
+        // logging.rs's plugin()). Derived from package_info() rather than
+        // hardcoded so a productName change can't silently break this again.
+        let file_name = format!("{}.log", app.package_info().name);
         let path = app
             .path()
             .app_log_dir()
             .map_err(|e| e.to_string())?
-            .join("aura-desktop.log");
+            .join(file_name);
         let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
         let lines: Vec<String> = content.lines().map(String::from).collect();
         let start = lines.len().saturating_sub(count);
@@ -117,11 +120,21 @@ pub fn run() {
     // exits) - dropping it early would flush and disable the client.
     let _sentry_guard = sentry_setup::init();
 
-    tauri::Builder::default()
-        .plugin(logging::plugin())
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+    let mut builder = tauri::Builder::default().plugin(logging::plugin());
+
+    // Release-only: dev and installed builds share the same com.aura.desktop
+    // single-instance key, and autostart keeps the installed app alive in the
+    // tray. Registering this in a debug build makes `npm run tauri dev`
+    // forward its launch to that old instance and exit - the panel that pops
+    // up is the installed binary, not the code being worked on (cost a full
+    // debugging cycle to spot; see lessons-learnt.txt 2026-07-08).
+    if !cfg!(debug_assertions) {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             overlay::summon(app);
-        }))
+        }));
+    }
+
+    builder
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, shortcut, event| {
@@ -143,14 +156,17 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_http::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .manage(OverlayStateHandle::default())
         .manage(ForegroundGeneration::default())
         .manage(updater::PendingUpdate::default())
+        .manage(updater::UpdatedNotice::default())
         .invoke_handler(tauri::generate_handler![
             current_overlay_state,
             esc_pressed,
             set_voice_active,
             set_panel_variant,
+            set_draft_card_open,
             set_onboarding_step,
             pill_activated,
             minimize_to_pill,
@@ -158,7 +174,9 @@ pub fn run() {
             summon,
             point_at,
             cancel_pointing,
-            install_pending_update,
+            updater::install_update,
+            updater::pending_update_version,
+            updater::just_updated_version,
             read_recent_log_lines,
             screenshot::capture_cursor_display_with_geometry
         ])
@@ -216,17 +234,29 @@ pub fn run() {
             overlay::load_persisted_center(app.handle());
             overlay::set_panel_variant(app.handle(), initial_variant);
 
+            // Present right after a user-initiated update restart. The update
+            // relaunch reuses the original args, so a boot-launched instance
+            // would otherwise come back hidden after the user clicked
+            // "Restart now" - the marker overrides the --autostart quiet
+            // start below. The caption only claims a version we're actually
+            // running: a marker left by a failed install doesn't match.
+            let just_updated = updater::take_just_updated_marker(app.handle());
+            if just_updated.as_deref() == Some(env!("CARGO_PKG_VERSION")) {
+                *app.state::<updater::UpdatedNotice>().0.lock().unwrap_or_else(|e| e.into_inner()) =
+                    just_updated.clone();
+            }
+
             // Launched by Windows at login (the autostart entry passes
             // --autostart): stay tray-only instead of popping the panel over
             // whatever the user is signing in to do. Manual launches keep the
             // summon-on-start behavior; the hotkey and tray still summon.
             let is_boot_launch = std::env::args().any(|arg| arg == "--autostart");
-            if !is_boot_launch {
+            if !is_boot_launch || just_updated.is_some() {
                 overlay::summon(app.handle());
             }
 
             let updater_handle = app.handle().clone();
-            tauri::async_runtime::spawn(updater::check_for_updates(updater_handle));
+            tauri::async_runtime::spawn(updater::run_update_loop(updater_handle));
 
             Ok(())
         })
