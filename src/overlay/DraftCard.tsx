@@ -35,7 +35,9 @@ export function DraftCard({ card }: { card: DraftCardState }) {
   };
 
   let body;
-  if (phase === "generating") {
+  if (phase === "generating" || phase === "refining") {
+    // A pill refine gets the same skeleton as a first-time generate: three
+    // pulsing lines where the text lands, never a spinner over dimmed text.
     body = (
       <div className="draft-card-shimmer" role="status" aria-label={copyStrings.generating}>
         <span />
@@ -50,14 +52,7 @@ export function DraftCard({ card }: { card: DraftCardState }) {
       </p>
     );
   } else if (draft) {
-    body = (
-      <div className="draft-card-body-wrap">
-        <p className={`draft-card-text${phase === "refining" ? " draft-card-text-refining" : ""}`}>
-          {draft.text}
-        </p>
-        {phase === "refining" && <span className="draft-card-spinner" aria-hidden="true" />}
-      </div>
-    );
+    body = <p className="draft-card-text">{draft.text}</p>;
   } else {
     body = null;
   }

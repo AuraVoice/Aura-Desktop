@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { load, type Store } from "@tauri-apps/plugin-store";
 import { trackEvent } from "../lib/analytics";
 import { logError } from "../lib/log";
@@ -80,18 +79,13 @@ export function useCallbackCard(inputs: CallbackCardInputs): CallbackCardState {
     [],
   );
 
-  const closeCardWindow = useCallback(() => {
-    invoke("set_callback_card_open", { open: false }).catch((err) =>
-      logError("useCallbackCard: close card window", err),
-    );
-  }, []);
-
+  // The window's height follows visibility: OverlayRoot watches callbackCard
+  // .visible and drives set_slot_height, so reset() only clears React state.
   const reset = useCallback(() => {
     if (!dataRef.current.visible) return;
     setData(INITIAL);
     shownAtRef.current = null;
-    closeCardWindow();
-  }, [closeCardWindow]);
+  }, []);
 
   // A call starting or a draft arriving takes the slot; the catch-up bows out
   // silently (no dismissed analytics - the user didn't act on it).
@@ -124,8 +118,8 @@ export function useCallbackCard(inputs: CallbackCardInputs): CallbackCardState {
         setData({ ...INITIAL, visible: true, line: payload.line, chips: payload.chips });
         shownAtRef.current = Date.now();
         engagedTrackedRef.current = false;
-        await invoke("set_callback_card_open", { open: true });
-        // Day consumed only now, when a card actually rendered.
+        // Day consumed only now, when a card actually rendered (OverlayRoot
+        // grows the window off this visibility change).
         await store.set(LAST_SHOWN_KEY, today);
         await store.save();
         trackEvent("callback_card_shown", { chips: payload.chips.length });

@@ -1,11 +1,11 @@
 /* OverlayRoot's panel layout: the bar keeps its own glass box and the draft
    card floats below it in the transparent window. Heights must agree with
-   overlay.rs: BAR_HEIGHT 64 + gap 12 + card 220 = DRAFT_CARD_HEIGHT 232 extra. */
+   OverlayRoot's DRAFT_CARD_HEIGHT: gap 6 + card 264 = 270 extra below the bar. */
 
 .overlay-column {
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 6px;
   width: 100%;
   height: 100%;
 }
@@ -88,13 +88,6 @@
   opacity: 1;
 }
 
-.draft-card-body-wrap {
-  position: relative;
-  flex: 1;
-  min-height: 0;
-  display: flex;
-}
-
 .draft-card-text {
   flex: 1;
   min-width: 0;
@@ -120,28 +113,6 @@
 .draft-card-text::-webkit-scrollbar-thumb {
   background: var(--glass-border-flat);
   border-radius: 3px;
-}
-
-.draft-card-text-refining {
-  opacity: 0.45;
-}
-
-.draft-card-spinner {
-  position: absolute;
-  top: calc(50% - 11px);
-  left: calc(50% - 11px);
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  border: 2.5px solid var(--glass-border-flat);
-  border-top-color: var(--glass-accent);
-  animation: draft-card-spin 0.8s linear infinite;
-}
-
-@keyframes draft-card-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 .draft-card-error {
@@ -199,8 +170,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .glass-surface.draft-card,
-  .draft-card-shimmer span,
-  .draft-card-spinner {
+  .draft-card-shimmer span {
     animation: none;
   }
 }

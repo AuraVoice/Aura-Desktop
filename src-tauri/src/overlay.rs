@@ -13,7 +13,9 @@ const OVERLAY_STORE: &str = "overlay-window.json";
 const CENTER_X_KEY: &str = "overlay_center_x";
 const CENTER_Y_KEY: &str = "overlay_center_y";
 
-const BAR_WIDTH: f64 = 600.0;
+// 480 = the old 600 shrunk ~20% once Dashboard/Feedback/Sign-out moved off the
+// bar into the kebab menu, leaving only screen-sight/minimize/mic/kebab inline.
+const BAR_WIDTH: f64 = 480.0;
 const BAR_HEIGHT: f64 = 64.0;
 const PILL_WIDTH: f64 = 280.0;
 // Canvas height is sized to the model's own aspect ratio (modelHalfWidth /
@@ -28,14 +30,13 @@ const PILL_HEIGHT: f64 = 374.0;
 const SETUP_WIDTH: f64 = 600.0;
 const SETUP_HEIGHT: f64 = 340.0;
 const TOP_MARGIN: f64 = 48.0;
-// Extra window height below the bar for the Buddy Drafts card (card + gap).
-// The card itself scrolls internally for long drafts, so this stays one fixed
-// number instead of per-draft window resizes. Keep in sync with DraftCard.css.
-const DRAFT_CARD_HEIGHT: f64 = 232.0;
-// Extra window height for the daily catch-up (callback) card, same contract:
-// gap 12 + card 168, fixed so the transparent window never has dead space that
-// would swallow clicks meant for apps below. Keep in sync with CallbackCard.css.
-const CALLBACK_CARD_HEIGHT: f64 = 180.0;
+// The single below-bar slot's extra window height is owned by React, not Rust:
+// whichever surface wins the slot (draft > callback > calendar agenda > kebab
+// menu, resolved in OverlayRoot.tsx) passes its own fixed height via
+// set_slot_height, and Rust just grows the window by that much below the bar.
+// One `slot_height` replaces the former per-card booleans + their applied
+// caches, so there's no multi-place tiebreak to keep in sync and no way to
+// forget writing one card's applied cache (the old callback-card apply bug).
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -78,20 +79,17 @@ pub struct OverlayState {
     panel_variant: PanelVariant,
     onboarding_step: OnboardingStep,
     voice_active: bool,
-    // Whether the Buddy Drafts card is showing under the bar; React owns the
-    // card's content and drives this flag via the set_draft_card_open command,
-    // Rust only grows/shrinks the window for it (Panel+Bar only).
-    draft_card_open: bool,
-    // Same contract for the daily catch-up (callback) card, driven by
-    // set_callback_card_open. If both flags are somehow true the draft card
-    // wins (it's an active user task; the catch-up is ambient) - React closes
-    // the catch-up when a draft arrives, this is just the geometry tiebreak.
-    callback_card_open: bool,
+    // Extra height (logical px) of the one below-bar slot, or None for bar-only.
+    // React owns which surface fills the slot and its content; it passes the
+    // height via set_slot_height, and Rust only grows/shrinks the window for it
+    // (Panel+Bar only). The former per-card draft_card_open/callback_card_open
+    // booleans collapsed into this single field once the priority tiebreak
+    // moved entirely into OverlayRoot.tsx.
+    slot_height: Option<f64>,
     user_center: Option<(f64, f64)>,
     applied_presentation: Option<OverlayPresentation>,
     applied_variant: Option<PanelVariant>,
-    applied_draft_card: Option<bool>,
-    applied_callback_card: Option<bool>,
+    applied_slot_height: Option<Option<f64>>,
     applying_bounds: bool,
     pre_pointing: Option<(OverlayPresentation, PanelVariant)>,
 }
@@ -103,13 +101,11 @@ impl Default for OverlayState {
             panel_variant: PanelVariant::Setup,
             onboarding_step: OnboardingStep::Welcome,
             voice_active: false,
-            draft_card_open: false,
-            callback_card_open: false,
+            slot_height: None,
             user_center: None,
             applied_presentation: None,
             applied_variant: None,
-            applied_draft_card: None,
-            applied_callback_card: None,
+            applied_slot_height: None,
             applying_bounds: false,
             pre_pointing: None,
         }
@@ -232,27 +228,14 @@ fn default_position(window: &WebviewWindow, size: LogicalSize<f64>) -> LogicalPo
     )
 }
 
-/// Whether the current state renders the draft card below the bar (the only
-/// place it exists; Pill/Setup/Pointing ignore the flag entirely).
-fn draft_card_showing(state: &OverlayState) -> bool {
-    state.draft_card_open
+/// Whether the below-bar slot is occupied (some surface is showing under the
+/// bar); drives the bar-top window anchoring in position_for/capture_user_
+/// position. The slot only exists in Panel+Bar; Pill/Setup/Pointing ignore the
+/// height entirely.
+fn slot_showing(state: &OverlayState) -> bool {
+    state.slot_height.is_some()
         && state.presentation == OverlayPresentation::Panel
         && state.panel_variant == PanelVariant::Bar
-}
-
-/// Same rule for the daily catch-up card; the draft card takes the slot when
-/// both flags are set.
-fn callback_card_showing(state: &OverlayState) -> bool {
-    state.callback_card_open
-        && !state.draft_card_open
-        && state.presentation == OverlayPresentation::Panel
-        && state.panel_variant == PanelVariant::Bar
-}
-
-/// Any below-the-bar card is showing; drives the bar-top window anchoring in
-/// position_for/capture_user_position.
-fn any_card_showing(state: &OverlayState) -> bool {
-    draft_card_showing(state) || callback_card_showing(state)
 }
 
 fn position_for(
@@ -261,11 +244,11 @@ fn position_for(
     size: LogicalSize<f64>,
 ) -> LogicalPosition<f64> {
     match state.user_center {
-        // user_center always means the BAR's center: with a card open the
+        // user_center always means the BAR's center: with the slot open the
         // window is taller, but anchoring the top edge at cy - BAR_HEIGHT/2
-        // keeps the bar pinned in place and grows the card downward instead of
+        // keeps the bar pinned in place and grows the slot downward instead of
         // re-centering the whole window around it.
-        Some((cx, cy)) if any_card_showing(state) => {
+        Some((cx, cy)) if slot_showing(state) => {
             LogicalPosition::new(cx - size.width / 2.0, cy - BAR_HEIGHT / 2.0)
         }
         Some((cx, cy)) => LogicalPosition::new(cx - size.width / 2.0, cy - size.height / 2.0),
@@ -277,13 +260,7 @@ fn size_for(state: &OverlayState) -> LogicalSize<f64> {
     match (state.presentation, state.panel_variant) {
         (OverlayPresentation::Pill, _) => LogicalSize::new(PILL_WIDTH, PILL_HEIGHT),
         (OverlayPresentation::Panel, PanelVariant::Bar) => {
-            if state.draft_card_open {
-                LogicalSize::new(BAR_WIDTH, BAR_HEIGHT + DRAFT_CARD_HEIGHT)
-            } else if state.callback_card_open {
-                LogicalSize::new(BAR_WIDTH, BAR_HEIGHT + CALLBACK_CARD_HEIGHT)
-            } else {
-                LogicalSize::new(BAR_WIDTH, BAR_HEIGHT)
-            }
+            LogicalSize::new(BAR_WIDTH, BAR_HEIGHT + state.slot_height.unwrap_or(0.0))
         }
         (OverlayPresentation::Panel, PanelVariant::Setup) => {
             LogicalSize::new(SETUP_WIDTH, SETUP_HEIGHT)
@@ -334,8 +311,7 @@ pub fn apply(app: &AppHandle) {
 
     let unchanged = state.applied_presentation == Some(state.presentation)
         && state.applied_variant == Some(state.panel_variant)
-        && state.applied_draft_card == Some(state.draft_card_open)
-        && state.applied_callback_card == Some(state.callback_card_open);
+        && state.applied_slot_height == Some(state.slot_height);
     if unchanged {
         return;
     }
@@ -346,8 +322,7 @@ pub fn apply(app: &AppHandle) {
         let from = (state.applied_presentation, state.applied_variant);
         state.applied_presentation = Some(state.presentation);
         state.applied_variant = Some(state.panel_variant);
-        state.applied_draft_card = Some(state.draft_card_open);
-        state.applied_callback_card = Some(state.callback_card_open);
+        state.applied_slot_height = Some(state.slot_height);
         drop(state);
         info!("overlay::apply: hiding (from {from:?})");
         if let Err(e) = window.hide() {
@@ -360,7 +335,7 @@ pub fn apply(app: &AppHandle) {
 
     let presentation = state.presentation;
     let panel_variant = state.panel_variant;
-    let draft_card_open = state.draft_card_open;
+    let slot_height = state.slot_height;
     let size = size_for(&state);
     let position = position_for(&state, &window, size);
     state.applying_bounds = true;
@@ -397,7 +372,7 @@ pub fn apply(app: &AppHandle) {
         let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
         state.applied_presentation = Some(presentation);
         state.applied_variant = Some(panel_variant);
-        state.applied_draft_card = Some(draft_card_open);
+        state.applied_slot_height = Some(slot_height);
     }
     emit_overlay_changed(app);
     info!(
@@ -525,22 +500,14 @@ pub fn set_panel_variant(app: &AppHandle, variant: PanelVariant) {
     apply(app);
 }
 
-/// Buddy Drafts card visibility, driven by React (useDraftCard). Only changes
-/// window geometry in Panel+Bar; the flag is remembered across presentations
-/// so a draft that arrives mid-pill still has its space once the panel is back.
-pub fn set_draft_card_open(app: &AppHandle, open: bool) {
+/// The below-bar slot's extra height, driven by React (OverlayRoot resolves
+/// which surface wins the slot and passes its fixed height, or None to collapse
+/// back to a bare bar). Only changes window geometry in Panel+Bar; the height
+/// is remembered across presentations so a draft that arrives mid-pill still
+/// has its space once the panel is back.
+pub fn set_slot_height(app: &AppHandle, height: Option<f64>) {
     if let Some(handle) = state_handle(app) {
-        handle.0.lock().unwrap_or_else(|e| e.into_inner()).draft_card_open = open;
-    }
-    apply(app);
-}
-
-/// Daily catch-up (callback) card visibility, driven by React
-/// (useCallbackCard). Same geometry contract as the drafts card; the drafts
-/// card wins the slot if both are open.
-pub fn set_callback_card_open(app: &AppHandle, open: bool) {
-    if let Some(handle) = state_handle(app) {
-        handle.0.lock().unwrap_or_else(|e| e.into_inner()).callback_card_open = open;
+        handle.0.lock().unwrap_or_else(|e| e.into_inner()).slot_height = height;
     }
     apply(app);
 }
@@ -564,10 +531,10 @@ pub fn capture_user_position(app: &AppHandle, x: f64, y: f64) {
             return;
         }
         let size = size_for(&state);
-        // With a card open, user_center must keep meaning "the bar's
-        // center" (matching position_for's anchoring), or a drag while the
-        // card is showing would shift the bar the moment the card closes.
-        if any_card_showing(&state) {
+        // With the slot open, user_center must keep meaning "the bar's
+        // center" (matching position_for's anchoring), or a drag while a card
+        // is showing would shift the bar the moment the card closes.
+        if slot_showing(&state) {
             (x + size.width / 2.0, y + BAR_HEIGHT / 2.0)
         } else {
             (x + size.width / 2.0, y + size.height / 2.0)

@@ -151,6 +151,30 @@ export function UpdateIcon() {
   );
 }
 
+/** Three vertical dots - the kebab that opens the overflow menu (calendar,
+ * dashboard, feedback, sign out) so the resting bar stays down to a few icons. */
+export function KebabIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor">
+      <circle cx="12" cy="5" r="2" />
+      <circle cx="12" cy="12" r="2" />
+      <circle cx="12" cy="19" r="2" />
+    </svg>
+  );
+}
+
+/** Calendar page with a header band - the kebab's Calendar entry and the
+ * agenda card header. */
+export function CalendarIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="3.5" y="4.5" width="17" height="16" rx="2.5" />
+      <path d="M3.5 9h17" />
+      <path d="M8 2.5v4M16 2.5v4" />
+    </svg>
+  );
+}
+
 export function SignOutIcon() {
   return (
     <svg viewBox="0 0 24 24">

@@ -89,7 +89,8 @@ function parseCreated(payload: Record<string, unknown>): DraftInfo | null {
  * mounted across presentations and calls) so a draft survives call teardown;
  * new drafts arrive over the LiveKit data channel from the voice tool, refine
  * chips always go over REST (one code path during and after the call), and
- * Rust is told to grow/shrink the window via set_draft_card_open.
+ * OverlayRoot grows/shrinks the window's slot off this card's phase (a fresh
+ * draft only needs restorePanelIfPill to pull the window out of pill first).
  */
 export function useDraftCard(
   room: Room | null,
@@ -115,23 +116,16 @@ export function useDraftCard(
     [],
   );
 
-  const openCardWindow = useCallback(async () => {
+  const restorePanelIfPill = useCallback(async () => {
+    // A draft arriving mid-pill force-restores the panel first; the card only
+    // renders under the bar. The window's height itself follows draft.phase
+    // via OverlayRoot's set_slot_height, so there's nothing to size here.
+    if (presentationRef.current !== "pill") return;
     try {
-      // A draft arriving mid-pill force-restores the panel first; the card
-      // only renders under the bar (pill/setup ignore the Rust flag too).
-      if (presentationRef.current === "pill") {
-        await invoke("pill_activated");
-      }
-      await invoke("set_draft_card_open", { open: true });
+      await invoke("pill_activated");
     } catch (err) {
-      logError("useDraftCard: open card window", err);
+      logError("useDraftCard: restore panel from pill", err);
     }
-  }, []);
-
-  const closeCardWindow = useCallback(() => {
-    invoke("set_draft_card_open", { open: false }).catch((err) =>
-      logError("useDraftCard: close card window", err),
-    );
   }, []);
 
   const markRefineFailed = useCallback(() => {
@@ -160,7 +154,7 @@ export function useDraftCard(
               channel: channel ?? prev.channel,
             }));
           }
-          void openCardWindow();
+          void restorePanelIfPill();
           break;
         }
         case "draft.created": {
@@ -170,7 +164,7 @@ export function useDraftCard(
             return;
           }
           setData({ ...INITIAL, phase: "shown", channel: draft.channel, draft });
-          void openCardWindow();
+          void restorePanelIfPill();
           break;
         }
         case "draft.updated": {
@@ -207,14 +201,14 @@ export function useDraftCard(
             return;
           }
           setData((prev) => ({ ...prev, phase: "error", draft: null, errorReason: reason }));
-          if (reason === "quota_exceeded") void openCardWindow();
+          if (reason === "quota_exceeded") void restorePanelIfPill();
           break;
         }
         default:
           break;
       }
     },
-    [openCardWindow, markRefineFailed],
+    [restorePanelIfPill, markRefineFailed],
   );
 
   // New drafts ride the same data channel as element.point / screen_save.created
@@ -331,8 +325,7 @@ export function useDraftCard(
       refineFailedTimerRef.current = null;
     }
     setData(INITIAL);
-    closeCardWindow();
-  }, [closeCardWindow]);
+  }, []);
 
   const dismiss = useCallback(() => {
     const channel = dataRef.current.channel;

@@ -121,6 +121,36 @@ export const callbackCard = {
   turnOff: "Turn off daily catch-ups",
 } as const;
 
+export const kebabMenu = {
+  openTooltip: "More",
+  calendar: "Calendar",
+  dashboard: "Dashboard",
+  feedback: "Send feedback",
+  feedbackSent: "Opened your email client",
+  signOut: "Sign out",
+} as const;
+
+export const meetingTicker = {
+  join: "Join",
+  joinTooltip: "Join the meeting",
+  dismissTooltip: "Snooze until the next one",
+  startingNow: "starting now",
+  inMinutes: (n: number) => `in ${n} min`,
+} as const;
+
+export const calendarAgenda = {
+  title: "Today",
+  joinTooltip: "Join the meeting",
+  openTooltip: "Open in Google Calendar",
+  dismissTooltip: "Close",
+  join: "Join",
+  now: "now",
+  notConnected: "Connect Google Calendar in the Aura app to see your meetings here.",
+  empty: "Nothing left on your calendar today.",
+  loading: "Checking your calendar...",
+  turnOff: "Turn off meeting alerts",
+} as const;
+
 export const signOut = {
   warning: "Sign out of Aura on this device?",
   trigger: "Sign out",

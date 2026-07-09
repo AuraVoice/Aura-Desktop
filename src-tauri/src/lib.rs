@@ -36,14 +36,12 @@ fn set_panel_variant(app: AppHandle, variant: PanelVariant) {
     overlay::set_panel_variant(&app, variant);
 }
 
+/// Sets the below-bar slot's extra height (or clears it with null). React
+/// (OverlayRoot) resolves which surface - draft, catch-up, calendar agenda, or
+/// kebab menu - wins the single slot and passes its fixed height here.
 #[tauri::command]
-fn set_draft_card_open(app: AppHandle, open: bool) {
-    overlay::set_draft_card_open(&app, open);
-}
-
-#[tauri::command]
-fn set_callback_card_open(app: AppHandle, open: bool) {
-    overlay::set_callback_card_open(&app, open);
+fn set_slot_height(app: AppHandle, height: Option<f64>) {
+    overlay::set_slot_height(&app, height);
 }
 
 #[tauri::command]
@@ -171,8 +169,7 @@ pub fn run() {
             esc_pressed,
             set_voice_active,
             set_panel_variant,
-            set_draft_card_open,
-            set_callback_card_open,
+            set_slot_height,
             set_onboarding_step,
             pill_activated,
             minimize_to_pill,

@@ -3,12 +3,12 @@ import { signOut } from "firebase/auth";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { auth } from "../lib/firebase";
-import { bar as copy, signOut as signOutCopy, update as updateCopy, hotkeyHints } from "../lib/copy";
+import { bar as copy, kebabMenu as kebabCopy, signOut as signOutCopy, update as updateCopy, hotkeyHints } from "../lib/copy";
 import { logError, logInfo } from "../lib/log";
-import { sendFeedback } from "../lib/feedback";
-import { openDashboard } from "../lib/dashboardLink";
-import { AvatarIcon, DashboardIcon, FeedbackIcon, IncognitoOffIcon, IncognitoOnIcon, RefreshIcon, SettingsIcon, SignOutIcon, UpdateIcon, WaveformIcon } from "./icons";
+import { AvatarIcon, IncognitoOffIcon, IncognitoOnIcon, KebabIcon, RefreshIcon, SettingsIcon, UpdateIcon, WaveformIcon } from "./icons";
 import { BarIconButton } from "./BarIconButton";
+import { MeetingTicker } from "./MeetingTicker";
+import type { SoonestMeeting } from "./useMeetings";
 import type { VoiceBarState } from "./useVoiceBar";
 import { useUpdateReady } from "./useUpdateReady";
 import iconUrl from "../assets/icons/Aura-Icon.png";
@@ -17,6 +17,17 @@ import "./VoiceBar.css";
 interface VoiceBarProps {
   voice: VoiceBarState;
   screenSight: { armed: boolean; toggleArmed: () => void; savedConfirmation: string | null };
+  /** The imminent meeting, if any, for the caption-region ticker (null hides it). */
+  soonestMeeting: SoonestMeeting | null;
+  onDismissMeeting: (eventId: string) => void;
+  /** Kebab overflow menu state, owned by OverlayRoot (the menu renders below
+   * the bar, outside this subtree). */
+  menuOpen: boolean;
+  onToggleMenu: () => void;
+  /** Set true by the kebab menu's Sign out; flips this bar into its confirm
+   * takeover, then calls onSignOutConsumed to clear the request. */
+  signOutRequested: boolean;
+  onSignOutConsumed: () => void;
 }
 
 const LIVE_STATUSES = new Set(["connecting", "ready", "listening", "processing", "speaking"]);
@@ -27,15 +38,21 @@ const LIVE_STATUSES = new Set(["connecting", "ready", "listening", "processing",
 // the Rust side could otherwise leave this screen stuck with no way out.
 const SIGN_OUT_STUCK_TIMEOUT_MS = 8_000;
 
-export function VoiceBar({ voice, screenSight }: VoiceBarProps) {
+export function VoiceBar({
+  voice,
+  screenSight,
+  soonestMeeting,
+  onDismissMeeting,
+  menuOpen,
+  onToggleMenu,
+  signOutRequested,
+  onSignOutConsumed,
+}: VoiceBarProps) {
   const [confirming, setConfirming] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const [signOutError, setSignOutError] = useState<string | null>(null);
   const [signOutStuck, setSignOutStuck] = useState(false);
   const signOutTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [feedbackSending, setFeedbackSending] = useState(false);
-  const [feedbackJustSent, setFeedbackJustSent] = useState(false);
-  const feedbackSentTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [updatePrompt, setUpdatePrompt] = useState<"hidden" | "confirm" | "restarting" | "deferred" | "failed">("hidden");
   const update = useUpdateReady();
 
@@ -57,25 +74,15 @@ export function VoiceBar({ voice, screenSight }: VoiceBarProps) {
   // succeeded) with the timer still pending.
   useEffect(() => clearSignOutTimeout, [clearSignOutTimeout]);
 
-  useEffect(
-    () => () => {
-      if (feedbackSentTimeoutRef.current) clearTimeout(feedbackSentTimeoutRef.current);
-    },
-    [],
-  );
-
-  function handleSendFeedback() {
-    if (feedbackSending) return;
-    setFeedbackSending(true);
-    sendFeedback(voice.status)
-      .then(() => {
-        setFeedbackJustSent(true);
-        if (feedbackSentTimeoutRef.current) clearTimeout(feedbackSentTimeoutRef.current);
-        feedbackSentTimeoutRef.current = setTimeout(() => setFeedbackJustSent(false), 2500);
-      })
-      .catch((err) => logError("VoiceBar: sendFeedback", err))
-      .finally(() => setFeedbackSending(false));
-  }
+  // The kebab menu's Sign out lives outside this subtree; when it fires,
+  // OverlayRoot raises signOutRequested and this bar takes over with its own
+  // confirm UI, then clears the request.
+  useEffect(() => {
+    if (!signOutRequested) return;
+    setSignOutError(null);
+    setConfirming(true);
+    onSignOutConsumed();
+  }, [signOutRequested, onSignOutConsumed]);
 
   function handleMicClick() {
     if (isLive) {
@@ -142,11 +149,6 @@ export function VoiceBar({ voice, screenSight }: VoiceBarProps) {
     }
   }
 
-  function handleOpenConfirm() {
-    setSignOutError(null);
-    setConfirming(true);
-  }
-
   function handleCancelSignOut() {
     clearSignOutTimeout();
     setConfirming(false);
@@ -199,12 +201,19 @@ export function VoiceBar({ voice, screenSight }: VoiceBarProps) {
   return (
     <div className="voice-bar">
       <img src={iconUrl} alt="" className="voice-bar-icon" />
-      <span
-        className={`voice-bar-caption${voice.errorMessage ? " voice-bar-caption-error" : ""}${isSavedConfirmation ? " voice-bar-caption-saved" : ""}`}
-        title={caption}
-      >
-        {caption}
-      </span>
+      {/* Caption precedence: an error or a transient saved/update notice wins
+          the region; otherwise an imminent meeting takes it as the ticker; a
+          live call keeps it for Buddy's speech (isLive blocks the ticker). */}
+      {!isLive && soonestMeeting && !voice.errorMessage && !isSavedConfirmation ? (
+        <MeetingTicker soonest={soonestMeeting} onDismiss={onDismissMeeting} />
+      ) : (
+        <span
+          className={`voice-bar-caption${voice.errorMessage ? " voice-bar-caption-error" : ""}${isSavedConfirmation ? " voice-bar-caption-saved" : ""}`}
+          title={caption}
+        >
+          {caption}
+        </span>
+      )}
 
       {voice.showMicSettingsHint && (
         <BarIconButton title={copy.openMicSettingsTooltip} onClick={() => void openUrl("ms-settings:privacy-microphone")}>
@@ -223,17 +232,15 @@ export function VoiceBar({ voice, screenSight }: VoiceBarProps) {
         <span className="bar-icon-button-dot" aria-hidden="true" />
       </BarIconButton>
 
-      {isLive && (
-        <BarIconButton title={copy.minimizeTooltip} onClick={handleMinimize}>
-          <AvatarIcon />
-        </BarIconButton>
-      )}
+      {/* Always inline per the bar layout; only actionable during a live call
+          (minimize_to_pill no-ops otherwise), so it's disabled when idle. */}
+      <BarIconButton title={copy.minimizeTooltip} onClick={handleMinimize} disabled={!isLive}>
+        <AvatarIcon />
+      </BarIconButton>
 
       <BarIconButton className="voice-bar-mic" title={micTooltip} onClick={handleMicClick} active={isLive}>
         {isError ? <RefreshIcon /> : <WaveformIcon />}
       </BarIconButton>
-
-      <span className="voice-bar-divider" />
 
       {update.version && !isLive && (
         <BarIconButton
@@ -246,20 +253,10 @@ export function VoiceBar({ voice, screenSight }: VoiceBarProps) {
         </BarIconButton>
       )}
 
-      <BarIconButton title={copy.openDashboardTooltip} onClick={() => void openDashboard()}>
-        <DashboardIcon />
-      </BarIconButton>
+      <span className="voice-bar-divider" />
 
-      <BarIconButton
-        title={feedbackJustSent ? copy.feedbackSentTooltip : copy.sendFeedbackTooltip}
-        onClick={handleSendFeedback}
-        disabled={feedbackSending}
-      >
-        <FeedbackIcon />
-      </BarIconButton>
-
-      <BarIconButton title={copy.signOutTooltip} onClick={handleOpenConfirm} danger>
-        <SignOutIcon />
+      <BarIconButton title={kebabCopy.openTooltip} onClick={onToggleMenu} active={menuOpen}>
+        <KebabIcon />
       </BarIconButton>
     </div>
   );

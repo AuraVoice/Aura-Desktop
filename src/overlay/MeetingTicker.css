@@ -1,0 +1,108 @@
+/* The meeting ticker occupies the bar's caption slot (flex: 1) when a meeting
+   is imminent. The label scrolls on a seamless loop (two identical copies, the
+   track translated by -50%); the badge, Join, and dismiss stay fixed. */
+
+.meeting-ticker {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+}
+
+/* Pulsing red "live/breaking" dot. */
+.meeting-ticker-badge {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--glass-danger);
+  animation: meeting-ticker-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes meeting-ticker-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.4;
+    transform: scale(0.65);
+  }
+}
+
+.meeting-ticker-track {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  /* Soft-fade the two edges so text enters/leaves the loop cleanly. */
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 10px, #000 calc(100% - 10px), transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 10px, #000 calc(100% - 10px), transparent);
+}
+
+.meeting-ticker-scroll {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  animation: meeting-ticker-marquee 16s linear infinite;
+}
+
+.meeting-ticker-text {
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: var(--glass-text-bright);
+  /* Gap between the looped copies; both carry it so the loop is evenly spaced. */
+  padding-right: 56px;
+}
+
+@keyframes meeting-ticker-marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.meeting-ticker-join {
+  flex-shrink: 0;
+  font-family: var(--font-body);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #04211c;
+  background: var(--glass-accent);
+  border: none;
+  border-radius: var(--button-radius);
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: filter 0.15s ease;
+}
+
+.meeting-ticker-join:hover {
+  filter: brightness(1.08);
+}
+
+/* No scroll for reduced motion: pin the badge, drop the duplicate copy, and let
+   the single label ellipsize in place. */
+@media (prefers-reduced-motion: reduce) {
+  .meeting-ticker-badge {
+    animation: none;
+  }
+  .meeting-ticker-scroll {
+    animation: none;
+    display: block;
+    min-width: 0;
+    overflow: hidden;
+  }
+  .meeting-ticker-text {
+    display: block;
+    padding-right: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .meeting-ticker-text[aria-hidden="true"] {
+    display: none;
+  }
+}
