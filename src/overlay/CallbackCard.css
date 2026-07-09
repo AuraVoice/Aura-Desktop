@@ -1,0 +1,190 @@
+/* The daily catch-up card below the bar, same slot and visual language as the
+   drafts card. Heights must agree with overlay.rs: BAR_HEIGHT 64 + gap 12
+   (overlay-column) + card 168 = CALLBACK_CARD_HEIGHT 180 extra. The card fills
+   the whole extra window height (flex: 1 1 auto) so the transparent window
+   never has dead space swallowing clicks meant for apps below; the expanded
+   chips area scrolls internally instead of growing the window. */
+
+.glass-surface.callback-card {
+  flex: 1 1 auto;
+  min-height: 0;
+  border-radius: 28px;
+  animation: callback-card-enter 0.22s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+
+@keyframes callback-card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .glass-surface.callback-card {
+    animation: none;
+  }
+}
+
+.callback-card-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  height: 100%;
+  padding: 14px 18px 12px;
+  box-sizing: border-box;
+}
+
+.callback-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.callback-card-title {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--glass-text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.callback-card-line {
+  margin: 0;
+  flex-shrink: 0;
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--glass-text-bright);
+  overflow-wrap: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.callback-card-expander {
+  align-self: flex-start;
+  flex-shrink: 0;
+  font-family: var(--font-body);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--glass-text-dim);
+  background: none;
+  border: none;
+  padding: 2px 0;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.callback-card-expander:hover {
+  color: var(--glass-text-bright);
+}
+
+.callback-card-chips-area {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.callback-card-chips-area::-webkit-scrollbar {
+  width: 6px;
+}
+
+.callback-card-chips-area::-webkit-scrollbar-thumb {
+  background: var(--glass-border-flat);
+  border-radius: 3px;
+}
+
+.callback-card-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.callback-card-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  font-family: var(--font-body);
+  font-size: 11.5px;
+  color: var(--glass-text-bright);
+  background: var(--glass-field-fill);
+  border: 1px solid var(--glass-border-flat);
+  border-radius: var(--button-radius);
+  padding: 4px 6px 4px 12px;
+}
+
+.callback-card-chip-text {
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.callback-card-chip-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: var(--glass-text-dim);
+  background: none;
+  border: none;
+  border-radius: 50%;
+  padding: 0;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.callback-card-chip-delete:hover {
+  color: var(--glass-text-bright);
+}
+
+.callback-card-chip-delete svg {
+  width: 12px;
+  height: 12px;
+}
+
+.callback-card-delete-failed {
+  margin: 0;
+  flex-shrink: 0;
+  font-family: var(--font-body);
+  font-size: 11.5px;
+  color: var(--glass-danger);
+}
+
+.callback-card-turn-off {
+  align-self: flex-start;
+  flex-shrink: 0;
+  font-family: var(--font-body);
+  font-size: 11px;
+  color: var(--glass-text-dim);
+  background: none;
+  border: none;
+  padding: 2px 0;
+  cursor: pointer;
+  text-decoration: underline;
+  transition: color 0.15s ease;
+}
+
+.callback-card-turn-off:hover {
+  color: var(--glass-text-bright);
+}

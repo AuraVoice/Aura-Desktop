@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { fetch } from "@tauri-apps/plugin-http";
 import { hostname } from "@tauri-apps/plugin-os";
+import packageJson from "../../package.json";
 import { auth } from "./firebase";
 import { logError } from "./log";
 import { pairingCodeLength, pairingErrorCopy } from "./pairingCopy";
@@ -8,6 +9,15 @@ import { rawPairingCode } from "./pairingCodeFormat";
 import { webAuthCopy } from "./webAuthCopy";
 
 export const API_BASE_URL = "https://juno-backend-620715294422.us-central1.run.app";
+
+/** Sent on every backend request so the server can tell desktop traffic apart
+ * from mobile and correlate behavior with a specific shipped build. Version
+ * comes from package.json, the same source sentry.ts already uses for its
+ * release tag, so all three (installer, Sentry, these headers) agree. */
+const PLATFORM_HEADERS = {
+  "X-Aura-Platform": "windows",
+  "X-Aura-App-Version": packageJson.version,
+} as const;
 
 const CLAIM_TIMEOUT_MS = 15_000;
 
@@ -45,6 +55,7 @@ export async function authFetch(
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers: {
+      ...PLATFORM_HEADERS,
       ...init?.headers,
       Authorization: `Bearer ${idToken}`,
     },
@@ -92,7 +103,7 @@ export async function claimPairingCode(code: string): Promise<string> {
   try {
     response = await fetch(`${API_BASE_URL}/devices/pair/claim`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...PLATFORM_HEADERS },
       body: JSON.stringify({ code: raw, device_name: deviceName ?? "" }),
       signal: controller.signal,
     });
@@ -159,7 +170,7 @@ export async function startWebAuth(): Promise<WebAuthStartResult> {
   try {
     response = await fetch(`${API_BASE_URL}/devices/web-auth/start`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...PLATFORM_HEADERS },
       body: JSON.stringify({ device_name: deviceName ?? "" }),
       signal: controller.signal,
     });
@@ -204,7 +215,7 @@ export async function pollWebAuthStatusOnce(code: string): Promise<WebAuthStatus
   try {
     response = await fetch(`${API_BASE_URL}/devices/web-auth/status`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...PLATFORM_HEADERS },
       body: JSON.stringify({ code }),
       signal: controller.signal,
     });

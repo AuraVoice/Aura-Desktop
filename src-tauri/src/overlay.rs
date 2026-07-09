@@ -32,6 +32,10 @@ const TOP_MARGIN: f64 = 48.0;
 // The card itself scrolls internally for long drafts, so this stays one fixed
 // number instead of per-draft window resizes. Keep in sync with DraftCard.css.
 const DRAFT_CARD_HEIGHT: f64 = 232.0;
+// Extra window height for the daily catch-up (callback) card, same contract:
+// gap 12 + card 168, fixed so the transparent window never has dead space that
+// would swallow clicks meant for apps below. Keep in sync with CallbackCard.css.
+const CALLBACK_CARD_HEIGHT: f64 = 180.0;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -78,10 +82,16 @@ pub struct OverlayState {
     // card's content and drives this flag via the set_draft_card_open command,
     // Rust only grows/shrinks the window for it (Panel+Bar only).
     draft_card_open: bool,
+    // Same contract for the daily catch-up (callback) card, driven by
+    // set_callback_card_open. If both flags are somehow true the draft card
+    // wins (it's an active user task; the catch-up is ambient) - React closes
+    // the catch-up when a draft arrives, this is just the geometry tiebreak.
+    callback_card_open: bool,
     user_center: Option<(f64, f64)>,
     applied_presentation: Option<OverlayPresentation>,
     applied_variant: Option<PanelVariant>,
     applied_draft_card: Option<bool>,
+    applied_callback_card: Option<bool>,
     applying_bounds: bool,
     pre_pointing: Option<(OverlayPresentation, PanelVariant)>,
 }
@@ -94,10 +104,12 @@ impl Default for OverlayState {
             onboarding_step: OnboardingStep::Welcome,
             voice_active: false,
             draft_card_open: false,
+            callback_card_open: false,
             user_center: None,
             applied_presentation: None,
             applied_variant: None,
             applied_draft_card: None,
+            applied_callback_card: None,
             applying_bounds: false,
             pre_pointing: None,
         }
@@ -228,17 +240,32 @@ fn draft_card_showing(state: &OverlayState) -> bool {
         && state.panel_variant == PanelVariant::Bar
 }
 
+/// Same rule for the daily catch-up card; the draft card takes the slot when
+/// both flags are set.
+fn callback_card_showing(state: &OverlayState) -> bool {
+    state.callback_card_open
+        && !state.draft_card_open
+        && state.presentation == OverlayPresentation::Panel
+        && state.panel_variant == PanelVariant::Bar
+}
+
+/// Any below-the-bar card is showing; drives the bar-top window anchoring in
+/// position_for/capture_user_position.
+fn any_card_showing(state: &OverlayState) -> bool {
+    draft_card_showing(state) || callback_card_showing(state)
+}
+
 fn position_for(
     state: &OverlayState,
     window: &WebviewWindow,
     size: LogicalSize<f64>,
 ) -> LogicalPosition<f64> {
     match state.user_center {
-        // user_center always means the BAR's center: with the draft card open
-        // the window is taller, but anchoring the top edge at cy - BAR_HEIGHT/2
+        // user_center always means the BAR's center: with a card open the
+        // window is taller, but anchoring the top edge at cy - BAR_HEIGHT/2
         // keeps the bar pinned in place and grows the card downward instead of
         // re-centering the whole window around it.
-        Some((cx, cy)) if draft_card_showing(state) => {
+        Some((cx, cy)) if any_card_showing(state) => {
             LogicalPosition::new(cx - size.width / 2.0, cy - BAR_HEIGHT / 2.0)
         }
         Some((cx, cy)) => LogicalPosition::new(cx - size.width / 2.0, cy - size.height / 2.0),
@@ -252,6 +279,8 @@ fn size_for(state: &OverlayState) -> LogicalSize<f64> {
         (OverlayPresentation::Panel, PanelVariant::Bar) => {
             if state.draft_card_open {
                 LogicalSize::new(BAR_WIDTH, BAR_HEIGHT + DRAFT_CARD_HEIGHT)
+            } else if state.callback_card_open {
+                LogicalSize::new(BAR_WIDTH, BAR_HEIGHT + CALLBACK_CARD_HEIGHT)
             } else {
                 LogicalSize::new(BAR_WIDTH, BAR_HEIGHT)
             }
@@ -305,7 +334,8 @@ pub fn apply(app: &AppHandle) {
 
     let unchanged = state.applied_presentation == Some(state.presentation)
         && state.applied_variant == Some(state.panel_variant)
-        && state.applied_draft_card == Some(state.draft_card_open);
+        && state.applied_draft_card == Some(state.draft_card_open)
+        && state.applied_callback_card == Some(state.callback_card_open);
     if unchanged {
         return;
     }
@@ -317,6 +347,7 @@ pub fn apply(app: &AppHandle) {
         state.applied_presentation = Some(state.presentation);
         state.applied_variant = Some(state.panel_variant);
         state.applied_draft_card = Some(state.draft_card_open);
+        state.applied_callback_card = Some(state.callback_card_open);
         drop(state);
         info!("overlay::apply: hiding (from {from:?})");
         if let Err(e) = window.hide() {
@@ -504,6 +535,16 @@ pub fn set_draft_card_open(app: &AppHandle, open: bool) {
     apply(app);
 }
 
+/// Daily catch-up (callback) card visibility, driven by React
+/// (useCallbackCard). Same geometry contract as the drafts card; the drafts
+/// card wins the slot if both are open.
+pub fn set_callback_card_open(app: &AppHandle, open: bool) {
+    if let Some(handle) = state_handle(app) {
+        handle.0.lock().unwrap_or_else(|e| e.into_inner()).callback_card_open = open;
+    }
+    apply(app);
+}
+
 pub fn set_onboarding_step(app: &AppHandle, step: OnboardingStep) {
     if let Some(handle) = state_handle(app) {
         handle.0.lock().unwrap_or_else(|e| e.into_inner()).onboarding_step = step;
@@ -523,10 +564,10 @@ pub fn capture_user_position(app: &AppHandle, x: f64, y: f64) {
             return;
         }
         let size = size_for(&state);
-        // With the draft card open, user_center must keep meaning "the bar's
+        // With a card open, user_center must keep meaning "the bar's
         // center" (matching position_for's anchoring), or a drag while the
         // card is showing would shift the bar the moment the card closes.
-        if draft_card_showing(&state) {
+        if any_card_showing(&state) {
             (x + size.width / 2.0, y + BAR_HEIGHT / 2.0)
         } else {
             (x + size.width / 2.0, y + size.height / 2.0)

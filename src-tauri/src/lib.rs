@@ -42,6 +42,11 @@ fn set_draft_card_open(app: AppHandle, open: bool) {
 }
 
 #[tauri::command]
+fn set_callback_card_open(app: AppHandle, open: bool) {
+    overlay::set_callback_card_open(&app, open);
+}
+
+#[tauri::command]
 fn set_onboarding_step(app: AppHandle, step: OnboardingStep) {
     overlay::set_onboarding_step(&app, step);
 }
@@ -167,6 +172,7 @@ pub fn run() {
             set_voice_active,
             set_panel_variant,
             set_draft_card_open,
+            set_callback_card_open,
             set_onboarding_step,
             pill_activated,
             minimize_to_pill,

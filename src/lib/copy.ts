@@ -112,6 +112,15 @@ export const draftCard = {
   },
 } as const;
 
+export const callbackCard = {
+  title: "Daily catch-up",
+  dismissTooltip: "Dismiss",
+  remembers: (n: number) => `Buddy remembers ${n} ${n === 1 ? "thing" : "things"}`,
+  deleteTooltip: (key: string) => `Forget "${key}"`,
+  deleteFailed: "Couldn't forget that. Try again.",
+  turnOff: "Turn off daily catch-ups",
+} as const;
+
 export const signOut = {
   warning: "Sign out of Aura on this device?",
   trigger: "Sign out",
