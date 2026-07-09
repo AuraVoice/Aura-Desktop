@@ -282,6 +282,7 @@ export function useDraftCard(
         priorDraft: draft.text,
         chip,
         contextSummary: draft.contextSummary,
+        draftId: draft.draftId,
       })
         .then((result) => {
           // A voice refine may have replaced the draft mid-flight; the newer

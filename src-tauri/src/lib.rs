@@ -191,9 +191,29 @@ pub fn run() {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             let handle = app.handle().clone();
-            app.global_shortcut().register(hotkeys::summon_shortcut())?;
-            app.global_shortcut().register(hotkeys::sign_out_shortcut())?;
-            app.global_shortcut().register(hotkeys::screen_sight_shortcut())?;
+
+            // A failed registration means some other process already holds
+            // the hotkey system-wide - during local dev that's the installed
+            // release build sitting in the desktop tray (it autostarts), for an end
+            // user it's any other app that claimed the combo first. Either
+            // way it must not abort setup: the app is still fully usable
+            // through the tray, while panicking here kills it at every boot
+            // with nothing on screen (this exact panic reached Sentry from a real install).
+            for (name, shortcut) in [
+                ("summon", hotkeys::summon_shortcut()),
+                ("sign-out", hotkeys::sign_out_shortcut()),
+                ("screen-sight", hotkeys::screen_sight_shortcut()),
+            ] {
+                if let Err(e) = app.global_shortcut().register(shortcut) {
+                    error!("hotkeys: failed to register {name} ({e}) - another process holds it; continuing without it");
+                    if !cfg!(debug_assertions) {
+                        sentry::capture_message(
+                            &format!("hotkeys: failed to register {name}: {e}"),
+                            sentry::Level::Error,
+                        );
+                    }
+                }
+            }
 
             // Before tray::build so the "Start with Windows" checkbox reads
             // the post-policy state. Release-only: a dev build would register

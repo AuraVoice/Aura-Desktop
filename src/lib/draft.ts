@@ -3,7 +3,10 @@ import { authFetch } from "./api";
 /** Buddy Drafts client contract, mirroring the worker's data-channel payloads
  * and POST /desktop/draft-outbound/refine. The card refines over REST on every
  * chip tap (during and after a call, one code path); new drafts only ever come
- * from the voice tool over the data channel. */
+ * from the voice tool over the data channel. The backend persists the latest
+ * version of every draft for the dashboard (7-day expiry), so the refine body
+ * carries the worker-minted draft_id and a successful refine updates the
+ * stored copy too. */
 
 export type DraftChannel = "email_reply" | "cold_dm";
 export type DraftLength = "short" | "medium" | "detailed";
@@ -37,6 +40,9 @@ export interface RefineDraftParams {
   priorDraft: string;
   chip: RefineChip;
   contextSummary: string;
+  /** The worker-minted id from draft.created, so the backend updates the
+   * stored dashboard copy alongside returning the refined text. */
+  draftId: string;
 }
 
 export interface RefineDraftResult {
@@ -63,6 +69,7 @@ export async function refineDraft(params: RefineDraftParams): Promise<RefineDraf
         refine_instruction: CHIP_INSTRUCTIONS[params.chip],
         context_summary: params.contextSummary,
         instruction_kind: params.chip,
+        draft_id: params.draftId,
       }),
       signal: controller.signal,
     });
