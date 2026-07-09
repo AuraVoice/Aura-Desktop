@@ -13,13 +13,23 @@ const DSN: &str = "https://eac19fd147547b09aa774070f00b18f8@o4511685555519488.in
 /// `install_panic_hook` runs later inside `.setup()`), both the local log
 /// line and the Sentry report happen for every panic, neither one clobbering
 /// the other.
+/// Dev builds init with no DSN, which is Sentry's own documented off switch:
+/// the client, guard, and panic-hook wiring all behave identically, but every
+/// event is dropped locally instead of sent. This keeps `tauri dev` crashes
+/// (e.g. hotkey collisions with the installed build & local dev) out of the project so
+/// its feed only ever shows real installs. `debug: true` in dev prints the
+/// would-be events to the console, so the reporting path stays visible while
+/// iterating on it.
 pub fn init() -> sentry::ClientInitGuard {
-    sentry::init((
-        DSN,
-        sentry::ClientOptions {
-            release: sentry::release_name!(),
-            debug: cfg!(debug_assertions),
-            ..Default::default()
-        },
-    ))
+    let dsn = if cfg!(debug_assertions) {
+        None
+    } else {
+        Some(DSN.parse().expect("hardcoded Sentry DSN must parse"))
+    };
+    sentry::init(sentry::ClientOptions {
+        dsn,
+        release: sentry::release_name!(),
+        debug: cfg!(debug_assertions),
+        ..Default::default()
+    })
 }

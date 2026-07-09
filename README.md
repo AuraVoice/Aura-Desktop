@@ -107,6 +107,7 @@ stateDiagram-v2
 | `esc_pressed` | – | Collapses to Hidden, ends any live call |
 | `set_voice_active` | `active: bool` | Marks a call live/ended; may flip Hidden ↔ Panel/Pill |
 | `set_panel_variant` | `variant: "setup" \| "bar"` | Switches panel content + resizes |
+| `set_draft_card_open` | `open: bool` | Grows/shrinks the bar window for the Buddy Drafts card (Panel+Bar only; the bar's top edge stays fixed and the card grows downward) |
 | `set_onboarding_step` | `step: "welcome" \| "getApp" \| "link"` | Tracks onboarding progress in Rust |
 | `pill_activated` | – | Pill → Panel |
 | `minimize_to_pill` | – | Panel → Pill, only while a call is live |
@@ -128,10 +129,27 @@ stateDiagram-v2
 | `open-dashboard-requested` | – | Tray "Open Dashboard" click; `App.tsx` responds by minting a dashboard link and opening the browser |
 
 **Over the LiveKit data channel** (backend agent → desktop, JSON, not a Tauri event): only
-`error`/`session.error`, `element.point`, and `screen_save.created` (a saved-screen-item
-confirmation, shown briefly as a "Saved to ..." caption in the bar) are ever actually sent -
+`error`/`session.error`, `element.point`, `screen_save.created` (a saved-screen-item
+confirmation, shown briefly as a "Saved to ..." caption in the bar), and the Buddy Drafts
+events `draft.generating`/`draft.created`/`draft.updated`/`draft.failed` (consumed by
+`useDraftCard.ts`, rendered by `DraftCard.tsx` below the bar) are ever actually sent -
 confirmed by grepping every `publish_data` call in the backend. Everything else voice state comes from native LiveKit
 primitives, not the data channel - see below.
+
+**Buddy Drafts** ("draft a short reply to this email"): triggered by voice only, during a call
+with screen-sight armed. The backend voice agent drafts from the current screen frame in the
+user's own tone (UserAura profile) and pushes the draft over the data channel; the card shows
+it with copy-to-clipboard and refine chips (shorter/longer/more formal/warmer/regenerate).
+Chips always hit `POST /desktop/draft-outbound/refine` over REST (works during and after the
+call - the refine needs only the prior draft plus the model-written context summary, never the
+frame). The backend persists the LATEST version of every draft to Firestore
+(`UserAura/{uid}/drafts/{draft_id}`, written by the voice worker on create and updated on every
+refine - the chip request carries the worker-minted `draft_id` for this) so it shows up in the
+web dashboard's Drafts feed, deletable there, auto-expiring 7 days after its last edit via a
+Firestore TTL policy. The draft text and its model-written context summary (which is
+screen-derived) are what persist; the screen frame itself stays ephemeral, and analytics still
+carry channel/length/mode, never text. In dev builds, `window.__injectDraftEvent({...})` (see
+`src/debug/draftDebug.ts`) drives the card without a voice call (UI only, nothing persisted).
 
 ## Voice session flow
 
