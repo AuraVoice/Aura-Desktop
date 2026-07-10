@@ -7,6 +7,9 @@ export const privacyUrl = "https://auravoiceapp.com/privacy";
 export const termsUrl = "https://auravoiceapp.com/terms";
 export const webAuthUrl = "https://auravoiceapp.com/auth";
 export const dashboardUrl = "https://auravoiceapp.com/dashboard";
+// Opens Google Calendar's new-event composer directly (the connected calendar
+// is Google), for the agenda card's empty-state "Create event" action.
+export const createEventUrl = "https://calendar.google.com/calendar/u/0/r/eventedit";
 
 export const consent = {
   heading: "Before we get started",
@@ -130,6 +133,22 @@ export const kebabMenu = {
   signOut: "Sign out",
 } as const;
 
+// The plan line + Upgrade button at the top of the kebab menu. The desktop is a
+// pure reader of the account's subscription: it shows the state and links out
+// to web checkout. Payments never happen in the app.
+export const subscription = {
+  trialDaysLeft: (n: number) => `Trial · ${n} days left`,
+  trialLastDay: "Trial · last day",
+  freePlan: "Free plan",
+  paidPlan: (name: string) => `${name} plan`,
+  paymentIssue: (name: string) => `${name} · payment issue`,
+  upgrade: "Upgrade",
+  upgradeOpening: "Opening...",
+  upgradeWaiting: "Waiting for payment...",
+  upgraded: "You're upgraded",
+  upgradeFailed: "Try again",
+} as const;
+
 export const meetingTicker = {
   join: "Join",
   joinTooltip: "Join the meeting",
@@ -140,14 +159,19 @@ export const meetingTicker = {
 
 export const calendarAgenda = {
   title: "Today",
+  upcomingTitle: "Upcoming",
   joinTooltip: "Join the meeting",
   openTooltip: "Open in Google Calendar",
   dismissTooltip: "Close",
   join: "Join",
   now: "now",
-  notConnected: "Connect Google Calendar in the Aura app to see your meetings here.",
-  empty: "Nothing left on your calendar today.",
+  notConnected: "Connect Google Calendar to see your meetings here.",
+  connectCta: "Connect Google Calendar",
+  empty: "No events on your calendar yet.",
+  createEvent: "Create event",
   loading: "Checking your calendar...",
+  errorTitle: "Couldn't load your calendar.",
+  retry: "Try again",
   turnOff: "Turn off meeting alerts",
 } as const;
 

@@ -1,712 +1,220 @@
 LESSONS LEARNT
 ==============
 
-Date: 2026-07-03
-Problem: Aura Desktop window showed "Aura Desktop (Not Responding)" in the title bar during use.
-Issue: capture_cursor_display_with_geometry (src-tauri/src/screenshot.rs) was a synchronous
-(non-async) Tauri command. Tauri executes non-async commands directly on the main thread, the
-same thread that pumps the native window's message loop. This command did blocking screen
-capture (xcap DXGI capture), RGBA-to-RGB conversion, JPEG encoding (pure-Rust, CPU-only), and
-base64 encoding, all synchronously. On 4K/multi-monitor/high-DPI setups, and especially in debug
-builds, this took long enough (multiple seconds) that Windows flagged the window as hung. It
-could repeat every spoken turn of a voice session while screen-sight was armed (useScreenSight.ts
-calls it on arm, on session.ready, and on every user.text.delta).
-Solution: Made capture_cursor_display_with_geometry async and moved the actual capture/encode
-work into tauri::async_runtime::spawn_blocking, so it runs on a blocking worker thread instead of
-the main thread. Also replaced the base64 JSON round trip with a raw tauri::ipc::Response: a
-28-byte little-endian geometry header followed directly by the JPEG bytes, read on the frontend
-via DataView/ArrayBuffer instead of atob-decoding a base64 string. Removed the now-unused base64
-crate dependency from Cargo.toml.
-Justification: Tauri's own docs state commands without the async keyword run on the main thread
-and can freeze the UI; async commands (or spawn_blocking for CPU-bound work) are the documented
-fix. The base64 round trip was pure waste, since Rust encoded to base64 only for JS to immediately
-decode it back to raw bytes for LiveKit; a raw IPC response skips both the encode/decode CPU cost
-and the ~33% payload bloat base64 adds. Verified with `cargo check` and `npx tsc --noEmit`, both
-clean.
+Purpose: Keep only durable engineering rules learned from real failures. Each lesson must remain
+short enough to scan, must describe a reusable failure class, and must not become a chronological
+debug diary. Unresolved audit findings are labeled "Required fix" instead of "Solution".
 
 Date: 2026-07-03
-Problem: A user hit "Buddy's taking too long to pick up" 5 times in a row with no way to tell
-whether it was a backend/agent dispatch failure or a LiveKit account-tier limit, because nothing
-about the failure was ever recorded anywhere.
-Issue: useVoiceBar.ts's enterErrorState (the single funnel for all error transitions - join
-timeout, silence timeout, and the backend's own session.error event) only updated React state for
-the UI. logError (lib/log.ts), which exists specifically to write durable, post-hoc-inspectable
-entries to the app's log file, was wired into just one of four error-producing paths (the
-try/catch around fetchVoiceToken/Room.connect) - the three watchdog/event-driven paths logged
-nothing. The room name returned by fetchVoiceToken was also fetched and discarded, so even a
-manual repro had no ID to cross-reference against backend/LiveKit logs. Separately, the join
-timeout (15s, briefly 20s) was too short to distinguish "agent is just slow to dispatch" from
-"agent never joined".
-Solution: Added a logError call inside enterErrorState capturing the error code, the LiveKit room
-name (now threaded through via a ref set when fetchVoiceToken resolves), and the message. Bumped
-AGENT_JOIN_TIMEOUT_MS to 30s.
-Justification: A durable logger that only covers one of four ways into the same error state isn't
-a logging gap so much as a blind spot - it made the exact failure mode a user reported completely
-unrecoverable after the fact. Threading the room name through costs nothing at call time and turns
-a vague repro report into a room ID that can be grepped directly in juno-backend/LiveKit Cloud
-logs. 30s gives a legitimately slow agent dispatch room to succeed without meaningfully changing
-the felt latency of a real hang. Verified with `npx tsc --noEmit`, clean.
+Problem: The Tauri window became "Not Responding" during screen capture.
+Issue: A synchronous Tauri command performed DXGI capture, image conversion, JPEG encoding, and
+base64 work on the native message-loop thread. Windows could not pump window messages while that
+work ran.
+Solution: Make commands async by default. Put CPU-bound or blocking work in
+tauri::async_runtime::spawn_blocking, and avoid encoding or serialization round trips when raw IPC
+bytes are sufficient.
+Justification: A non-async Tauri command shares the thread that keeps the native window alive.
+Compilation cannot detect UI-thread starvation, so command threading is an architectural rule.
 
 Date: 2026-07-04
-Problem: The LiveKit dashboard showed the backend agent joining every voice session
-(Participants: 2 on every row), yet nearly every session still ended in "Buddy's taking too long
-to pick up" within 1-2 minutes - only one session out of eight ran long enough to be a real
-conversation.
-Issue: In useVoiceBar.ts's startSession, the AGENT_JOIN_TIMEOUT_MS setTimeout was armed
-immediately after creating the Room object - before fetchVoiceToken() (a network round trip) and
-Room.connect() (a WebRTC handshake) even ran. A captured log showed that setup alone consuming
-~3s of the budget before the agent had any chance to respond, and the agent cannot signal
-readiness in a room the client hasn't joined yet.
-Solution: Moved the joinWatchdogRef arm to fire only after `await newRoom.connect(url, token)`
-resolves, so the full timeout window is spent solely waiting on the agent instead of also covering
-our own token-fetch/connect setup.
-Justification: Counting connect-time against the agent's patience budget only shrinks the real
-waiting window with no possible benefit, since the agent cannot possibly respond before the room
-exists for it to join. This alone doesn't explain the bulk of the failures, though - LiveKit
-session durations (1-2 min, matching the client's own timeout-then-teardown) point to the agent's
-own startup latency chronically exceeding the client's patience, which is a backend/infra concern
-(e.g. Cloud Run cold starts for the agent worker) outside this repo's reach. Verified with
-`npx tsc --noEmit`, clean.
-
-Date: 2026-07-03
-Problem: The pill presentation needed to become a rendered 3D character (buddy-rigged.fbx)
-instead of a text bar, but the raw source asset was completely unusable as shipped: 33MB, a
-500,821-vertex / 607,366-triangle mesh with two 2048x2048 textures, and its one baked "animation"
-turned out to be duration=0 (a single static pose, not a loop) when inspected with `gltf-transform
-inspect` - film-asset quality, not real-time-UI quality, and with no actual idle animation at all.
-Issue: FBX2glTF's own console log ("Animation mixamo.com: [0 - 0]") was the only signal available
-before authoritative inspection, and easy to misread as a tool quirk rather than what it actually
-was: zero baked keyframes beyond a bind pose. Separately, three.js's DRACOLoader.js resolves its
-decoder files via module-level `new URL('../libs/draco/draco_decoder.wasm', import.meta.url)`
-constants - Vite bundles these automatically and correctly out of the box, so manually copying the
-decoder into public/ and calling setDecoderPath() was redundant (and didn't even dedupe anything,
-since DRACOLoader.js also unconditionally evaluates a second `gltf/`-variant constant regardless of
-which path ends up used).
-Solution: Used the user-provided Avatars/ directory (separately Mixamo-retargeted Idle/Wave/Walk
-clips already merged onto an already-decimated ~50k-vertex mesh) instead of reprocessing the raw
-33MB FBX. Ran `gltf-transform optimize` (webp textures at 1024px, Draco geometry compression, no
-further simplification since the mesh was already decimated) to take that 13.46MB intermediate
-down to 1.28MB with all three real animations intact - verified via `gltf-transform inspect`
-post-optimization, not just trusted. Removed the manual public/draco/ copy and setDecoderPath()
-call in favor of DRACOLoader's own Vite-friendly defaults. Added `assetsInclude: ["**/*.glb"]` to
-vite.config.ts and a `declare module "*.glb"` ambient type, since .glb isn't in Vite's default
-recognized-asset list. AvatarPill.tsx is lazy-loaded from OverlayRoot.tsx so three.js's bundle cost
-isn't paid until the pill is actually reached.
-Justification: A console log from a decade-old conversion tool isn't proof of anything - the
-duration=0 finding only became trustworthy once corroborated by a dedicated inspector, and it
-changed the plan (from "the FBX already has an idle loop" to "get one from Mixamo and retarget
-it"). Reusing the user's already-retargeted/decimated intermediate instead of reprocessing the raw
-FBX avoided redoing real work (animation retargeting, mesh decimation) that had already been done
-correctly. Verified with `cargo check`, `npx tsc --noEmit`, and a full `npm run build` (confirms
-the .glb import and Draco decoder actually resolve at build time, not just type-check).
+Problem: Desktop voice repeatedly timed out even though the agent had joined and published audio.
+Issue: The client waited for custom data messages that the backend never emitted. It also armed the
+agent watchdog before token fetch and room connection, and initially missed agents already present
+when Room.connect completed.
+Solution: Verify wire contracts against the real producer and a working reference client. Use
+LiveKit participant kind, participant attributes, transcription, and audio-track events. Scan
+remoteParticipants immediately after connect, and arm join timeouts only after connect succeeds.
+Route every terminal error through one durable logger with the room ID and error code.
+Justification: Timeout tuning cannot repair an unreachable success condition. Observability and
+protocol verification must precede timing changes.
 
 Date: 2026-07-04
-Problem: Voice calls never worked on desktop at all - every attempt showed "Buddy's taking too
-long to pick up" after the full timeout, even though the LiveKit dashboard confirmed the agent
-joined the room and published audio almost instantly, and the user confirmed Flutter's own
-Windows desktop build (same machine, same network, same backend) worked perfectly. Days of
-tuning the client-side timeout (15s -> 20s -> 30s) and auditing LiveKit/network/backend never
-moved the needle, because none of it was the actual bug.
-Issue: useVoiceBar.ts (and useScreenSight.ts) waited for a custom JSON protocol over LiveKit's
-RoomEvent.DataReceived - message types `session.ready`, `session.state` (nested under
-`event.payload.state`), `assistant.text.delta`/`assistant.text.final`, `user.text.delta`/
-`user.text.final`. Grepping the actual backend (`../Aura/backend/src/shared/protocol.py` and
-every `publish_data` call in the codebase) proved these are never sent - `protocol.py`'s message
-classes are imported nowhere else at all (dead code), and the real agent communicates exclusively
-through native LiveKit primitives: participant kind (`ParticipantKind.AGENT`) for join detection,
-the `lk.agent.state` participant attribute for listening/thinking/speaking state, and the native
-Transcription API for captions. Confirmed by reading the actual working Flutter client
-(`voice_session_service.dart`): its own `'session.ready'` is a purely local event synthesized on
-room-connect, never received from the network - the desktop port had mistaken Flutter's internal,
-already-translated event vocabulary for the literal wire protocol, then built a DataReceived
-parser to consume messages that don't exist. Also found empirically that `RoomEvent.
-ParticipantConnected` never fires for a participant already in the room when `connect()`
-resolves (only for participants joining afterward) - relevant because the agent was already
-present in every failed test, so relying solely on the live-join event would have kept missing it
-even after fixing the protocol misunderstanding.
-Solution: Rewired both hooks' event handling onto the real signals: `ParticipantConnected`
-(+ an explicit `room.remoteParticipants` scan for an already-present agent right after connect)
-clears the join watchdog, `ParticipantAttributesChanged` reading `lk.agent.state` drives status,
-`TranscriptionReceived` drives captions and the silence watchdog, `TrackSubscribed` audio marks
-the agent as having responded. `session.error` (the one message type actually confirmed real via
-`errors.py`'s `publish_client_error`) is the only case kept on `DataReceived`. Also added,
-per follow-up request: automatic retry with exponential backoff (2s/4s/8s, 3 attempts, skipped
-for mic-access codes that need user action) driven off a `lastErrorCode` state + effect rather
-than a direct call from `enterErrorState` (avoids a circular useCallback dependency); try/catch
-around every event handler body and `.catch()` on every fire-and-forget async call, so one bad
-event can't cascade or produce an unhandled rejection; and PostHog telemetry
-(`src/lib/analytics.ts`, plain HTTP POST reusing the Flutter app's own project token/host, since
-Flutter's own Windows build hits the identical "no SDK for this platform" wall and already solved
-it the same way) for `voice_session_started`/`voice_first_response`/`voice_error`/
-`voice_retry_attempt`/`voice_retry_exhausted`/`voice_session_ended`.
-Justification: No amount of client-side timeout tuning could ever have fixed this, since the
-exit condition itself was unreachable - the fix isn't "wait long enough," it's "wait for
-something that actually happens." Verifying against the real backend source and a working
-reference client, rather than continuing to reason from the desktop code's own (wrong)
-assumptions, is what actually found it after multiple sessions of plausible-but-wrong theories
-(LiveKit free-tier limits, Cloud Run cold starts, network/firewall differences). Retry/logging/
-telemetry are separately justified: the user had to manually retry more than 5 times during this
-investigation with a log file that showed nothing, because logging coverage had gaps and nothing
-retried on its own - auto-retry with backoff and telemetry mean the next occurrence of any
-failure (known or new) is both less disruptive and independently diagnosable without a live
-debugging session. Verified with `npx tsc --noEmit`, clean.
-
-Date: 2026-07-03
-Problem: Aura Desktop froze completely ("Not Responding" in Task Manager, required killing the
-process to recover) whenever the overlay was summoned via Ctrl+Alt+B while a different app
-currently owned the foreground. Happened with any foreground app, not just certain ones.
-Issue: Two separate bugs stacked in the summon path. (1) overlay::apply() (overlay.rs) held the
-OverlayState mutex across window.set_size()/set_position(), but Windows delivers WM_MOVE to the
-window procedure synchronously, before SetWindowPos returns, and lib.rs's WindowEvent::Moved
-handler calls capture_user_position(), which locks that same mutex - a real position change
-re-entered a std::sync::Mutex from the same thread that already held it. The standard library
-documents this as unspecified and possibly deadlocking; on this thread it deadlocked permanently,
-matching "stays frozen, needs a kill" exactly. (2) win_focus::force_foreground() used
-AttachThreadInput to borrow the current foreground window's permission to call
-SetForegroundWindow, running inline on the same thread (and, before fix 1, while still holding
-that same mutex). Microsoft's own guidance, and multiple documented production incidents, warn
-that attaching two threads' input queues makes their message handling synchronous with each
-other - if the other app's thread is ever slow to service its queue, the calling thread hangs
-waiting on it.
-Solution: Restructured apply() so every state read/write is its own short-lived lock, with the
-guard always dropped before any window.* call. Replaced AttachThreadInput in win_focus.rs with a
-SendInput-synthesized Alt tap (satisfies SetForegroundWindow's documented "calling process
-received the last input event" exception without ever sharing an input queue with another
-process), and moved the remaining Win32 calls onto a spawned thread so even a slow
-SetForegroundWindow call can no longer block the thread servicing the overlay's own window.
-Removed the now-unused Win32_System_Threading Cargo feature.
-Justification: The mutex fix is a plain, verifiable Rust concurrency bug, confirmed against the
-std docs, and unique to apply() - point_at()/cancel_pointing() already scoped their locks
-correctly, so this wasn't a systemic pattern across the module. The AttachThreadInput removal is
-grounded in Raymond Chen's "The Old New Thing" warning against attaching input queues, a
-documented production hang with the identical mechanism, and the official Microsoft docs on
-SetForegroundWindow's exception list, which is what the SendInput trick exploits instead of
-sharing a queue. Verified with `cargo check`, clean, no warnings.
+Problem: Overlay transitions could deadlock, repeat side effects, or leave the fullscreen pointing
+window permanently click-through.
+Issue: Overlay state locks were held across native window calls that synchronously re-entered event
+handlers. Some direct state transitions did not emit the matching React event, and applied-state
+caches could be updated inconsistently with the side effect they represented.
+Solution: Hold state locks only for short reads or writes, never across window APIs. Every Rust
+presentation transition must emit the event React uses to render it. Normal presentations must
+restore cursor interaction defensively. Write applied-state caches only after resize, position,
+show, or hide succeeds.
+Justification: Native window APIs are re-entrant. State, native geometry, and React rendering must
+either converge together or remain retryable after failure.
 
 Date: 2026-07-04
-Problem: Arming screen-sight and having the agent point at something took the window fullscreen
-and click-through (correct, for the PointerBuddy flight animation) and then never gave it back -
-no hotkey, click, or Esc did anything, and the process had to be killed to recover.
-Issue: overlay::point_at() mutates OverlayState.presentation to Pointing and resizes/click-throughs
-the window directly, bypassing apply()'s normal flow (deliberately, per its own comment) - but it
-only ever emitted "pointing-target", never "overlay-changed". OverlayRoot.tsx's own presentation
-state (which gates whether <PointingOverlay/> renders at all) is only ever updated by receiving
-"overlay-changed", so it never became "pointing" and PointingOverlay never mounted. The only call
-to cancel_pointing anywhere in the codebase is a setTimeout inside PointingOverlay's own effect -
-so with the component never mounted, nothing was ever going to call cancel_pointing, and the
-takeover had no exit. Compounding it: hotkey_pressed()'s match has a bare `_ => {}` for Pointing (an
-intentional "ignore mid-flight" - not itself the bug, but it meant Ctrl+Alt+B couldn't rescue a
-stuck session either), and apply() itself never reset ignore_cursor_events - only cancel_pointing()
-did - so even a successful escape via some other path (e.g. sign-out) would have left the window
-click-through.
-Solution: Added the missing emit_overlay_changed(app) call in point_at(), so the frontend actually
-learns presentation is "pointing", mounts PointingOverlay, and its built-in auto-cancel timer gets
-scheduled like it was always meant to. Also made apply() unconditionally call
-set_ignore_cursor_events(false) whenever it applies a normal (non-Hidden) presentation, as a
-second, independent guarantee that click-through can never survive a return to Panel/Pill
-regardless of which path got us there.
-Justification: This wasn't a race or a timing fluke - point_at() and OverlayRoot.tsx were grepped
-side by side and the missing emit is the entire explanation, with zero other call sites for
-cancel_pointing anywhere in the app to fall back on. The apply() reset is deliberately redundant
-with cancel_pointing's own reset: a single missed notification should never again be able to strand
-the window in an unrecoverable, unclickable, un-dismissable state - that failure mode is bad enough
-to warrant a second independent guarantee rather than trusting one call site to always fire.
-Verified with `cargo check`, clean, no warnings.
+Problem: The 3D avatar silently hung, framed the wrong pose, and swallowed clicks inside the drag
+region.
+Issue: Vite development pre-bundling broke DRACO's inferred decoder path, bind-pose bounds differed
+from the animated pose, and a div with role=button was still treated as a window drag target.
+Solution: Import the exact DRACO decoder assets and set their URLs explicitly. Evaluate the first
+animation frame before measuring bounds. Use real button elements for interactive controls. Build
+a small browser harness with visible bounds and frustum helpers before changing camera constants.
+Justification: Build success does not validate the development loader, and correct camera math is
+still wrong when it measures geometry that is not actually rendered.
 
 Date: 2026-07-04
-Problem: The pill's 3D avatar (AvatarPill.tsx) was broken through three unrelated failures in
-sequence: it never appeared at all (just the caption, forever, no error anywhere); once it loaded,
-the character was clipped with a large dead gap before the caption; and there was no way to click
-back out to the panel. Confirmed fully fixed and working in the running app.
-Issue: Three independent bugs, each one only findable by actually inspecting the object/environment
-rather than reasoning about it on paper.
-(1) DRACOLoader.js resolves its decoder file paths via `new URL('../libs/draco/...',
-import.meta.url)` inside its own module. Under Vite dev mode, once esbuild's dependency
-pre-bundler moves DRACOLoader.js into node_modules/.vite/deps/, that relative path resolves to
-nothing - the fetch 404s, Vite's dev-server fallback serves index.html in its place, and that HTML
-gets fed into the decoder Worker as JS and thrown as `Uncaught SyntaxError: Unexpected token '<'`.
-DRACOLoader never wires up `worker.onerror`, so the crash is invisible everywhere - not the
-terminal, not the app's log file, only the browser's own console - and `GLTFLoader.load()` just
-hangs forever with neither onLoad nor onError ever firing. Confirmed by building a throwaway
-standalone page (debug-avatar.html/src/debug/avatarDebug.ts) that hit the identical silent hang
-with plain three.js, proving the bug lived in the loading path, not AvatarPill.tsx's React/Tauri
-glue. A prior lessons-learnt entry (2026-07-03) claiming Vite handles this "automatically and
-correctly out of the box" was only ever verified via `npm run build` (Rollup) - a different
-pipeline from `npm run dev`/`tauri dev` (esbuild), which is what actually broke.
-(2) The clickable avatar-pill element was a `<div role="button" tabIndex={0}>`, not a real
-`<button>`. This repo's drag-region rule (CLAUDE.md) only auto-excludes real inputs/buttons/links
-from the "deep" region Tauri makes draggable - an ARIA-role div doesn't qualify, so clicks were
-being swallowed as window-drag attempts instead of ever firing onClick.
-(3) Two rounds of pure camera-trigonometry changes (removing a deliberate tilt, retuning the
-pill's aspect ratio) made no visible difference, because the camera was never the actual bug.
-Building a second, more faithful debug harness (debug-pill.html/src/debug/pillDebug.ts, mirroring
-AvatarPill.tsx's exact camera code and real 280x374 dimensions) and drawing the model's bind-pose
-(T-pose) bounding box as a wireframe showed the camera fit that box exactly as designed - but the
-actual "Idle" animation doesn't render at the bind pose at all. Measuring a live Box3 of the posed,
-animating mesh (min=(-0.558,-0.008,-0.440), max=(0.524,1.991,0.562)) against the bind pose's box
-(min=(-0.83,-1.0,-0.47), max=(0.83,1.0,0.47)) showed the same total height (~2.0) but the whole
-character sitting about one full unit higher - feet near y=0 instead of y=-1, head near y=2 instead
-of y=1. All animation `.scale` tracks were confirmed at (1,1,1), ruling out a bad scale keyframe;
-this is the retargeted Idle clip's root bone sitting at the wrong height relative to the mesh's own
-centered-at-origin convention, most likely a leftover ground-plane-vs-centered-origin mismatch from
-the external Mixamo retargeting pass (2026-07-03 entry above). The camera was correctly framing a
-pose that's never actually on screen.
-Solution: (1) Imported the exact decoder files DRACOLoader would have used
-(three/examples/jsm/libs/draco/draco_wasm_wrapper.js, draco_decoder.wasm) via Vite's `?url` suffix
-and passed them to `dracoLoader.setDecoderPath({ js, wasm })`, sidestepping DRACOLoader's own
-import.meta.url computation entirely - correct in both dev and build regardless of Vite's bundling
-decisions. (2) Changed the pill's root element to a real `<button type="button">` with matching CSS
-resets. (3) In AvatarPill.tsx, after starting the Idle clip, evaluate its first frame immediately
-(`mixer.update(0)` + `gltf.scene.updateMatrixWorld(true)`, since neither the mixer nor a render has
-run yet), take a real Box3 of the POSED scene, recenter the loaded scene on that box's real vertical
-center (`gltf.scene.position.y -= centerY`), and derive modelHalfWidth/modelHalfHeight from the real
-measured extents instead of hardcoded bind-pose constants (which now only serve as the one-frame
-fallback before the real measurement lands) - then re-run the same frameCamera() fitting logic
-(unchanged) with the corrected values. Also replaced a one-time canvas.clientWidth/clientHeight
-read at mount with a ResizeObserver driving camera.aspect/renderer.setSize, since that effect fires
-the instant Suspense resolves, immediately after Rust has just resized the native window and before
-the canvas's own flex layout is guaranteed to have settled - a real fix for a real, independent
-sizing race, not what caused the framing bug above.
-Justification: Every wrong turn here came from reasoning about the problem instead of looking at
-it. The Draco failure was invisible in every log this app has, because a Worker's own parse-time
-exception isn't routed through any onError callback - only a standalone repro outside the Tauri
-webview surfaced the actual browser console error. The framing failure survived two rounds of
-correct-looking camera trigonometry because the trigonometry was never wrong - the target it was
-fitting was. Building (and rebuilding, more faithfully each time) a throwaway harness that mirrors
-the real component's exact code and dimensions, then actually measuring the object - a live Box3, a
-dump of animation scale tracks - rather than trusting the static GLB's bind pose, is what found the
-one-unit vertical offset; no amount of further angle-guessing would have surfaced it. Verified with
-`npx tsc --noEmit` and `cargo check`, both clean, and confirmed visually in the running app.
-
-Date: 2026-07-04
-Problem: Clicking "Sign out" left the confirm screen stuck on "Signing out..." for about a minute
-with both buttons disabled and no way out short of killing the process.
-Issue: The app's own durable log file captured the real cause as its last two lines before the
-stall: a win_focus::force_foreground WARN, then a Rust panic 64 seconds later in tao's Windows
-event-loop runner ("cannot move state from Destroyed") - almost exactly matching the reported
-freeze length. force_foreground() (called from overlay::apply() on every transition into the panel
-presentation, sign-out's bar->setup switch included) spawns a brand-new, completely untracked OS
-thread on every call that performs BringWindowToTop/SetForegroundWindow against a raw HWND with,
-per its own existing comment, "no documented time bound." Nothing stopped a thread delayed by OS
-scheduling, or queued behind a slow prior call, from still running against a window whose state had
-already moved on - exactly the shape of failure that produces tao's panic. Same two files
-(win_focus.rs/overlay.rs) as the 2026-07-03 "froze completely, required killing the process" entry
-below, but a different race than the AttachThreadInput hang and mutex-reentrancy deadlock that entry
-fixed. Separately, VoiceBar.tsx's sign-out confirm screen had no timeout of its own - once
-`signingOut` was true, both buttons were disabled with the only way out being an external event
-(AuthProvider's onAuthStateChanged flipping the panel) that had no bound, so any delay in that
-chain - this one or a future one - left the user with zero recourse. It also didn't end an active
-voice call before signing out, letting the LiveKit room fall through to the unmount-cleanup
-fire-and-forget disconnect instead of the deliberate endSession() path.
-Solution: Added an independent `.manage()`-ed AtomicU64 generation counter (ForegroundGeneration,
-in win_focus.rs) that force_foreground() claims before spawning its thread; the thread re-checks its
-generation is still current before touching any Win32 API and bails out otherwise. Deliberately not
-folded into OverlayState's existing Mutex, since that mutex has a documented reentrancy hazard
-already (set_position re-enters it via WM_MOVE) and a plain atomic sidesteps that entirely. Added
-start/elapsed info! logging to overlay::apply() so a future occurrence is diagnosable from the log
-file alone. In VoiceBar.tsx, added an 8-second stuck-timeout (armed before both endSession() and
-signOut(auth)) that re-enables a relabeled "Dismiss" button if the panel never switches away in
-time, and made handleConfirmSignOut call voice.endSession() before signOut(auth).
-Justification: All RMW/load operations on one AtomicU64 share a single total modification order
-regardless of Ordering, so a stale thread's captured generation is reliably invalidated the instant
-a newer call increments it - verified this reasoning rather than assuming it. Confirmed AppHandle is
-Send + Sync + 'static directly from the vendored tauri/tauri-runtime 2.11.x source (not assumed),
-and that this codebase already relies on that exact fact today (lib.rs's
-tauri::async_runtime::spawn(updater_handle) call), so cloning it into win_focus's spawned thread is
-precedented, not a new risk. The UI timeout is a defense-in-depth fix that stands on its own
-regardless of whether the generation counter fully eliminates the underlying race: a confirm screen
-with no timeout on an external event is a latent bug the instant that event is ever late, for any
-reason, now or later. Verified with `cargo check` and `npx tsc --noEmit`, both clean.
-
-Date: 2026-07-04
-Problem: The newly-added "Sign in with Google" flow was completely unreachable through normal
-navigation, and separately, cancelling the Google consent popup left the desktop silently waiting
-for the full ~10-minute session TTL instead of surfacing the cancellation.
-Issue: SignInForm.tsx's pairing and email modes toggle to each other but neither had a button into
-google mode - the only entry point was a link on OnboardingFlow.tsx's first-run welcome step, which
-is skipped forever once desktop_onboarding_seen is persisted true (confirmed already true on the
-test machine, from earlier testing). Separately, in Aura-Web, AuthPageClient.tsx's catch block for
-signInWithPopup only called the already-built POST /api/auth/fail (which flips the desktop's polled
-session doc so the wait ends immediately) for the account-exists and generic-error branches - the
-auth/popup-closed-by-user, auth/cancelled-popup-request, and auth/popup-blocked branches only set
-local component state and never reported the failure back, even though /api/auth/fail already had a
-"popup_blocked" reason in its allowlist ready to use.
-Solution: Added a "New here? Sign up with Google" toggle button to both the pairing and email mode
-screens in SignInForm.tsx, reachable regardless of which mode the user lands on. In Aura-Web, added
-the missing reportFailure() calls for the cancelled/popup-blocked branches, added "cancelled" to
-AUTH_FAIL_REASONS (it would otherwise have silently collapsed to "other" at the schema layer), and
-added a matching test case. On the desktop side, gave webAuthCopy.ts distinct "cancelled"/
-"popupBlocked" messages instead of lumping a deliberate user cancel under "Something went sideways."
-Justification: A shipped entry point with zero reachable path to it is as good as not shipped -
-this wasn't a UI polish issue, the feature was unreachable in the built product the moment
-onboarding was marked seen, which happens after the very first run. Untangling the cancel-reporting
-gap required reading the actual AuthPageClient.tsx catch block rather than assuming the existing
-/api/auth/fail route meant every failure path already used it. Verified with `npx tsc --noEmit`
-(Aura-Desktop) and `npx vitest run` (52 passed) + `npm run build` (Aura-Web), all clean.
+Problem: Sign-out could stall or allow an old async completion to reassert stale window state.
+Issue: Cleanup awaited slow network-backed operations, and work started before sign-out could
+finish after the account or foreground generation had changed.
+Solution: Keep local sign-out bounded and independent of best-effort remote cleanup. Stamp async
+work with an account or generation identifier and verify it again before applying completion state.
+Justification: Cancellation alone is not a correctness mechanism. Stale completions must be made
+unable to mutate the new session.
 
 Date: 2026-07-05
-Problem: Clicking "Sign in with Google"/"Sign up with Google" on desktop never completes - the
-browser opens, but sign-in never finishes, and the app's own durable log file (Aura Desktop.log)
-showed zero trace of the attempt across three separate app launches: no start failure, no poll
-error, nothing.
-Issue: This feature spans three repos (Aura-Desktop opens the browser and polls; the Python backend
-issues/tracks the session code; Aura-Web hosts the actual Google sign-in page and relays the result
-back). Live testing (`curl` against the real endpoints, not just reading source) showed
-`POST https://juno-backend-.../devices/web-auth/start` returns 200 with a real code - the backend
-half is live - but `GET https://auravoiceapp.com/auth?session=...` returns a plain 404. Aura-Web's
-`src/app/auth/` and `src/app/api/auth/` (the page and the /complete + /fail routes) exist on disk
-but are untracked in git (`git log --all` shows zero history for them) and Aura-Web ships via a
-git-triggered deploy (per its own CLAUDE.md: `/ship` -> push -> platform build), so they were never
-pushed and never deployed. The backend route IS live only because `backend/deploy.sh` builds its
-image via a plain `docker build` against the local working directory (confirmed via `.dockerignore`
-and deploy.sh), which doesn't care about git state at all - the two repos in the same feature deploy
-through fundamentally different mechanisms, and nothing surfaced that mismatch. Separately, the
-desktop side has no bug at all here: `startWebAuth()` and every poll to `/devices/web-auth/status`
-return normal 200 responses (the code IS valid, the session IS pending) the entire time, so none of
-useWebAuthSignIn.ts's existing logError call sites (which only cover thrown/network errors) ever
-fired - the code was "correctly" waiting on a browser leg that could never complete, for the full
-10-minute server TTL, with nothing to report until then, and even the terminal "expired" state
-itself was never logged before this fix.
-Solution: Added logInfo/trackEvent calls to every terminal state in useWebAuthSignIn.ts (started,
-completed, expired - both client-deadline and specific status from `/status` - failed with reason,
-cancelled), mirroring useVoiceBar.ts's existing PostHog funnel pattern
-(voice_session_started/voice_error/etc.) so a 100%-expiry funnel like this one would show up on a
-dashboard within minutes instead of surfacing only as a user complaint. The actual production fix
-(committing and deploying Aura-Web's auth page/routes) is a cross-repo deploy action left for the
-user to explicitly trigger, not done here.
-Justification: No amount of reading Aura-Desktop's own source could have found this, since the bug
-isn't in this repo - confirming against the live production endpoints (a 200 vs. a 404) is what
-actually proved it, the same lesson as the 2026-07-04 voice-protocol entry (verify against the real
-system, not just plausible-looking source). The telemetry gap compounds independently of this one
-incident: the existing logError-only coverage means any future break in this same handshake (an
-Aura-Web outage, a backend regression, a Firestore rule change) would again be invisible until
-someone manually reproduces it - the new funnel events make that class of failure visible
-immediately instead of requiring another live investigation. Verified with `npx tsc --noEmit`,
-clean.
+Problem: Features existed in source but were unreachable from the states users actually entered.
+Issue: Google sign-in and feedback were implemented without checking every real navigation entry
+point, including returning-user screens that skipped onboarding.
+Solution: Treat reachability as part of implementation. For every feature, trace at least one path
+from each persisted landing state, not only the fresh-install path. Add a direct entry point or an
+explicit reason the state cannot reach the feature.
+Justification: Compiled code with no reachable control is equivalent to an unshipped feature.
 
 Date: 2026-07-05
-Problem: Clicking "Sign out" showed a fully blank overlay for 5-8 seconds before the sign-in screen
-finally appeared "in a regular way" - not the expected "Signing out..." confirm text the whole
-time, an actually empty window.
-Issue: SetupPanel (shown once `user` flips to null) renders OnboardingFlow, which mounts for the
-first time all session exactly at that moment (it's never mounted while signed in) and gates its
-entire render on `if (!resolved) return null` while it awaits `Store.load("overlay-window.json")` +
-`store.get(desktopOnboardingSeenKey)` - a real, literal blank render, not a stuck spinner. The
-comment above that line already flagged the assumption: "render nothing for the one frame before
-the seen-flag resolves." That assumption breaks down because `overlay-window.json` is the exact
-same store file overlay.rs's `persist_center`/`capture_user_position` write to on every
-`WindowEvent::Moved` - and the Bar->Setup resize that's part of this same sign-out transition fires
-a burst of those move events at the exact moment OnboardingFlow's freshly-mounted read is going
-through the same underlying store. Two unrelated concerns (window-position persistence, an
-onboarding-seen flag) sharing one store file, contended hardest at the one moment both are busiest,
-turned "one frame" into several seconds. VoiceBar's own sign-out path (`endSession()` then
-`signOut(auth)`) had zero timing instrumentation either, so there was no way to independently
-confirm how much of the delay was that vs. the store read.
-Solution: Added a 300ms hard-timeout fallback in OnboardingFlow's store-load effect - if the store
-hasn't resolved by then, default to the "link" (sign-in) step and stop blocking the render,
-biased toward skipping "welcome" since reaching this component post-sign-out already implies a
-completed onboarding ("New here?" is still one click away if that guess is ever wrong). A late
-real resolution after the timeout only logs its actual elapsed time, it no longer mutates
-step/resolved (avoids stomping navigation the user already made in that window). Also added
-logInfo timing around both `endSession()` and `signOut(auth)` in VoiceBar.tsx's
-handleConfirmSignOut, matching the pattern already used elsewhere in this file
-(SIGN_OUT_STUCK_TIMEOUT_MS's own reasoning) so a future slow sign-out shows exactly which step ate
-the time instead of requiring another live investigation. Did not split the shared store file
-(the actual root contention) since existing installed users already have
-`desktop_onboarding_seen: true` persisted in `overlay-window.json` specifically - moving that key to
-a new file would silently reset onboarding-seen for everyone already in beta, a real migration cost
-that deserves its own explicit decision rather than being folded into a bug fix.
-Justification: The 300ms bound makes the reported symptom's severity structurally impossible
-regardless of the exact cause of store contention - this is more robust than chasing the precise
-root cause of a single I/O stall, which can vary by disk, AV scanning, or Windows Defender in ways
-no fix here can fully control. The timing logs are the direct fix for the actual gap this
-investigation hit: neither of the two real culprits under discussion (store contention, sign-out
-step latency) had any instrumentation before this, so the theory could only be argued from static
-code reading, not proven from a captured timestamp. Verified with `npx tsc --noEmit`, clean.
+Problem: A cross-repository Google sign-in flow was correct on disk but failed for every live user.
+Issue: Desktop, backend, and web deploy differently. The backend Docker build can include untracked
+files, while the web deployment only receives committed and pushed files. Local source inspection
+therefore gave a false picture of the deployed contract.
+Solution: For cross-repository flows, verify every live endpoint and deployed artifact after an
+approved deploy. Check route existence, request and response shapes, and the exact browser or app
+handoff. Never equate "present locally" with "deployed".
+Justification: A distributed feature is only as live as its least-deployed participant.
 
 Date: 2026-07-05
-Problem: While wiring up the Sentry Rust SDK almost installed a panic hook that would have silently discarded Sentry's own crash reporting.
-Issue: logging.rs's install_panic_hook already calls `std::panic::set_hook` unconditionally to
-write panics to the durable log file. `sentry::init()`'s default ClientOptions
-(default_integrations: true) also installs its own panic hook, at the point it's called, to report
-crashes to Sentry - and does so by capturing whatever hook was previously installed and chaining to
-it. Since sentry_setup::init() runs first (top of run(), before .setup()) and
-logging::install_panic_hook() runs second (inside .setup()), a naive `std::panic::set_hook` in the
-second call wholesale replaces the first hook rather than extending it - Sentry's hook (and its
-chain back to Rust's own default hook) would have been silently thrown away, so panics would still
-reach the local log file but never reach Sentry, with no error anywhere to say so. This is the same
-failure shape as incident 6 below (two things silently stepping on the same piece of global state),
-just via a panic hook instead of a mutex.
-Solution: Changed install_panic_hook to call `std::panic::take_hook()` first and chain to it
-(`previous(info)`) after its own log::error! line, instead of calling `set_hook` blind. Whatever was
-installed before this point - Sentry's hook if a DSN was configured, or Rust's own default hook if
-not - still runs, so both the local log line and Sentry's report happen for every panic regardless
-of which one (if either) got wired up first.
-Justification: Chaining via take_hook/set_hook is plain std library behavior with no dependency on
-sentry-rust's specific internal API surface, so it's correct regardless of ordering, regardless of
-whether a DSN is actually configured, and regardless of future changes to either crate's internals -
-more robust than trying to call a specific sentry-panic integration function directly, which would
-have made this file's correctness depend on knowing that function still exists in whatever sentry
-crate version is in use. Verified with `cargo check`, clean; full end-to-end confirmation (an actual
-event arriving in Sentry) still needs a real DSN and a forced panic in the built app, which is beyond
-what a compile check alone can confirm.
+Problem: A hardened CSP passed type-checking but broke Tauri IPC and runtime network behavior.
+Issue: connect-src omitted runtime transport schemes such as ipc/http://ipc.localhost and was
+derived from source-level URLs rather than the protocols the packaged webview actually used.
+Solution: Build CSP allowlists from the packaged runtime, Tauri internals, Firebase, telemetry, and
+backend transports. Verify IPC, authentication, voice, analytics, and error reporting in the real
+webview after any CSP change.
+Justification: CSP failures are runtime integration failures. Static checks cannot prove that a
+webview can reach its native bridge or vendors.
 
 Date: 2026-07-05
-Problem: Replacing `"csp": null` with a real Content-Security-Policy is exactly
-the kind of change that could silently break sign-in or voice calls the moment it ships, with no
-compile-time signal that anything was wrong.
-Issue: capabilities/default.json's http:default scope (the thing that looks like "the network
-allowlist" at a glance) only covers juno-backend and PostHog - it governs tauri-plugin-http's
-Rust-mediated fetch, not the webview's own native fetch/XHR/WebSocket calls, which Firebase's JS SDK
-and livekit-client both use directly. Neither of those is restricted by that scope today, and
-neither was going to be caught by a wrong CSP guess until a real sign-in or voice-call attempt failed
-in the field. Two specific facts were needed before writing connect-src with any confidence: (1)
-this app only ever calls signInWithCustomToken/signInWithEmailAndPassword (confirmed by grep - no
-popup/redirect methods), so only identitytoolkit.googleapis.com/securetoken.googleapis.com matter,
-not the authDomain (juno-2ea45.firebaseapp.com), which is never contacted; (2) the LiveKit room URL
-is fetched dynamically from juno-backend at runtime (useVoiceBar.ts) and isn't hardcoded anywhere in
-this repo, so it couldn't be discovered by reading code at all - confirmed with the user directly
-that it's a LiveKit Cloud project before scoping connect-src to *.livekit.cloud.
-Solution: Wrote the CSP's connect-src from those two confirmed facts rather than a guess, and
-separately added `ws://localhost:1420` to it - `tauri dev` loads the webview directly from Vite's
-dev server per `devUrl`, so without that entry the same CSP that hardens a production build would
-have broken this repo's own everyday `npm run tauri dev` hot-reload loop the next time anyone ran
-it.
-Justification: A CSP is exactly the kind of change where "compiles" and "typechecks" prove nothing -
-the failure mode is a silently-blocked network request with no error surfaced anywhere except a
-webview devtools console most people never open. Confirming the actual domains first, rather than
-writing a plausible-looking policy and finding out from a bug report, is the only way to make this
-kind of change with real confidence. Verified with `cargo check` (the config parses) and
-`npx tsc --noEmit`; actually exercising sign-in/voice/the avatar pill's Draco worker against this
-policy still needs `npm run tauri dev` run by hand, which is now the first item in SMOKE_TEST.md's
-"this pass's changes" section specifically because of this.
-
-Date: 2026-07-05
-Problem: While building an update-ready notice (todo.txt section 6 - never install mid-call, show a
-restart notice), the first design (a small banner stacked inside the existing GlassSurface content)
-would have risked visually breaking the Bar panel the moment it shipped.
-Issue: overlay.rs's size_for hardcodes BAR_HEIGHT at 64.0 - the window itself is a fixed-size,
-non-resizing borderless surface, not a normal browser page that grows to fit its content. VoiceBar's
-own layout (VoiceBar.css) already relies on exactly one available trick to fit a variable number of
-icon buttons in that space: a flex-shrink:0 row of fixed-size buttons plus one flex:1 caption that
-ellipsizes to absorb whatever width is left. That trick works for one more icon button in the same
-row (confirmed by reading VoiceBar.css/BarIconButton.css before adding the feedback button below);
-it does not generalize to a second stacked row, which would need real vertical space the 64px window
-has none of. This wasn't discovered by looking at a screenshot (screen capture of this window is
-already documented as unreliable) - it was caught by reading the actual CSS and Rust size constants
-before writing the notice, not after.
-Solution: Moved the update-ready notice to the tray menu (a dynamically relabeled, initially
-disabled MenuItem that becomes clickable once a download finishes) instead of in-overlay UI. Tray
-menus aren't constrained by the app's own window-sizing code at all, so this sidesteps the risk
-entirely rather than trying to make a banner fit. The feedback button (a separate, unrelated
-addition the same session) went into VoiceBar's existing icon row instead, specifically because that
-row was confirmed to already handle a variable button count via the ellipsis trick above.
-Justification: Given no way to visually verify a layout change against the real running overlay
-before shipping it, the safer choice when two implementations achieve the same requirement is the
-one that structurally cannot overflow a fixed-size window, rather than the one that looks correct on
-paper. Verified with `cargo check` and `npx tsc --noEmit`; visually confirming the Bar's layout with
-the new feedback button is included in SMOKE_TEST.md rather than assumed.
-
-Date: 2026-07-06
-Problem: A full beta-readiness audit against todo.txt found the "Send feedback" button described as
-already shipped (in this file's own 2026-07-05 entry above, SMOKE_TEST.md, and BETA_ONBOARDING.md)
-was not actually reachable anywhere in the running app.
-Issue: `src/lib/feedback.ts`'s `sendFeedback()` (redacted log tail, version/OS/state, mailto compose)
-and its `sendFeedbackTooltip`/`feedbackSentTooltip` copy in `copy.ts` were both fully implemented and
-correct, and the backend `read_recent_log_lines` command it depends on exists in `lib.rs` - but no
-component anywhere in `src/` imported `sendFeedback` or referenced either copy string. `VoiceBar.tsx`'s
-icon row had a screen-sight toggle, minimize, mic, and sign-out button, but no feedback button. This
-is the third instance of the exact same failure shape already logged twice in this file (the Google
-sign-in entry point with no reachable button, and AvatarPill's click-swallowed-as-drag bug): a feature
-built correctly in isolation with no verification that it's actually wired into the render tree a user
-can reach.
-Solution: Added a `FeedbackIcon` (icons.tsx) and a `BarIconButton` calling `sendFeedback(voice.status)`
-in `VoiceBar.tsx`'s existing icon row, grouped with sign-out after the divider (both are account/support
-utility actions, not call controls). Disabled the button while the send is in flight (covers the
-"basic rate-limiting" ask from todo.txt section 8 P2 at zero extra cost) and swaps its tooltip to the
-already-existing `feedbackSentTooltip` copy for 2.5s after it resolves, as a lightweight confirmation
-that fits this bar's 64px-tall constraint the same way BarIconButton's own native-title tooltip
-approach already does, rather than adding new stacked UI.
-Justification: The fix is the same lesson repeated a third time: verify a feature is actually reachable
-in the render tree, not just that its logic compiles and its copy exists. Placed in VoiceBar rather than
-the Pill, matching todo.txt section 8's own scope ("Bar/Pill chrome") loosely but consistent with this
-repo's existing pattern of keeping the Pill's chrome minimal (click-to-restore only) - a user needing to
-report a problem while minimized restores to Bar first, the same way they'd reach any other VoiceBar
-control. Verified with `npx tsc --noEmit`, clean. SMOKE_TEST.md already had a line asserting the feedback
-button is reachable and works - that line was untested/aspirational until this fix, and is now the check
-that actually catches a regression of this exact bug going forward.
-
-Date: 2026-07-07
-Problem: Sentry NATIVE-3, "TypeError: First argument to DataView constructor must be an ArrayBuffer",
-unhandled, from the first screen-sight capture in a production build - screen sight then stays dead
-for the rest of the session while every dev run of the identical code works fine.
-Issue: The hardened CSP shipped in 0.1.4 (commit da67c71) set connect-src without
-`ipc: http://ipc.localhost`. Tauri does not append its own IPC origins to a user-supplied CSP (its
-config docs show them as something you must include yourself), and the conf CSP only applies to
-production builds - dev loads from Vite's devUrl with no injected CSP, which is exactly why dev never
-reproduced it. In the shipped build the first invoke()'s fetch to http://ipc.localhost is CSP-blocked,
-and Tauri's injected ipc-protocol.js latches `customProtocolIpcFailed = true` for the whole session,
-silently rerouting all IPC through the postMessage fallback (one console warning, nothing durable).
-JSON responses survive that path, so the entire app appears healthy - but a raw-bytes response
-(tauri::ipc::Response, used only by capture_cursor_display_with_geometry) cannot travel over
-postMessage, so tauri 2.11.5's protocol.rs serde_json-serializes the Vec<u8> into a plain JSON number
-array. parseCapturedFrame handed that array to new DataView() and threw.
-Solution: Added `ipc: http://ipc.localhost` to connect-src in tauri.conf.json (the root cause), and
-made useScreenSight normalize the invoke result (ArrayBuffer / typed-array view / number array) via
-asArrayBuffer() before parsing (resilience), since the fallback latch is triggered by ANY rejected
-IPC fetch - one transient failure mid-session would otherwise convert every later capture into this
-same crash.
-Justification: Verified end to end in the vendored tauri 2.11.5 sources rather than guessed: the
-latch in scripts/ipc-protocol.js, the `can_use_channel_for_response = !custom_protocol_ipc_blocked`
-branch in src/ipc/protocol.rs, and format_callback.rs's serde_json serialization of Raw responses.
-The lesson generalizing past this bug: a Tauri CSP change can never be validated in dev - it only
-takes effect through the tauri protocol in a built app, so CSP edits need a production-build smoke
-test of at least one binary-IPC feature (screen sight) before shipping.
-
-Date: 2026-07-07
-Problem: Two of the first three issues in the Sentry feed (NATIVE-1 "ReferenceError: openUrl is not
-defined" in src/App, NATIVE-2 "Should have a queue. You are likely calling Hooks conditionally" in
-useScreenSight) were crashes that no shipped build can produce, and they burned a full investigation
-cycle to disprove.
-Issue: initSentryIfEnabled reported `npm run tauri dev` sessions into the same project with no
-environment tag, so feed entries are indistinguishable from user crashes. NATIVE-1 was a mid-edit
-state during the dashboard-link refactor: Vite dev transpiles without typechecking, so a
-not-yet-imported identifier compiles into a bare global reference that only explodes when the tray
-handler fires (a production Rollup build of the same code refuses to build at all). NATIVE-2 was
-React Fast Refresh re-rendering against a stale fiber right when this session's edit added a
-useState+useRef pair to useScreenSight during a live dev run - the committed code has a fixed,
-unconditional hook order in useVoiceBar, useScreenSight, and OverlayRoot (each verified), one React
-copy, and a clean tsc, so no real code path produces that error.
-Solution: initSentryIfEnabled now returns early under import.meta.env.DEV and tags
-environment: import.meta.env.MODE on what it does send. NATIVE-1 and NATIVE-2 should be resolved in
-Sentry as stale dev artifacts; NATIVE-3 resolves when the CSP fix ships.
-Justification: An error-feed is only useful while "unresolved" means "a user hit this". Dev-session
-errors already surface in the dev console at the moment they happen, attached to the code being
-edited; letting them also age into the production feed hours later manufactures fire drills like
-this one.
+Problem: Installing Sentry risked replacing its panic hook, and development errors polluted the
+same issue feed as installed-user failures.
+Issue: std::panic::set_hook replaces the prior hook, and development sessions lacked a reliable
+environment boundary in telemetry.
+Solution: Chain panic hooks using take_hook before installing application logging. Disable remote
+reporting in development and tag release events with environment and version.
+Justification: Error reporting must preserve upstream crash capture, and an unresolved feed is only
+useful when it represents real deployed users.
 
 Date: 2026-07-08
-Problem: Updates were undiscoverable - after the silent background download, the only signal was a
-relabeled item inside the tray icon's right-click menu, which Windows hides behind the overflow
-chevron by default. Realistically no user ever found it, so every install stayed on its first
-version forever, and the check ran once at startup while the app autostarts and lives for weeks.
-Issue: The plan to fix it ("install-on-quit like Chrome") died on verified platform facts from the
-vendored tauri-plugin-updater 2.10.1 sources: on Windows update.install() launches the NSIS
-installer and ends in std::process::exit(0) - it NEVER returns, no Tauri exit events run, and the
-app.request_restart() after it in tray.rs was unreachable dead code. The default Passive install
-mode hard-wires NSIS /P /R /UPDATE /ARGS <original args>: /R force-relaunches the app (so
-install-on-quit would resurrect an app the user deliberately quit - not overridable, /R is a
-managed arg), and /ARGS preserves --autostart, so a boot-launched instance relaunches HIDDEN after
-the user explicitly clicked "Restart now". On macOS install() is the opposite: an in-place bundle
-swap that returns Ok with the old process still running, needing an explicit restart, and it can
-raise an admin-password prompt when the bundle directory isn't user-writable.
-Solution: Three layers in updater.rs. (1) 6-hour re-check loop, since a startup-only check never
-even downloads updates for a long-running autostart app. (2) Startup auto-install (voice-gated,
-release-builds only - in dev it would install the production app over itself and kill `tauri dev`),
-with fallback to the visible-notice flow on failure. (3) A VoiceBar chip + inline restart confirm
-fed by an "update-ready" event plus a pending_update_version query command (the same race-covering
-idiom as overlay-changed/current_overlay_state). A just-updated marker file, written before install
-because on Windows there is no "after", forces a summon on the post-update relaunch (fixing the
-/ARGS --autostart hidden-relaunch trap) and drives a one-time "Updated to vX" caption, only shown
-when the marker version matches the running version so a failed install can't fake a success
-notice. Frontend sets "Restarting..." BEFORE invoking install_update since on Windows that invoke
-never resolves.
-Justification: Every platform claim above was read from the actual dependency source
-(~/.cargo/registry/.../tauri-plugin-updater-2.10.1/src/updater.rs lines 787-866 and 1217-1310,
-config.rs lines 14-46), not docs or memory - and that reading is what falsified the original
-install-on-quit design before it shipped. The generalizable lesson: updater code paths behave
-asymmetrically per-OS at the process-lifecycle level (does install() return? who restarts? can it
-prompt for credentials?), so any update-UX design must be validated against the plugin's per-OS
-install_inner implementations first, and code after update.install() must be treated as
-macOS/Linux-only.
+Problem: A feature appeared absent because the installed release handled the launch instead of the
+new development binary.
+Issue: Dev and release shared the same Tauri single-instance identity. The old tray process accepted
+the launch and displayed old bundled assets while the new dev process exited.
+Solution: Keep single-instance behavior release-only. When behavior contradicts local source,
+confirm the running artifact from asset origin, bundle hash, version, process path, and durable
+logs before debugging feature code.
+Justification: Testing the wrong binary produces convincing but meaningless evidence.
 
 Date: 2026-07-08
-Problem: Buddy Drafts' first real test dictated the whole email out loud on the call ("Here's a
-draft for you: Subject: Application for AI Engineer Role...") instead of putting it in the
-desktop draft card.
-Issue: The voice LLM (gpt-4.1-mini) never called the draft_outbound_message tool. Worker logs
-proved the screen frame WAS injected into the turn and that the session made zero tool calls;
-a local find_function_tools check proved the tool WAS registered on BuddyAgent, so this was
-model behavior, not wiring. Two design choices invited the skip: the drafting instruction sat
-at the very end of a ~32K-token system prompt, and the tool's own description said "if the
-user did NOT say how long, do not call this yet - ask first". For a small tool-calling model
-that gate reads as permission to not call the tool, and since the screenshot was already in
-its context it just wrote the reply as speech.
-Solution: Rewrote the tool description to be the only permitted path ("The ONLY way to produce
-text the user will send... NEVER write, dictate, or speak message text yourself"), removed the
-ask-length-first gate (call immediately with length empty; the tool returns the exact one-line
-question to speak, then gets called again with the answer), and rewrote the voice prompt's
-drafting section as a hard rule carrying the observed failure verbatim as a wrong/right
-example pair. Worker redeploy (lk agent deploy) required to take effect.
-Justification: A tool description that gates calling on having complete arguments is, to a
-small model, an instruction to answer directly instead. Follow-up questions must come FROM the
-tool's return value, never stand between the model and the call, and prompts steering small
-models need the negative example of the exact failure, not just the positive rule. The
-diagnosis path (lk agent logs showing frame injected + zero tool calls + dictated
-agent-response preview) is the one-pass check for any future "it talked instead of acting" bug.
+Problem: A global hotkey collision crashed the entire tray application at startup.
+Issue: Shortcut registration used ? in setup, so another process owning one key combination turned
+a convenience failure into a process-killing setup error.
+Solution: Register each shortcut independently, log and report failures, and continue booting with
+tray access available.
+Justification: Fail fast for corrupted invariants, not for optional operating-system integrations.
+A missing shortcut should reduce convenience, not availability.
 
 Date: 2026-07-08
-Problem: The in-app feedback attachment command read_recent_log_lines always failed with
-file-not-found - it read <app_log_dir>/aura-desktop.log, but no such file ever exists.
-Issue: logging.rs registers tauri-plugin-log with LogDir { file_name: None }, and the plugin's
-default for a None file_name is the PRODUCT name from package_info() ("Aura Desktop"), not the
-cargo package name ("aura-desktop") the lib.rs comment claimed. The real file on disk is
-"Aura Desktop.log". Nothing surfaced this at compile time or in normal use - the command only
-runs when a user actually submits feedback, and its error just meant a silently missing
-attachment.
-Solution: Derive the file name at the call site from the same source the plugin uses:
-format!("{}.log", app.package_info().name), instead of hardcoding either spelling.
-Justification: Trading the wrong hardcode for the right hardcode would break again on any
-future productName change; reading package_info() keeps the command and the plugin agreeing by
-construction. Found by listing the actual log directory during the drafts investigation rather
-than trusting the comment. Verified with cargo check, clean.
+Problem: Feedback log attachment silently failed because code hardcoded a log filename that did not
+match tauri-plugin-log's generated filename.
+Issue: Two call sites attempted to duplicate a value already derived from package metadata.
+Solution: Derive generated paths and names from the same package or plugin source of truth. When a
+file cannot be found, inspect the real directory instead of trusting comments or guessed names.
+Justification: Replacing a wrong hardcode with a currently correct hardcode only delays recurrence.
 
-Date: 2026-07-08
-Problem: The Buddy Drafts card never appeared on screen during a live voice test even though
-the agent spoke "the draft is being displayed", and it looked exactly like an overlay
-rendering/layout bug in the new DraftCard code.
-Issue: The session was not running the new code at all. The installed 0.1.5 build (which
-predates the entire drafts feature) autostarts at boot and sits in the tray, and
-tauri_plugin_single_instance keys on com.aura.desktop for dev and release builds alike - so
-`npm run tauri dev` built the new code, forwarded its launch to the already-running old
-instance, summoned the OLD panel, and exited. The user was testing the installed binary while
-believing they were testing the dev build. The deployed backend already had the draft tool
-live, sent draft.generating/draft.created over the data channel, and the old client's generic
-DataReceived logger even logged them - then dropped them, having no draft code. The tell in
-the durable log: asset URLs on tauri.localhost (bundled production assets, hash
-index-Dk0KAWMX.js) instead of localhost:1420 (Vite dev server), plus zero overlay::apply or
-useDraftCard lines in the event window. Confirmed by grepping the installed exe: 0 hits for
-DraftCard/set_draft_card_open.
-Solution: Register tauri_plugin_single_instance only in release builds
-(if !cfg!(debug_assertions) around the .plugin() call in lib.rs), so a dev run always opens
-its own window even while the installed app is running.
-Justification: This is the client-side twin of the 2026-07-05 "code exists on disk does not
-mean the code is live" incident: a locally-correct checkout, a live backend, and a stale
-deployed artifact in between. The one-pass diagnosis for any future "feature silently absent"
-report: check the log's asset origin (tauri.localhost vs localhost:1420) and compare its
-index-*.js hash against dist/index.html, then grep the installed exe for a feature string.
-The dev-only guard removes the trap rather than documenting around it; the cost (two dev
-instances can coexist if launched twice) is harmless next to a silently-wrong test target.
+Date: 2026-07-09
+Problem: Adding more below-bar cards multiplied Rust booleans, applied caches, and duplicated
+priority rules, causing redundant resize and focus side effects.
+Issue: The same "which surface wins" decision existed in Rust geometry, Rust cache updates, and
+React rendering. One applied cache was not updated on the normal success path.
+Solution: React owns surface priority and sends one slot_height to Rust. Rust owns only native
+geometry, with one applied_slot_height written after success.
+Justification: Represent mutually exclusive UI with one discriminant or dimension. Parallel
+booleans and mirrored priority logic create invalid combinations and forgotten cache updates.
 
-Date: 2026-07-08
-Problem: After the release-only single-instance fix above, `npm run tauri dev` stopped silently
-testing the wrong binary and started hard-crashing instead: panic at setup, "HotKey already
-registered: Ctrl+Alt+B", exit code 101, no window. Same panic also arrived in Sentry from an
-installed build.
-Issue: The three global_shortcut().register() calls in lib.rs setup used `?`, so any failure
-aborted the setup hook, which Tauri escalates to a process-killing panic (app.rs:1425). A
-registration fails whenever ANY other process already holds the combo system-wide: in dev
-that's the autostarted installed build sitting in the tray (guaranteed after every reboot);
-for an end user it's any app that claimed Ctrl+Alt+B first (AutoHotkey, OBS, etc.) - and since
-the app autostarts, that user's install dies at every boot with nothing on screen, forever.
-Solution: Hotkey registration is non-fatal in all builds: loop over the three shortcuts, log
-each failure and keep booting (tray access still works). Release builds additionally
-sentry::capture_message at Error level per lost hotkey; dev builds only log, since the
-dev-vs-installed collision is an expected local condition that would drown real Sentry signal.
-Justification: Fail fast on what makes the product wrong, degrade gracefully on what loses a
-convenience. A resident tray app that panics at boot over a lost hotkey trades a 95%-usable
-session (everything but the shortcut works) for a 0%-usable one, and the crash is invisible to
-the user. The Sentry event preserves the signal that used to come from the panic, per-hotkey
-and with the actual combo named. Dev-loop reminder this doesn't remove: while the installed
-app is alive, Ctrl+Alt+B still summons the OLD app - quit it from the tray before testing
-hotkey-driven flows. Verified with cargo check, clean.
+Date: 2026-07-09
+Problem: Subscription webhooks could permanently miss payments, restore revoked access, or ignore
+chargebacks. This is an unresolved audit finding.
+Issue: The event claim and entitlement write are separate Firestore operations. State is chosen
+from event names even though Dodo retries can arrive out of order. Every event also assumes
+data.metadata.firebase_uid, while dispute payloads identify only the payment.
+Required fix: In one Firestore transaction, resolve a durable payment/subscription/customer to UID
+mapping, reject stale transitions using authoritative payload state and event time, write the
+entitlement, and create the billing event record. Test real Dodo fixtures for every event family.
+Justification: Signature verification and duplicate detection are necessary but insufficient.
+Billing correctness also requires atomicity, ordering defense, and resource-specific identity.
+
+Date: 2026-07-09
+Problem: A user can receive Pro without a durable entitlement or create multiple paid subscriptions.
+This is an unresolved audit finding.
+Issue: Missing entitlement documents resolve to Pro in enforcement paths, while trial stamping
+depends on a cooperative client calling GET /entitlement. POST /billing/checkout does not reject or
+reuse an existing paid billing relationship.
+Required fix: All protected server entry points must atomically get or create the entitlement.
+Checkout must enforce one billing relationship per UID, reuse dodo_customer_id, and be idempotent
+across retries and devices.
+Justification: Clients cannot be trusted to call initialization endpoints in order or to prevent
+duplicate charges. Entitlement and billing uniqueness are server invariants.
+
+Date: 2026-07-09
+Problem: Desktop can serve one account's cached paid entitlement to the next signed-in account.
+This is an unresolved audit finding.
+Issue: The Tauri store uses one global cache key with no Firebase UID. Sign-out clears React state
+but leaves the persistent cache, and a fresh cache suppresses the next backend fetch.
+Required fix: Store the UID with the cached payload or key entries by UID. Require the current UID
+when reading and writing, reject mismatches, and test paid-to-free account switching.
+Justification: Every user-derived cache is part of the authorization boundary. TTL validation does
+not replace identity validation.
+
+Date: 2026-07-09
+Problem: Trial and subscription lifecycle fields can disagree, and the launch migration can fail to
+grant the promised trial. This is an unresolved audit finding.
+Issue: Stored trialing status is trusted after trial_end_date, paid status is not reconciled with
+expires_at, and the migration scans only existing entitlement docs while updating dates without
+resetting eligible accounts to trialing.
+Required fix: Resolve status and effective tier from authoritative dates and billing state. Migrate
+from the users collection, upsert missing entitlement docs, reset eligible free users to trialing,
+and test expired, missing, paid, cancelled, and concurrent cases in dry-run and apply modes.
+Justification: A migration that updates dates but leaves a status that overrides them has changed
+data without changing access.
+
+Date: 2026-07-09
+Problem: Mobile steering and checkout-return behavior can show prohibited or false purchase UI.
+This is an unresolved audit finding.
+Issue: Mobile treats locale country as store storefront. The web return page claims payment success
+for both success and failure redirects, and targets an aura:// link that no current client handles.
+Required fix: Use an authoritative storefront signal or default to SILENT. Render checkout state
+honestly, verify entitlement before claiming unlock, and register and test a dedicated return deep
+link before attempting it automatically.
+Justification: Billing UI is a policy and trust boundary. Locale, redirect arrival, and an
+unregistered URL scheme are not proof of storefront eligibility, payment, or app availability.
+
+Date: 2026-07-09
+Problem: The 2026-07-09 subscription audit findings above (13 total across the four repos) were
+open: webhook uid resolution, event ordering, claim/merge atomicity, duplicate subscriptions,
+missing-doc-grants-Pro, date-blind status, migration gaps, the desktop cache leak, locale
+steering, the dishonest checkout return page, copy mismatches, ignored background pushes.
+Issue: Resolved in this pass. Backend: reverse dodo_customers/dodo_subscriptions/dodo_payments
+mappings + payment.succeeded and subscription.updated handling, one Firestore transaction for
+claim + staleness + mappings + entitlement merge (last_billing_event_at guard), checkout 409 +
+customer reuse, ensure_entitlement_doc get-or-create in every enforcement path, normalize_status
+with a 3-day renewal grace, reset_trials rewritten to iterate users and reset status. Desktop:
+entitlement cache keyed by uid, cleared on sign-out (clear_entitlement_cache). Web: return page
+renders success/pending/failure from Dodo params and auto-fires aura://checkout only on success.
+Mobile: steering from the backend-resolved country (silent when unknown), aura://checkout
+registered on Android + iOS, background push persists a SharedPreferences refresh marker consumed
+on resume, paywall copy matches enforced limits.
+Non-obvious constraints hit along the way: a terminal webhook (dispute/refund) with no resolvable
+uid must 500 for redelivery, never 200, because its payment mapping may land seconds later from a
+payment.succeeded still in flight; a fake Firestore transaction must BUFFER writes and flush only
+on success or atomicity tests pass vacuously; flutter test runs ENV=dev so SubscriptionService's
+dev bypass shortcuts refreshEntitlement (tests need a @visibleForTesting state hook); the Flutter
+repo's generated mockito mocks were stale after NotificationService grew entitlementUpdatedStream,
+failing 23 unrelated tests until build_runner regenerated them.
+Justification: Closes the audit trail; the constraints above are the ones a future pass would
+otherwise re-discover the hard way.

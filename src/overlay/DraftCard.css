@@ -15,8 +15,10 @@
   min-height: 0;
 }
 
-/* Only pinned to bar height while the card is showing; without the card the
-   single glass child just fills the window exactly as before. */
+/* Pinned to bar height whenever it's the signed-in bar (OverlayRoot adds this
+   class while a user is present), so it can never stretch into a momentarily
+   still-tall window during a slot resize. The unsigned SetupPanel omits the
+   class and fills its own taller window. */
 .overlay-column > .glass-surface.overlay-column-bar {
   flex: 0 0 64px;
   height: 64px;

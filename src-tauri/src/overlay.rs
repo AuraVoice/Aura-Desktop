@@ -336,6 +336,12 @@ pub fn apply(app: &AppHandle) {
     let presentation = state.presentation;
     let panel_variant = state.panel_variant;
     let slot_height = state.slot_height;
+    // A "fresh show" is a real presentation/variant transition (summon from
+    // hidden, setup<->bar). A slot-height-only change (opening/closing the kebab
+    // menu or a card) is NOT one - it must not re-steal OS foreground, which
+    // flickers focus and costs ~100ms per click on every dropdown toggle.
+    let is_fresh_show = state.applied_presentation != Some(presentation)
+        || state.applied_variant != Some(panel_variant);
     let size = size_for(&state);
     let position = position_for(&state, &window, size);
     state.applying_bounds = true;
@@ -364,7 +370,7 @@ pub fn apply(app: &AppHandle) {
     if let Err(e) = window.set_ignore_cursor_events(false) {
         error!("overlay::apply: failed to restore cursor events: {e}");
     }
-    if presentation == OverlayPresentation::Panel {
+    if presentation == OverlayPresentation::Panel && is_fresh_show {
         win_focus::force_foreground(app, &window);
     }
 

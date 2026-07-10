@@ -3,12 +3,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useAuth } from "../state/AuthProvider";
 import { logError } from "../lib/log";
+import { openDashboard } from "../lib/dashboardLink";
 import { useEscHotkey } from "./useEscHotkey";
 import { useVoiceBar } from "./useVoiceBar";
 import { useScreenSight } from "./useScreenSight";
 import { useDraftCard } from "./useDraftCard";
 import { useCallbackCard } from "./useCallbackCard";
 import { useMeetings } from "./useMeetings";
+import { useEntitlement } from "../state/useEntitlement";
 import { GlassSurface } from "./GlassSurface";
 import { VoiceBar } from "./VoiceBar";
 import { SetupPanel } from "./SetupPanel";
@@ -26,7 +28,11 @@ import "./CallbackCard.css";
 const DRAFT_CARD_HEIGHT = 270;
 const CALLBACK_CARD_HEIGHT = 180;
 const AGENDA_CARD_HEIGHT = 236;
-const MENU_HEIGHT = 200;
+// The compact kebab popover is content-sized and anchored top-right, so this
+// only needs to be >= its natural height; any extra is invisible transparent
+// slot area (see KebabMenu.css). Sized for the plan line + separator now atop
+// the four action rows.
+const MENU_HEIGHT = 240;
 
 // Lazy: keeps three.js out of the overlay's startup bundle - only fetched
 // the first time the pill is actually reached.
@@ -53,6 +59,7 @@ export function OverlayRoot() {
     draftActive: draftCard.phase !== "idle",
   });
   const meetings = useMeetings({ presentation, signedIn: user !== null, callLive });
+  const entitlement = useEntitlement({ signedIn: user !== null, uid: user?.uid ?? null });
   const resetDraftCard = draftCard.reset;
   const resetCallbackCard = callbackCard.reset;
   useEscHotkey();
@@ -85,7 +92,6 @@ export function OverlayRoot() {
   const showMenu = user !== null && !showDraftCard && !showAgendaCard && menuOpen;
   const showCallbackCard =
     user !== null && !showDraftCard && !showAgendaCard && !showMenu && callbackCard.visible;
-  const slotShowing = showDraftCard || showAgendaCard || showMenu || showCallbackCard;
   const slotHeight = showDraftCard
     ? DRAFT_CARD_HEIGHT
     : showAgendaCard
@@ -96,8 +102,12 @@ export function OverlayRoot() {
           ? CALLBACK_CARD_HEIGHT
           : null;
 
-  // The one place the window's slot height is driven: the winning surface hands
-  // Rust its height, or null to collapse back to a bare bar.
+  // The one place the window's slot height is driven, in a single synchronous
+  // step: the winning surface hands Rust its height, or null to collapse back to
+  // a bare bar. Kept effect-free of any delayed "exit" hold on purpose - holding
+  // the window open after a surface is logically closed caused an intermediate
+  // render where the bar unpinned into the still-tall window (a dark "fat
+  // bubble" flash) plus a null->height->null resize thrash on every close.
   useEffect(() => {
     invoke("set_slot_height", { height: slotHeight }).catch((err) =>
       logError("OverlayRoot: set_slot_height", err),
@@ -128,6 +138,12 @@ export function OverlayRoot() {
   }, []);
   const handleSignOutConsumed = useCallback(() => setSignOutRequested(false), []);
   const handleCloseAgenda = useCallback(() => setAgendaOpen(false), []);
+  // Not-connected CTA: open the web dashboard straight to the Connectors panel
+  // where the user connects Google Calendar (the ?settings deep-link lands once
+  // Aura-Web reads it; harmless before then).
+  const handleConnectCalendar = useCallback(() => {
+    void openDashboard({ settings: "connectors" });
+  }, []);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -179,10 +195,14 @@ export function OverlayRoot() {
   // Surfaces only ever render under the signed-in bar, one at a time in a single
   // slot (resolved above). The wrapper column is always present so opening or
   // closing a surface never remounts VoiceBar (the GlassSurface keeps its tree
-  // position; only its height pinning toggles).
+  // position; only its height pinning toggles). The bar is pinned to 64px
+  // whenever it's the signed-in bar (not just while a card shows), so during the
+  // brief lag between "slot closed in React" and "window shrunk in Rust" it can
+  // never stretch to fill the still-tall window (the dark "fat bubble" flash).
+  // The unsigned SetupPanel still fills its own taller window.
   return (
     <div className="overlay-column">
-      <GlassSurface className={slotShowing ? "overlay-column-bar" : undefined}>
+      <GlassSurface className={user ? "overlay-column-bar" : undefined}>
         {user ? (
           <VoiceBar
             voice={voice}
@@ -200,10 +220,17 @@ export function OverlayRoot() {
       </GlassSurface>
       {showDraftCard && <DraftCard card={draftCard} />}
       {showCallbackCard && <CallbackCard card={callbackCard} />}
-      {showAgendaCard && <CalendarAgendaCard meetings={meetings} onClose={handleCloseAgenda} />}
+      {showAgendaCard && (
+        <CalendarAgendaCard
+          meetings={meetings}
+          onClose={handleCloseAgenda}
+          onConnect={handleConnectCalendar}
+        />
+      )}
       {showMenu && (
         <KebabMenu
           voiceStatus={voice.status}
+          entitlement={entitlement}
           onCalendar={handleOpenCalendar}
           onSignOut={handleMenuSignOut}
         />

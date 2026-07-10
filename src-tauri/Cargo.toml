@@ -1,6 +1,6 @@
 [package]
 name = "aura-desktop"
-version = "0.1.8"
+version = "0.1.9"
 description = "Aura Desktop companion app"
 authors = ["Aura"]
 edition = "2021"
@@ -46,4 +46,3 @@ sentry = { version = "0.48", default-features = false, features = ["backtrace", 
 # against those platforms' toolchains.
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse"] }
-

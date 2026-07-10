@@ -1,5 +1,6 @@
 mod auth_cache;
 mod autostart;
+mod entitlement;
 mod hotkeys;
 mod logging;
 mod overlay;
@@ -181,7 +182,10 @@ pub fn run() {
             updater::pending_update_version,
             updater::just_updated_version,
             read_recent_log_lines,
-            screenshot::capture_cursor_display_with_geometry
+            screenshot::capture_cursor_display_with_geometry,
+            entitlement::cache_entitlement,
+            entitlement::cached_entitlement,
+            entitlement::clear_entitlement_cache
         ])
         .setup(|app| {
             logging::install_panic_hook();

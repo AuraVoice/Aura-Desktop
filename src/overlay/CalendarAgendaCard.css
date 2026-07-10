@@ -7,13 +7,15 @@
   flex: 1 1 auto;
   min-height: 0;
   border-radius: 28px;
-  animation: calendar-agenda-enter 0.22s cubic-bezier(0.2, 0.8, 0.3, 1);
+  transform-origin: top center;
+  animation: calendar-agenda-enter 0.24s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 
+/* iPhone-style expand from the bar. */
 @keyframes calendar-agenda-enter {
   from {
     opacity: 0;
-    transform: translateY(-10px);
+    transform: scale(0.96) translateY(-6px);
   }
   to {
     opacity: 1;
@@ -126,8 +128,25 @@
 .calendar-agenda-time {
   flex-shrink: 0;
   width: 64px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  line-height: 1.2;
   font-size: 12.5px;
   font-variant-numeric: tabular-nums;
+  color: var(--glass-text-dim);
+}
+
+/* Future (non-today) rows show the date over the time so "Upcoming" reads
+   clearly without a second column. */
+.calendar-agenda-when-date {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--glass-text-bright);
+}
+
+.calendar-agenda-when-time {
+  font-size: 11px;
   color: var(--glass-text-dim);
 }
 
@@ -166,4 +185,138 @@
 
 .calendar-agenda-turn-off:hover {
   color: var(--glass-text-bright);
+}
+
+/* Loading skeleton: rows sized like real events, with a moving shimmer. */
+.calendar-agenda-skeleton {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.calendar-agenda-skeleton-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+}
+
+.agenda-skeleton-pill {
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.06) 25%,
+    rgba(255, 255, 255, 0.14) 37%,
+    rgba(255, 255, 255, 0.06) 63%
+  );
+  background-size: 400% 100%;
+  animation: agenda-shimmer 1.4s ease infinite;
+}
+
+.agenda-skeleton-time {
+  flex-shrink: 0;
+  width: 52px;
+}
+
+.agenda-skeleton-title {
+  /* width set inline per row for an organic stagger */
+}
+
+@keyframes agenda-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: 0 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agenda-skeleton-pill {
+    animation: none;
+  }
+}
+
+/* Not-connected and load-failed both use this stacked layout: the explanatory
+   line above a single action button. */
+.calendar-agenda-fallback {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 12px;
+}
+
+/* Whole-week-empty state: centered message with a "Create event" button in the
+   middle. */
+.calendar-agenda-empty-state {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  text-align: center;
+}
+
+.calendar-agenda-empty-text {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: 13px;
+  color: var(--glass-text-dim);
+}
+
+.calendar-agenda-fallback .calendar-agenda-empty {
+  flex: 0 0 auto;
+}
+
+.calendar-agenda-connect {
+  flex-shrink: 0;
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #04211c;
+  background: var(--glass-accent);
+  border: none;
+  border-radius: var(--button-radius);
+  padding: 8px 16px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.calendar-agenda-connect:hover {
+  background: var(--glass-accent-lerp-white);
+}
+
+.calendar-agenda-retry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--glass-text-bright);
+  background: var(--glass-field-fill);
+  border: 1px solid var(--glass-border-flat);
+  border-radius: var(--button-radius);
+  padding: 7px 14px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.calendar-agenda-retry:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.calendar-agenda-retry svg {
+  width: 15px;
+  height: 15px;
+  color: var(--glass-text-dim);
 }

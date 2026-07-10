@@ -46,6 +46,10 @@ export interface MeetingsState {
   connected: boolean;
   /** Whether at least one successful fetch has resolved (agenda loading state). */
   loaded: boolean;
+  /** True when a fetch failed (network/backend error, not "not connected")
+   * before any successful load - lets the agenda show a terminal retry state
+   * instead of sticking on the skeleton forever. Cleared on the next success. */
+  loadFailed: boolean;
   /** Today's remaining events, for the agenda card. */
   events: UpcomingMeeting[];
   /** The soonest not-snoozed event within the ticker window, or null. */
@@ -55,6 +59,8 @@ export interface MeetingsState {
   dismiss: (eventId: string) => void;
   /** Kill switch: no ticker, no auto-summon, for this device. */
   turnOffAlerts: () => void;
+  /** Re-run the poll now, for the agenda's retry button after a load failure. */
+  refresh: () => void;
 }
 
 type IdDateMap = Record<string, string>;
@@ -80,6 +86,7 @@ export function useMeetings(inputs: MeetingsInputs): MeetingsState {
 
   const [connected, setConnected] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [events, setEvents] = useState<UpcomingMeeting[]>([]);
   const [soonest, setSoonest] = useState<SoonestMeeting | null>(null);
   const [alertsDisabled, setAlertsDisabled] = useState(false);
@@ -87,6 +94,11 @@ export function useMeetings(inputs: MeetingsInputs): MeetingsState {
   const storeRef = useRef<Store | null>(null);
   const eventsRef = useRef<UpcomingMeeting[]>(events);
   eventsRef.current = events;
+  // Mirror so poll()'s stable closure can tell "never loaded yet" (terminal
+  // error) apart from "already have data" (a transient failed refresh) without
+  // re-subscribing on every load state change.
+  const loadedRef = useRef(loaded);
+  loadedRef.current = loaded;
   const dismissedRef = useRef<IdDateMap>({});
   const summonedRef = useRef<IdDateMap>({});
   const lastGoodAtRef = useRef<number | null>(null);
@@ -187,6 +199,10 @@ export function useMeetings(inputs: MeetingsInputs): MeetingsState {
     if (!signedInRef.current) return;
     const result = await fetchUpcomingMeetings(FETCH_BUDGET_MS);
     if (result === null) {
+      // Before any successful load this is a terminal failure - surface a retry
+      // so the agenda never sticks on the skeleton (e.g. the endpoint 404s or
+      // the network is down on first open).
+      if (!loadedRef.current) setLoadFailed(true);
       // Staleness guard: only clear a previously-good list once it's too old to
       // trust, so a single failed poll doesn't blank a valid ticker.
       if (lastGoodAtRef.current !== null && Date.now() - lastGoodAtRef.current > STALE_MAX_MS) {
@@ -200,7 +216,14 @@ export function useMeetings(inputs: MeetingsInputs): MeetingsState {
     setConnected(result.connected);
     setEvents(result.events);
     setLoaded(true);
+    setLoadFailed(false);
   }, []);
+
+  // Retry after a load failure: clear the error and re-poll immediately.
+  const refresh = useCallback(() => {
+    setLoadFailed(false);
+    void poll();
+  }, [poll]);
 
   // Poll on mount, on an interval, and whenever the user brings the panel up
   // (so an opened bar always reflects a fresh calendar).
@@ -208,6 +231,7 @@ export function useMeetings(inputs: MeetingsInputs): MeetingsState {
     if (!signedIn) {
       setConnected(false);
       setLoaded(false);
+      setLoadFailed(false);
       setEvents([]);
       setSoonest(null);
       lastGoodAtRef.current = null;
@@ -255,5 +279,5 @@ export function useMeetings(inputs: MeetingsInputs): MeetingsState {
     trackEvent("meeting_alerts_toggle_off", {});
   }, [getStore]);
 
-  return { connected, loaded, events, soonest, alertsDisabled, dismiss, turnOffAlerts };
+  return { connected, loaded, loadFailed, events, soonest, alertsDisabled, dismiss, turnOffAlerts, refresh };
 }

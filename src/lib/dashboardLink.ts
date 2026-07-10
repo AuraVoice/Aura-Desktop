@@ -44,7 +44,14 @@ export async function mintDashboardLink(): Promise<DashboardLinkResult> {
 // single-use codes and open two browser tabs.
 let openInFlight: Promise<void> | null = null;
 
-export async function openDashboard(): Promise<void> {
+/** Optional deep-link target inside the dashboard. `settings` opens straight to
+ * a settings panel (e.g. "connectors" for the Google Calendar connect flow)
+ * once Aura-Web reads the matching `?settings=` param; harmless if it doesn't. */
+export interface OpenDashboardOptions {
+  settings?: string;
+}
+
+export async function openDashboard(options: OpenDashboardOptions = {}): Promise<void> {
   if (openInFlight) return openInFlight;
   openInFlight = (async () => {
     try {
@@ -54,10 +61,17 @@ export async function openDashboard(): Promise<void> {
       if (auth.currentUser?.uid) {
         url.searchParams.set("uid", auth.currentUser.uid);
       }
+      if (options.settings) {
+        url.searchParams.set("settings", options.settings);
+      }
       await openUrl(url.toString());
     } catch (err) {
       logError("openDashboard", err);
-      await openUrl(dashboardUrl);
+      const fallback = new URL(dashboardUrl);
+      if (options.settings) {
+        fallback.searchParams.set("settings", options.settings);
+      }
+      await openUrl(fallback.toString());
     } finally {
       openInFlight = null;
     }
