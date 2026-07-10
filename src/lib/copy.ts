@@ -147,6 +147,8 @@ export const subscription = {
   upgradeWaiting: "Waiting for payment...",
   upgraded: "You're upgraded",
   upgradeFailed: "Try again",
+  voiceCapReached: "You've used today's free voice minutes. They reset tomorrow.",
+  voiceCapUpgradeTooltip: "Upgrade for unlimited voice",
 } as const;
 
 export const meetingTicker = {

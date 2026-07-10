@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Room, RoomEvent, Track, type RemoteParticipant } from "livekit-client";
 import { invoke } from "@tauri-apps/api/core";
-import { fetchVoiceToken } from "../lib/voice";
+import { fetchVoiceToken, VoiceCapError } from "../lib/voice";
 import { AuthRequiredError, routeToDashboardForExpiredSession } from "../lib/api";
 import { logError, logInfo } from "../lib/log";
 import { trackEvent } from "../lib/analytics";
-import { micCaptureFailedCode, voiceErrorMessageForCode } from "../lib/voiceErrorCopy";
+import { micCaptureFailedCode, voiceCapReachedCode, voiceErrorMessageForCode } from "../lib/voiceErrorCopy";
 
 export type VoiceSessionStatus =
   | "disconnected"
@@ -32,10 +32,16 @@ const SILENCE_WATCHDOG_MS = 15_000;
 
 // Auto-retry budget for a failed call. Excludes mic-access codes below, since
 // those need the user to fix something in OS settings - retrying immediately
-// just fails identically and burns the whole budget for nothing.
+// just fails identically and burns the whole budget for nothing. The voice-cap
+// code is in the same boat: the daily counter only resets server-side, so a
+// retry can't succeed until the user upgrades or the day rolls over.
 const MAX_AUTO_RETRIES = 3;
 const RETRY_BASE_DELAY_MS = 2_000;
-const NON_RETRYABLE_CODES = new Set<string>(["mic_permission_denied", micCaptureFailedCode]);
+const NON_RETRYABLE_CODES = new Set<string>([
+  "mic_permission_denied",
+  micCaptureFailedCode,
+  voiceCapReachedCode,
+]);
 
 // Direct port of `_mapAgentState` - the agent reports its own state via a
 // LiveKit participant attribute (`lk.agent.state`), not a data message.
@@ -445,6 +451,12 @@ export function useVoiceBar() {
         await routeToDashboardForExpiredSession();
         return;
       }
+      if (err instanceof VoiceCapError) {
+        // Free-tier daily cap: a known state, not a failure. The code is
+        // non-retryable, so this shows the capped message and stays put.
+        enterErrorState(voiceCapReachedCode);
+        return;
+      }
       logError("useVoiceBar: startSession", err);
       enterErrorState(null, "Couldn't start the call. Give it another shot in a sec?");
     }
@@ -497,12 +509,17 @@ export function useVoiceBar() {
   }, [clearWatchdogs]);
 
   const showMicSettingsHint = errorMessage === voiceErrorMessageForCode({ code: micCaptureFailedCode });
+  // Rides the existing error status + code rather than a new VoiceSessionStatus
+  // member: the bar renders the capped state as a neutral notice with an
+  // Upgrade pointer instead of the error treatment.
+  const isVoiceCapped = status === "error" && lastErrorCode === voiceCapReachedCode;
 
   return {
     status,
     assistantCaption,
     errorMessage,
     showMicSettingsHint,
+    isVoiceCapped,
     startSession,
     endSession,
     room,

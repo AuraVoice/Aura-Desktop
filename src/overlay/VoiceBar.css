@@ -63,6 +63,27 @@
   color: var(--glass-accent);
 }
 
+/* Daily voice cap: a plan notice, not a failure - stays the normal bright
+   caption tone instead of the danger tint. */
+.voice-bar-caption-capped {
+  color: var(--glass-text-bright);
+}
+
+/* Inline pointer to the kebab menu's Upgrade row; the confirm-button accent
+   treatment, sized down to sit inside the 64px bar. */
+.voice-bar-upgrade {
+  flex-shrink: 0;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px;
+  border-radius: var(--button-radius);
+  border: none;
+  cursor: pointer;
+  background: var(--glass-accent);
+  color: #04211c;
+}
+
 /* The update chip stays accent-tinted with its dot always on - it signals
    "something is waiting for you", not an active/inactive toggle state. */
 .bar-icon-button.voice-bar-update {

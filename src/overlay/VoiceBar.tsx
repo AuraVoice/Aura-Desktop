@@ -3,7 +3,7 @@ import { signOut } from "firebase/auth";
 import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { auth } from "../lib/firebase";
-import { bar as copy, kebabMenu as kebabCopy, signOut as signOutCopy, update as updateCopy, hotkeyHints } from "../lib/copy";
+import { bar as copy, kebabMenu as kebabCopy, signOut as signOutCopy, subscription as subCopy, update as updateCopy, hotkeyHints } from "../lib/copy";
 import { logError, logInfo } from "../lib/log";
 import { AvatarIcon, IncognitoOffIcon, IncognitoOnIcon, KebabIcon, RefreshIcon, SettingsIcon, UpdateIcon, WaveformIcon } from "./icons";
 import { BarIconButton } from "./BarIconButton";
@@ -208,11 +208,27 @@ export function VoiceBar({
         <MeetingTicker soonest={soonestMeeting} onDismiss={onDismissMeeting} />
       ) : (
         <span
-          className={`voice-bar-caption${voice.errorMessage ? " voice-bar-caption-error" : ""}${isSavedConfirmation ? " voice-bar-caption-saved" : ""}`}
+          className={`voice-bar-caption${voice.errorMessage ? (voice.isVoiceCapped ? " voice-bar-caption-capped" : " voice-bar-caption-error") : ""}${isSavedConfirmation ? " voice-bar-caption-saved" : ""}`}
           title={caption}
         >
           {caption}
         </span>
+      )}
+
+      {/* The daily free-voice cap is a plan state, not a call failure: neutral
+          caption plus a pointer to the kebab menu, which owns the full
+          checkout flow (no inline checkout duplication in a 64px bar). */}
+      {voice.isVoiceCapped && (
+        <button
+          type="button"
+          className="voice-bar-upgrade"
+          title={subCopy.voiceCapUpgradeTooltip}
+          onClick={() => {
+            if (!menuOpen) onToggleMenu();
+          }}
+        >
+          {subCopy.upgrade}
+        </button>
       )}
 
       {voice.showMicSettingsHint && (
