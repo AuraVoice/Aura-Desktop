@@ -44,9 +44,19 @@ const RULES: &[Rule] = &[
     // absent: this app logs diagnostic error codes as `code=agent_silent`
     // and losing those would gut the feedback flow; the *_code variants
     // cover the credential-bearing ones (session/pairing/device/oauth/auth).
+    // Quoted values are separate from unquoted values so whitespace inside
+    // a password or token cannot terminate the match and leak the suffix.
     Rule {
-        pattern: r#"(?i)\b((?:refresh_?|id_?|access_?|custom_?)?token|api[_-]?key|secret|password|passwd|pwd|(?:set-)?cookie|session[_-]?(?:id|code)|device[_-]?(?:link[_-]?)?code|oauth[_-]?code|pairing[_-]?code|auth[_-]?code)(["']?\s*[:=]\s*["']?)[^\s"',;}&?]+"#,
-        replacement: "${1}${2}[redacted]",
+        pattern: r#"(?i)(["']?\b(?:refresh_?|id_?|access_?|custom_?)?token["']?\s*[:=]\s*|["']?\b(?:api[_-]?key|secret|password|passwd|pwd|(?:set-)?cookie|session[_-]?(?:id|code)|device[_-]?(?:link[_-]?)?code|oauth[_-]?code|pairing[_-]?code|auth[_-]?code)["']?\s*[:=]\s*)"(?:\\.|[^"\\])*""#,
+        replacement: "${1}\"[redacted]\"",
+    },
+    Rule {
+        pattern: r#"(?i)(["']?\b(?:refresh_?|id_?|access_?|custom_?)?token["']?\s*[:=]\s*|["']?\b(?:api[_-]?key|secret|password|passwd|pwd|(?:set-)?cookie|session[_-]?(?:id|code)|device[_-]?(?:link[_-]?)?code|oauth[_-]?code|pairing[_-]?code|auth[_-]?code)["']?\s*[:=]\s*)'(?:\\.|[^'\\])*'"#,
+        replacement: "${1}'[redacted]'",
+    },
+    Rule {
+        pattern: r#"(?i)(["']?\b(?:refresh_?|id_?|access_?|custom_?)?token["']?\s*[:=]\s*|["']?\b(?:api[_-]?key|secret|password|passwd|pwd|(?:set-)?cookie|session[_-]?(?:id|code)|device[_-]?(?:link[_-]?)?code|oauth[_-]?code|pairing[_-]?code|auth[_-]?code)["']?\s*[:=]\s*)[^\s"',;}&?]+"#,
+        replacement: "${1}[redacted]",
     },
     // Sensitive URL query parameters - keeps origin+path readable.
     Rule {
@@ -151,6 +161,42 @@ mod tests {
         }
         // The key survives so support can still see WHAT failed.
         assert!(redact_line("idToken=abcd1234").contains("idToken"));
+    }
+
+    #[test]
+    fn quoted_secrets_with_spaces_are_fully_redacted() {
+        for (line, secrets) in [
+            (
+                r#"password="correct horse battery staple" status=denied"#,
+                &["correct", "horse", "battery", "staple"][..],
+            ),
+            (
+                "secret: 'alpha beta gamma' retry=false",
+                &["alpha", "beta", "gamma"][..],
+            ),
+        ] {
+            let out = redact_line(line);
+            assert!(out.contains("[redacted]"), "{line} -> {out}");
+            for secret in secrets {
+                assert!(!out.contains(secret), "{line} -> {out}");
+            }
+        }
+        assert_eq!(
+            redact_line(r#"password="correct horse battery staple" status=denied"#),
+            r#"password="[redacted]" status=denied"#,
+        );
+        assert_eq!(
+            redact_line("secret: 'alpha beta gamma' retry=false"),
+            "secret: '[redacted]' retry=false",
+        );
+    }
+
+    #[test]
+    fn unquoted_secrets_stop_at_diagnostic_whitespace() {
+        assert_eq!(
+            redact_line("password=hunter42 status=denied"),
+            "password=[redacted] status=denied",
+        );
     }
 
     #[test]

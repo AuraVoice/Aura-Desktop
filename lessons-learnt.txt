@@ -334,3 +334,28 @@ its value is fail-closed centralization, lifecycle invariants, and confused-depu
 Native ID-token verification in set_auth_state (a documented follow-up) would close fabricated
 signed-out sessions and uid spoofing, but still not signed-in XSS, since compromised JS can
 obtain a genuine token from the Firebase SDK it shares a page with.
+
+Date: 2026-07-11
+Problem: The PR #6 follow-up review found that meeting audio ownership still belonged to the
+Windows installation instead of the signed-in account, native sign-out left join-detection
+threads alive, and quoted credential values leaked every word after the first whitespace.
+Issue: The durable manifest had no owner UID, so any valid session could enumerate, decrypt,
+mark, or delete a previous account's queued captures. React keyed its claims, retry backoff,
+rejoin holds, and pump only on a boolean signedIn value, which does not change during a direct
+account A to account B switch. Native revocation stopped recording but did not drain the
+JoinWatchHandle map. The generic key/value redaction regex treated quoted and unquoted values
+the same, so password="correct horse battery staple" exposed "horse battery staple".
+Solution: Native authorization tickets now carry the trusted session UID. Active captures,
+capture events, and all new manifest rows carry that owner, while snapshots, segment reads,
+upload marks, and acknowledgements require an exact ticket-owner match and recheck the auth
+epoch. Legacy rows deserialize without an owner and match no account. React receives the UID,
+invalidates account-scoped generations and caches on every UID change, and ignores capture
+events for other owners. Native revocation drains and cancels every join watch, with a post-start
+ticket recheck closing the revoke-versus-insert race. Credential redaction now has separate
+double-quoted, single-quoted, and unquoted rules with whitespace regression tests.
+Justification: Authentication answers whether a caller is signed in; it does not answer whose
+persisted data the caller may access. Persisted private data needs an owner on every row and an
+exact owner check at every native read and mutation boundary. UID, rather than signedIn, is the
+correct frontend lifecycle key because account switches keep the boolean true. Revocation must
+also cancel native workers without relying on a responsive webview, and redaction must parse the
+value's quoting mode before deciding where the credential ends.

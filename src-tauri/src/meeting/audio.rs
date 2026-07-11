@@ -102,13 +102,26 @@ impl StreamShared {
 pub fn spawn_engine(
     app: AppHandle,
     meeting_id: String,
+    owner_uid: String,
     event_id: String,
+    next_seq: u32,
+    timeline_base_ms: i64,
 ) -> Result<Sender<String>, String> {
     let (stop_tx, stop_rx) = std::sync::mpsc::channel::<String>();
     super::session::ensure_watcher();
     std::thread::Builder::new()
         .name("meeting-engine".to_string())
-        .spawn(move || engine_thread(app, meeting_id, event_id, stop_rx))
+        .spawn(move || {
+            engine_thread(
+                app,
+                meeting_id,
+                owner_uid,
+                event_id,
+                next_seq,
+                timeline_base_ms,
+                stop_rx,
+            )
+        })
         .map_err(|e| format!("failed to spawn engine thread: {e}"))?;
     Ok(stop_tx)
 }
@@ -299,14 +312,16 @@ impl ChannelState {
 fn engine_thread(
     app: AppHandle,
     meeting_id: String,
+    owner_uid: String,
     event_id: String,
+    next_seq: u32,
+    timeline_base_ms: i64,
     stop_rx: Receiver<String>,
 ) {
     let started_at_ms = super::now_ms();
     // A rejoin continues the first session's seq numbering and timeline
     // instead of overwriting its files (queue.rs keeps the entry alive).
-    let mut seq = super::queue::next_seq(&app, &meeting_id);
-    let timeline_base_ms = super::queue::recorded_span_ms(&app, &meeting_id);
+    let mut seq = next_seq;
 
     // The cap is per MEETING, not per engine run: a rejoin only gets whatever
     // budget the earlier session(s) left, so drop-and-rejoin can never stack
@@ -316,7 +331,13 @@ fn engine_thread(
     if session_budget.is_zero() {
         info!("meeting.audio: cap already reached for {meeting_id}, not restarting capture");
         super::finalize_capture(
-            &app, &meeting_id, &event_id, started_at_ms, timeline_base_ms, "max_duration",
+            &app,
+            &meeting_id,
+            &owner_uid,
+            &event_id,
+            started_at_ms,
+            timeline_base_ms,
+            "max_duration",
         );
         return;
     }
@@ -355,9 +376,18 @@ fn engine_thread(
                 // Close the running segment at the lock boundary; the locked
                 // span simply doesn't exist in the audio timeline.
                 if !close_segment(
-                    &app, &meeting_id, &event_id, started_at_ms, &mut seq,
-                    &mut mic_state, &mut loop_state, &mut segment_start_ms,
-                    &mut emitted_ms, &mut segment_incomplete, false,
+                    &app,
+                    &meeting_id,
+                    &owner_uid,
+                    &event_id,
+                    started_at_ms,
+                    &mut seq,
+                    &mut mic_state,
+                    &mut loop_state,
+                    &mut segment_start_ms,
+                    &mut emitted_ms,
+                    &mut segment_incomplete,
+                    false,
                 ) {
                     break 'run "capture_failed".to_string();
                 }
@@ -392,9 +422,18 @@ fn engine_thread(
         //    indicator claims otherwise, so the capture stops honestly.
         while mic_state.acc.len() >= SEGMENT_FRAMES && loop_state.acc.len() >= SEGMENT_FRAMES {
             if !close_segment(
-                &app, &meeting_id, &event_id, started_at_ms, &mut seq,
-                &mut mic_state, &mut loop_state, &mut segment_start_ms,
-                &mut emitted_ms, &mut segment_incomplete, true,
+                &app,
+                &meeting_id,
+                &owner_uid,
+                &event_id,
+                started_at_ms,
+                &mut seq,
+                &mut mic_state,
+                &mut loop_state,
+                &mut segment_start_ms,
+                &mut emitted_ms,
+                &mut segment_incomplete,
+                true,
             ) {
                 break 'run "capture_failed".to_string();
             }
@@ -412,12 +451,27 @@ fn engine_thread(
         }
     }
     let _ = close_segment(
-        &app, &meeting_id, &event_id, started_at_ms, &mut seq,
-        &mut mic_state, &mut loop_state, &mut segment_start_ms,
-        &mut emitted_ms, &mut segment_incomplete, false,
+        &app,
+        &meeting_id,
+        &owner_uid,
+        &event_id,
+        started_at_ms,
+        &mut seq,
+        &mut mic_state,
+        &mut loop_state,
+        &mut segment_start_ms,
+        &mut emitted_ms,
+        &mut segment_incomplete,
+        false,
     );
     super::finalize_capture(
-        &app, &meeting_id, &event_id, started_at_ms, emitted_ms, &stop_reason,
+        &app,
+        &meeting_id,
+        &owner_uid,
+        &event_id,
+        started_at_ms,
+        emitted_ms,
+        &stop_reason,
     );
 }
 
@@ -432,6 +486,7 @@ fn engine_thread(
 fn close_segment(
     app: &AppHandle,
     meeting_id: &str,
+    owner_uid: &str,
     event_id: &str,
     started_at_ms: i64,
     seq: &mut u32,
@@ -467,8 +522,16 @@ fn close_segment(
         Ok(flac) => {
             let incomplete = *segment_incomplete;
             match super::record_segment(
-                app, meeting_id, event_id, started_at_ms, *seq,
-                *segment_start_ms, duration_ms, &flac, incomplete,
+                app,
+                meeting_id,
+                owner_uid,
+                event_id,
+                started_at_ms,
+                *seq,
+                *segment_start_ms,
+                duration_ms,
+                &flac,
+                incomplete,
             ) {
                 Ok(()) => {
                     info!(

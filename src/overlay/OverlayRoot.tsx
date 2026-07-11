@@ -66,7 +66,7 @@ export function OverlayRoot() {
   const meetings = useMeetings({ presentation, signedIn: user !== null, callLive });
   const meetingArm = useMeetingArm(user?.uid ?? null);
   const meetingCapture = useMeetingCapture({
-    signedIn: user !== null,
+    uid: user?.uid ?? null,
     events: meetings.events,
     isArmed: meetingArm.isArmed,
     armRevision: meetingArm.revision,

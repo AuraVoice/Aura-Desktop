@@ -106,9 +106,18 @@ pub enum Operation {
 /// Proof of a successful `authorize` call, carrying the auth epoch it was
 /// issued under so `recheck` can reject completions that straddled a
 /// sign-out or account switch.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct Ticket {
     auth_epoch: u64,
+    uid: String,
+}
+
+impl Ticket {
+    /// The authenticated account this authorization was issued to. Queue
+    /// ownership checks use this value, never a UID supplied over IPC.
+    pub fn uid(&self) -> &str {
+        &self.uid
+    }
 }
 
 /// What a session report actually changed - drives the side effects the
@@ -145,16 +154,12 @@ impl fmt::Display for Denied {
 }
 
 impl SecurityState {
-    fn signed_in(&self) -> bool {
-        matches!(self.session, Session::SignedIn { .. })
-    }
-
     /// The one authorization decision point. Pure and AppHandle-free so the
     /// whole matrix is unit-testable.
     pub fn authorize(&self, op: Operation) -> Result<Ticket, Denied> {
-        if !self.signed_in() {
+        let Session::SignedIn { uid } = &self.session else {
             return Err(Denied::SignedOut);
-        }
+        };
         match op {
             Operation::CaptureScreen => {
                 if !self.voice_active {
@@ -195,6 +200,7 @@ impl SecurityState {
         }
         Ok(Ticket {
             auth_epoch: self.auth_epoch,
+            uid: uid.clone(),
         })
     }
 
@@ -203,6 +209,9 @@ impl SecurityState {
     /// and the operation must still be allowed under the current state.
     pub fn recheck(&self, op: Operation, ticket: &Ticket) -> Result<(), Denied> {
         if ticket.auth_epoch != self.auth_epoch {
+            return Err(Denied::StaleAuth);
+        }
+        if !matches!(&self.session, Session::SignedIn { uid } if uid == &ticket.uid) {
             return Err(Denied::StaleAuth);
         }
         self.authorize(op).map(|_| ())
@@ -326,6 +335,17 @@ pub fn recheck(app: &AppHandle, op: Operation, ticket: &Ticket) -> Result<(), St
     })
 }
 
+/// Current native session identity for filtering non-authorizing status
+/// payloads. Sensitive operations must still use `authorize` and its ticket.
+pub fn current_uid(app: &AppHandle) -> Option<String> {
+    let handle = handle(app)?;
+    let state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+    match &state.session {
+        Session::SignedIn { uid } => Some(uid.clone()),
+        Session::SignedOut => None,
+    }
+}
+
 /// Records a successful, authorized screen capture (enables PointAt).
 pub fn note_capture(app: &AppHandle) {
     if let Some(handle) = handle(app) {
@@ -353,6 +373,7 @@ pub fn session_changed(app: &AppHandle, signed_in: bool, uid: Option<String>) {
     }
     if transition.revoked {
         crate::meeting::request_stop(app, "signed_out");
+        crate::meeting::stop_all_join_watches(app);
     }
 }
 
@@ -648,6 +669,7 @@ mod tests {
     fn repeated_same_session_report_changes_nothing() {
         let mut s = armed_in_voice_session();
         let ticket = s.authorize(Operation::CaptureScreen).unwrap();
+        assert_eq!(ticket.uid(), "uid-1");
         let transition = s.set_session(true, Some("uid-1".to_string()));
         assert!(!transition.revoked);
         assert!(!transition.disarmed);

@@ -32,6 +32,7 @@ use tauri::{AppHandle, Emitter, Manager};
 /// stop path - user click, meeting left, 4h cap, capture failure - converges
 /// on the same code.
 pub struct ActiveCapture {
+    pub owner_uid: String,
     pub meeting_id: String,
     pub event_id: String,
     pub started_at_ms: i64,
@@ -62,6 +63,7 @@ pub fn is_capture_active(app: &AppHandle) -> bool {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CaptureStatePayload {
+    pub owner_uid: String,
     pub active: bool,
     pub meeting_id: Option<String>,
     pub event_id: Option<String>,
@@ -73,6 +75,7 @@ pub struct CaptureStatePayload {
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SegmentReadyPayload {
+    pub owner_uid: String,
     pub meeting_id: String,
     pub seq: u32,
     pub start_ms: i64,
@@ -118,6 +121,28 @@ pub fn request_stop(app: &AppHandle, reason: &str) {
     }
 }
 
+/// Cancels every native Zoom/Teams watcher. Authorization revocation calls
+/// this directly so a hung webview cannot leave background window scans
+/// running under the next account.
+pub fn stop_all_join_watches(app: &AppHandle) {
+    let Some(handle) = app.try_state::<JoinWatchHandle>() else {
+        return;
+    };
+    cancel_all_join_watches(&handle);
+}
+
+fn cancel_all_join_watches(handle: &JoinWatchHandle) -> usize {
+    let watches = {
+        let mut guard = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        std::mem::take(&mut *guard)
+    };
+    let count = watches.len();
+    for cancel in watches.into_values() {
+        cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    count
+}
+
 /// Runs once at setup: drop queue entries (and their segment files) older
 /// than the retention window - an unsent capture is not worth keeping forever
 /// (MEETING_NOTES_PLAN.md section 6, "upload interrupted for days").
@@ -142,8 +167,8 @@ pub async fn start_meeting_capture(
     meeting_id: String,
     event_id: String,
 ) -> Result<(), String> {
-    let ticket =
-        crate::security::authorize(&app, crate::security::Operation::StartMeetingCapture)?;
+    let ticket = crate::security::authorize(&app, crate::security::Operation::StartMeetingCapture)?;
+    let owner_uid = ticket.uid().to_string();
     queue::validate_meeting_id(&meeting_id)?;
     #[cfg(windows)]
     {
@@ -155,8 +180,38 @@ pub async fn start_meeting_capture(
             }
         }
 
+        let offsets_app = app.clone();
+        let offsets_meeting_id = meeting_id.clone();
+        let offsets_owner_uid = owner_uid.clone();
+        let (next_seq, timeline_base_ms) = tauri::async_runtime::spawn_blocking(move || {
+            queue::capture_offsets(&offsets_app, &offsets_meeting_id, &offsets_owner_uid)
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+        crate::security::recheck(
+            &app,
+            crate::security::Operation::StartMeetingCapture,
+            &ticket,
+        )?;
         let started_at_ms = now_ms();
-        let stop_tx = audio::spawn_engine(app.clone(), meeting_id.clone(), event_id.clone())
+        // `capture_offsets` runs off-thread. Hold the capture-state lock from
+        // the post-await check through publishing ActiveCapture so two start
+        // commands cannot both create engines. A very fast engine finalize
+        // waits on this same lock and therefore cannot clear state before it
+        // has been published.
+        {
+            let mut guard = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+            if guard.is_some() {
+                return Err("a meeting capture is already active".to_string());
+            }
+            let stop_tx = audio::spawn_engine(
+                app.clone(),
+                meeting_id.clone(),
+                owner_uid.clone(),
+                event_id.clone(),
+                next_seq,
+                timeline_base_ms,
+            )
             .map_err(|e| {
                 // Init failures stay silent to the user (ambient-surface
                 // rule) but always reach the log + Sentry.
@@ -169,10 +224,8 @@ pub async fn start_meeting_capture(
                 }
                 e
             })?;
-
-        {
-            let mut guard = handle.0.lock().unwrap_or_else(|e| e.into_inner());
             *guard = Some(ActiveCapture {
+                owner_uid: owner_uid.clone(),
                 meeting_id: meeting_id.clone(),
                 event_id: event_id.clone(),
                 started_at_ms,
@@ -182,14 +235,18 @@ pub async fn start_meeting_capture(
         }
         crate::tray::set_recording(&app, true);
         info!("meeting: capture started for {meeting_id} (event {event_id})");
-        emit_capture_state(&app, CaptureStatePayload {
-            active: true,
-            meeting_id: Some(meeting_id),
-            event_id: Some(event_id),
-            started_at_ms: Some(started_at_ms),
-            paused: false,
-            reason: "started".to_string(),
-        });
+        emit_capture_state(
+            &app,
+            CaptureStatePayload {
+                owner_uid,
+                active: true,
+                meeting_id: Some(meeting_id),
+                event_id: Some(event_id),
+                started_at_ms: Some(started_at_ms),
+                paused: false,
+                reason: "started".to_string(),
+            },
+        );
 
         // Closes the authorize -> publish race: a sign-out (or account
         // switch) landing before ActiveCapture was stored above finds
@@ -200,9 +257,11 @@ pub async fn start_meeting_capture(
         // before this line trips the epoch here, a revocation after it
         // finds the handle - and both funnel into the same engine stop
         // (idempotent; finalize_capture cleans up state/tray/event).
-        if let Err(denied) =
-            crate::security::recheck(&app, crate::security::Operation::StartMeetingCapture, &ticket)
-        {
+        if let Err(denied) = crate::security::recheck(
+            &app,
+            crate::security::Operation::StartMeetingCapture,
+            &ticket,
+        ) {
             request_stop(&app, "signed_out");
             return Err(denied);
         }
@@ -255,17 +314,20 @@ pub struct CaptureStatus {
 /// race where capture state changed before the frontend mounted listeners.
 #[tauri::command]
 pub fn capture_status(app: AppHandle) -> CaptureStatus {
+    let current_uid = crate::security::current_uid(&app);
     let handle = app.state::<MeetingCaptureHandle>();
     let guard = handle.0.lock().unwrap_or_else(|e| e.into_inner());
     match guard.as_ref() {
-        Some(active) => CaptureStatus {
-            active: true,
-            meeting_id: Some(active.meeting_id.clone()),
-            event_id: Some(active.event_id.clone()),
-            started_at_ms: Some(active.started_at_ms),
-            paused: active.paused,
-        },
-        None => CaptureStatus {
+        Some(active) if current_uid.as_deref() == Some(active.owner_uid.as_str()) => {
+            CaptureStatus {
+                active: true,
+                meeting_id: Some(active.meeting_id.clone()),
+                event_id: Some(active.event_id.clone()),
+                started_at_ms: Some(active.started_at_ms),
+                paused: active.paused,
+            }
+        }
+        _ => CaptureStatus {
             active: false,
             meeting_id: None,
             event_id: None,
@@ -279,10 +341,16 @@ pub fn capture_status(app: AppHandle) -> CaptureStatus {
 /// segments and upload/completion flags. File IO (manifest read), so async.
 #[tauri::command]
 pub async fn queue_snapshot(app: AppHandle) -> Result<queue::Manifest, String> {
-    crate::security::authorize(&app, crate::security::Operation::QueueSnapshot)?;
-    tauri::async_runtime::spawn_blocking(move || Ok(queue::load(&app)))
-        .await
-        .map_err(|e| e.to_string())?
+    let ticket = crate::security::authorize(&app, crate::security::Operation::QueueSnapshot)?;
+    let owner_uid = ticket.uid().to_string();
+    let blocking_app = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        Ok(queue::load_for_owner(&blocking_app, &owner_uid))
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    crate::security::recheck(&app, crate::security::Operation::QueueSnapshot, &ticket)?;
+    result
 }
 
 /// Decrypts one segment and returns its raw FLAC bytes over binary IPC
@@ -297,14 +365,19 @@ pub async fn read_segment(
     #[cfg(windows)]
     {
         let ticket = crate::security::authorize(&app, crate::security::Operation::ReadSegment)?;
+        let owner_uid = ticket.uid().to_string();
         let blocking_app = app.clone();
         let result = tauri::async_runtime::spawn_blocking(move || {
             // Only meetings this install itself captured (i.e. that Rust
             // wrote into its own manifest) are readable - an arbitrary id
             // can't probe the filesystem, even one that passes the charset
             // check.
-            if !queue::load(&blocking_app).meetings.contains_key(&meeting_id) {
+            let manifest = queue::load_for_owner(&blocking_app, &owner_uid);
+            let Some(entry) = manifest.meetings.get(&meeting_id) else {
                 return Err("unknown meeting id".to_string());
+            };
+            if !entry.segments.iter().any(|segment| segment.seq == seq) {
+                return Err("unknown segment".to_string());
             }
             let path = queue::segment_path(&blocking_app, &meeting_id, seq)?;
             let encrypted = std::fs::read(&path).map_err(|e| e.to_string())?;
@@ -335,12 +408,20 @@ pub async fn mark_segment_uploaded(
     meeting_id: String,
     seq: u32,
 ) -> Result<(), String> {
-    crate::security::authorize(&app, crate::security::Operation::MarkSegmentUploaded)?;
-    tauri::async_runtime::spawn_blocking(move || {
-        queue::mark_uploaded(&app, &meeting_id, seq)
+    let ticket = crate::security::authorize(&app, crate::security::Operation::MarkSegmentUploaded)?;
+    let owner_uid = ticket.uid().to_string();
+    let blocking_app = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        queue::mark_uploaded(&blocking_app, &meeting_id, &owner_uid, seq)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    crate::security::recheck(
+        &app,
+        crate::security::Operation::MarkSegmentUploaded,
+        &ticket,
+    )?;
+    result
 }
 
 /// The backend accepted /complete: this capture's local life is over. Deletes
@@ -350,17 +431,26 @@ pub async fn mark_segment_uploaded(
 /// pump's backoff retries once the rejoined capture ends.
 #[tauri::command]
 pub async fn mark_meeting_acked(app: AppHandle, meeting_id: String) -> Result<(), String> {
-    crate::security::authorize(&app, crate::security::Operation::MarkMeetingAcked)?;
+    let ticket = crate::security::authorize(&app, crate::security::Operation::MarkMeetingAcked)?;
+    let owner_uid = ticket.uid().to_string();
     {
         let handle = app.state::<MeetingCaptureHandle>();
         let guard = handle.0.lock().unwrap_or_else(|e| e.into_inner());
-        if guard.as_ref().is_some_and(|active| active.meeting_id == meeting_id) {
+        if guard
+            .as_ref()
+            .is_some_and(|active| active.owner_uid == owner_uid && active.meeting_id == meeting_id)
+        {
             return Err("meeting is actively capturing; ack refused".to_string());
         }
     }
-    tauri::async_runtime::spawn_blocking(move || queue::remove_meeting(&app, &meeting_id))
-        .await
-        .map_err(|e| e.to_string())?
+    let blocking_app = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        queue::remove_meeting(&blocking_app, &meeting_id, &owner_uid)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    crate::security::recheck(&app, crate::security::Operation::MarkMeetingAcked, &ticket)?;
+    result
 }
 
 /// Arms Zoom/Teams join detection for one meeting's time window. Windows-only
@@ -372,14 +462,29 @@ pub fn start_join_watch(
     window_start_ms: i64,
     window_end_ms: i64,
 ) -> Result<(), String> {
-    crate::security::authorize(&app, crate::security::Operation::StartJoinWatch)?;
+    let ticket = crate::security::authorize(&app, crate::security::Operation::StartJoinWatch)?;
     #[cfg(windows)]
     {
-        detect::start_join_watch(app, event_id, window_start_ms, window_end_ms)
+        detect::start_join_watch(
+            app.clone(),
+            event_id.clone(),
+            window_start_ms,
+            window_end_ms,
+        )?;
+        // Close authorize -> insert against native revocation. If revocation
+        // drained the map just before this watch was inserted, the stale
+        // ticket catches it and cancels the newly inserted watch directly.
+        if let Err(denied) =
+            crate::security::recheck(&app, crate::security::Operation::StartJoinWatch, &ticket)
+        {
+            detect::stop_join_watch(app, event_id);
+            return Err(denied);
+        }
+        Ok(())
     }
     #[cfg(not(windows))]
     {
-        let _ = (app, event_id, window_start_ms, window_end_ms);
+        let _ = (app, event_id, window_start_ms, window_end_ms, ticket);
         Ok(())
     }
 }
@@ -424,6 +529,7 @@ pub fn debug_force_join(app: AppHandle, event_id: String) -> Result<(), String> 
 pub(crate) fn record_segment(
     app: &AppHandle,
     meeting_id: &str,
+    owner_uid: &str,
     event_id: &str,
     started_at_ms: i64,
     seq: u32,
@@ -435,15 +541,27 @@ pub(crate) fn record_segment(
     let key = crypto::load_or_create_key(app)?;
     let encrypted = crypto::encrypt(&key, flac_bytes)?;
     queue::write_segment(
-        app, meeting_id, event_id, started_at_ms, seq, start_ms, duration_ms,
-        &encrypted, incomplete,
-    )?;
-    if let Err(e) = app.emit("meeting-segment-ready", SegmentReadyPayload {
-        meeting_id: meeting_id.to_string(),
+        app,
+        meeting_id,
+        owner_uid,
+        event_id,
+        started_at_ms,
         seq,
         start_ms,
         duration_ms,
-    }) {
+        &encrypted,
+        incomplete,
+    )?;
+    if let Err(e) = app.emit(
+        "meeting-segment-ready",
+        SegmentReadyPayload {
+            owner_uid: owner_uid.to_string(),
+            meeting_id: meeting_id.to_string(),
+            seq,
+            start_ms,
+            duration_ms,
+        },
+    ) {
         error!("meeting: failed to emit segment-ready: {e}");
     }
     Ok(())
@@ -460,6 +578,7 @@ pub(crate) fn notify_paused(app: &AppHandle, paused: bool) {
             Some(active) => {
                 active.paused = paused;
                 Some(CaptureStatePayload {
+                    owner_uid: active.owner_uid.clone(),
                     active: true,
                     meeting_id: Some(active.meeting_id.clone()),
                     event_id: Some(active.event_id.clone()),
@@ -482,13 +601,20 @@ pub(crate) fn notify_paused(app: &AppHandle, paused: bool) {
 pub(crate) fn finalize_capture(
     app: &AppHandle,
     meeting_id: &str,
+    owner_uid: &str,
     event_id: &str,
     started_at_ms: i64,
     total_duration_ms: i64,
     reason: &str,
 ) {
     if let Err(e) = queue::mark_completed(
-        app, meeting_id, event_id, started_at_ms, total_duration_ms, reason,
+        app,
+        meeting_id,
+        owner_uid,
+        event_id,
+        started_at_ms,
+        total_duration_ms,
+        reason,
     ) {
         error!("meeting: failed to mark capture completed in manifest: {e}");
     }
@@ -505,12 +631,42 @@ pub(crate) fn finalize_capture(
             sentry::Level::Error,
         );
     }
-    emit_capture_state(app, CaptureStatePayload {
-        active: false,
-        meeting_id: Some(meeting_id.to_string()),
-        event_id: Some(event_id.to_string()),
-        started_at_ms: None,
-        paused: false,
-        reason: reason.to_string(),
-    });
+    emit_capture_state(
+        app,
+        CaptureStatePayload {
+            owner_uid: owner_uid.to_string(),
+            active: false,
+            meeting_id: Some(meeting_id.to_string()),
+            event_id: Some(event_id.to_string()),
+            started_at_ms: None,
+            paused: false,
+            reason: reason.to_string(),
+        },
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    use super::{cancel_all_join_watches, JoinWatchHandle};
+
+    #[test]
+    fn cancelling_all_join_watches_drains_and_signals_every_entry() {
+        let first = Arc::new(AtomicBool::new(false));
+        let second = Arc::new(AtomicBool::new(false));
+        let handle = JoinWatchHandle::default();
+        {
+            let mut watches = handle.0.lock().unwrap();
+            watches.insert("event-a".to_string(), first.clone());
+            watches.insert("event-b".to_string(), second.clone());
+        }
+
+        assert_eq!(cancel_all_join_watches(&handle), 2);
+        assert!(first.load(Ordering::Relaxed));
+        assert!(second.load(Ordering::Relaxed));
+        assert!(handle.0.lock().unwrap().is_empty());
+        assert_eq!(cancel_all_join_watches(&handle), 0);
+    }
 }

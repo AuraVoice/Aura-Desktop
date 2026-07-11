@@ -40,6 +40,7 @@ interface QueueSegment {
 }
 
 interface QueueMeeting {
+  ownerUid: string;
   eventId: string;
   startedAtMs: number;
   completed: boolean;
@@ -53,6 +54,7 @@ interface QueueSnapshot {
 }
 
 interface CaptureStatePayload {
+  ownerUid: string;
   active: boolean;
   meetingId: string | null;
   eventId: string | null;
@@ -90,7 +92,7 @@ export interface MeetingCaptureState {
 }
 
 interface MeetingCaptureInputs {
-  signedIn: boolean;
+  uid: string | null;
   events: UpcomingMeeting[];
   isArmed: (eventId: string) => boolean;
   /** Arm-state revision counter so watch scheduling reruns on toggles. */
@@ -107,7 +109,8 @@ interface MeetingCaptureInputs {
  * (a plan state, surfaced with an Upgrade pointer, mirroring the voice cap).
  */
 export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureState {
-  const { signedIn, events, isArmed, armRevision } = inputs;
+  const { uid, events, isArmed, armRevision } = inputs;
+  const signedIn = uid !== null;
 
   const [recording, setRecording] = useState(false);
   const [paused, setPaused] = useState(false);
@@ -116,8 +119,9 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
 
   const eventsRef = useRef(events);
   eventsRef.current = events;
-  const signedInRef = useRef(signedIn);
-  signedInRef.current = signedIn;
+  const uidRef = useRef(uid);
+  uidRef.current = uid;
+  const identityEpochRef = useRef(0);
   const isArmedRef = useRef(isArmed);
   isArmedRef.current = isArmed;
 
@@ -130,11 +134,34 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
   const holdUntilRef = useRef<Map<string, number>>(new Map());
   /** meeting_id -> { failures, nextAttemptAt } upload backoff. */
   const backoffRef = useRef<Map<string, { failures: number; nextAt: number }>>(new Map());
-  const pumpRunningRef = useRef(false);
-  const claimInFlightRef = useRef(false);
+  const pumpRunningRef = useRef<{ uid: string; epoch: number } | null>(null);
+  const claimInFlightRef = useRef<{ uid: string; epoch: number } | null>(null);
   /** A join re-detected while the previous engine was still flushing; replayed
    * once the capture-state event says the teardown finished. */
   const pendingRejoinRef = useRef<string | null>(null);
+
+  // A direct A -> B switch never passes through signedIn=false. Treat UID as
+  // the state-machine identity and invalidate every account-scoped cache and
+  // in-flight generation before the new account schedules work.
+  useEffect(() => {
+    identityEpochRef.current += 1;
+    claimsRef.current.clear();
+    holdUntilRef.current.clear();
+    backoffRef.current.clear();
+    pumpRunningRef.current = null;
+    claimInFlightRef.current = null;
+    activeEventRef.current = null;
+    pendingRejoinRef.current = null;
+    recordingRef.current = false;
+    setRecording(false);
+    setPaused(false);
+    setCapBlocked(false);
+    setLastCompletedMeetingId(null);
+    for (const eventId of watchedRef.current) {
+      void invoke("stop_join_watch", { eventId }).catch(() => undefined);
+    }
+    watchedRef.current.clear();
+  }, [uid]);
 
   // ── Watch scheduling ────────────────────────────────────────────────────
   // Keep Rust's join detector armed for exactly the armed meetings whose
@@ -185,19 +212,24 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
         windowEndMs: window.endMs,
       }).catch((err) => logError("useMeetingCapture: start_join_watch", err));
     }
-  }, [signedIn, events, isArmed, armRevision]);
+  }, [uid, signedIn, events, isArmed, armRevision]);
 
   // ── Claim + capture ─────────────────────────────────────────────────────
   const startCaptureFor = useCallback(
     async (eventId: string, title: string, startTime: string, endTime: string) => {
-      if (recordingRef.current || claimInFlightRef.current) return;
-      claimInFlightRef.current = true;
+      if (!uid || recordingRef.current || claimInFlightRef.current) return;
+      const run = { uid, epoch: identityEpochRef.current };
+      const isCurrent = () =>
+        uidRef.current === run.uid && identityEpochRef.current === run.epoch;
+      claimInFlightRef.current = run;
       try {
         const deviceId = (await hostname().catch(() => null)) ?? "desktop";
+        if (!isCurrent()) return;
         let lastError: unknown = null;
         for (let attempt = 0; attempt <= CLAIM_RETRIES; attempt++) {
           try {
             const claim = await claimMeeting({ eventId, title, startTime, endTime, deviceId });
+            if (!isCurrent()) return;
             claimsRef.current.set(eventId, claim.meetingId);
             holdUntilRef.current.delete(claim.meetingId);
             activeEventRef.current = eventId;
@@ -205,9 +237,11 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
               meetingId: claim.meetingId,
               eventId,
             });
+            if (!isCurrent()) return;
             trackEvent("meeting_capture_started", { rejoined: claim.rejoined });
             return;
           } catch (err) {
+            if (!isCurrent()) return;
             if (err instanceof MeetingCapError) {
               setCapBlocked(true);
               trackEvent("meeting_cap_blocked", {
@@ -222,19 +256,22 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
             if (err instanceof AuthRequiredError) return;
             lastError = err;
             await new Promise((resolve) => setTimeout(resolve, 5000 * (attempt + 1)));
+            if (!isCurrent()) return;
           }
         }
         logError("useMeetingCapture: claim failed after retries", lastError);
       } finally {
-        claimInFlightRef.current = false;
+        if (claimInFlightRef.current === run) {
+          claimInFlightRef.current = null;
+        }
       }
     },
-    [],
+    [uid],
   );
 
   const handleJoinDetected = useCallback(
     (eventId: string) => {
-      if (!signedInRef.current) return;
+      if (!uidRef.current) return;
       if (recordingRef.current) {
         if (activeEventRef.current === eventId) {
           // The detector re-latched the same meeting while the previous
@@ -267,7 +304,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
   );
 
   const captureNow = useCallback(() => {
-    if (recordingRef.current || !signedInRef.current) return;
+    if (recordingRef.current || !uidRef.current) return;
     const eventId = `manual:${crypto.randomUUID()}`;
     const now = new Date();
     trackEvent("meeting_capture_manual", {});
@@ -293,18 +330,27 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
   // ack so Rust deletes the local files. Runs on segment-ready, capture end,
   // mount (restart recovery), and a slow interval.
   const pump = useCallback(async () => {
-    if (pumpRunningRef.current || !signedInRef.current) return;
-    pumpRunningRef.current = true;
+    if (!uid || uidRef.current !== uid || pumpRunningRef.current) return;
+    const run = { uid, epoch: identityEpochRef.current };
+    const isCurrent = () =>
+      uidRef.current === run.uid && identityEpochRef.current === run.epoch;
+    pumpRunningRef.current = run;
     try {
       const snapshot = await invoke<QueueSnapshot>("queue_snapshot");
+      if (!isCurrent()) return;
       const now = Date.now();
       for (const [meetingId, meeting] of Object.entries(snapshot.meetings ?? {})) {
+        if (!isCurrent()) return;
+        // Native filtering is authoritative. Keep this check as defense in
+        // depth against a future serialization or command regression.
+        if (meeting.ownerUid !== run.uid) continue;
         const backoff = backoffRef.current.get(meetingId);
         if (backoff && backoff.nextAt > now) continue;
         try {
           for (const segment of meeting.segments) {
             if (segment.uploaded) continue;
             const raw = await invoke("read_segment", { meetingId, seq: segment.seq });
+            if (!isCurrent()) return;
             await uploadSegment(
               meetingId,
               segment.seq,
@@ -313,7 +359,9 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
               segment.durationMs,
               segment.incomplete,
             );
+            if (!isCurrent()) return;
             await invoke("mark_segment_uploaded", { meetingId, seq: segment.seq });
+            if (!isCurrent()) return;
           }
           const allUploaded = meeting.segments.every((segment) => segment.uploaded)
             || meeting.segments.length === 0;
@@ -325,10 +373,12 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
             recordingRef.current &&
             (await invoke<{ meetingId: string | null }>("capture_status")).meetingId ===
               meetingId;
+          if (!isCurrent()) return;
           if (meeting.completed && hold <= now && !activelyCapturing) {
             // Segments may have just been marked uploaded above; re-check via
             // a fresh snapshot only when the stale view said no.
-            if (allUploaded || (await allSegmentsUploaded(meetingId))) {
+            if (allUploaded || (await allSegmentsUploaded(meetingId, run.uid, run.epoch))) {
+              if (!isCurrent()) return;
               // Zero-segment captures still report completion (the backend
               // resolves the claimed meeting to "failed"), they just never
               // become a note to poll.
@@ -337,6 +387,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
                 totalDurationMs: meeting.totalDurationMs,
                 reason: meeting.completeReason || "ended",
               });
+              if (!isCurrent()) return;
               if (meeting.segments.length > 0) {
                 setLastCompletedMeetingId(meetingId);
               }
@@ -345,11 +396,13 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
                 reason: meeting.completeReason || "ended",
               });
               await invoke("mark_meeting_acked", { meetingId });
+              if (!isCurrent()) return;
               holdUntilRef.current.delete(meetingId);
             }
           }
           backoffRef.current.delete(meetingId);
         } catch (err) {
+          if (!isCurrent()) return;
           if (err instanceof AuthRequiredError) throw err;
           if (err instanceof MeetingGoneError) {
             // The backend forgot this meeting (claim lock replaced it, doc
@@ -368,18 +421,28 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
         }
       }
     } catch (err) {
+      if (!isCurrent()) return;
       if (!(err instanceof AuthRequiredError)) {
         logError("useMeetingCapture: pump", err);
       }
     } finally {
-      pumpRunningRef.current = false;
+      if (pumpRunningRef.current === run) {
+        pumpRunningRef.current = null;
+      }
     }
-  }, []);
+  }, [uid]);
 
-  const allSegmentsUploaded = async (meetingId: string): Promise<boolean> => {
+  const allSegmentsUploaded = async (
+    meetingId: string,
+    expectedUid: string,
+    expectedEpoch: number,
+  ): Promise<boolean> => {
+    if (uidRef.current !== expectedUid || identityEpochRef.current !== expectedEpoch) return false;
     const snapshot = await invoke<QueueSnapshot>("queue_snapshot");
+    if (uidRef.current !== expectedUid || identityEpochRef.current !== expectedEpoch) return false;
     const meeting = snapshot.meetings?.[meetingId];
-    return meeting != null && meeting.segments.every((segment) => segment.uploaded);
+    return meeting?.ownerUid === expectedUid
+      && meeting.segments.every((segment) => segment.uploaded);
   };
 
   // ── Event wiring ────────────────────────────────────────────────────────
@@ -414,6 +477,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
     add(
       listen<CaptureStatePayload>("meeting-capture-state", (event) => {
         const payload = event.payload;
+        if (payload.ownerUid !== uidRef.current) return;
         recordingRef.current = payload.active;
         setRecording(payload.active);
         setPaused(payload.active && payload.paused);
@@ -443,7 +507,9 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
       "capture-state",
     );
     add(
-      listen("meeting-segment-ready", () => void pump()),
+      listen<{ ownerUid: string }>("meeting-segment-ready", (event) => {
+        if (event.payload.ownerUid === uidRef.current) void pump();
+      }),
       "segment-ready",
     );
     return () => {
@@ -455,23 +521,24 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
   // Recording is a per-user consent grant: signing out (or being signed out)
   // must end any live capture immediately, not just stop future watches.
   useEffect(() => {
-    if (signedIn) return;
+    if (uid) return;
     pendingRejoinRef.current = null;
     if (recordingRef.current) {
       void invoke("stop_meeting_capture", { reason: "signed_out" }).catch((err) =>
         logError("useMeetingCapture: stop on sign-out", err),
       );
     }
-  }, [signedIn]);
+  }, [uid]);
 
   // Restart recovery + steady drain: seed recording state, then pump on an
   // interval. capture_status covers the race where capture started before
   // the listener mounted (post-crash relaunch cannot have a live capture,
   // but a webview reload during dev can).
   useEffect(() => {
-    if (!signedIn) return;
+    if (!uid) return;
     void invoke<{ active: boolean; paused: boolean; eventId: string | null }>("capture_status")
       .then((status) => {
+        if (uidRef.current !== uid) return;
         recordingRef.current = status.active;
         setRecording(status.active);
         setPaused(status.active && status.paused);
@@ -481,7 +548,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
     void pump();
     const id = setInterval(() => void pump(), PUMP_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [signedIn, pump]);
+  }, [uid, pump]);
 
   // Dev harness (see meetingDebug.ts).
   useEffect(() => {
