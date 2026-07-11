@@ -10,6 +10,9 @@ import { useScreenSight } from "./useScreenSight";
 import { useDraftCard } from "./useDraftCard";
 import { useCallbackCard } from "./useCallbackCard";
 import { useMeetings } from "./useMeetings";
+import { isEligibleForNotes, useMeetingArm } from "./useMeetingArm";
+import { useMeetingCapture } from "./useMeetingCapture";
+import { useMeetingNotes } from "./useMeetingNotes";
 import { useEntitlement } from "../state/useEntitlement";
 import { GlassSurface } from "./GlassSurface";
 import { VoiceBar } from "./VoiceBar";
@@ -18,6 +21,7 @@ import { PointingOverlay } from "./PointingOverlay";
 import { DraftCard } from "./DraftCard";
 import { CallbackCard } from "./CallbackCard";
 import { CalendarAgendaCard } from "./CalendarAgendaCard";
+import { MeetingNotesCard } from "./MeetingNotesCard";
 import { KebabMenu } from "./KebabMenu";
 import "./DraftCard.css";
 import "./CallbackCard.css";
@@ -28,11 +32,12 @@ import "./CallbackCard.css";
 const DRAFT_CARD_HEIGHT = 270;
 const CALLBACK_CARD_HEIGHT = 180;
 const AGENDA_CARD_HEIGHT = 236;
+const MEETING_NOTES_CARD_HEIGHT = 240;
 // The compact kebab popover is content-sized and anchored top-right, so this
 // only needs to be >= its natural height; any extra is invisible transparent
-// slot area (see KebabMenu.css). Sized for the plan line + separator now atop
-// the four action rows.
-const MENU_HEIGHT = 240;
+// slot area (see KebabMenu.css). Sized for the plan line + separator atop the
+// five action rows (Capture this call joined the original four).
+const MENU_HEIGHT = 276;
 
 // Lazy: keeps three.js out of the overlay's startup bundle - only fetched
 // the first time the pill is actually reached.
@@ -59,9 +64,24 @@ export function OverlayRoot() {
     draftActive: draftCard.phase !== "idle",
   });
   const meetings = useMeetings({ presentation, signedIn: user !== null, callLive });
+  const meetingArm = useMeetingArm(user?.uid ?? null);
+  const meetingCapture = useMeetingCapture({
+    signedIn: user !== null,
+    events: meetings.events,
+    isArmed: meetingArm.isArmed,
+    armRevision: meetingArm.revision,
+  });
+  const meetingNotes = useMeetingNotes({
+    presentation,
+    signedIn: user !== null,
+    callLive,
+    draftActive: draftCard.phase !== "idle",
+    lastCompletedMeetingId: meetingCapture.lastCompletedMeetingId,
+  });
   const entitlement = useEntitlement({ signedIn: user !== null, uid: user?.uid ?? null });
   const resetDraftCard = draftCard.reset;
   const resetCallbackCard = callbackCard.reset;
+  const resetMeetingNotes = meetingNotes.reset;
   useEscHotkey();
 
   // The kebab overflow menu and the calendar agenda both live in the single
@@ -77,11 +97,12 @@ export function OverlayRoot() {
     if (!user) {
       resetDraftCard();
       resetCallbackCard();
+      resetMeetingNotes();
       setMenuOpen(false);
       setAgendaOpen(false);
       setSignOutRequested(false);
     }
-  }, [user, resetDraftCard, resetCallbackCard]);
+  }, [user, resetDraftCard, resetCallbackCard, resetMeetingNotes]);
 
   // The single below-bar slot, resolved by fixed priority. A draft (result of
   // an active ask) wins outright; then the two surfaces the user just opened
@@ -90,17 +111,29 @@ export function OverlayRoot() {
   const showDraftCard = user !== null && draftCard.phase !== "idle";
   const showAgendaCard = user !== null && !showDraftCard && agendaOpen;
   const showMenu = user !== null && !showDraftCard && !showAgendaCard && menuOpen;
+  // A fresh meeting note outranks the once-a-day catch-up (it's the direct
+  // result of something the user armed) but never covers a surface the user
+  // just opened (agenda, menu).
+  const showMeetingNotesCard =
+    user !== null && !showDraftCard && !showAgendaCard && !showMenu && meetingNotes.visible;
   const showCallbackCard =
-    user !== null && !showDraftCard && !showAgendaCard && !showMenu && callbackCard.visible;
+    user !== null &&
+    !showDraftCard &&
+    !showAgendaCard &&
+    !showMenu &&
+    !showMeetingNotesCard &&
+    callbackCard.visible;
   const slotHeight = showDraftCard
     ? DRAFT_CARD_HEIGHT
     : showAgendaCard
       ? AGENDA_CARD_HEIGHT
       : showMenu
         ? MENU_HEIGHT
-        : showCallbackCard
-          ? CALLBACK_CARD_HEIGHT
-          : null;
+        : showMeetingNotesCard
+          ? MEETING_NOTES_CARD_HEIGHT
+          : showCallbackCard
+            ? CALLBACK_CARD_HEIGHT
+            : null;
 
   // The one place the window's slot height is driven, in a single synchronous
   // step: the winning surface hands Rust its height, or null to collapse back to
@@ -209,6 +242,12 @@ export function OverlayRoot() {
             screenSight={screenSight}
             soonestMeeting={meetings.soonest}
             onDismissMeeting={meetings.dismiss}
+            meetingCapture={meetingCapture}
+            tickerNotesArmed={
+              meetings.soonest !== null &&
+              isEligibleForNotes(meetings.soonest.meeting) &&
+              meetingArm.isArmed(meetings.soonest.meeting.id)
+            }
             menuOpen={menuOpen}
             onToggleMenu={handleToggleMenu}
             signOutRequested={signOutRequested}
@@ -219,10 +258,12 @@ export function OverlayRoot() {
         )}
       </GlassSurface>
       {showDraftCard && <DraftCard card={draftCard} />}
+      {showMeetingNotesCard && <MeetingNotesCard card={meetingNotes} />}
       {showCallbackCard && <CallbackCard card={callbackCard} />}
       {showAgendaCard && (
         <CalendarAgendaCard
           meetings={meetings}
+          arm={meetingArm}
           onClose={handleCloseAgenda}
           onConnect={handleConnectCalendar}
         />
@@ -232,6 +273,8 @@ export function OverlayRoot() {
           voiceStatus={voice.status}
           entitlement={entitlement}
           onCalendar={handleOpenCalendar}
+          onCaptureNow={meetingCapture.captureNow}
+          capturing={meetingCapture.recording}
           onSignOut={handleMenuSignOut}
         />
       )}

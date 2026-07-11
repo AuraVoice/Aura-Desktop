@@ -117,6 +117,28 @@ export function CloseIcon() {
   );
 }
 
+/** Recording-live mark for the bar while a meeting capture runs: a filled dot
+ * in a ring, the universal "REC" glyph. Color/pulse comes from CSS. */
+export function RecordDotIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <circle cx="12" cy="12" r="8.5" />
+      <circle cx="12" cy="12" r="4" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+/** Per-meeting "take notes" toggle in the agenda card: a note sheet with
+ * lines. Armed state is conveyed by BarIconButton's active styling. */
+export function NotesIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M6 3.5h9.5L19 7v13.5H6z" />
+      <path d="M9 11h6M9 14.5h6M9 18h3.5" />
+    </svg>
+  );
+}
+
 export function FeedbackIcon() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

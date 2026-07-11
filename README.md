@@ -110,7 +110,17 @@ stateDiagram-v2
 | `esc_pressed` | – | Collapses to Hidden, ends any live call |
 | `set_voice_active` | `active: bool` | Marks a call live/ended; may flip Hidden ↔ Panel/Pill |
 | `set_panel_variant` | `variant: "setup" \| "bar"` | Switches panel content + resizes |
-| `set_draft_card_open` | `open: bool` | Grows/shrinks the bar window for the Buddy Drafts card (Panel+Bar only; the bar's top edge stays fixed and the card grows downward) |
+| `set_slot_height` | `height: number \| null` | Grows/shrinks the bar window for the single below-bar slot (Panel+Bar only; the bar's top edge stays fixed and the slot grows downward). OverlayRoot resolves which surface wins the slot (draft > agenda > menu > meeting note > catch-up) and passes the winner's height, or null to collapse |
+| `start_meeting_capture` | `meetingId, eventId` | Starts WASAPI mic+loopback capture for a claimed meeting (async; capture runs on dedicated threads) |
+| `stop_meeting_capture` | `reason` | Asks the capture engine to flush and finish |
+| `capture_status` | – | `{ active, meetingId, eventId, startedAtMs, paused }` |
+| `queue_snapshot` | – | The durable upload queue manifest (meetings + segments + upload flags) |
+| `read_segment` | `meetingId, seq` | Decrypts one captured segment, returns raw FLAC bytes as an `ArrayBuffer` (the JS upload pump POSTs them to the backend) |
+| `mark_segment_uploaded` | `meetingId, seq` | Records a backend-acked segment upload in the manifest |
+| `mark_meeting_acked` | `meetingId` | Backend accepted /complete: deletes the meeting's local segment files + manifest entry |
+| `start_join_watch` | `eventId, windowStartMs, windowEndMs` | Arms Zoom/Teams join detection for one armed meeting's time window |
+| `stop_join_watch` | `eventId` | Disarms a watch |
+| `debug_force_join` | `eventId` | Dev builds only: emits `meeting-join-detected` without a detector |
 | `set_onboarding_step` | `step: "welcome" \| "getApp" \| "link"` | Tracks onboarding progress in Rust |
 | `pill_activated` | – | Pill → Panel |
 | `minimize_to_pill` | – | Panel → Pill, only while a call is live |
@@ -130,6 +140,10 @@ stateDiagram-v2
 | `screen-sight-hotkey` | – | Ctrl+Alt+S |
 | `pointing-target` | `{ x, y, label }` (window-relative) | `point_at` |
 | `open-dashboard-requested` | – | Tray "Open Dashboard" click; `App.tsx` responds by minting a dashboard link and opening the browser |
+| `meeting-join-detected` | `{ eventId, app, windowTitle }` | The join detector matched an in-call Zoom/Teams window for an armed meeting |
+| `meeting-left` | `{ eventId }` | The matched meeting window disappeared for two consecutive polls |
+| `meeting-capture-state` | `{ active, meetingId, eventId, startedAtMs, paused, reason }` | Capture started/stopped/paused (reasons: started, stopped_by_user, meeting_left, max_duration, capture_failed, paused_lock, resumed) |
+| `meeting-segment-ready` | `{ meetingId, seq, startMs, durationMs }` | A 5-minute FLAC segment closed and is queued for upload |
 
 **Over the LiveKit data channel** (backend agent → desktop, JSON, not a Tauri event): only
 `error`/`session.error`, `element.point`, `screen_save.created` (a saved-screen-item
@@ -153,6 +167,36 @@ Firestore TTL policy. The draft text and its model-written context summary (whic
 screen-derived) are what persist; the screen frame itself stays ephemeral, and analytics still
 carry channel/length/mode, never text. In dev builds, `window.__injectDraftEvent({...})` (see
 `src/debug/draftDebug.ts`) drives the card without a voice call (UI only, nothing persisted).
+
+**Meeting Notes** (MEETING_NOTES_PLAN.md, v1): capture is user-armed, never default-on.
+A global "Auto meeting notes" toggle (default OFF) plus per-meeting overrides live in the
+calendar agenda card (`useMeetingArm.ts`, keyed by uid in `calendar.json`).
+
+**60-minute clamp, for now (product decision 2026-07-11):** meeting notes only supports
+meetings up to one hour. Events scheduled longer than 60 minutes (classes, workshops, all-day
+blocks with an auto-attached Meet link) are not armable at all rather than silently truncated -
+`isEligibleForNotes` in `useMeetingArm.ts` is the gate, the Rust engine hard-stops every
+capture at 60 minutes (rejoin-aware: sessions share one per-meeting budget), and the backend
+synthesis caps are clamped to 60 on every tier as the defense-in-depth layer. The design
+ceilings to restore when long-meeting support lands (4h capture, 240min Pro synthesis) are
+documented at each clamp site.
+
+For armed meetings, Rust polls for an in-call Zoom/Teams window (`meeting/detect.rs`) ONLY
+inside the event's own scheduled window, start to end - no lead, no tail - which is exposure
+control, not just thrift: detection is not link-matched in v1, so the armed window is also the
+window in which an unrelated call could be misattributed to the event. Google Meet has no
+detector and uses the kebab menu's "Capture this call" instead. On join, `useMeetingCapture.ts`
+claims the meeting (`POST /meetings/claim`, monthly cap server-side: 5/month on Free and
+Companion, unlimited count on Pro, 402 mirrors the voice-cap shape) and starts
+`meeting/audio.rs`: WASAPI mic + render-loopback, both autoconverted to 16 kHz mono, written as
+5-minute 2-channel FLAC segments (ch0 = you, ch1 = everyone else), AES-256-GCM encrypted at
+rest (DPAPI-wrapped key). A red recording indicator shows in the bar the whole time (tray
+tooltip too), capture pauses while the session is locked, and defers any pending update
+install. The JS pump uploads segments over REST, sends `/complete`, and the backend synthesizes
+(Deepgram nova-3 multichannel + LLM) into `users/{uid}/meetings/{id}` (7-day TTL on non-pro),
+deleting the raw audio immediately. The finished note arrives as a below-bar card
+(`MeetingNotesCard.tsx`). In dev builds, `window.__meetingDebug.forceJoin("evt-1")` (see
+`src/debug/meetingDebug.ts`) drives the whole loop with no Zoom/Teams installed.
 
 ## Voice session flow
 

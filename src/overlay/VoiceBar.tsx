@@ -4,11 +4,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { auth } from "../lib/firebase";
 import { bar as copy, kebabMenu as kebabCopy, signOut as signOutCopy, subscription as subCopy, update as updateCopy, hotkeyHints } from "../lib/copy";
+import { meetingNotes as notesCopy } from "../lib/meetingCopy";
 import { logError, logInfo } from "../lib/log";
-import { AvatarIcon, IncognitoOffIcon, IncognitoOnIcon, KebabIcon, RefreshIcon, SettingsIcon, UpdateIcon, WaveformIcon } from "./icons";
+import { AvatarIcon, IncognitoOffIcon, IncognitoOnIcon, KebabIcon, RecordDotIcon, RefreshIcon, SettingsIcon, UpdateIcon, WaveformIcon } from "./icons";
 import { BarIconButton } from "./BarIconButton";
 import { MeetingTicker } from "./MeetingTicker";
 import type { SoonestMeeting } from "./useMeetings";
+import type { MeetingCaptureState } from "./useMeetingCapture";
 import type { VoiceBarState } from "./useVoiceBar";
 import { useUpdateReady } from "./useUpdateReady";
 import iconUrl from "../assets/icons/Aura-Icon.png";
@@ -20,6 +22,10 @@ interface VoiceBarProps {
   /** The imminent meeting, if any, for the caption-region ticker (null hides it). */
   soonestMeeting: SoonestMeeting | null;
   onDismissMeeting: (eventId: string) => void;
+  /** Meeting capture state: recording indicator, stop, cap notice. */
+  meetingCapture: MeetingCaptureState;
+  /** Notes armed for the ticker's meeting (passive glyph on the ticker). */
+  tickerNotesArmed: boolean;
   /** Kebab overflow menu state, owned by OverlayRoot (the menu renders below
    * the bar, outside this subtree). */
   menuOpen: boolean;
@@ -43,12 +49,15 @@ export function VoiceBar({
   screenSight,
   soonestMeeting,
   onDismissMeeting,
+  meetingCapture,
+  tickerNotesArmed,
   menuOpen,
   onToggleMenu,
   signOutRequested,
   onSignOutConsumed,
 }: VoiceBarProps) {
   const [confirming, setConfirming] = useState(false);
+  const [stopCapturePrompt, setStopCapturePrompt] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const [signOutError, setSignOutError] = useState<string | null>(null);
   const [signOutStuck, setSignOutStuck] = useState(false);
@@ -60,7 +69,13 @@ export function VoiceBar({
   const isError = voice.status === "error";
   const updatedNotice = update.updatedNotice ? updateCopy.updatedNotice(update.updatedNotice) : null;
   const isSavedConfirmation = !voice.errorMessage && (!!screenSight.savedConfirmation || !!updatedNotice);
-  const caption = voice.errorMessage ?? screenSight.savedConfirmation ?? updatedNotice ?? (voice.assistantCaption || "");
+  // The meeting cap is a plan state like the voice cap: a neutral caption plus
+  // an Upgrade pointer, never an error. It yields to errors/notices above it.
+  const meetingCapNotice =
+    meetingCapture.capBlocked && !voice.errorMessage && !isSavedConfirmation
+      ? notesCopy.capReached
+      : null;
+  const caption = voice.errorMessage ?? screenSight.savedConfirmation ?? updatedNotice ?? meetingCapNotice ?? (voice.assistantCaption || "");
 
   const clearSignOutTimeout = useCallback(() => {
     if (signOutTimeoutRef.current) {
@@ -177,6 +192,33 @@ export function VoiceBar({
     );
   }
 
+  // Stop-capture confirm takeover, same pattern as the update prompt: a
+  // recording must never end on a single stray click.
+  if (stopCapturePrompt) {
+    return (
+      <div className="voice-bar voice-bar-confirm">
+        <span className="voice-bar-confirm-text">{notesCopy.stopConfirm}</span>
+        <button
+          type="button"
+          className="voice-bar-confirm-cancel"
+          onClick={() => setStopCapturePrompt(false)}
+        >
+          {notesCopy.stopConfirmNo}
+        </button>
+        <button
+          type="button"
+          className="voice-bar-confirm-signout"
+          onClick={() => {
+            meetingCapture.stopCapture();
+            setStopCapturePrompt(false);
+          }}
+        >
+          {notesCopy.stopConfirmYes}
+        </button>
+      </div>
+    );
+  }
+
   if (confirming) {
     return (
       <div className="voice-bar voice-bar-confirm">
@@ -204,8 +246,8 @@ export function VoiceBar({
       {/* Caption precedence: an error or a transient saved/update notice wins
           the region; otherwise an imminent meeting takes it as the ticker; a
           live call keeps it for Buddy's speech (isLive blocks the ticker). */}
-      {!isLive && soonestMeeting && !voice.errorMessage && !isSavedConfirmation ? (
-        <MeetingTicker soonest={soonestMeeting} onDismiss={onDismissMeeting} />
+      {!isLive && soonestMeeting && !voice.errorMessage && !isSavedConfirmation && !meetingCapNotice ? (
+        <MeetingTicker soonest={soonestMeeting} onDismiss={onDismissMeeting} notesArmed={tickerNotesArmed} />
       ) : (
         <span
           className={`voice-bar-caption${voice.errorMessage ? (voice.isVoiceCapped ? " voice-bar-caption-capped" : " voice-bar-caption-error") : ""}${isSavedConfirmation ? " voice-bar-caption-saved" : ""}`}
@@ -229,6 +271,37 @@ export function VoiceBar({
         >
           {subCopy.upgrade}
         </button>
+      )}
+
+      {/* Monthly meeting-notes cap: same upgrade pointer; opening the menu
+          also consumes the notice so it doesn't linger all session. */}
+      {meetingCapNotice && (
+        <button
+          type="button"
+          className="voice-bar-upgrade"
+          title={notesCopy.capUpgradeTooltip}
+          onClick={() => {
+            meetingCapture.dismissCapBlocked();
+            if (!menuOpen) onToggleMenu();
+          }}
+        >
+          {subCopy.upgrade}
+        </button>
+      )}
+
+      {/* The visible capture indicator: present the entire time a meeting is
+          being recorded, per the never-silent commitment. Click to stop
+          (with its own confirm takeover above). */}
+      {meetingCapture.recording && (
+        <BarIconButton
+          className="voice-bar-recording"
+          title={meetingCapture.paused ? notesCopy.recordingPausedTooltip : notesCopy.recordingTooltip}
+          active={!meetingCapture.paused}
+          onClick={() => setStopCapturePrompt(true)}
+        >
+          <RecordDotIcon />
+          <span className="bar-icon-button-dot" aria-hidden="true" />
+        </BarIconButton>
       )}
 
       {voice.showMicSettingsHint && (

@@ -8,7 +8,7 @@ import { authFetch } from "./api";
  * carries the worker-minted draft_id and a successful refine updates the
  * stored copy too. */
 
-export type DraftChannel = "email_reply" | "cold_dm";
+export type DraftChannel = "email_reply" | "cold_dm" | "snippet";
 export type DraftLength = "short" | "medium" | "detailed";
 export type RefineChip = "shorter" | "longer" | "more_formal" | "warmer" | "regenerate";
 
@@ -24,7 +24,9 @@ export function steppedLength(current: DraftLength, direction: 1 | -1): DraftLen
 }
 
 /** What each chip asks the model to do. Shorter/longer lean on the target
- * length the request already carries; the wording chips carry the instruction. */
+ * length the request already carries; the wording chips carry the instruction.
+ * Snippets only ever show regenerate, with its own wording (a command has no
+ * "angle", it has alternative valid approaches). */
 const CHIP_INSTRUCTIONS: Record<RefineChip, string> = {
   shorter: "tighten it up to fit the target length",
   longer: "expand it to fit the target length, without padding",
@@ -32,6 +34,16 @@ const CHIP_INSTRUCTIONS: Record<RefineChip, string> = {
   warmer: "make it warmer and friendlier",
   regenerate: "rewrite it fresh with a different angle, same meaning and context",
 };
+
+const SNIPPET_REGENERATE_INSTRUCTION =
+  "redo it, using a different valid approach if one exists; it must still do exactly the same thing";
+
+function chipInstruction(chip: RefineChip, channel: DraftChannel): string {
+  if (channel === "snippet" && chip === "regenerate") {
+    return SNIPPET_REGENERATE_INSTRUCTION;
+  }
+  return CHIP_INSTRUCTIONS[chip];
+}
 
 export interface RefineDraftParams {
   channel: DraftChannel;
@@ -66,7 +78,7 @@ export async function refineDraft(params: RefineDraftParams): Promise<RefineDraf
         channel: params.channel,
         length: params.length,
         prior_draft: params.priorDraft,
-        refine_instruction: CHIP_INSTRUCTIONS[params.chip],
+        refine_instruction: chipInstruction(params.chip, params.channel),
         context_summary: params.contextSummary,
         instruction_kind: params.chip,
         draft_id: params.draftId,

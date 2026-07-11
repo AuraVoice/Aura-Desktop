@@ -1,7 +1,8 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { BarIconButton } from "./BarIconButton";
-import { CloseIcon } from "./icons";
+import { CloseIcon, NotesIcon } from "./icons";
 import { meetingTicker as copy } from "../lib/copy";
+import { meetingNotes as notesCopy } from "../lib/meetingCopy";
 import { logError } from "../lib/log";
 import type { SoonestMeeting } from "./useMeetings";
 import "./MeetingTicker.css";
@@ -16,9 +17,12 @@ import "./MeetingTicker.css";
 export function MeetingTicker({
   soonest,
   onDismiss,
+  notesArmed = false,
 }: {
   soonest: SoonestMeeting;
   onDismiss: (eventId: string) => void;
+  /** Meeting notes are armed for this meeting (small passive glyph). */
+  notesArmed?: boolean;
 }) {
   const { meeting, minutesUntil } = soonest;
   const countdown = minutesUntil <= 0 ? copy.startingNow : copy.inMinutes(minutesUntil);
@@ -32,6 +36,11 @@ export function MeetingTicker({
   return (
     <div className="meeting-ticker">
       <span className="meeting-ticker-badge" aria-hidden="true" />
+      {notesArmed && (
+        <span className="meeting-ticker-notes-armed" title={notesCopy.armedTooltip}>
+          <NotesIcon />
+        </span>
+      )}
       <div className="meeting-ticker-track" title={label}>
         <div className="meeting-ticker-scroll">
           <span className="meeting-ticker-text">{label}</span>

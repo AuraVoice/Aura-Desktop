@@ -14,6 +14,10 @@ const CHIP_ORDER: readonly RefineChip[] = [
   "regenerate",
 ];
 
+// A snippet has no length ladder and no tone; the only chip that makes sense
+// is a fresh take. Everything else goes through voice refines.
+const SNIPPET_CHIP_ORDER: readonly RefineChip[] = ["regenerate"];
+
 /**
  * The Buddy Drafts card, rendered by OverlayRoot below the bar (its own glass
  * box, matching the bar's visual language). draggable={false}: the card is for
@@ -52,10 +56,19 @@ export function DraftCard({ card }: { card: DraftCardState }) {
       </p>
     );
   } else if (draft) {
-    body = <p className="draft-card-text">{draft.text}</p>;
+    // A snippet is copy-exact text: monospace, whitespace preserved, wrapped
+    // rather than clipped so nothing runnable is hidden.
+    body =
+      channel === "snippet" ? (
+        <pre className="draft-card-snippet">{draft.text}</pre>
+      ) : (
+        <p className="draft-card-text">{draft.text}</p>
+      );
   } else {
     body = null;
   }
+
+  const chips = channel === "snippet" ? SNIPPET_CHIP_ORDER : CHIP_ORDER;
 
   return (
     <GlassSurface className="draft-card" draggable={false}>
@@ -78,7 +91,7 @@ export function DraftCard({ card }: { card: DraftCardState }) {
         {body}
 
         <div className="draft-card-chips">
-          {CHIP_ORDER.map((chip) => (
+          {chips.map((chip) => (
             <button
               key={chip}
               type="button"

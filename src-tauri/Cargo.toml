@@ -40,9 +40,33 @@ tauri-plugin-clipboard-manager = "2"
 tokio = { version = "1", features = ["time"] }
 sentry = { version = "0.48", default-features = false, features = ["backtrace", "contexts", "debug-images", "panic", "reqwest", "rustls"] }
 
-# Win32 bindings - only win_focus.rs uses this, and only on Windows. Scoping it
-# to a target-specific dependency table (rather than [dependencies]) keeps it
-# out of a macOS/Linux build entirely, since the crate itself only compiles
-# against those platforms' toolchains.
+# Win32 bindings - win_focus.rs and the meeting/ module use this, Windows
+# only. Scoping it to a target-specific dependency table (rather than
+# [dependencies]) keeps it out of a macOS/Linux build entirely, since the
+# crate itself only compiles against those platforms' toolchains.
+# Feature map: WindowsAndMessaging/KeyboardAndMouse are win_focus, the join
+# detector's EnumWindows walk, and the session-watch message window; Threading
+# is PID -> exe name; Security_Cryptography is DPAPI key wrapping (its
+# LocalAlloc'd output is freed with Foundation's LocalFree); RemoteDesktop is
+# the lock/unlock session notifications.
 [target.'cfg(windows)'.dependencies]
-windows = { version = "0.61", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse"] }
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_System_Threading",
+    "Win32_System_LibraryLoader",
+    "Win32_Security_Cryptography",
+    "Win32_System_RemoteDesktop",
+] }
+# Meeting capture: WASAPI loopback+mic (wasapi), FLAC container encode
+# (flacenc, pure Rust, no C deps - the deliberate codec choice over Opus,
+# which would add a cmake/libopus build step and an Ogg muxing layer; see
+# MEETING_NOTES_PLAN.md), and AES-256-GCM for segments at rest (aes-gcm's
+# default features include getrandom, so key/nonce generation needs no
+# separate rand dependency). No resampler crate: both streams are opened in
+# shared mode with autoconvert, so the Windows audio engine itself delivers
+# 16 kHz mono f32 regardless of the device's native format.
+wasapi = "0.23"
+flacenc = "0.5"
+aes-gcm = "0.10"

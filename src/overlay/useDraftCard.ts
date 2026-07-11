@@ -61,7 +61,9 @@ interface DraftEvent {
 }
 
 function asChannel(value: unknown): DraftChannel | null {
-  return value === "email_reply" || value === "cold_dm" ? value : null;
+  return value === "email_reply" || value === "cold_dm" || value === "snippet"
+    ? value
+    : null;
 }
 
 function asLength(value: unknown): DraftLength | null {

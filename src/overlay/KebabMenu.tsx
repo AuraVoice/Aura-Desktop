@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { GlassSurface } from "./GlassSurface";
-import { CalendarIcon, DashboardIcon, FeedbackIcon, SignOutIcon } from "./icons";
+import { CalendarIcon, DashboardIcon, FeedbackIcon, RecordDotIcon, SignOutIcon } from "./icons";
 import { kebabMenu as copy, subscription as subCopy } from "../lib/copy";
+import { meetingNotes as notesCopy } from "../lib/meetingCopy";
 import { sendFeedback } from "../lib/feedback";
 import { openDashboard } from "../lib/dashboardLink";
 import { logError } from "../lib/log";
@@ -30,11 +31,16 @@ export function KebabMenu({
   voiceStatus,
   entitlement,
   onCalendar,
+  onCaptureNow,
+  capturing,
   onSignOut,
 }: {
   voiceStatus: string;
   entitlement: EntitlementState;
   onCalendar: () => void;
+  /** Manual meeting-notes capture (the Google Meet path, no auto-detect). */
+  onCaptureNow: () => void;
+  capturing: boolean;
   onSignOut: () => void;
 }) {
   const [feedbackSending, setFeedbackSending] = useState(false);
@@ -95,6 +101,15 @@ export function KebabMenu({
           <button type="button" className="kebab-menu-item" onClick={onCalendar}>
             <CalendarIcon />
             <span>{copy.calendar}</span>
+          </button>
+          <button
+            type="button"
+            className="kebab-menu-item"
+            onClick={onCaptureNow}
+            disabled={capturing}
+          >
+            <RecordDotIcon />
+            <span>{capturing ? notesCopy.captureNowBusy : notesCopy.captureNow}</span>
           </button>
           <button type="button" className="kebab-menu-item" onClick={() => void openDashboard()}>
             <DashboardIcon />

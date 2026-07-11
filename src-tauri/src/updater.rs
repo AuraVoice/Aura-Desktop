@@ -6,7 +6,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
-use crate::{overlay, tray};
+use crate::{meeting, overlay, tray};
 
 /// How often the long-running app re-checks the feed after the startup check.
 /// This app autostarts and then lives for days, so a startup-only check would
@@ -104,8 +104,9 @@ async fn check_once(app: &AppHandle, auto_install: bool) {
 /// VoiceBar chip listens for.
 fn handle_downloaded(app: &AppHandle, update: Update, bytes: Vec<u8>, auto_install: bool) {
     // The voice gate still matters at startup: a fast user can summon and
-    // start a call while the download is in flight.
-    if auto_install && !overlay::is_voice_active(app) {
+    // start a call while the download is in flight. Meeting capture gates the
+    // same way - a restart must never eat a recording.
+    if auto_install && !overlay::is_voice_active(app) && !meeting::is_capture_active(app) {
         info!("update check: installing v{} at startup", update.version);
         match update.install(&bytes) {
             // On Windows this line is unreachable: install() launches the
@@ -142,6 +143,10 @@ fn handle_downloaded(app: &AppHandle, update: Update, bytes: Vec<u8>, auto_insta
 pub fn install_pending_update(app: &AppHandle) -> Result<bool, String> {
     if overlay::is_voice_active(app) {
         info!("install_pending_update: voice call active, deferring install");
+        return Ok(false);
+    }
+    if meeting::is_capture_active(app) {
+        info!("install_pending_update: meeting capture active, deferring install");
         return Ok(false);
     }
     let Some(handle) = app.try_state::<PendingUpdate>() else {

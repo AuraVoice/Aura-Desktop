@@ -3,6 +3,7 @@ mod autostart;
 mod entitlement;
 mod hotkeys;
 mod logging;
+mod meeting;
 mod overlay;
 mod screenshot;
 mod sentry_setup;
@@ -165,6 +166,8 @@ pub fn run() {
         .manage(ForegroundGeneration::default())
         .manage(updater::PendingUpdate::default())
         .manage(updater::UpdatedNotice::default())
+        .manage(meeting::MeetingCaptureHandle::default())
+        .manage(meeting::JoinWatchHandle::default())
         .invoke_handler(tauri::generate_handler![
             current_overlay_state,
             esc_pressed,
@@ -185,7 +188,17 @@ pub fn run() {
             screenshot::capture_cursor_display_with_geometry,
             entitlement::cache_entitlement,
             entitlement::cached_entitlement,
-            entitlement::clear_entitlement_cache
+            entitlement::clear_entitlement_cache,
+            meeting::start_meeting_capture,
+            meeting::stop_meeting_capture,
+            meeting::capture_status,
+            meeting::queue_snapshot,
+            meeting::read_segment,
+            meeting::mark_segment_uploaded,
+            meeting::mark_meeting_acked,
+            meeting::start_join_watch,
+            meeting::stop_join_watch,
+            meeting::debug_force_join
         ])
         .setup(|app| {
             logging::install_panic_hook();
@@ -281,6 +294,10 @@ pub fn run() {
             if !is_boot_launch || just_updated.is_some() {
                 overlay::summon(app.handle());
             }
+
+            // Drop upload-queue entries whose captures went unsent past the
+            // retention window (fs work, runs on a blocking thread inside).
+            meeting::startup_maintenance(app.handle());
 
             let updater_handle = app.handle().clone();
             tauri::async_runtime::spawn(updater::run_update_loop(updater_handle));

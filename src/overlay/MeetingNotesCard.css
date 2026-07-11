@@ -1,0 +1,162 @@
+/* Meeting note delivery card, same slot and visual language as the catch-up
+   card. Heights must agree with OverlayRoot: BAR_HEIGHT 64 + gap 12
+   (overlay-column) + card 228 = MEETING_NOTES_CARD_HEIGHT 240 extra. The card
+   fills the extra window height; overflowing content scrolls internally. */
+
+.glass-surface.meeting-notes-card {
+  flex: 1 1 auto;
+  min-height: 0;
+  border-radius: 28px;
+  animation: meeting-notes-card-enter 0.22s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+
+@keyframes meeting-notes-card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .glass-surface.meeting-notes-card {
+    animation: none;
+  }
+}
+
+.meeting-notes-card-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  height: 100%;
+  padding: 14px 18px 12px;
+  box-sizing: border-box;
+}
+
+.meeting-notes-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.meeting-notes-card-title {
+  flex-shrink: 0;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--glass-text-dim);
+  white-space: nowrap;
+}
+
+.meeting-notes-card-meeting {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-body);
+  font-size: 12px;
+  color: var(--glass-text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.meeting-notes-card-summary {
+  margin: 0;
+  flex-shrink: 0;
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--glass-text-bright);
+  overflow-wrap: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.meeting-notes-card-items {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.meeting-notes-card-items::-webkit-scrollbar {
+  width: 6px;
+}
+
+.meeting-notes-card-items::-webkit-scrollbar-thumb {
+  background: var(--glass-border-flat);
+  border-radius: 3px;
+}
+
+.meeting-notes-card-items-heading {
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--glass-text-dim);
+}
+
+.meeting-notes-card-list {
+  margin: 0;
+  padding-left: 18px;
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--glass-text-bright);
+}
+
+.meeting-notes-card-list li {
+  overflow-wrap: break-word;
+}
+
+.meeting-notes-card-caveat {
+  margin: 0;
+  flex-shrink: 0;
+  font-family: var(--font-body);
+  font-size: 11.5px;
+  font-style: italic;
+  color: var(--glass-text-dim);
+}
+
+.meeting-notes-card-footer {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0;
+}
+
+.meeting-notes-card-view-all,
+.meeting-notes-card-turn-off {
+  font-family: var(--font-body);
+  font-size: 11px;
+  color: var(--glass-text-dim);
+  background: none;
+  border: none;
+  padding: 2px 0;
+  cursor: pointer;
+  text-decoration: underline;
+  transition: color 0.15s ease;
+}
+
+.meeting-notes-card-view-all:hover,
+.meeting-notes-card-turn-off:hover {
+  color: var(--glass-text-bright);
+}
+
+.meeting-notes-card-view-all {
+  font-weight: 600;
+  color: var(--glass-text-bright);
+  text-decoration: none;
+}

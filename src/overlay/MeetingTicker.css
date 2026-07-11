@@ -106,3 +106,19 @@
     display: none;
   }
 }
+
+/* Passive "notes are on for this meeting" glyph, sized to sit quietly next to
+   the live badge without competing with the scrolling label. */
+.meeting-ticker-notes-armed {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  width: 13px;
+  height: 13px;
+  color: var(--glass-text-dim);
+}
+
+.meeting-ticker-notes-armed svg {
+  width: 100%;
+  height: 100%;
+}

@@ -97,8 +97,12 @@ export const update = {
 } as const;
 
 export const draftCard = {
-  title: (channel: "email_reply" | "cold_dm") =>
-    channel === "cold_dm" ? "Draft · DM" : "Draft · Email reply",
+  title: (channel: "email_reply" | "cold_dm" | "snippet") =>
+    channel === "snippet"
+      ? "Draft · Snippet"
+      : channel === "cold_dm"
+        ? "Draft · DM"
+        : "Draft · Email reply",
   copyTooltip: "Copy draft",
   copiedTooltip: "Copied!",
   dismissTooltip: "Dismiss draft",

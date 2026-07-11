@@ -320,3 +320,33 @@
   height: 15px;
   color: var(--glass-text-dim);
 }
+
+/* Row + per-meeting notes-arm toggle side by side (the toggle can't nest
+   inside the row button). The row button keeps flex priority. */
+.calendar-agenda-li {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.calendar-agenda-li .calendar-agenda-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.calendar-agenda-arm {
+  flex-shrink: 0;
+}
+
+.calendar-agenda-arm svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* Footer: alerts kill switch + the global auto-notes default, one quiet row. */
+.calendar-agenda-footer {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0;
+}

@@ -158,3 +158,41 @@
   opacity: 0.6;
   cursor: default;
 }
+
+/* Meeting-capture recording indicator: always red-tinted while a capture is
+   running (the whole point is that it can't be missed), dot pulses while
+   actively recording, steady dim red while paused (screen locked). */
+.bar-icon-button.voice-bar-recording {
+  color: #e5484d;
+  opacity: 1;
+}
+
+.voice-bar-recording .bar-icon-button-dot {
+  opacity: 1;
+  transform: scale(1);
+  background: #e5484d;
+  animation: voice-bar-recording-pulse 1.6s ease-in-out infinite;
+}
+
+.voice-bar-recording:not(.bar-icon-button-active) {
+  color: color-mix(in srgb, #e5484d 55%, transparent);
+}
+
+.voice-bar-recording:not(.bar-icon-button-active) .bar-icon-button-dot {
+  animation: none;
+}
+
+@keyframes voice-bar-recording-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-bar-recording .bar-icon-button-dot {
+    animation: none;
+  }
+}

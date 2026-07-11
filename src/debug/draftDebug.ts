@@ -8,6 +8,7 @@
  *   __injectDraftEvent({type: "draft.created", payload: {draft_id: "d1", revision: 1, channel: "email_reply", length: "short", text: "Hi Sarah,\n\nThanks for the invite but I have to pass this week.\n\nVarun", context_summary: "Declining Sarah's invite.", recipient_hint: "Sarah"}})
  *   __injectDraftEvent({type: "draft.updated", payload: {draft_id: "d1", revision: 2, length: "short", text: "Hey Sarah, thank you so much! I have to sit this one out."}})
  *   __injectDraftEvent({type: "draft.failed", payload: {draft_id: null, reason: "quota_exceeded"}})
+ *   __injectDraftEvent({type: "draft.created", payload: {draft_id: "d2", revision: 1, channel: "snippet", length: "short", text: "Add-Content $PROFILE \"Set-Location C:\\Users\\varun\\MobileApps\"", context_summary: "Appends a Set-Location line to the PowerShell profile.", recipient_hint: ""}})
  *
  * The chips hit the real REST refine endpoint, and copy lands on the real
  * clipboard, so those two flows verify end-to-end from here too. */

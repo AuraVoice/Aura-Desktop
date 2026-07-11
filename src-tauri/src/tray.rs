@@ -26,6 +26,12 @@ pub struct UpdateMenuItem(pub MenuItem<Wry>);
 /// check mark matched to the real registry state without rebuilding the menu.
 pub struct AutostartMenuItem(pub CheckMenuItem<Wry>);
 
+/// Handle to the tray icon itself, so `set_recording` (called from
+/// meeting/mod.rs on capture start/stop) can flip the tooltip - part of the
+/// "visible capture indicator" commitment: even with the overlay hidden, the
+/// tray still says a recording is running.
+pub struct TrayHandle(pub tauri::tray::TrayIcon<Wry>);
+
 pub fn build(app: &AppHandle) -> tauri::Result<()> {
     let open_buddy = MenuItem::with_id(app, OPEN_BUDDY, "Open Buddy", true, None::<&str>)?;
     let open_dashboard = MenuItem::with_id(app, OPEN_DASHBOARD, "Open Dashboard", true, None::<&str>)?;
@@ -74,7 +80,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         .cloned()
         .ok_or_else(|| tauri::Error::AssetNotFound("default window icon".into()))?;
 
-    TrayIconBuilder::new()
+    let tray = TrayIconBuilder::new()
         .icon(icon)
         // No-op on Windows/Linux; on macOS this tells the menu bar to treat the
         // icon as a monochrome mask (alpha channel only) so it auto-adapts to
@@ -117,8 +123,22 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             other => error!("tray: unknown menu event id {other}"),
         })
         .build(app)?;
+    app.manage(TrayHandle(tray));
 
     Ok(())
+}
+
+/// Meeting capture started/stopped: the tray tooltip is the always-there
+/// capture indicator (the bar's recording dot only exists while the overlay
+/// is visible). No tooltip when idle, matching the tray's default state.
+pub fn set_recording(app: &AppHandle, active: bool) {
+    let Some(handle) = app.try_state::<TrayHandle>() else {
+        return;
+    };
+    let tooltip = if active { Some("Recording meeting...") } else { None };
+    if let Err(e) = handle.0.set_tooltip(tooltip) {
+        error!("tray: failed to set recording tooltip: {e}");
+    }
 }
 
 /// Called from autostart.rs after every enable/disable attempt so the

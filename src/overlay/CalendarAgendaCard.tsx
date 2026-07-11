@@ -1,11 +1,13 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { GlassSurface } from "./GlassSurface";
 import { BarIconButton } from "./BarIconButton";
-import { CalendarIcon, CloseIcon, RefreshIcon } from "./icons";
+import { CalendarIcon, CloseIcon, NotesIcon, RefreshIcon } from "./icons";
 import { calendarAgenda as copy, createEventUrl } from "../lib/copy";
+import { meetingNotes as notesCopy } from "../lib/meetingCopy";
 import { logError } from "../lib/log";
 import type { UpcomingMeeting } from "../lib/calendar";
 import type { MeetingsState } from "./useMeetings";
+import { isEligibleForNotes, type MeetingArmState } from "./useMeetingArm";
 import "./CalendarAgendaCard.css";
 
 /** Local wall-clock time of an event, e.g. "10:00 AM", from its UTC start. */
@@ -60,10 +62,13 @@ function AgendaSkeleton() {
  */
 export function CalendarAgendaCard({
   meetings,
+  arm,
   onClose,
   onConnect,
 }: {
   meetings: MeetingsState;
+  /** Meeting-notes arm state: per-row toggles + the global footer default. */
+  arm: MeetingArmState;
   onClose: () => void;
   onConnect: () => void;
 }) {
@@ -132,8 +137,12 @@ export function CalendarAgendaCard({
               const today = isToday(ev.startTime, todayKey);
               const started = Date.parse(ev.startTime) < Date.now();
               const target = ev.meetingLink ?? ev.htmlLink;
+              // Long meetings (past the 60-minute clamp) and linkless events
+              // get no arm toggle at all - not armable, not truncated.
+              const armable = isEligibleForNotes(ev);
+              const armed = armable && arm.isArmed(ev.id);
               return (
-                <li key={ev.id}>
+                <li key={ev.id} className="calendar-agenda-li">
                   <button
                     type="button"
                     className="calendar-agenda-row"
@@ -154,6 +163,18 @@ export function CalendarAgendaCard({
                     <span className="calendar-agenda-event">{ev.title}</span>
                     {ev.meetingLink && <span className="calendar-agenda-join">{copy.join}</span>}
                   </button>
+                  {/* Sibling of the row button (a button can't nest a button). */}
+                  {armable && (
+                    <BarIconButton
+                      className="calendar-agenda-arm"
+                      title={armed ? notesCopy.disarmTooltip : notesCopy.armTooltip}
+                      active={armed}
+                      onClick={() => arm.toggleArm(ev.id)}
+                    >
+                      <NotesIcon />
+                      <span className="bar-icon-button-dot" aria-hidden="true" />
+                    </BarIconButton>
+                  )}
                 </li>
               );
             })}
@@ -161,13 +182,22 @@ export function CalendarAgendaCard({
         )}
 
         {hasEvents && (
-          <button
-            type="button"
-            className="calendar-agenda-turn-off"
-            onClick={meetings.turnOffAlerts}
-          >
-            {copy.turnOff}
-          </button>
+          <div className="calendar-agenda-footer">
+            <button
+              type="button"
+              className="calendar-agenda-turn-off"
+              onClick={meetings.turnOffAlerts}
+            >
+              {copy.turnOff}
+            </button>
+            <button
+              type="button"
+              className="calendar-agenda-turn-off calendar-agenda-auto-notes"
+              onClick={arm.toggleAutoNotes}
+            >
+              {arm.autoNotes ? notesCopy.autoNotesOn : notesCopy.autoNotesOff}
+            </button>
+          </div>
         )}
       </div>
     </GlassSurface>
