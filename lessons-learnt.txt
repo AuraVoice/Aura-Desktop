@@ -218,3 +218,79 @@ repo's generated mockito mocks were stale after NotificationService grew entitle
 failing 23 unrelated tests until build_runner regenerated them.
 Justification: Closes the audit trail; the constraints above are the ones a future pass would
 otherwise re-discover the hard way.
+
+Date: 2026-07-10
+Problem: On a live call, Buddy dictated a PowerShell command aloud, symbol by symbol, when asked
+to "draft a command", and generally lectured (long unbroken monologues) and answered profanity
+with a therapist script ("I feel your frustration...").
+Issue: All three were prompt/tool-surface gaps, not model bugs. The draft tool only modeled text
+SENT to a person (email_reply | cold_dm), so copy-exact text (commands, code, config) had no
+render path and speech was the model's only output; the brevity rule's "unless they ask for
+detail" escape hatch was unbounded, and any technical question reads as asking for detail; the
+persona prompt had zero guidance for user aggression, so the model fell back to its default
+de-escalation register.
+Solution: New "snippet" channel through the existing draft pipeline (frame optional, balanced
+tier when frameless, no length ladder, quota-exempt, monospace card render with a
+Regenerate-only chip row), a hard four-sentence ceiling even in detail mode plus an explicit
+"put copyable answers on screen" pressure valve, and a "When they snap at you" prompt section
+with the de-escalation phrases banned verbatim.
+Non-obvious constraint: adding a value to a data-channel enum is a cross-repo contract change
+with a forced release order. An old desktop client receiving channel "snippet" drops the
+draft.created payload in parseCreated and the card sits on the loading skeleton forever, so the
+desktop release that understands the new value must ship BEFORE the backend that emits it.
+Justification: A model can only follow the output paths it's given; when the only path is
+speech, every gap becomes dictation. Bound the escape hatches and give long-form output a
+non-speech surface instead of prompt-scolding the model harder.
+
+Date: 2026-07-11
+Problem: Building Meeting Notes capture (MEETING_NOTES_PLAN.md Phase 1), two audio-pipeline
+assumptions from the design doc turned out wrong before a line of capture code ran, and one
+process assumption about the plan doc itself.
+Issue: (1) The plan budgeted a resampler dependency (rubato) and a format-conversion matrix for
+WASAPI's device formats. Unnecessary: shared-mode WASAPI with AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM
+(wasapi crate: StreamMode::PollingShared { autoconvert: true }) accepts a requested 16 kHz mono
+f32 format directly and the Windows audio engine does the conversion, for both the mic and the
+render-loopback stream. (2) WASAPI loopback delivers packets ONLY while something is actively
+rendering; render-silence means no packets at all, not zero-filled packets, and event-driven
+timing goes quiet with it. A loopback recorder that just appends what arrives compresses silent
+spans out of the timeline and desyncs the two channels. (3) The plan doc's own "blocked on
+backend entitlement plumbing" prerequisite was stale: the /entitlement and /billing/* routes it
+declared unbuilt were live in production, verifiable in one minute with unauthenticated probes
+(401/405 = deployed and gated, 404 = absent).
+Solution: No resampler crate at all, request the target format and let autoconvert do it; poll
+both streams and wall-clock silence-fill each one past a 200ms guard so channel alignment and
+segment duration stay honest through render-silence; and before treating any plan document's
+"current state" claims as true, probe the live endpoints (the 2026-07-05 deploy-state lesson
+applies to design docs, not just code reviews).
+Justification: Each of these would have surfaced as a confusing runtime symptom (format
+mismatches on exotic devices, transcripts with vanished silent minutes, a feature gated on a
+prerequisite that already shipped) instead of a design-time decision.
+
+Date: 2026-07-11
+Problem: A staff-engineer-mode external review (codex) of the freshly built Meeting Notes
+feature surfaced 15 findings the build session's own checks (compile, types, unit tests) never
+touched, four of them critical.
+Issue: The failure classes were systemic, not typos. (1) Client-supplied metadata that feeds a
+server-side spend cap (segment start_ms/duration_ms driving the STT budget) was range-unchecked
+and trusted by the worker, so a modified client could bypass the free-tier cap entirely.
+(2) A status compare-and-set that allows X->X re-entry (synthesizing->synthesizing, meant for
+crashed-worker recovery) is NOT idempotency under at-least-once delivery: a concurrent duplicate
+also passes and double-runs the whole paid pipeline; recovery needs a lease with an expiry, not
+a permissive transition. (3) Multiple threads doing load-modify-save on one JSON manifest with
+no shared lock silently drop whichever mutation saves first. (4) Recording consent stored
+without a uid namespace is granted by the INSTALL, not the person: the next account on the same
+Windows profile inherits the opt-in, and sign-out didn't stop a live capture. (5) A privacy
+filter (sensitive-meeting exclude list) that fails open on a read error ships exactly the data
+it exists to protect to a third-party vendor on a transient blip.
+Solution: All fixed same-day: range checks + cumulative-duration cap + segment-count ceiling,
+a transactional synthesis lease (fresh lease refuses duplicates, stale lease reclaims), a
+process-wide manifest mutex plus an ack-refused-while-capturing guard, uid-scoped arm keys plus
+stop-capture-on-sign-out, and exclude-list reads that raise (retry with audio intact) instead
+of defaulting to empty. Plus: terminal-vs-retryable classification for vendor rejections (a
+non-429 4xx retried forever is a retry storm), and capture persistence failures now stop the
+recording instead of letting the indicator claim health while audio is lost.
+Justification: Every one of these passes compilation, type checks, and happy-path unit tests.
+The reviewable properties (cap integrity under a hostile client, at-least-once semantics,
+cross-thread file access, consent scoping, fail-open vs fail-closed on privacy filters) need an
+adversarial pass with exactly those lenses; budget one for any feature that touches money,
+consent, or third-party data flows before it ships.

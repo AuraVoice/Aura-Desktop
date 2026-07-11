@@ -89,7 +89,9 @@ Fast, silent checks - fine to run directly, no need to ask:
 ### Touching the overlay state machine
 
 Changes to `OverlayPresentation`/`PanelVariant` or their transitions live in `overlay.rs` (`set_presentation`, `size_for`, `position_for`) with a matching render branch in `OverlayRoot.tsx`. Respect the optimistic-cache rule above. `Pill` renders `AvatarPill.tsx` (a lazy-loaded three.js scene, not `GlassPill.tsx` - deleted) and is reached via the `minimize_to_pill` command, which only fires while a call is live.
-The Panel+Bar presentation can also grow downward for the Buddy Drafts card: `useDraftCard.ts` drives the `set_draft_card_open` command, `overlay.rs` tracks it as `draft_card_open` (with its own `applied_draft_card` cache, same after-success rule), and the bar's top edge stays fixed while the window height changes.
+The Panel+Bar presentation can also grow downward for one below-bar slot: OverlayRoot resolves which surface wins it (priority draft > agenda > kebab menu > meeting note > daily catch-up) and drives the single `set_slot_height` command; `overlay.rs` tracks it as `slot_height` (with its `applied_slot_height` cache, same after-success rule), and the bar's top edge stays fixed while the window height changes.
+The per-card open commands this replaced (`set_draft_card_open`, `set_callback_card_open`) no longer exist; each surface's height constant lives in OverlayRoot and must agree with its CSS.
+Meeting Notes (MEETING_NOTES_PLAN.md) adds `src-tauri/src/meeting/` (WASAPI capture, join detection, encrypted segment queue) plus `useMeetingArm`/`useMeetingCapture`/`useMeetingNotes` on the React side; capture is user-armed only, shows a persistent recording indicator, and gates the updater like `voice_active` does.
 
 ## Working style
 
@@ -121,3 +123,13 @@ Key routing rules:
 - Architecture review → invoke plan-eng-review
 - Save progress, checkpoint, resume → invoke checkpoint
 - Code quality, health check → invoke health
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+Rules:
+- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
