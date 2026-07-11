@@ -74,6 +74,13 @@ const RULES: &[Rule] = &[
         pattern: r"\b[A-Za-z0-9+/_-]{48,}={0,2}\b",
         replacement: "[redacted:blob]",
     },
+    // The account-name segment of home-directory paths (C:\Users\<name>\...,
+    // /Users/<name>, /home/<name>) - the username is user context, while the
+    // rest of the path keeps its diagnostic value.
+    Rule {
+        pattern: r#"(?i)([\\/](?:Users|home)[\\/])[^\\/\s"']+"#,
+        replacement: "${1}[redacted:user]",
+    },
 ];
 
 fn compiled() -> &'static Vec<(Regex, &'static str)> {
@@ -155,10 +162,25 @@ mod tests {
             "lk.agent.state=speaking",
             "meeting: pruned 2 expired capture(s) from the upload queue",
             "app version 0.2.1 on windows 10.0.26200",
-            r"path C:\Users\someone\AppData\Local\aura-desktop\logs",
+            r"path D:\Projects\aura-desktop\target\debug\build",
         ] {
             assert_eq!(redact_line(line), line, "must survive verbatim");
         }
+    }
+
+    #[test]
+    fn home_directory_usernames_are_redacted_rest_of_path_kept() {
+        let out = redact_line(r"failed to open C:\Users\someone\AppData\Local\aura-desktop\logs");
+        assert_eq!(
+            out,
+            r"failed to open C:\Users\[redacted:user]\AppData\Local\aura-desktop\logs"
+        );
+
+        let out = redact_line("store at /Users/jane.doe/Library/Logs/aura");
+        assert_eq!(out, "store at /Users/[redacted:user]/Library/Logs/aura");
+
+        let out = redact_line("config in /home/varun/.config/aura");
+        assert_eq!(out, "config in /home/[redacted:user]/.config/aura");
     }
 
     #[test]

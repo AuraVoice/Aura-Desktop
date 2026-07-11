@@ -142,7 +142,8 @@ pub async fn start_meeting_capture(
     meeting_id: String,
     event_id: String,
 ) -> Result<(), String> {
-    crate::security::authorize(&app, crate::security::Operation::StartMeetingCapture)?;
+    let ticket =
+        crate::security::authorize(&app, crate::security::Operation::StartMeetingCapture)?;
     queue::validate_meeting_id(&meeting_id)?;
     #[cfg(windows)]
     {
@@ -189,11 +190,27 @@ pub async fn start_meeting_capture(
             paused: false,
             reason: "started".to_string(),
         });
+
+        // Closes the authorize -> publish race: a sign-out (or account
+        // switch) landing before ActiveCapture was stored above finds
+        // nothing for security::session_changed -> request_stop to stop, so
+        // the fresh engine would keep recording with authorization already
+        // revoked. Re-checking the ticket AFTER the handle is published
+        // guarantees one of the two paths always fires - a revocation
+        // before this line trips the epoch here, a revocation after it
+        // finds the handle - and both funnel into the same engine stop
+        // (idempotent; finalize_capture cleans up state/tray/event).
+        if let Err(denied) =
+            crate::security::recheck(&app, crate::security::Operation::StartMeetingCapture, &ticket)
+        {
+            request_stop(&app, "signed_out");
+            return Err(denied);
+        }
         Ok(())
     }
     #[cfg(not(windows))]
     {
-        let _ = (app, meeting_id, event_id);
+        let _ = (app, meeting_id, event_id, ticket);
         Err("meeting capture is Windows-only".to_string())
     }
 }

@@ -48,17 +48,23 @@ const MAX_LOG_BYTES: u64 = 64 * 1024;
 /// Reads the last `count` lines of the durable app log for the in-app
 /// feedback button - async per this repo's main-thread-blocking rule.
 ///
-/// Hardened: the requested count is clamped to `MAX_LOG_LINES`, at most
-/// `MAX_LOG_BYTES` are read (seek-from-end, whole file never in memory), and
-/// every line is redacted in Rust (redact.rs) BEFORE it crosses IPC into
-/// JavaScript - the frontend's own redactSecrets pass in feedback.ts is a
-/// second layer, not the boundary.
+/// Hardened: requires a signed-in session (security.rs ReadLogs - redaction
+/// lowers the tail's exposure but does not make it public-safe, and the
+/// feedback button that calls this only renders signed-in), the requested
+/// count is clamped to `MAX_LOG_LINES`, at most `MAX_LOG_BYTES` are read
+/// (seek-from-end, whole file never in memory), and every line is redacted
+/// in Rust (redact.rs) BEFORE it crosses IPC into JavaScript - the
+/// frontend's own redactSecrets pass in feedback.ts is a second layer, not
+/// the boundary.
 #[tauri::command]
 pub async fn read_recent_log_lines(
     app: tauri::AppHandle,
     count: usize,
 ) -> Result<Vec<String>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    let ticket = crate::security::authorize(&app, crate::security::Operation::ReadLogs)?;
+    let blocking_app = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let app = blocking_app;
         // Matches tauri-plugin-log's own LogDir{file_name: None} naming:
         // <app_log_dir>/<product name>.log ("Aura Desktop.log" - see
         // plugin() above). Derived from package_info() rather than hardcoded
@@ -73,10 +79,14 @@ pub async fn read_recent_log_lines(
         Ok(tail_lines(&bytes, count.min(MAX_LOG_LINES))
             .into_iter()
             .map(|line| crate::redact::redact_line(&line))
-            .collect())
+            .collect::<Vec<String>>())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    // Same rule as read_segment: the tail is the sensitive return value, so
+    // a sign-out that landed during the file read drops it.
+    crate::security::recheck(&app, crate::security::Operation::ReadLogs, &ticket)?;
+    result
 }
 
 /// At most `budget` bytes from the end of the file. When the read starts

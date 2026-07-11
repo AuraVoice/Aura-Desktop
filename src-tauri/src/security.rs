@@ -9,13 +9,27 @@
 //! otherwise. The persisted `has_session` flag in auth_cache.rs is a UI
 //! startup hint only and is deliberately never read here.
 //!
-//! Honest limits: the transitions themselves (`set_auth_state`,
-//! `set_voice_active`, arming) are still driven by the webview, because
-//! that's where Firebase and LiveKit live. What this module guarantees is a
-//! single auditable checkpoint, lifecycle invariants (sign-out, voice
+//! NON-GOALS - read this before trusting the module with more than it does.
+//! The transitions themselves (`set_auth_state`, `set_voice_active`, arming)
+//! are registered commands, callable by anything running in the webview,
+//! because that's where Firebase and LiveKit live. This module therefore
+//! CANNOT authenticate its own inputs and is NOT a defense against arbitrary
+//! code execution inside the webview: compromised JS can walk the legitimate
+//! state machine (assert a session, activate voice, arm, capture) exactly as
+//! the real UI would. What it IS: a single fail-closed checkpoint for every
+//! sensitive command; lifecycle invariants (sign-out, account switch, voice
 //! disconnect, and restart always clear authorization, so stale or replayed
-//! operations die), and that no single hostile data-channel message can reach
-//! an OS resource without the surrounding session state actually existing.
+//! operations die, including mid-flight via the epoch recheck); and immunity
+//! to single-message confused-deputy attacks - a hostile LiveKit data
+//! message can no longer reach an OS resource unless the surrounding session
+//! state genuinely exists. Every transition logs, so misuse is auditable.
+//!
+//! Documented upgrade path (deliberately not in this change): verify the
+//! Firebase ID token natively inside `set_auth_state` (RS256 against
+//! Google's securetoken certs, aud/iss/exp). That would stop a signed-out
+//! compromised webview from fabricating a session and stop uid spoofing -
+//! but it still cannot stop signed-in XSS, since compromised JS can obtain
+//! a genuine ID token from the Firebase SDK it shares a page with.
 //!
 //! Lock rule: the `SecurityHandle` mutex is a leaf lock. Never call
 //! `window.*`, `overlay::*`, `emit`, or take any other lock while holding it;
@@ -86,6 +100,7 @@ pub enum Operation {
     MarkSegmentUploaded,
     MarkMeetingAcked,
     StartJoinWatch,
+    ReadLogs,
 }
 
 /// Proof of a successful `authorize` call, carrying the auth epoch it was
@@ -94,6 +109,17 @@ pub enum Operation {
 #[derive(Clone, Copy, Debug)]
 pub struct Ticket {
     auth_epoch: u64,
+}
+
+/// What a session report actually changed - drives the side effects the
+/// caller must run outside the state lock.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct SessionTransition {
+    /// A previously signed-in session lost authorization (sign-out or a
+    /// direct uid change).
+    pub revoked: bool,
+    /// The armed bit was cleared (caller emits screen-sight-armed).
+    pub disarmed: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -153,12 +179,19 @@ impl SecurityState {
             // Signed-in is the whole gate: meeting-ID validity is anchored in
             // the Rust-written manifest (queue.rs), and restart-recovery
             // uploads of past meetings must work with no voice session.
+            // ReadLogs rides the same rule - redaction (redact.rs) lowers the
+            // log tail's exposure but does not make it public-safe, and the
+            // only caller (the feedback button) lives in the signed-in kebab
+            // menu; a signed-out invoke degrades gracefully because
+            // feedback.ts already catches the error and sends the email with
+            // "(no log lines available)".
             Operation::StartMeetingCapture
             | Operation::QueueSnapshot
             | Operation::ReadSegment
             | Operation::MarkSegmentUploaded
             | Operation::MarkMeetingAcked
-            | Operation::StartJoinWatch => {}
+            | Operation::StartJoinWatch
+            | Operation::ReadLogs => {}
         }
         Ok(Ticket {
             auth_epoch: self.auth_epoch,
@@ -175,10 +208,11 @@ impl SecurityState {
         self.authorize(op).map(|_| ())
     }
 
-    /// Applies a live auth-state report. Returns whether the armed bit was
-    /// cleared, so the caller can emit the armed-changed event outside the
-    /// lock. Idempotent: repeating the current state changes nothing.
-    pub fn set_session(&mut self, signed_in: bool, uid: Option<String>) -> bool {
+    /// Applies a live auth-state report. Returns what the transition did so
+    /// the caller can act outside the lock (emit the armed-changed event,
+    /// stop a live recording). Idempotent: repeating the current state
+    /// reports no changes.
+    pub fn set_session(&mut self, signed_in: bool, uid: Option<String>) -> SessionTransition {
         let next = if signed_in {
             match uid {
                 Some(uid) if !uid.is_empty() => Session::SignedIn { uid },
@@ -189,22 +223,26 @@ impl SecurityState {
             Session::SignedOut
         };
         if next == self.session {
-            return false;
+            return SessionTransition { revoked: false, disarmed: false };
         }
-        let lost_authorization = self.session != Session::SignedOut;
+        let revoked = self.session != Session::SignedOut;
         self.session = next;
-        if lost_authorization {
-            // Sign-out or a direct account switch: everything the previous
-            // account authorized dies, including in-flight work (epoch).
+        let mut disarmed = false;
+        if revoked {
+            // Sign-out OR a direct account switch: everything the previous
+            // account authorized dies - in-flight work (epoch), voice,
+            // arming, and (via the caller) any live recording. uid A -> uid B
+            // must revoke exactly like A signing out, or A's meeting capture
+            // would keep recording under B's session.
             self.auth_epoch += 1;
             self.voice_active = false;
             self.captured_this_voice_session = false;
             if self.screen_sight_armed {
                 self.screen_sight_armed = false;
-                return true;
+                disarmed = true;
             }
         }
-        false
+        SessionTransition { revoked, disarmed }
     }
 
     /// Voice session lifecycle. Only a true -> false transition tears down
@@ -296,25 +334,24 @@ pub fn note_capture(app: &AppHandle) {
     }
 }
 
-/// Shared sign-in/out transition. On a transition away from a signed-in
-/// account this also best-effort stops a live meeting capture natively -
-/// recording consent belongs to the person, and the JS stop must not be the
-/// only line of defense.
+/// Shared sign-in/out transition. Whenever a signed-in session loses
+/// authorization - sign-out OR a direct uid switch - this also best-effort
+/// stops a live meeting capture natively: recording consent belongs to the
+/// person, so account B must never inherit a recording account A armed, and
+/// the JS stop must not be the only line of defense.
 pub fn session_changed(app: &AppHandle, signed_in: bool, uid: Option<String>) {
-    let (was_signed_in, armed_cleared) = {
+    let transition = {
         let Some(handle) = handle(app) else {
             return;
         };
         let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
-        let was = state.signed_in();
-        let cleared = state.set_session(signed_in, uid);
-        (was, cleared)
+        state.set_session(signed_in, uid)
     };
     info!("security: session -> {}", if signed_in { "signed-in" } else { "signed-out" });
-    if armed_cleared {
+    if transition.disarmed {
         emit_armed_changed(app, false);
     }
-    if was_signed_in && !signed_in {
+    if transition.revoked {
         crate::meeting::request_stop(app, "signed_out");
     }
 }
@@ -425,7 +462,7 @@ mod tests {
         s
     }
 
-    const GATED_OPS: [Operation; 9] = [
+    const GATED_OPS: [Operation; 10] = [
         Operation::CaptureScreen,
         Operation::PointAt,
         Operation::ArmScreenSight,
@@ -435,6 +472,7 @@ mod tests {
         Operation::MarkSegmentUploaded,
         Operation::MarkMeetingAcked,
         Operation::StartJoinWatch,
+        Operation::ReadLogs,
     ];
 
     #[test]
@@ -516,9 +554,21 @@ mod tests {
             Operation::MarkSegmentUploaded,
             Operation::MarkMeetingAcked,
             Operation::StartJoinWatch,
+            Operation::ReadLogs,
         ] {
             assert!(s.authorize(op).is_ok(), "{op:?}");
         }
+    }
+
+    #[test]
+    fn log_reads_need_a_session_and_die_with_it() {
+        let s = SecurityState::default();
+        assert_eq!(s.authorize(Operation::ReadLogs).unwrap_err(), Denied::SignedOut);
+
+        let mut s = signed_in();
+        let ticket = s.authorize(Operation::ReadLogs).unwrap();
+        s.set_session(false, None);
+        assert!(s.recheck(Operation::ReadLogs, &ticket).is_err());
     }
 
     #[test]
@@ -561,19 +611,72 @@ mod tests {
         let mut s = armed_in_voice_session();
         let ticket = s.authorize(Operation::ReadSegment).unwrap();
 
-        s.set_session(true, Some("uid-2".to_string()));
+        // The revoked flag is what makes session_changed() stop a live
+        // recording - uid A -> uid B must report it exactly like a sign-out,
+        // or A's capture keeps recording under B.
+        let transition = s.set_session(true, Some("uid-2".to_string()));
+        assert!(transition.revoked);
+        assert!(transition.disarmed);
         assert!(!s.screen_sight_armed);
         assert!(!s.voice_active);
         assert_eq!(s.recheck(Operation::ReadSegment, &ticket).unwrap_err(), Denied::StaleAuth);
     }
 
     #[test]
+    fn transition_flags_match_each_kind_of_report() {
+        // Sign-out from a signed-in session: revoked.
+        let mut s = signed_in();
+        assert!(s.set_session(false, None).revoked);
+
+        // Fresh sign-in from signed-out: nothing to revoke.
+        let mut s = SecurityState::default();
+        let transition = s.set_session(true, Some("uid-1".to_string()));
+        assert!(!transition.revoked);
+        assert!(!transition.disarmed);
+
+        // Repeated sign-out while already signed out: idempotent.
+        let mut s = SecurityState::default();
+        assert!(!s.set_session(false, None).revoked);
+
+        // A signed-in report with no uid is malformed and treated as
+        // sign-out - it must still revoke a real prior session.
+        let mut s = signed_in();
+        assert!(s.set_session(true, None).revoked);
+    }
+
+    #[test]
     fn repeated_same_session_report_changes_nothing() {
         let mut s = armed_in_voice_session();
         let ticket = s.authorize(Operation::CaptureScreen).unwrap();
-        assert!(!s.set_session(true, Some("uid-1".to_string())));
+        let transition = s.set_session(true, Some("uid-1".to_string()));
+        assert!(!transition.revoked);
+        assert!(!transition.disarmed);
         assert!(s.screen_sight_armed);
         assert!(s.recheck(Operation::CaptureScreen, &ticket).is_ok());
+    }
+
+    #[test]
+    fn capture_start_recheck_catches_mid_start_sign_out() {
+        // The start_meeting_capture race (PR #6 finding 2): authorization is
+        // revoked after authorize() but before ActiveCapture is published,
+        // so request_stop finds nothing to stop. The command's post-publish
+        // recheck must catch the revocation deterministically - for a
+        // sign-out and for a direct account switch alike.
+        let mut s = signed_in();
+        let ticket = s.authorize(Operation::StartMeetingCapture).unwrap();
+        s.set_session(false, None);
+        assert_eq!(
+            s.recheck(Operation::StartMeetingCapture, &ticket).unwrap_err(),
+            Denied::StaleAuth
+        );
+
+        let mut s = signed_in();
+        let ticket = s.authorize(Operation::StartMeetingCapture).unwrap();
+        s.set_session(true, Some("uid-2".to_string()));
+        assert_eq!(
+            s.recheck(Operation::StartMeetingCapture, &ticket).unwrap_err(),
+            Denied::StaleAuth
+        );
     }
 
     #[test]

@@ -328,3 +328,9 @@ on purpose: anything persisted would survive into a state the live auth listener
 re-asserted. Full sender pinning still needs two backend additions (agent_identity in the
 /voice/token response; topic + msg_id/sent_at_ms on publish_data), documented in agentData.ts
 with a fail-closed migration path, client shipping first.
+Scope the claim precisely (PR #6 review): the guard's own transitions are webview-callable
+commands, so it authenticates nothing and is NOT an XSS boundary while a real session exists -
+its value is fail-closed centralization, lifecycle invariants, and confused-deputy immunity.
+Native ID-token verification in set_auth_state (a documented follow-up) would close fabricated
+signed-out sessions and uid spoofing, but still not signed-in XSS, since compromised JS can
+obtain a genuine token from the Firebase SDK it shares a page with.
