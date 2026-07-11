@@ -92,6 +92,32 @@ pub fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
+/// Best-effort native stop, used by security.rs when the account signs out:
+/// recording consent belongs to the person, so the webview's own
+/// stop_meeting_capture call must not be the only line of defense. Clones the
+/// engine's stop sender under the lock, drops the lock, then sends - same
+/// discipline as stop_meeting_capture.
+pub fn request_stop(app: &AppHandle, reason: &str) {
+    #[cfg(windows)]
+    {
+        let Some(handle) = app.try_state::<MeetingCaptureHandle>() else {
+            return;
+        };
+        let stop = {
+            let guard = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+            guard.as_ref().map(|active| active.stop.clone())
+        };
+        if let Some(stop) = stop {
+            info!("meeting: native stop requested ({reason})");
+            let _ = stop.send(reason.to_string());
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (app, reason);
+    }
+}
+
 /// Runs once at setup: drop queue entries (and their segment files) older
 /// than the retention window - an unsent capture is not worth keeping forever
 /// (MEETING_NOTES_PLAN.md section 6, "upload interrupted for days").
@@ -116,6 +142,8 @@ pub async fn start_meeting_capture(
     meeting_id: String,
     event_id: String,
 ) -> Result<(), String> {
+    crate::security::authorize(&app, crate::security::Operation::StartMeetingCapture)?;
+    queue::validate_meeting_id(&meeting_id)?;
     #[cfg(windows)]
     {
         let handle = app.state::<MeetingCaptureHandle>();
@@ -234,6 +262,7 @@ pub fn capture_status(app: AppHandle) -> CaptureStatus {
 /// segments and upload/completion flags. File IO (manifest read), so async.
 #[tauri::command]
 pub async fn queue_snapshot(app: AppHandle) -> Result<queue::Manifest, String> {
+    crate::security::authorize(&app, crate::security::Operation::QueueSnapshot)?;
     tauri::async_runtime::spawn_blocking(move || Ok(queue::load(&app)))
         .await
         .map_err(|e| e.to_string())?
@@ -250,15 +279,28 @@ pub async fn read_segment(
 ) -> Result<tauri::ipc::Response, String> {
     #[cfg(windows)]
     {
-        tauri::async_runtime::spawn_blocking(move || {
-            let path = queue::segment_path(&app, &meeting_id, seq)?;
+        let ticket = crate::security::authorize(&app, crate::security::Operation::ReadSegment)?;
+        let blocking_app = app.clone();
+        let result = tauri::async_runtime::spawn_blocking(move || {
+            // Only meetings this install itself captured (i.e. that Rust
+            // wrote into its own manifest) are readable - an arbitrary id
+            // can't probe the filesystem, even one that passes the charset
+            // check.
+            if !queue::load(&blocking_app).meetings.contains_key(&meeting_id) {
+                return Err("unknown meeting id".to_string());
+            }
+            let path = queue::segment_path(&blocking_app, &meeting_id, seq)?;
             let encrypted = std::fs::read(&path).map_err(|e| e.to_string())?;
-            let key = crypto::load_or_create_key(&app)?;
+            let key = crypto::load_or_create_key(&blocking_app)?;
             let plain = crypto::decrypt(&key, &encrypted)?;
             Ok(tauri::ipc::Response::new(plain))
         })
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+        // The account must still be the one that authorized the read - a
+        // sign-out (or account switch) mid-decrypt drops the plaintext.
+        crate::security::recheck(&app, crate::security::Operation::ReadSegment, &ticket)?;
+        result
     }
     #[cfg(not(windows))]
     {
@@ -276,6 +318,7 @@ pub async fn mark_segment_uploaded(
     meeting_id: String,
     seq: u32,
 ) -> Result<(), String> {
+    crate::security::authorize(&app, crate::security::Operation::MarkSegmentUploaded)?;
     tauri::async_runtime::spawn_blocking(move || {
         queue::mark_uploaded(&app, &meeting_id, seq)
     })
@@ -290,6 +333,7 @@ pub async fn mark_segment_uploaded(
 /// pump's backoff retries once the rejoined capture ends.
 #[tauri::command]
 pub async fn mark_meeting_acked(app: AppHandle, meeting_id: String) -> Result<(), String> {
+    crate::security::authorize(&app, crate::security::Operation::MarkMeetingAcked)?;
     {
         let handle = app.state::<MeetingCaptureHandle>();
         let guard = handle.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -311,6 +355,7 @@ pub fn start_join_watch(
     window_start_ms: i64,
     window_end_ms: i64,
 ) -> Result<(), String> {
+    crate::security::authorize(&app, crate::security::Operation::StartJoinWatch)?;
     #[cfg(windows)]
     {
         detect::start_join_watch(app, event_id, window_start_ms, window_end_ms)

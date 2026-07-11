@@ -80,12 +80,24 @@ fn base_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-pub fn segment_path(app: &AppHandle, meeting_id: &str, seq: u32) -> Result<PathBuf, String> {
-    // meeting_id is a backend-minted uuid hex, but never trust a path
-    // component that crossed the IPC boundary.
-    if meeting_id.contains(['/', '\\', '.']) || meeting_id.is_empty() {
-        return Err("invalid meeting id".to_string());
+/// meeting_id is a backend-minted uuid hex, but never trust a path component
+/// that crossed the IPC boundary: charset allowlist + length bound, strictly
+/// tighter than the old `/ \ .` deny-list.
+pub fn validate_meeting_id(meeting_id: &str) -> Result<(), String> {
+    let valid = !meeting_id.is_empty()
+        && meeting_id.len() <= 128
+        && meeting_id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+    if valid {
+        Ok(())
+    } else {
+        Err("invalid meeting id".to_string())
     }
+}
+
+pub fn segment_path(app: &AppHandle, meeting_id: &str, seq: u32) -> Result<PathBuf, String> {
+    validate_meeting_id(meeting_id)?;
     Ok(base_dir(app)?.join(meeting_id).join(format!("{seq:04}.flac.enc")))
 }
 
@@ -277,4 +289,35 @@ pub fn prune_expired(app: &AppHandle) -> usize {
         }
     }
     expired.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_meeting_id;
+
+    #[test]
+    fn accepts_backend_shaped_ids() {
+        assert!(validate_meeting_id("3f2a9c1b7d4e4f209a1b2c3d4e5f6a7b").is_ok());
+        assert!(validate_meeting_id("mtg_2026-07-11").is_ok());
+        assert!(validate_meeting_id("a").is_ok());
+    }
+
+    #[test]
+    fn rejects_everything_path_shaped_or_odd() {
+        for bad in [
+            "",
+            "../x",
+            "a/b",
+            r"a\b",
+            "a.b",
+            "id with space",
+            "id\nnewline",
+            "sémantic",
+            "..",
+        ] {
+            assert!(validate_meeting_id(bad).is_err(), "{bad:?}");
+        }
+        assert!(validate_meeting_id(&"x".repeat(129)).is_err());
+        assert!(validate_meeting_id(&"x".repeat(128)).is_ok());
+    }
 }

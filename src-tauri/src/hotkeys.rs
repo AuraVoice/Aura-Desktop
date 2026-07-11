@@ -1,8 +1,7 @@
-use log::error;
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::AppHandle;
 use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
 
-use crate::overlay;
+use crate::{overlay, security};
 
 /// Summon/hide the overlay.
 pub fn summon_shortcut() -> Shortcut {
@@ -26,10 +25,9 @@ pub fn handle(app: &AppHandle, shortcut: &Shortcut) {
     } else if shortcut == &sign_out_shortcut() {
         overlay::sign_out_requested(app);
     } else if shortcut == &screen_sight_shortcut() {
-        if let Some(window) = app.get_webview_window("main") {
-            if let Err(e) = window.emit("screen-sight-hotkey", ()) {
-                error!("hotkeys: failed to emit screen-sight-hotkey: {e}");
-            }
-        }
+        // Rust owns the armed bit (security.rs). The toggle emits
+        // "screen-sight-armed" with the new state; the frontend mirrors that
+        // instead of flipping its own boolean off a bare hotkey event.
+        security::toggle_screen_sight(app);
     }
 }

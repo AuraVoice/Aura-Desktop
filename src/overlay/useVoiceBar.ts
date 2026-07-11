@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Room, RoomEvent, Track, type RemoteParticipant } from "livekit-client";
 import { invoke } from "@tauri-apps/api/core";
+import { validateAgentDataMessage } from "../lib/agentData";
 import { fetchVoiceToken, VoiceCapError } from "../lib/voice";
 import { AuthRequiredError, routeToDashboardForExpiredSession } from "../lib/api";
 import { logError, logInfo } from "../lib/log";
@@ -16,12 +17,6 @@ export type VoiceSessionStatus =
   | "speaking"
   | "ended"
   | "error";
-
-interface VoiceServerEvent {
-  type: string;
-  payload?: Record<string, unknown>;
-  message?: string;
-}
 
 // Both watchdogs turn a hung/gone-quiet call into a visible error instead of
 // an endless spinner - direct port of the two timers `voice_session_service`
@@ -386,23 +381,24 @@ export function useVoiceBar() {
     // Narrowed to the one genuine case sent over the data channel -
     // session.state/assistant.text.*/user.text.*/bare error/session.ended
     // are declared in the backend's protocol but never actually published;
-    // session.error is the sole real message that arrives this way.
-    newRoom.on(RoomEvent.DataReceived, (payload) => {
+    // session.error is the sole real message that arrives this way. Every
+    // message is sender-validated first (agentData.ts): only the verified
+    // agent participant can report a session error or keep the silence
+    // watchdog fed - a hostile participant must not be able to end the call
+    // OR keep a dead one looking alive.
+    newRoom.on(RoomEvent.DataReceived, (payload, participant, _kind, topic) => {
       try {
-        let event: VoiceServerEvent;
-        try {
-          event = JSON.parse(new TextDecoder().decode(payload));
-        } catch (err) {
-          logInfo("useVoiceBar: DataReceived", `unparseable payload: ${String(err)}`);
-          return;
-        }
-        logInfo("useVoiceBar: DataReceived", `type=${event.type}`);
-        // Any parseable message (including useScreenSight's element.point,
-        // which shares this same data channel) is a sign of life.
+        const verdict = validateAgentDataMessage(payload, participant, topic);
+        if (verdict.kind === "rejected") return;
+        // Anything from the verified agent - including an unknown type from
+        // a newer backend - is a sign of life (element.point and draft.*
+        // share this same data channel).
         pokeSilenceWatchdog();
-        if (event.type === "session.error") {
-          const code = typeof event.payload?.code === "string" ? event.payload.code : null;
-          enterErrorState(code, event.message ?? null);
+        if (verdict.kind !== "valid") return;
+        logInfo("useVoiceBar: DataReceived", `type=${verdict.type}`);
+        if (verdict.type === "session.error") {
+          const code = typeof verdict.payload.code === "string" ? verdict.payload.code : null;
+          enterErrorState(code, verdict.message ?? null);
         }
       } catch (err) {
         logError("useVoiceBar: DataReceived handler", err);
@@ -448,6 +444,11 @@ export function useVoiceBar() {
     } catch (err) {
       if (err instanceof AuthRequiredError) {
         clearWatchdogs();
+        // Without this, the voice_active flag set at the top of startSession
+        // stays latched true across the re-auth flow (Rust would keep
+        // treating a voice session as live for the updater gate and the
+        // security state).
+        setVoiceActive(false);
         await routeToDashboardForExpiredSession();
         return;
       }

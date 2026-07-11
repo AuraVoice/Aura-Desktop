@@ -38,6 +38,9 @@ tauri-plugin-clipboard-manager = "2"
 # Only for time::sleep in updater.rs's re-check loop - tauri already pulls
 # tokio in, this just makes it directly usable.
 tokio = { version = "1", features = ["time"] }
+# Log redaction rules (redact.rs) - already in the dependency tree
+# transitively, this just makes it a direct dependency.
+regex = "1"
 sentry = { version = "0.48", default-features = false, features = ["backtrace", "contexts", "debug-images", "panic", "reqwest", "rustls"] }
 
 # Win32 bindings - win_focus.rs and the meeting/ module use this, Windows

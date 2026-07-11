@@ -20,7 +20,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [initializing, setInitializing] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (nextUser) => {
+    const unsubscribe = onAuthStateChanged(auth, async (nextUser) => {
+      // Rust's security state (security.rs) is the authorization boundary
+      // for screen capture / meeting audio / pointing; it must be current
+      // BEFORE React exposes the user, or a signed-in-gated effect (the
+      // meeting upload pump, for one) could invoke a guarded command that
+      // Rust still believes is signed out. Awaited for exactly that
+      // ordering; on failure the native state simply keeps its previous,
+      // more restrictive value (fresh processes start signed out) - fail
+      // closed, never open.
+      await invoke("set_auth_state", {
+        signedIn: nextUser !== null,
+        uid: nextUser?.uid ?? null,
+      }).catch((err) => logError("AuthProvider: set_auth_state", err));
+
+      // The persisted startup hint (window pre-seeding only - never an
+      // authorization input; see auth_cache.rs).
       invoke("set_session_cached", { hasSession: nextUser !== null }).catch((err) =>
         logError("AuthProvider: set_session_cached", err),
       );
@@ -43,7 +58,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     listen("sign-out-requested", () => {
-      signOut(auth).catch((err) => logError("AuthProvider: sign-out-requested", err));
+      signOut(auth).catch((err) => {
+        logError("AuthProvider: sign-out-requested", err);
+        // Rust already revoked its native authorization before emitting this
+        // event; if Firebase's own sign-out failed, the user is still signed
+        // in on the JS side - re-assert the real state so the two sides
+        // can't stay split (signed-in UI over locked-out native commands).
+        invoke("set_auth_state", {
+          signedIn: auth.currentUser !== null,
+          uid: auth.currentUser?.uid ?? null,
+        }).catch((reassertErr) => logError("AuthProvider: set_auth_state re-assert", reassertErr));
+      });
     })
       .then((fn) => {
         unlisten = fn;

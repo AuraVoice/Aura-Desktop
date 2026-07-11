@@ -294,3 +294,37 @@ The reviewable properties (cap integrity under a hostile client, at-least-once s
 cross-thread file access, consent scoping, fail-open vs fail-closed on privacy filters) need an
 adversarial pass with exactly those lenses; budget one for any feature that touches money,
 consent, or third-party data flows before it ships.
+
+Date: 2026-07-11
+Problem: A security hardening pass found the app's real authorization living entirely in webview
+state: every sensitive Rust command (screen capture, meeting capture start, segment decrypt,
+manifest mutation, native pointing, log reading) executed for any invoke() with no native check,
+and all three LiveKit DataReceived handlers bound only the payload argument, trusting any room
+participant whose JSON "type" field looked right (element.point from a stranger could move the
+native pointer via point_at).
+Issue: In Tauri, "the UI only calls this when armed/signed in" is not a boundary: XSS or a
+hostile data-channel message reaches the same invoke() surface. And LiveKit hands every handler
+the sender participant and topic for free; ignoring those parameters silently converts "message
+from our agent" into "message from anyone in the room." Two adjacent traps surfaced while fixing
+it: (1) an authorization epoch bumped on voice-session end would have broken the meeting upload
+pump, which legitimately decrypts queued segments with no voice session (restart recovery), so
+staleness had to key on auth changes only, with per-operation re-authorization after blocking
+work; (2) enterErrorState sends set_voice_active(false) even when no call ever started, so a
+voice false-transition that disarmed screen sight unconditionally would wipe a legal
+arm-before-call - teardown must fire on the true->false transition only.
+Solution: One Rust module (security.rs) owns a memory-only, never-persisted authorization state
+(session/voice/armed/captured-this-session/auth-epoch) with a pure authorize()/recheck() core;
+every sensitive command checks it first and async commands re-check after spawn_blocking so a
+sign-out mid-flight drops the result. Sign-out (including the Ctrl+Shift+D native path), voice
+disconnect, and restart all clear it; the armed bit moved into Rust with JS as a mirror.
+A shared validator (agentData.ts) gates every data-channel message on participant.isAgent,
+topic, size, and per-type schema before any hook acts, and only verified-agent messages feed
+the silence watchdog. read_recent_log_lines is capped (200 lines / 64 KiB tail read) and
+redacted in Rust (redact.rs) before crossing IPC. Firebase persistence is now explicit
+(initializeAuth + indexedDBLocalPersistence) and AuthProvider awaits set_auth_state before
+exposing the user so no signed-in-gated effect can outrun the native state.
+Justification: The persisted has_session flag stays a UI hint and the guard state is memory-only
+on purpose: anything persisted would survive into a state the live auth listener never
+re-asserted. Full sender pinning still needs two backend additions (agent_identity in the
+/voice/token response; topic + msg_id/sent_at_ms on publish_data), documented in agentData.ts
+with a fail-closed migration path, client shipping first.

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Room, RoomEvent } from "livekit-client";
+import { Room, RoomEvent, type RemoteParticipant } from "livekit-client";
 import { invoke } from "@tauri-apps/api/core";
+import { validateAgentDataMessage } from "../lib/agentData";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { AuthRequiredError, routeToDashboardForExpiredSession } from "../lib/api";
 import { trackEvent } from "../lib/analytics";
@@ -214,18 +215,24 @@ export function useDraftCard(
   );
 
   // New drafts ride the same data channel as element.point / screen_save.created
-  // (see useScreenSight) - parse-and-ignore-unknown, never throw into LiveKit.
+  // (see useScreenSight) - validated for sender/topic/schema first
+  // (agentData.ts) so a non-agent participant can't inject a draft, then
+  // ignore-unknown, never throw into LiveKit.
   useEffect(() => {
     if (!room) return;
 
-    function onDataReceived(payload: Uint8Array) {
+    function onDataReceived(
+      payload: Uint8Array,
+      participant?: RemoteParticipant,
+      _kind?: unknown,
+      topic?: string,
+    ) {
       try {
-        const event = JSON.parse(new TextDecoder().decode(payload)) as DraftEvent;
-        if (typeof event.type === "string" && event.type.startsWith("draft.")) {
-          handleDraftEvent(event);
-        }
-      } catch {
-        // not JSON - not one of ours, ignore
+        const verdict = validateAgentDataMessage(payload, participant, topic);
+        if (verdict.kind !== "valid" || !verdict.type.startsWith("draft.")) return;
+        handleDraftEvent({ type: verdict.type, payload: verdict.payload });
+      } catch (err) {
+        logError("useDraftCard: onDataReceived", err);
       }
     }
 
