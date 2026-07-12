@@ -12,6 +12,7 @@ dist
 dist-ssr
 *.local
 /src-tauri/target
+graphify-out/
 .claude/settings.local.json
 
 # Editor directories and files

@@ -414,6 +414,11 @@ fn hide_ending_voice(app: &AppHandle) {
     if let Some(handle) = state_handle(app) {
         handle.0.lock().unwrap_or_else(|e| e.into_inner()).voice_active = false;
     }
+    // Mirror the teardown into the security state directly - waiting on the
+    // webview's own endSession -> set_voice_active round trip would leave
+    // screen-capture authorization live exactly as long as a hung webview
+    // stays hung. (No overlay lock is held here; security's is a leaf lock.)
+    crate::security::note_voice_active(app, false);
     set_presentation(app, OverlayPresentation::Hidden);
 }
 
@@ -475,6 +480,10 @@ pub fn minimize_to_pill(app: &AppHandle) {
 /// the frontend to sign out immediately (bypassing its usual confirm step)
 /// and brings the panel up so the result is visible.
 pub fn sign_out_requested(app: &AppHandle) {
+    // Revoke native authorization (and stop any live meeting capture) BEFORE
+    // asking the webview to sign out - if the JS leg stalls or never runs,
+    // the sensitive command surface is already locked.
+    crate::security::clear_for_sign_out(app);
     if let Some(window) = main_window(app) {
         if let Err(e) = window.emit("sign-out-requested", ()) {
             error!("overlay::sign_out_requested: failed to emit: {e}");

@@ -46,6 +46,12 @@ impl ScreenFrameGeometry {
 /// or debug builds) that it was tripping Windows' "Not Responding" state.
 #[tauri::command]
 pub async fn capture_cursor_display_with_geometry(app: AppHandle) -> Result<Response, String> {
+    // Native authorization, not the frontend's armed boolean: capture needs a
+    // signed-in session, a live voice call, and screen sight armed - all
+    // tracked in security.rs, all cleared on sign-out/disconnect/restart.
+    let ticket =
+        crate::security::authorize(&app, crate::security::Operation::CaptureScreen)?;
+
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "main window not found".to_string())?;
@@ -53,9 +59,16 @@ pub async fn capture_cursor_display_with_geometry(app: AppHandle) -> Result<Resp
     let cursor_x = cursor.x as i32;
     let cursor_y = cursor.y as i32;
 
-    tauri::async_runtime::spawn_blocking(move || capture_frame(cursor_x, cursor_y))
+    let result = tauri::async_runtime::spawn_blocking(move || capture_frame(cursor_x, cursor_y))
         .await
-        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+
+    // A disarm/sign-out that landed during the capture+encode window drops
+    // the frame instead of returning it (the JS side already applied the same
+    // rule to its own armed flag; this makes it authoritative).
+    crate::security::recheck(&app, crate::security::Operation::CaptureScreen, &ticket)?;
+    crate::security::note_capture(&app);
+    result
 }
 
 /// Returns a raw IPC response: the `GEOMETRY_HEADER_LEN`-byte geometry header

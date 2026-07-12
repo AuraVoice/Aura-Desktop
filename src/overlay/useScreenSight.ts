@@ -1,7 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Room, RoomEvent, type Participant, type TranscriptionSegment } from "livekit-client";
+import {
+  Room,
+  RoomEvent,
+  type Participant,
+  type RemoteParticipant,
+  type TranscriptionSegment,
+} from "livekit-client";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { validateAgentDataMessage } from "../lib/agentData";
 import { logError } from "../lib/log";
 import type { VoiceSessionStatus } from "./useVoiceBar";
 
@@ -13,11 +20,6 @@ interface ScreenFrameGeometry {
   scaleFactor: number;
   jpegWidthPx: number;
   jpegHeightPx: number;
-}
-
-interface ElementPointEvent {
-  type: string;
-  payload?: Record<string, unknown>;
 }
 
 const RETAINED_FRAME_GEOMETRY_COUNT = 4;
@@ -156,27 +158,50 @@ export function useScreenSight(room: Room | null, status: VoiceSessionStatus) {
     capturedThisTurnRef.current = false;
   }, []);
 
+  // Rust owns the armed bit (security.rs) - capture authorization is checked
+  // there, not against this mirror. The eye button asks Rust to toggle; the
+  // new state comes back on the screen-sight-armed event below, same as the
+  // Ctrl+Alt+S hotkey (which never leaves Rust at all).
   const toggleArmed = useCallback(() => {
-    if (armedRef.current) {
-      disarm();
-      return;
-    }
-    setArmed(true);
-    capturedThisTurnRef.current = false;
-    if (isSessionLive(status)) void captureAndSend("armed");
-  }, [status, disarm, captureAndSend]);
+    invoke("toggle_screen_sight_armed").catch((err) =>
+      logError("useScreenSight: toggle_screen_sight_armed", err),
+    );
+  }, []);
 
-  // Ctrl+Alt+S, forwarded from Rust as a plain event (arm/disarm state lives
-  // here in JS, not in Rust).
+  const statusRef = useRef(status);
+  statusRef.current = status;
+
+  // The single armed-state funnel for every trigger (hotkey, eye button,
+  // voice end, sign-out): mirror Rust's bit and fire the on-arm capture.
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    listen("screen-sight-hotkey", () => toggleArmed())
+    listen<{ armed: boolean }>("screen-sight-armed", (event) => {
+      const next = event.payload.armed;
+      const wasArmed = armedRef.current;
+      armedRef.current = next;
+      setArmed(next);
+      capturedThisTurnRef.current = false;
+      if (next && !wasArmed && isSessionLive(statusRef.current)) {
+        void captureAndSend("armed");
+      }
+    })
       .then((fn) => {
         unlisten = fn;
       })
-      .catch((err) => logError("useScreenSight: listen screen-sight-hotkey", err));
+      .catch((err) => logError("useScreenSight: listen screen-sight-armed", err));
     return () => unlisten?.();
-  }, [toggleArmed]);
+  }, [captureAndSend]);
+
+  // Seed the mirror once on mount - covers a webview reload while Rust's
+  // armed bit is still set (same race current_overlay_state covers).
+  useEffect(() => {
+    invoke<boolean>("screen_sight_armed")
+      .then((value) => {
+        armedRef.current = value;
+        setArmed(value);
+      })
+      .catch((err) => logError("useScreenSight: screen_sight_armed", err));
+  }, []);
 
   // Auto-capture the instant the session becomes live - covers arming the
   // hotkey while the call is still dialing. `status` is already the
@@ -200,9 +225,8 @@ export function useScreenSight(room: Room | null, status: VoiceSessionStatus) {
   useEffect(() => {
     if (!room) return;
 
-    function handleElementPoint(event: ElementPointEvent) {
+    function handleElementPoint(payload: Record<string, unknown>) {
       try {
-        const payload = event.payload;
         const x = payload?.x;
         const y = payload?.y;
         if (typeof x !== "number" || typeof y !== "number") return;
@@ -229,8 +253,7 @@ export function useScreenSight(room: Room | null, status: VoiceSessionStatus) {
     // Backend confirmation that a screen_save.created write landed (see
     // save_screen_item on the voice agent) - surfaced as a brief caption in
     // the bar, not tied to capture/send in any way.
-    function handleScreenSaveCreated(event: ElementPointEvent) {
-      const payload = event.payload;
+    function handleScreenSaveCreated(payload: Record<string, unknown>) {
       const collectionName = typeof payload?.collection_name === "string" ? payload.collection_name.trim() : "";
       const title = typeof payload?.title === "string" ? payload.title.trim() : "";
       const label = collectionName ? `Saved to ${collectionName}` : title ? `Saved "${title}"` : "Saved";
@@ -244,14 +267,23 @@ export function useScreenSight(room: Room | null, status: VoiceSessionStatus) {
 
     // Only genuinely real messages on this data channel that useScreenSight
     // cares about - session.ready/user.text.*/session.ended never arrive
-    // (see useVoiceBar.ts), element.point and screen_save.created do.
-    function onDataReceived(payload: Uint8Array) {
+    // (see useVoiceBar.ts), element.point and screen_save.created do. Every
+    // message is sender/topic/schema-validated first (agentData.ts): a
+    // non-agent participant cannot move the native pointer or fake a saved
+    // confirmation.
+    function onDataReceived(
+      payload: Uint8Array,
+      participant?: RemoteParticipant,
+      _kind?: unknown,
+      topic?: string,
+    ) {
       try {
-        const event = JSON.parse(new TextDecoder().decode(payload)) as ElementPointEvent;
-        if (event.type === "element.point") handleElementPoint(event);
-        else if (event.type === "screen_save.created") handleScreenSaveCreated(event);
-      } catch {
-        // not JSON - not one of ours, ignore
+        const verdict = validateAgentDataMessage(payload, participant, topic);
+        if (verdict.kind !== "valid") return;
+        if (verdict.type === "element.point") handleElementPoint(verdict.payload);
+        else if (verdict.type === "screen_save.created") handleScreenSaveCreated(verdict.payload);
+      } catch (err) {
+        logError("useScreenSight: onDataReceived", err);
       }
     }
 

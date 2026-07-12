@@ -5,7 +5,9 @@ mod hotkeys;
 mod logging;
 mod meeting;
 mod overlay;
+mod redact;
 mod screenshot;
+mod security;
 mod sentry_setup;
 mod tray;
 mod updater;
@@ -30,6 +32,9 @@ fn esc_pressed(app: AppHandle) {
 
 #[tauri::command]
 fn set_voice_active(app: AppHandle, active: bool) {
+    // Security first (leaf lock, disarms screen sight on a true->false
+    // transition), then the overlay's own window bookkeeping.
+    security::note_voice_active(&app, active);
     overlay::set_voice_active(&app, active);
 }
 
@@ -75,6 +80,12 @@ fn summon(app: AppHandle) {
     overlay::summon(&app);
 }
 
+/// Guarded natively: pointing takes the window fullscreen and click-through,
+/// and its only legitimate trigger is the agent answering a frame this app
+/// itself captured - so it requires a signed-in session, a live voice call,
+/// and at least one authorized capture this session (security.rs). The check
+/// completes (and its lock drops) before overlay::point_at touches any
+/// window API.
 #[tauri::command]
 fn point_at(
     app: AppHandle,
@@ -85,38 +96,15 @@ fn point_at(
     monitor_w: f64,
     monitor_h: f64,
     label: String,
-) {
+) -> Result<(), String> {
+    security::authorize(&app, security::Operation::PointAt)?;
     overlay::point_at(&app, target_x, target_y, monitor_x, monitor_y, monitor_w, monitor_h, &label);
+    Ok(())
 }
 
 #[tauri::command]
 fn cancel_pointing(app: AppHandle) {
     overlay::cancel_pointing(&app);
-}
-
-/// Reads the last `count` lines of the durable app log, for the in-app
-/// feedback button to attach - file IO, so this is async per this repo's own
-/// main-thread-blocking rule rather than reading inline.
-#[tauri::command]
-async fn read_recent_log_lines(app: AppHandle, count: usize) -> Result<Vec<String>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        // Matches tauri-plugin-log's own LogDir{file_name: None} naming:
-        // <app_log_dir>/<product name>.log ("Aura Desktop.log" - see
-        // logging.rs's plugin()). Derived from package_info() rather than
-        // hardcoded so a productName change can't silently break this again.
-        let file_name = format!("{}.log", app.package_info().name);
-        let path = app
-            .path()
-            .app_log_dir()
-            .map_err(|e| e.to_string())?
-            .join(file_name);
-        let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
-        let lines: Vec<String> = content.lines().map(String::from).collect();
-        let start = lines.len().saturating_sub(count);
-        Ok(lines[start..].to_vec())
-    })
-    .await
-    .map_err(|e| e.to_string())?
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -163,6 +151,7 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .manage(OverlayStateHandle::default())
+        .manage(security::SecurityHandle::default())
         .manage(ForegroundGeneration::default())
         .manage(updater::PendingUpdate::default())
         .manage(updater::UpdatedNotice::default())
@@ -181,10 +170,13 @@ pub fn run() {
             summon,
             point_at,
             cancel_pointing,
+            security::set_auth_state,
+            security::toggle_screen_sight_armed,
+            security::screen_sight_armed,
             updater::install_update,
             updater::pending_update_version,
             updater::just_updated_version,
-            read_recent_log_lines,
+            logging::read_recent_log_lines,
             screenshot::capture_cursor_display_with_geometry,
             entitlement::cache_entitlement,
             entitlement::cached_entitlement,
