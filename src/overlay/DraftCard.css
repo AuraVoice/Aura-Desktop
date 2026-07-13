@@ -129,13 +129,118 @@
   font-size: 12.5px;
   line-height: 1.6;
   color: var(--glass-text-bright);
-  white-space: pre-wrap;
-  overflow-wrap: break-word;
-  word-break: break-all;
+  white-space: pre;
+  overflow-x: auto;
+  overflow-y: auto;
   -webkit-user-select: text;
   user-select: text;
   cursor: text;
   padding-right: 6px;
+}
+
+.draft-card-snippet::before {
+  content: attr(data-language);
+  display: block;
+  margin-bottom: 6px;
+  font-family: var(--font-body);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--glass-text-dim);
+}
+
+.draft-card-snippet:not([data-language])::before {
+  display: none;
+}
+
+.draft-card-markdown {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow-y: auto;
+  padding-right: 6px;
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--glass-text-bright);
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: text;
+}
+
+.draft-card-markdown > :first-child {
+  margin-top: 0;
+}
+
+.draft-card-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.draft-card-markdown h1,
+.draft-card-markdown h2,
+.draft-card-markdown h3 {
+  margin: 12px 0 6px;
+  font-size: 14px;
+  line-height: 1.3;
+}
+
+.draft-card-markdown p,
+.draft-card-markdown ul,
+.draft-card-markdown ol,
+.draft-card-markdown blockquote {
+  margin: 0 0 8px;
+}
+
+.draft-card-markdown ul,
+.draft-card-markdown ol {
+  padding-left: 22px;
+}
+
+.draft-card-markdown li + li {
+  margin-top: 4px;
+}
+
+.draft-card-markdown code {
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 5px;
+  padding: 1px 4px;
+}
+
+.draft-card-markdown pre {
+  overflow-x: auto;
+  margin: 8px 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.draft-card-markdown pre code {
+  display: block;
+  min-width: max-content;
+  padding: 0;
+  background: none;
+  white-space: pre;
+}
+
+.draft-card-markdown blockquote {
+  padding-left: 10px;
+  border-left: 2px solid var(--glass-border-flat);
+  color: var(--glass-text-dim);
+}
+
+.draft-card-markdown::-webkit-scrollbar,
+.draft-card-markdown pre::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.draft-card-markdown::-webkit-scrollbar-thumb,
+.draft-card-markdown pre::-webkit-scrollbar-thumb {
+  background: var(--glass-border-flat);
+  border-radius: 3px;
 }
 
 .draft-card-snippet::-webkit-scrollbar {

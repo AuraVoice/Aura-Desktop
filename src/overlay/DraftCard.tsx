@@ -4,6 +4,8 @@ import { CheckIcon, CloseIcon, CopyIcon } from "./icons";
 import { draftCard as copyStrings } from "../lib/copy";
 import type { RefineChip } from "../lib/draft";
 import type { DraftCardState } from "./useDraftCard";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import "./DraftCard.css";
 
 const CHIP_ORDER: readonly RefineChip[] = [
@@ -29,7 +31,9 @@ export function DraftCard({ card }: { card: DraftCardState }) {
 
   const title = refineFailed
     ? copyStrings.refineFailed
-    : copyStrings.title(channel ?? "email_reply");
+    : draft?.artifactKind
+      ? draft.title || copyStrings.artifactTitle(draft.artifactKind)
+      : copyStrings.title(channel ?? "email_reply");
 
   const chipDisabled = (chip: RefineChip): boolean => {
     if (phase !== "shown" || !draft) return true;
@@ -56,19 +60,39 @@ export function DraftCard({ card }: { card: DraftCardState }) {
       </p>
     );
   } else if (draft) {
-    // A snippet is copy-exact text: monospace, whitespace preserved, wrapped
-    // rather than clipped so nothing runnable is hidden.
-    body =
-      channel === "snippet" ? (
-        <pre className="draft-card-snippet">{draft.text}</pre>
-      ) : (
-        <p className="draft-card-text">{draft.text}</p>
+    if (draft.contentFormat === "markdown") {
+      body = (
+        <div className="draft-card-markdown">
+          <Markdown
+            remarkPlugins={[remarkGfm]}
+            skipHtml
+            disallowedElements={["a", "img"]}
+            unwrapDisallowed
+          >
+            {draft.text}
+          </Markdown>
+        </div>
       );
+    } else if (draft.contentFormat === "code") {
+      body = (
+        <pre className="draft-card-snippet" data-language={draft.language || undefined}>
+          {draft.text}
+        </pre>
+      );
+    } else {
+      body = <p className="draft-card-text">{draft.text}</p>;
+    }
   } else {
     body = null;
   }
 
-  const chips = channel === "snippet" ? SNIPPET_CHIP_ORDER : CHIP_ORDER;
+  // New ephemeral artifacts are regenerated through voice so the complete
+  // intent remains in the live turn. Legacy snippets keep their REST button.
+  const chips = draft?.artifactKind
+    ? []
+    : channel === "snippet"
+      ? SNIPPET_CHIP_ORDER
+      : CHIP_ORDER;
 
   return (
     <GlassSurface className="draft-card" draggable={false}>
@@ -76,7 +100,13 @@ export function DraftCard({ card }: { card: DraftCardState }) {
         <div className={`draft-card-header${refineFailed ? " draft-card-header-error" : ""}`}>
           <span className="draft-card-title">{title}</span>
           <BarIconButton
-            title={copied ? copyStrings.copiedTooltip : copyStrings.copyTooltip}
+            title={
+              copied
+                ? copyStrings.copiedTooltip
+                : draft?.artifactKind
+                  ? copyStrings.copyArtifactTooltip
+                  : copyStrings.copyTooltip
+            }
             onClick={card.copy}
             disabled={!draft}
             className={copied ? "draft-card-copied" : undefined}
@@ -90,19 +120,21 @@ export function DraftCard({ card }: { card: DraftCardState }) {
 
         {body}
 
-        <div className="draft-card-chips">
-          {chips.map((chip) => (
-            <button
-              key={chip}
-              type="button"
-              className="draft-card-chip"
-              onClick={() => card.refine(chip)}
-              disabled={chipDisabled(chip)}
-            >
-              {copyStrings.chips[chip]}
-            </button>
-          ))}
-        </div>
+        {chips.length > 0 && (
+          <div className="draft-card-chips">
+            {chips.map((chip) => (
+              <button
+                key={chip}
+                type="button"
+                className="draft-card-chip"
+                onClick={() => card.refine(chip)}
+                disabled={chipDisabled(chip)}
+              >
+                {copyStrings.chips[chip]}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </GlassSurface>
   );

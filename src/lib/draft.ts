@@ -11,6 +11,15 @@ import { authFetch } from "./api";
 export type DraftChannel = "email_reply" | "cold_dm" | "snippet";
 export type DraftLength = "short" | "medium" | "detailed";
 export type RefineChip = "shorter" | "longer" | "more_formal" | "warmer" | "regenerate";
+export type ArtifactKind =
+  | "command"
+  | "code"
+  | "config"
+  | "prompt"
+  | "steps"
+  | "checklist"
+  | "note";
+export type DraftContentFormat = "plain_text" | "code" | "markdown";
 
 const REFINE_TIMEOUT_MS = 15_000;
 

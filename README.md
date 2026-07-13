@@ -67,7 +67,7 @@ Rust owns the window: geometry, global hotkeys, tray, and stealing OS focus. Rea
 | `overlay/useVoiceBar.ts` | LiveKit `Room` lifecycle + call status state machine |
 | `overlay/useScreenSight.ts` | Arm/disarm + capture/stream/point flow |
 | `overlay/useEscHotkey.ts` | Esc collapses the overlay |
-| `overlay/DraftCard.tsx`, `overlay/useDraftCard.ts` | Buddy Drafts card rendered below the bar: consumes the `draft.*` data-channel events, refine chips, copy button; drives `set_draft_card_open` so the window grows for it |
+| `overlay/DraftCard.tsx`, `overlay/useDraftCard.ts` | Visible artifact card rendered below the bar: consumes backward-compatible `draft.*` data-channel events, renders exact code or safe GFM Markdown, exposes copy/refine actions, and drives `set_draft_card_open` so the window grows for it |
 | `overlay/useUpdateReady.ts` | Listens for the Rust `update-ready` event, exposes the "Restart to install vX.Y.Z" state to the bar, and shows the one-time "Updated to vX" caption after a restart |
 | `lib/api.ts`, `lib/voice.ts`, `lib/firebase.ts`, `lib/firebaseConfig.ts` | Backend and Firebase clients |
 | `lib/copy.ts`, `lib/pairingCopy.ts`, `lib/pairingCodeFormat.ts`, `lib/voiceErrorCopy.ts`, `lib/webAuthCopy.ts` | UI copy and formatting, ported verbatim from the Flutter app where applicable |
@@ -153,10 +153,10 @@ events `draft.generating`/`draft.created`/`draft.updated`/`draft.failed` (consum
 confirmed by grepping every `publish_data` call in the backend. Everything else voice state comes from native LiveKit
 primitives, not the data channel - see below.
 
-**Buddy Drafts** ("draft a short reply to this email"): triggered by voice only, during a call
-with screen-sight armed. The backend voice agent drafts from the current screen frame in the
-user's own tone (UserAura profile) and pushes the draft over the data channel; the card shows
-it with copy-to-clipboard and refine chips (shorter/longer/more formal/warmer/regenerate).
+**Visible artifacts and Buddy Drafts:** email replies and DMs are triggered by voice during a
+call with screen-sight armed. The backend drafts from the current screen frame in the user's own
+tone (UserAura profile) and pushes the draft over the data channel; the card shows it with
+copy-to-clipboard and refine chips (shorter/longer/more formal/warmer/regenerate).
 Chips always hit `POST /desktop/draft-outbound/refine` over REST (works during and after the
 call - the refine needs only the prior draft plus the model-written context summary, never the
 frame). The backend persists the LATEST version of every draft to Firestore
@@ -167,6 +167,16 @@ Firestore TTL policy. The draft text and its model-written context summary (whic
 screen-derived) are what persist; the screen frame itself stays ephemeral, and analytics still
 carry channel/length/mode, never text. In dev builds, `window.__injectDraftEvent({...})` (see
 `src/debug/draftDebug.ts`) drives the card without a voice call (UI only, nothing persisted).
+
+Commands, code, configuration, prompts for another agent, and multi-step guidance use the same
+card but a separate `present_visible_artifact` voice tool. Its `draft.created` event retains
+`channel: "snippet"` for old-client compatibility and adds optional `artifact_kind`,
+`content_format`, `title`, `language`, and `persisted: false` fields. `content_format: "code"`
+preserves exact whitespace and horizontal scrolling. `content_format: "markdown"` supports GFM
+headings, lists, task lists, quotes, and fenced code while dropping raw HTML, links, and images.
+The backend does not persist these artifacts, does not use the draft quota, and does not log or
+analyze their text. If the overlay is hidden or pointing when one arrives, it is summoned after
+pointer cleanup so a successfully published artifact cannot remain invisible.
 
 **Meeting Notes** (MEETING_NOTES_PLAN.md, v1): capture is user-armed, never default-on.
 A global "Auto meeting notes" toggle (default OFF) plus per-meeting overrides live in the

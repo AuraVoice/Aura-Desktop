@@ -104,9 +104,22 @@ export const draftCard = {
         ? "Draft · DM"
         : "Draft · Email reply",
   copyTooltip: "Copy draft",
+  copyArtifactTooltip: "Copy text",
   copiedTooltip: "Copied!",
   dismissTooltip: "Dismiss draft",
   generating: "Buddy's writing your draft...",
+  artifactTitle: (
+    kind: "command" | "code" | "config" | "prompt" | "steps" | "checklist" | "note",
+  ) =>
+    ({
+      command: "Command",
+      code: "Code",
+      config: "Configuration",
+      prompt: "Prompt",
+      steps: "Next steps",
+      checklist: "Checklist",
+      note: "Note",
+    })[kind],
   refineFailed: "Couldn't update that. Try again.",
   failed: "That draft didn't come together. Ask Buddy to try again.",
   quotaReached: "You've used today's free drafts. They reset tomorrow.",

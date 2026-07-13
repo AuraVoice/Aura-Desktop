@@ -1,7 +1,7 @@
 {
   "name": "aura-desktop",
   "private": true,
-  "version": "0.2.2",
+  "version": "0.2.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -25,7 +25,9 @@
     "livekit-client": "^2.20.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "react-markdown": "10.1.0",
     "react-qr-code": "^2.2.0",
+    "remark-gfm": "4.0.1",
     "three": "^0.185.1"
   },
   "devDependencies": {

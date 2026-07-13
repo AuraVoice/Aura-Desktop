@@ -91,7 +91,7 @@ export function OverlayRoot() {
   // Raised by the menu's Sign out; VoiceBar consumes it into its confirm UI.
   const [signOutRequested, setSignOutRequested] = useState(false);
 
-  // A draft can outlive its call, but never its session: signing out clears
+  // A draft or visible artifact can outlive its call, but never its session: signing out clears
   // the cards and menu (and shrinks the window) without firing dismiss analytics.
   useEffect(() => {
     if (!user) {
@@ -104,7 +104,7 @@ export function OverlayRoot() {
     }
   }, [user, resetDraftCard, resetCallbackCard, resetMeetingNotes]);
 
-  // The single below-bar slot, resolved by fixed priority. A draft (result of
+  // The single below-bar slot, resolved by fixed priority. A draft or visible artifact (result of
   // an active ask) wins outright; then the two surfaces the user just opened
   // (agenda, menu) outrank the ambient once-a-day catch-up, so a kebab click is
   // never swallowed by a catch-up card sitting in the slot.

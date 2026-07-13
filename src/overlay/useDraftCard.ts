@@ -9,6 +9,8 @@ import {
   refineDraft,
   steppedLength,
   type DraftChannel,
+  type ArtifactKind,
+  type DraftContentFormat,
   type DraftLength,
   type RefineChip,
 } from "../lib/draft";
@@ -27,6 +29,11 @@ export interface DraftInfo {
   text: string;
   contextSummary: string;
   revision: number;
+  artifactKind: ArtifactKind | null;
+  contentFormat: DraftContentFormat;
+  title: string;
+  language: string;
+  persisted: boolean;
 }
 
 interface DraftCardData {
@@ -71,6 +78,23 @@ function asLength(value: unknown): DraftLength | null {
   return value === "short" || value === "medium" || value === "detailed" ? value : null;
 }
 
+function asArtifactKind(value: unknown): ArtifactKind | null {
+  return value === "command" ||
+    value === "code" ||
+    value === "config" ||
+    value === "prompt" ||
+    value === "steps" ||
+    value === "checklist" ||
+    value === "note"
+    ? value
+    : null;
+}
+
+function asContentFormat(value: unknown, channel: DraftChannel): DraftContentFormat {
+  if (value === "plain_text" || value === "code" || value === "markdown") return value;
+  return channel === "snippet" ? "code" : "plain_text";
+}
+
 function parseCreated(payload: Record<string, unknown>): DraftInfo | null {
   const channel = asChannel(payload.channel);
   const length = asLength(payload.length);
@@ -84,6 +108,11 @@ function parseCreated(payload: Record<string, unknown>): DraftInfo | null {
     text,
     contextSummary: typeof payload.context_summary === "string" ? payload.context_summary : "",
     revision: typeof payload.revision === "number" ? payload.revision : 1,
+    artifactKind: asArtifactKind(payload.artifact_kind),
+    contentFormat: asContentFormat(payload.content_format, channel),
+    title: typeof payload.title === "string" ? payload.title.slice(0, 80) : "",
+    language: typeof payload.language === "string" ? payload.language.slice(0, 32) : "",
+    persisted: typeof payload.persisted === "boolean" ? payload.persisted : true,
   };
 }
 
@@ -93,7 +122,7 @@ function parseCreated(payload: Record<string, unknown>): DraftInfo | null {
  * new drafts arrive over the LiveKit data channel from the voice tool, refine
  * chips always go over REST (one code path during and after the call), and
  * OverlayRoot grows/shrinks the window's slot off this card's phase (a fresh
- * draft only needs restorePanelIfPill to pull the window out of pill first).
+ * draft or artifact summons the panel when hidden and restores it from pill).
  */
 export function useDraftCard(
   room: Room | null,
@@ -119,15 +148,16 @@ export function useDraftCard(
     [],
   );
 
-  const restorePanelIfPill = useCallback(async () => {
-    // A draft arriving mid-pill force-restores the panel first; the card only
-    // renders under the bar. The window's height itself follows draft.phase
-    // via OverlayRoot's set_slot_height, so there's nothing to size here.
-    if (presentationRef.current !== "pill") return;
+  const ensurePanelVisible = useCallback(async () => {
+    // Requested text must be visible even when the user hid or minimized Buddy.
+    // Pointing is allowed to finish; if it restores Hidden, the effect below
+    // summons the panel immediately afterward.
+    const current = presentationRef.current;
+    if (current !== "pill" && current !== "hidden") return;
     try {
-      await invoke("pill_activated");
+      await invoke(current === "pill" ? "pill_activated" : "summon");
     } catch (err) {
-      logError("useDraftCard: restore panel from pill", err);
+      logError("useDraftCard: ensure panel visible", err);
     }
   }, []);
 
@@ -157,7 +187,7 @@ export function useDraftCard(
               channel: channel ?? prev.channel,
             }));
           }
-          void restorePanelIfPill();
+          void ensurePanelVisible();
           break;
         }
         case "draft.created": {
@@ -167,7 +197,7 @@ export function useDraftCard(
             return;
           }
           setData({ ...INITIAL, phase: "shown", channel: draft.channel, draft });
-          void restorePanelIfPill();
+          void ensurePanelVisible();
           break;
         }
         case "draft.updated": {
@@ -204,15 +234,23 @@ export function useDraftCard(
             return;
           }
           setData((prev) => ({ ...prev, phase: "error", draft: null, errorReason: reason }));
-          if (reason === "quota_exceeded") void restorePanelIfPill();
+          if (reason === "quota_exceeded") void ensurePanelVisible();
           break;
         }
         default:
           break;
       }
     },
-    [restorePanelIfPill, markRefineFailed],
+    [ensurePanelVisible, markRefineFailed],
   );
+
+  // An artifact can arrive while the full-screen pointer is in flight. Let the
+  // pointer finish, then guarantee that a Hidden pre-pointing state cannot
+  // swallow the card that just arrived.
+  useEffect(() => {
+    if (data.phase === "idle" || presentation !== "hidden") return;
+    void ensurePanelVisible();
+  }, [data.phase, presentation, ensurePanelVisible]);
 
   // New drafts ride the same data channel as element.point / screen_save.created
   // (see useScreenSight) - validated for sender/topic/schema first
@@ -261,7 +299,11 @@ export function useDraftCard(
           setData((prev) => ({ ...prev, copied: false }));
         }, COPIED_FLASH_MS);
         // Breakdown dimensions only - never the draft text (privacy contract).
-        trackEvent("draft_card_copied", { channel: draft.channel, length: draft.length });
+        trackEvent("draft_card_copied", {
+          channel: draft.channel,
+          length: draft.length,
+          artifactKind: draft.artifactKind ?? "message",
+        });
       })
       .catch((err) => logError("useDraftCard: copy to clipboard", err));
   }, []);

@@ -295,67 +295,24 @@ cross-thread file access, consent scoping, fail-open vs fail-closed on privacy f
 adversarial pass with exactly those lenses; budget one for any feature that touches money,
 consent, or third-party data flows before it ships.
 
-Date: 2026-07-11
-Problem: A security hardening pass found the app's real authorization living entirely in webview
-state: every sensitive Rust command (screen capture, meeting capture start, segment decrypt,
-manifest mutation, native pointing, log reading) executed for any invoke() with no native check,
-and all three LiveKit DataReceived handlers bound only the payload argument, trusting any room
-participant whose JSON "type" field looked right (element.point from a stranger could move the
-native pointer via point_at).
-Issue: In Tauri, "the UI only calls this when armed/signed in" is not a boundary: XSS or a
-hostile data-channel message reaches the same invoke() surface. And LiveKit hands every handler
-the sender participant and topic for free; ignoring those parameters silently converts "message
-from our agent" into "message from anyone in the room." Two adjacent traps surfaced while fixing
-it: (1) an authorization epoch bumped on voice-session end would have broken the meeting upload
-pump, which legitimately decrypts queued segments with no voice session (restart recovery), so
-staleness had to key on auth changes only, with per-operation re-authorization after blocking
-work; (2) enterErrorState sends set_voice_active(false) even when no call ever started, so a
-voice false-transition that disarmed screen sight unconditionally would wipe a legal
-arm-before-call - teardown must fire on the true->false transition only.
-Solution: One Rust module (security.rs) owns a memory-only, never-persisted authorization state
-(session/voice/armed/captured-this-session/auth-epoch) with a pure authorize()/recheck() core;
-every sensitive command checks it first and async commands re-check after spawn_blocking so a
-sign-out mid-flight drops the result. Sign-out (including the Ctrl+Shift+D native path), voice
-disconnect, and restart all clear it; the armed bit moved into Rust with JS as a mirror.
-A shared validator (agentData.ts) gates every data-channel message on participant.isAgent,
-topic, size, and per-type schema before any hook acts, and only verified-agent messages feed
-the silence watchdog. read_recent_log_lines is capped (200 lines / 64 KiB tail read) and
-redacted in Rust (redact.rs) before crossing IPC. Firebase persistence is now explicit
-(initializeAuth + indexedDBLocalPersistence) and AuthProvider awaits set_auth_state before
-exposing the user so no signed-in-gated effect can outrun the native state.
-Justification: The persisted has_session flag stays a UI hint and the guard state is memory-only
-on purpose: anything persisted would survive into a state the live auth listener never
-re-asserted. Full sender pinning still needs two backend additions (agent_identity in the
-/voice/token response; topic + msg_id/sent_at_ms on publish_data), documented in agentData.ts
-with a fail-closed migration path, client shipping first.
-Scope the claim precisely (PR #6 review): the guard's own transitions are webview-callable
-commands, so it authenticates nothing and is NOT an XSS boundary while a real session exists -
-its value is fail-closed centralization, lifecycle invariants, and confused-deputy immunity.
-Native ID-token verification in set_auth_state (a documented follow-up) would close fabricated
-signed-out sessions and uid spoofing, but still not signed-in XSS, since compromised JS can
-obtain a genuine token from the Firebase SDK it shares a page with.
-
-Date: 2026-07-11
-Problem: The PR #6 follow-up review found that meeting audio ownership still belonged to the
-Windows installation instead of the signed-in account, native sign-out left join-detection
-threads alive, and quoted credential values leaked every word after the first whitespace.
-Issue: The durable manifest had no owner UID, so any valid session could enumerate, decrypt,
-mark, or delete a previous account's queued captures. React keyed its claims, retry backoff,
-rejoin holds, and pump only on a boolean signedIn value, which does not change during a direct
-account A to account B switch. Native revocation stopped recording but did not drain the
-JoinWatchHandle map. The generic key/value redaction regex treated quoted and unquoted values
-the same, so password="correct horse battery staple" exposed "horse battery staple".
-Solution: Native authorization tickets now carry the trusted session UID. Active captures,
-capture events, and all new manifest rows carry that owner, while snapshots, segment reads,
-upload marks, and acknowledgements require an exact ticket-owner match and recheck the auth
-epoch. Legacy rows deserialize without an owner and match no account. React receives the UID,
-invalidates account-scoped generations and caches on every UID change, and ignores capture
-events for other owners. Native revocation drains and cancels every join watch, with a post-start
-ticket recheck closing the revoke-versus-insert race. Credential redaction now has separate
-double-quoted, single-quoted, and unquoted rules with whitespace regression tests.
-Justification: Authentication answers whether a caller is signed in; it does not answer whose
-persisted data the caller may access. Persisted private data needs an owner on every row and an
-exact owner check at every native read and mutation boundary. UID, rather than signedIn, is the
-correct frontend lifecycle key because account switches keep the boolean true. Revocation must
-also cancel native workers without relying on a responsive webview, and redaction must parse the
-value's quoting mode before deciding where the credential ends.
+Date: 2026-07-13
+Problem: Voice answers containing PowerShell commands, code, prompts, or next steps were spoken
+aloud even after users repeatedly asked for a draft, because the only visible-output path was
+modeled as an outbound email/DM draft.
+Issue: Output modality is a capability, not a message channel. A narrow pre-inference classifier
+removed the only useful display tool, so the model could not recover. Blanket screenshot and
+persistence assumptions also made a command unnecessarily depend on screen sight and risked
+mixing reusable artifacts into the personal draft feed. Overlay state could hide a valid event
+while pointer mode was cleaning up.
+Solution: Add a deterministic, no-frame, no-write visible-artifact capability and a focused
+per-tool skill injected only when that tool is exposed. Keep `draft.created` plus `snippet` as the
+compatibility envelope, add optional Markdown/code metadata, keep presentation artifacts
+ephemeral, and summon the overlay on arrival. Remember only whether the prior requested artifact
+succeeded so "again" can repair a failed turn without storing content. Test negative frustration
+phrases, stale turns, missing fields, packet limits, publish failures, old payloads, and overlay
+arrival states.
+Justification: A perfect prompt cannot call a tool that deterministic orchestration removed.
+Capability routing, execution safety, transport truthfulness, rendering, and recovery therefore
+need separate contracts and tests. Tool-specific skills improve accuracy without bloating every
+voice turn, while policy code remains the authority for side effects and freshness. 
+(V0.2.3 makes Buddy’s useful text easier to see and reuse. PowerShell commands, code, configuration, prompts, checklists, and next steps now open in a copyable on-screen card instead of being read aloud, with Markdown formatting and exact whitespace preservation for runnable content. Buddy can also recover when asked to show something again, automatically restores the overlay when needed, and keeps email and message drafts separate from temporary visible artifacts.)
