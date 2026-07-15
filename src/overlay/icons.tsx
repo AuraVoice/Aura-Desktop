@@ -197,6 +197,16 @@ export function CalendarIcon() {
   );
 }
 
+/** Bell - the notifications entry (kebab row, inbox header, empty state). */
+export function BellIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M18 9A6 6 0 0 0 6 9c0 5-2.5 6.5-2.5 6.5h17S18 14 18 9Z" />
+      <path d="M10.3 19a2 2 0 0 0 3.4 0" />
+    </svg>
+  );
+}
+
 export function SignOutIcon() {
   return (
     <svg viewBox="0 0 24 24">

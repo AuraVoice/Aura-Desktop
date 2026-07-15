@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useAuth } from "../state/AuthProvider";
@@ -23,6 +23,9 @@ import { CallbackCard } from "./CallbackCard";
 import { CalendarAgendaCard } from "./CalendarAgendaCard";
 import { MeetingNotesCard } from "./MeetingNotesCard";
 import { KebabMenu } from "./KebabMenu";
+import { NotificationInboxCard } from "./NotificationInboxCard";
+import { useDesktopNotifications } from "../state/useDesktopNotifications";
+import type { StoredNotification } from "../lib/desktopNotifications";
 import "./DraftCard.css";
 import "./CallbackCard.css";
 
@@ -38,6 +41,10 @@ const MEETING_NOTES_CARD_HEIGHT = 240;
 // slot area (see KebabMenu.css). Sized for the plan line + separator atop the
 // five action rows (Capture this call joined the original four).
 const MENU_HEIGHT = 276;
+// Notification inbox: a scrollable list, sized like the kebab menu. The list
+// scrolls internally, so this is the fixed slot height, not a per-row total
+// (see NotificationInboxCard.css).
+const NOTIFICATION_INBOX_CARD_HEIGHT = 300;
 
 // Lazy: keeps three.js out of the overlay's startup bundle - only fetched
 // the first time the pill is actually reached.
@@ -67,27 +74,51 @@ export function OverlayRoot() {
   const meetingArm = useMeetingArm(user?.uid ?? null);
   const meetingCapture = useMeetingCapture({
     uid: user?.uid ?? null,
+    appHidden: presentation !== "panel",
     events: meetings.events,
     isArmed: meetingArm.isArmed,
     armRevision: meetingArm.revision,
   });
+  const entitlement = useEntitlement({ signedIn: user !== null, uid: user?.uid ?? null });
+  // Aura is "hidden" for toast purposes whenever it is not showing the panel
+  // (pill, pointing, or fully hidden), which drives the broker's when_hidden
+  // toast policy.
+  const desktopNotifications = useDesktopNotifications({
+    signedIn: user !== null,
+    uid: user?.uid ?? null,
+    appHidden: presentation !== "panel",
+  });
+  const notificationMeetingIds = useMemo(
+    () => desktopNotifications.inbox
+      .filter((row) =>
+        (row.type === "meeting_ready" || row.type === "meeting_needs_attention")
+        && row.resourceId)
+      .map((row) => row.resourceId as string),
+    [desktopNotifications.inbox],
+  );
   const meetingNotes = useMeetingNotes({
     presentation,
     signedIn: user !== null,
     callLive,
     draftActive: draftCard.phase !== "idle",
-    lastCompletedMeetingId: meetingCapture.lastCompletedMeetingId,
+    activities: meetingCapture.activities,
+    retryUpload: meetingCapture.retryNow,
+    notificationMeetingIds,
   });
-  const entitlement = useEntitlement({ signedIn: user !== null, uid: user?.uid ?? null });
   const resetDraftCard = draftCard.reset;
   const resetCallbackCard = callbackCard.reset;
   const resetMeetingNotes = meetingNotes.reset;
+  const resetDesktopNotifications = desktopNotifications.reset;
+  const markAllNotificationsSeen = desktopNotifications.markAllSeen;
+  const markNotificationSeen = desktopNotifications.markSeen;
+  const notificationUnreadCount = desktopNotifications.unreadCount;
   useEscHotkey();
 
   // The kebab overflow menu and the calendar agenda both live in the single
   // below-bar slot (siblings of the bar, so neither can render inside VoiceBar).
   const [menuOpen, setMenuOpen] = useState(false);
   const [agendaOpen, setAgendaOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   // Raised by the menu's Sign out; VoiceBar consumes it into its confirm UI.
   const [signOutRequested, setSignOutRequested] = useState(false);
 
@@ -98,11 +129,13 @@ export function OverlayRoot() {
       resetDraftCard();
       resetCallbackCard();
       resetMeetingNotes();
+      resetDesktopNotifications();
       setMenuOpen(false);
       setAgendaOpen(false);
+      setNotificationsOpen(false);
       setSignOutRequested(false);
     }
-  }, [user, resetDraftCard, resetCallbackCard, resetMeetingNotes]);
+  }, [user, resetDraftCard, resetCallbackCard, resetMeetingNotes, resetDesktopNotifications]);
 
   // The single below-bar slot, resolved by fixed priority. A draft or visible artifact (result of
   // an active ask) wins outright; then the two surfaces the user just opened
@@ -111,16 +144,26 @@ export function OverlayRoot() {
   const showDraftCard = user !== null && draftCard.phase !== "idle";
   const showAgendaCard = user !== null && !showDraftCard && agendaOpen;
   const showMenu = user !== null && !showDraftCard && !showAgendaCard && menuOpen;
+  // The notification inbox is a user-opened surface like the agenda and menu, so
+  // it sits with them above the ambient meeting-note/catch-up cards.
+  const showNotifications =
+    user !== null && !showDraftCard && !showAgendaCard && !showMenu && notificationsOpen;
   // A fresh meeting note outranks the once-a-day catch-up (it's the direct
   // result of something the user armed) but never covers a surface the user
-  // just opened (agenda, menu).
+  // just opened (agenda, menu, notifications).
   const showMeetingNotesCard =
-    user !== null && !showDraftCard && !showAgendaCard && !showMenu && meetingNotes.visible;
+    user !== null &&
+    !showDraftCard &&
+    !showAgendaCard &&
+    !showMenu &&
+    !showNotifications &&
+    meetingNotes.visible;
   const showCallbackCard =
     user !== null &&
     !showDraftCard &&
     !showAgendaCard &&
     !showMenu &&
+    !showNotifications &&
     !showMeetingNotesCard &&
     callbackCard.visible;
   const slotHeight = showDraftCard
@@ -129,11 +172,13 @@ export function OverlayRoot() {
       ? AGENDA_CARD_HEIGHT
       : showMenu
         ? MENU_HEIGHT
-        : showMeetingNotesCard
-          ? MEETING_NOTES_CARD_HEIGHT
-          : showCallbackCard
-            ? CALLBACK_CARD_HEIGHT
-            : null;
+        : showNotifications
+          ? NOTIFICATION_INBOX_CARD_HEIGHT
+          : showMeetingNotesCard
+            ? MEETING_NOTES_CARD_HEIGHT
+            : showCallbackCard
+              ? CALLBACK_CARD_HEIGHT
+              : null;
 
   // The one place the window's slot height is driven, in a single synchronous
   // step: the winning surface hands Rust its height, or null to collapse back to
@@ -154,17 +199,47 @@ export function OverlayRoot() {
     if (showDraftCard || callLive || presentation !== "panel") {
       setMenuOpen(false);
       setAgendaOpen(false);
+      setNotificationsOpen(false);
     }
   }, [showDraftCard, callLive, presentation]);
 
   const handleToggleMenu = useCallback(() => {
     setAgendaOpen(false);
+    setNotificationsOpen(false);
     setMenuOpen((open) => !open);
   }, []);
   const handleOpenCalendar = useCallback(() => {
     setMenuOpen(false);
+    setNotificationsOpen(false);
     setAgendaOpen(true);
   }, []);
+  // Opening the inbox counts as reading it: mark all seen so the unread badge
+  // (kebab row + tray) clears. Individual rows keep their own read state via the
+  // "Mark all read" button and row actions.
+  const handleOpenNotifications = useCallback(() => {
+    setMenuOpen(false);
+    setAgendaOpen(false);
+    setNotificationsOpen(true);
+    void markAllNotificationsSeen();
+  }, [markAllNotificationsSeen]);
+  const handleCloseNotifications = useCallback(() => setNotificationsOpen(false), []);
+  const handleNotificationAction = useCallback(
+    (notification: StoredNotification) => {
+      markNotificationSeen(notification.notificationId);
+      desktopNotifications.acknowledgeAction(notification);
+      if (notification.action === "retry_meeting_upload" && notification.resourceId) {
+        // retryNow only fires when a retryable local recording still exists. If
+        // it's gone (queue purged / marked failed after restart), fall through
+        // to the dashboard instead of closing the inbox on a dead action.
+        if (meetingCapture.retryNow(notification.resourceId)) {
+          setNotificationsOpen(false);
+          return;
+        }
+      }
+      void openDashboard();
+    },
+    [desktopNotifications, markNotificationSeen, meetingCapture],
+  );
   const handleMenuSignOut = useCallback(() => {
     setMenuOpen(false);
     setSignOutRequested(true);
@@ -213,6 +288,30 @@ export function OverlayRoot() {
     return () => unlisten?.();
   }, [voice]);
 
+  // The tray's "Notifications" item summons the overlay and asks us to open the
+  // inbox slot (mirrors "open-dashboard-requested").
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen("open-notifications-requested", () => {
+      setMenuOpen(false);
+      setAgendaOpen(false);
+      setNotificationsOpen(true);
+      void markAllNotificationsSeen();
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch((err) => logError("OverlayRoot: listen open-notifications-requested", err));
+    return () => unlisten?.();
+  }, [markAllNotificationsSeen]);
+
+  // Keep the tray menu item's unread badge in sync with the broker's count.
+  useEffect(() => {
+    invoke("set_tray_unread", { count: notificationUnreadCount }).catch((err) =>
+      logError("OverlayRoot: set_tray_unread", err),
+    );
+  }, [notificationUnreadCount]);
+
   if (presentation === "pointing") {
     return <PointingOverlay />;
   }
@@ -260,6 +359,13 @@ export function OverlayRoot() {
       {showDraftCard && <DraftCard card={draftCard} />}
       {showMeetingNotesCard && <MeetingNotesCard card={meetingNotes} />}
       {showCallbackCard && <CallbackCard card={callbackCard} />}
+      {showNotifications && (
+        <NotificationInboxCard
+          notifications={desktopNotifications}
+          onClose={handleCloseNotifications}
+          onAction={handleNotificationAction}
+        />
+      )}
       {showAgendaCard && (
         <CalendarAgendaCard
           meetings={meetings}
@@ -275,6 +381,8 @@ export function OverlayRoot() {
           onCalendar={handleOpenCalendar}
           onCaptureNow={meetingCapture.captureNow}
           capturing={meetingCapture.recording}
+          onNotifications={handleOpenNotifications}
+          unreadCount={notificationUnreadCount}
           onSignOut={handleMenuSignOut}
         />
       )}

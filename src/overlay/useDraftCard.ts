@@ -16,6 +16,10 @@ import {
 } from "../lib/draft";
 import { logError } from "../lib/log";
 import { installDraftDebugInjector } from "../debug/draftDebug";
+import {
+  pendingDraftRestoreAction,
+  type DraftPresentation,
+} from "./draftVisibility";
 
 const COPIED_FLASH_MS = 2500;
 const REFINE_FAILED_FLASH_MS = 3000;
@@ -126,7 +130,7 @@ function parseCreated(payload: Record<string, unknown>): DraftInfo | null {
  */
 export function useDraftCard(
   room: Room | null,
-  presentation: "hidden" | "panel" | "pill" | "pointing",
+  presentation: DraftPresentation,
 ): DraftCardState {
   const [data, setData] = useState<DraftCardData>(INITIAL);
 
@@ -136,6 +140,7 @@ export function useDraftCard(
   dataRef.current = data;
   const presentationRef = useRef(presentation);
   presentationRef.current = presentation;
+  const pendingPanelRestoreRef = useRef(false);
 
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refineFailedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -160,6 +165,14 @@ export function useDraftCard(
       logError("useDraftCard: ensure panel visible", err);
     }
   }, []);
+
+  const requestPanelVisibility = useCallback(() => {
+    if (presentationRef.current === "pointing") {
+      pendingPanelRestoreRef.current = true;
+      return;
+    }
+    void ensurePanelVisible();
+  }, [ensurePanelVisible]);
 
   const markRefineFailed = useCallback(() => {
     setData((prev) =>
@@ -187,7 +200,7 @@ export function useDraftCard(
               channel: channel ?? prev.channel,
             }));
           }
-          void ensurePanelVisible();
+          requestPanelVisibility();
           break;
         }
         case "draft.created": {
@@ -197,7 +210,7 @@ export function useDraftCard(
             return;
           }
           setData({ ...INITIAL, phase: "shown", channel: draft.channel, draft });
-          void ensurePanelVisible();
+          requestPanelVisibility();
           break;
         }
         case "draft.updated": {
@@ -234,22 +247,28 @@ export function useDraftCard(
             return;
           }
           setData((prev) => ({ ...prev, phase: "error", draft: null, errorReason: reason }));
-          if (reason === "quota_exceeded") void ensurePanelVisible();
+          if (reason === "quota_exceeded") requestPanelVisibility();
           break;
         }
         default:
           break;
       }
     },
-    [ensurePanelVisible, markRefineFailed],
+    [markRefineFailed, requestPanelVisibility],
   );
 
   // An artifact can arrive while the full-screen pointer is in flight. Let the
-  // pointer finish, then guarantee that a Hidden pre-pointing state cannot
-  // swallow the card that just arrived.
+  // pointer finish, then restore only that newly-arrived artifact. An existing
+  // draft must not immediately reopen the overlay after the user hides it.
   useEffect(() => {
-    if (data.phase === "idle" || presentation !== "hidden") return;
-    void ensurePanelVisible();
+    const action = pendingDraftRestoreAction(
+      pendingPanelRestoreRef.current,
+      data.phase,
+      presentation,
+    );
+    if (action === "none" || action === "wait") return;
+    pendingPanelRestoreRef.current = false;
+    if (action === "restore") void ensurePanelVisible();
   }, [data.phase, presentation, ensurePanelVisible]);
 
   // New drafts ride the same data channel as element.point / screen_save.created
@@ -366,6 +385,7 @@ export function useDraftCard(
   );
 
   const reset = useCallback(() => {
+    pendingPanelRestoreRef.current = false;
     if (dataRef.current.phase === "idle") return;
     if (copiedTimerRef.current) {
       clearTimeout(copiedTimerRef.current);

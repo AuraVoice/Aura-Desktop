@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { GlassSurface } from "./GlassSurface";
-import { CalendarIcon, DashboardIcon, FeedbackIcon, RecordDotIcon, SignOutIcon } from "./icons";
+import { BellIcon, CalendarIcon, DashboardIcon, FeedbackIcon, RecordDotIcon, SignOutIcon } from "./icons";
 import { kebabMenu as copy, subscription as subCopy } from "../lib/copy";
 import { meetingNotes as notesCopy } from "../lib/meetingCopy";
+import { notifications as notifCopy } from "../lib/notificationCopy";
 import { sendFeedback } from "../lib/feedback";
 import { openDashboard } from "../lib/dashboardLink";
 import { logError } from "../lib/log";
@@ -33,6 +34,8 @@ export function KebabMenu({
   onCalendar,
   onCaptureNow,
   capturing,
+  onNotifications,
+  unreadCount,
   onSignOut,
 }: {
   voiceStatus: string;
@@ -41,6 +44,9 @@ export function KebabMenu({
   /** Manual meeting-notes capture (the Google Meet path, no auto-detect). */
   onCaptureNow: () => void;
   capturing: boolean;
+  /** Open the notification inbox (below-bar slot). */
+  onNotifications: () => void;
+  unreadCount: number;
   onSignOut: () => void;
 }) {
   const [feedbackSending, setFeedbackSending] = useState(false);
@@ -110,6 +116,13 @@ export function KebabMenu({
           >
             <RecordDotIcon />
             <span>{capturing ? notesCopy.captureNowBusy : notesCopy.captureNow}</span>
+          </button>
+          <button type="button" className="kebab-menu-item" onClick={onNotifications}>
+            <BellIcon />
+            <span>{notifCopy.menuRow}</span>
+            {unreadCount > 0 && (
+              <span className="kebab-menu-badge">{unreadCount > 9 ? "9+" : unreadCount}</span>
+            )}
           </button>
           <button type="button" className="kebab-menu-item" onClick={() => void openDashboard()}>
             <DashboardIcon />

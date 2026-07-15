@@ -138,6 +138,7 @@
 }
 
 .meeting-notes-card-view-all,
+.meeting-notes-card-retry,
 .meeting-notes-card-turn-off {
   font-family: var(--font-body);
   font-size: 11px;
@@ -151,11 +152,18 @@
 }
 
 .meeting-notes-card-view-all:hover,
+.meeting-notes-card-retry:hover,
 .meeting-notes-card-turn-off:hover {
   color: var(--glass-text-bright);
 }
 
 .meeting-notes-card-view-all {
+  font-weight: 600;
+  color: var(--glass-text-bright);
+  text-decoration: none;
+}
+
+.meeting-notes-card-retry {
   font-weight: 600;
   color: var(--glass-text-bright);
   text-decoration: none;

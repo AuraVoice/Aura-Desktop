@@ -140,3 +140,19 @@
 .kebab-menu-item-danger svg {
   color: var(--glass-danger);
 }
+
+/* Unread badge on the Notifications row - pushed to the right edge, accent pill
+   with on-accent text, same treatment as the Upgrade button (KebabMenu.css:80). */
+.kebab-menu-badge {
+  margin-left: auto;
+  flex-shrink: 0;
+  min-width: 18px;
+  padding: 1px 6px;
+  border-radius: 9px;
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 700;
+  text-align: center;
+  color: #04211c;
+  background: var(--glass-accent);
+}

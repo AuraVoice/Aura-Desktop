@@ -16,6 +16,12 @@ import { AuthRequiredError } from "../lib/api";
 import { trackEvent } from "../lib/analytics";
 import { logError, logInfo } from "../lib/log";
 import { installMeetingDebug } from "../debug/meetingDebug";
+import {
+  bindMeetingActivityOwner,
+  type MeetingActivity,
+  upsertMeetingActivity,
+} from "../lib/meetingActivity";
+import { notifyLocal } from "../lib/desktopNotifications";
 
 /** Fallback meeting length when the calendar event has no end time. */
 const DEFAULT_MEETING_MS = 60 * 60_000;
@@ -86,13 +92,16 @@ export interface MeetingCaptureState {
   captureNow: () => void;
   /** The bar's stop control (after its own confirm step). */
   stopCapture: () => void;
-  /** Last meeting handed to the backend for synthesis - useMeetingNotes polls
-   * it to ready. */
-  lastCompletedMeetingId: string | null;
+  /** Durable local lifecycle rows, newest first. */
+  activities: MeetingActivity[];
+  /** Clear local backoff and safely re-run the idempotent upload pump. Returns
+   *  false when there is no retryable local recording left to retry. */
+  retryNow: (meetingId: string) => boolean;
 }
 
 interface MeetingCaptureInputs {
   uid: string | null;
+  appHidden: boolean;
   events: UpcomingMeeting[];
   isArmed: (eventId: string) => boolean;
   /** Arm-state revision counter so watch scheduling reruns on toggles. */
@@ -109,18 +118,22 @@ interface MeetingCaptureInputs {
  * (a plan state, surfaced with an Upgrade pointer, mirroring the voice cap).
  */
 export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureState {
-  const { uid, events, isArmed, armRevision } = inputs;
+  const { uid, appHidden, events, isArmed, armRevision } = inputs;
   const signedIn = uid !== null;
 
   const [recording, setRecording] = useState(false);
   const [paused, setPaused] = useState(false);
   const [capBlocked, setCapBlocked] = useState(false);
-  const [lastCompletedMeetingId, setLastCompletedMeetingId] = useState<string | null>(null);
+  const [activities, setActivities] = useState<MeetingActivity[]>([]);
+  const activitiesRef = useRef(activities);
+  activitiesRef.current = activities;
 
   const eventsRef = useRef(events);
   eventsRef.current = events;
   const uidRef = useRef(uid);
   uidRef.current = uid;
+  const appHiddenRef = useRef(appHidden);
+  appHiddenRef.current = appHidden;
   const identityEpochRef = useRef(0);
   const isArmedRef = useRef(isArmed);
   isArmedRef.current = isArmed;
@@ -156,12 +169,33 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
     setRecording(false);
     setPaused(false);
     setCapBlocked(false);
-    setLastCompletedMeetingId(null);
+    setActivities([]);
     for (const eventId of watchedRef.current) {
       void invoke("stop_join_watch", { eventId }).catch(() => undefined);
     }
     watchedRef.current.clear();
+    if (uid) {
+      void bindMeetingActivityOwner(uid)
+        .then((rows) => {
+          if (uidRef.current === uid) setActivities(rows);
+        })
+        .catch((err) => logError("useMeetingCapture: hydrate activity", err));
+    }
   }, [uid]);
+
+  const recordActivity = useCallback(
+    (activity: MeetingActivity) => {
+      if (!uid || uidRef.current !== uid) return;
+      setActivities((current) => [
+        activity,
+        ...current.filter((row) => row.meetingId !== activity.meetingId),
+      ]);
+      void upsertMeetingActivity(uid, activity).catch((err) =>
+        logError("useMeetingCapture: persist activity", err),
+      );
+    },
+    [uid],
+  );
 
   // ── Watch scheduling ────────────────────────────────────────────────────
   // Keep Rust's join detector armed for exactly the armed meetings whose
@@ -238,6 +272,18 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
               eventId,
             });
             if (!isCurrent()) return;
+            recordActivity({
+              meetingId: claim.meetingId,
+              eventId,
+              phase: "recording",
+              segmentCount: 0,
+              uploadedCount: 0,
+              lastAttemptAt: null,
+              nextRetryAt: null,
+              failureCode: null,
+              retryable: false,
+              updatedAt: Date.now(),
+            });
             trackEvent("meeting_capture_started", { rejoined: claim.rejoined });
             return;
           } catch (err) {
@@ -266,7 +312,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
         }
       }
     },
-    [uid],
+    [uid, recordActivity],
   );
 
   const handleJoinDetected = useCallback(
@@ -339,16 +385,59 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
       const snapshot = await invoke<QueueSnapshot>("queue_snapshot");
       if (!isCurrent()) return;
       const now = Date.now();
+      for (const activity of activitiesRef.current) {
+        if (snapshot.meetings?.[activity.meetingId]) continue;
+        if (!["saved_local", "uploading", "needs_attention"].includes(activity.phase)) {
+          continue;
+        }
+        recordActivity({
+          ...activity,
+          phase: "failed",
+          nextRetryAt: null,
+          failureCode: "upload_expired",
+          retryable: false,
+          updatedAt: now,
+        });
+      }
       for (const [meetingId, meeting] of Object.entries(snapshot.meetings ?? {})) {
         if (!isCurrent()) return;
         // Native filtering is authoritative. Keep this check as defense in
         // depth against a future serialization or command regression.
         if (meeting.ownerUid !== run.uid) continue;
         const backoff = backoffRef.current.get(meetingId);
+        let uploadedCount = meeting.segments.filter((segment) => segment.uploaded).length;
+        recordActivity({
+          meetingId,
+          eventId: meeting.eventId,
+          phase: meeting.completed
+            ? uploadedCount < meeting.segments.length
+              ? "uploading"
+              : "saved_local"
+            : "recording",
+          segmentCount: meeting.segments.length,
+          uploadedCount,
+          lastAttemptAt: null,
+          nextRetryAt: backoff?.nextAt ?? null,
+          failureCode: backoff ? "upload_storage_unavailable" : null,
+          retryable: backoff !== undefined,
+          updatedAt: now,
+        });
         if (backoff && backoff.nextAt > now) continue;
         try {
           for (const segment of meeting.segments) {
             if (segment.uploaded) continue;
+            recordActivity({
+              meetingId,
+              eventId: meeting.eventId,
+              phase: "uploading",
+              segmentCount: meeting.segments.length,
+              uploadedCount,
+              lastAttemptAt: Date.now(),
+              nextRetryAt: null,
+              failureCode: null,
+              retryable: false,
+              updatedAt: Date.now(),
+            });
             const raw = await invoke("read_segment", { meetingId, seq: segment.seq });
             if (!isCurrent()) return;
             await uploadSegment(
@@ -362,6 +451,19 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
             if (!isCurrent()) return;
             await invoke("mark_segment_uploaded", { meetingId, seq: segment.seq });
             if (!isCurrent()) return;
+            uploadedCount += 1;
+            recordActivity({
+              meetingId,
+              eventId: meeting.eventId,
+              phase: "uploading",
+              segmentCount: meeting.segments.length,
+              uploadedCount,
+              lastAttemptAt: Date.now(),
+              nextRetryAt: null,
+              failureCode: null,
+              retryable: false,
+              updatedAt: Date.now(),
+            });
           }
           const allUploaded = meeting.segments.every((segment) => segment.uploaded)
             || meeting.segments.length === 0;
@@ -388,9 +490,18 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
                 reason: meeting.completeReason || "ended",
               });
               if (!isCurrent()) return;
-              if (meeting.segments.length > 0) {
-                setLastCompletedMeetingId(meetingId);
-              }
+              recordActivity({
+                meetingId,
+                eventId: meeting.eventId,
+                phase: meeting.segments.length > 0 ? "processing" : "failed",
+                segmentCount: meeting.segments.length,
+                uploadedCount: meeting.segments.length,
+                lastAttemptAt: Date.now(),
+                nextRetryAt: null,
+                failureCode: meeting.segments.length > 0 ? null : "no_audio",
+                retryable: false,
+                updatedAt: Date.now(),
+              });
               trackEvent("meeting_capture_completed", {
                 segments: meeting.segments.length,
                 reason: meeting.completeReason || "ended",
@@ -405,18 +516,46 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
           if (!isCurrent()) return;
           if (err instanceof AuthRequiredError) throw err;
           if (err instanceof MeetingGoneError) {
-            // The backend forgot this meeting (claim lock replaced it, doc
-            // expired): retrying forever cannot help. Drop the local entry.
-            logError(`useMeetingCapture: pump ${meetingId} gone on backend, acking`, err);
-            await invoke("mark_meeting_acked", { meetingId }).catch(() => undefined);
-            backoffRef.current.delete(meetingId);
-            continue;
+            // A generic 404 is not proof that deleting the only recoverable
+            // recording is safe. It can also mean a route rollout mismatch or
+            // a temporarily inconsistent backend. Keep the encrypted queue
+            // entry and retry with the normal bounded backoff. Only an
+            // explicit terminal backend contract may authorize deletion.
+            logError(`useMeetingCapture: pump ${meetingId} missing on backend, retaining`, err);
           }
           const failures = (backoff?.failures ?? 0) + 1;
+          const nextAt = now
+            + Math.min(BACKOFF_BASE_MS * 2 ** (failures - 1), BACKOFF_MAX_MS);
           backoffRef.current.set(meetingId, {
             failures,
-            nextAt: now + Math.min(BACKOFF_BASE_MS * 2 ** (failures - 1), BACKOFF_MAX_MS),
+            nextAt,
           });
+          recordActivity({
+            meetingId,
+            eventId: meeting.eventId,
+            phase: "needs_attention",
+            segmentCount: meeting.segments.length,
+            uploadedCount,
+            lastAttemptAt: Date.now(),
+            nextRetryAt: nextAt,
+            failureCode: "upload_storage_unavailable",
+            retryable: true,
+            updatedAt: Date.now(),
+          });
+          void notifyLocal(
+            {
+              type: "meeting_upload_pending",
+              severity: "warning",
+              title: "A meeting is saved securely",
+              body: "Aura could not upload it yet. It will retry automatically.",
+              dedupKey: `meeting:${meetingId}:upload_pending`,
+              action: "retry_meeting_upload",
+              resourceId: meetingId,
+              toastPolicy: "when_hidden",
+              sensitive: true,
+            },
+            { appHidden: appHiddenRef.current, ownerUid: run.uid },
+          );
           logError(`useMeetingCapture: pump ${meetingId} (attempt ${failures})`, err);
         }
       }
@@ -430,7 +569,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
         pumpRunningRef.current = null;
       }
     }
-  }, [uid]);
+  }, [uid, recordActivity]);
 
   const allSegmentsUploaded = async (
     meetingId: string,
@@ -556,6 +695,26 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
     return installMeetingDebug({ captureNow, stopCapture, pump: () => void pump() });
   }, [captureNow, stopCapture, pump]);
 
+  const retryNow = useCallback(
+    (meetingId: string): boolean => {
+      const activity = activities.find((row) => row.meetingId === meetingId);
+      if (!activity?.retryable || !uid) return false;
+      backoffRef.current.delete(meetingId);
+      recordActivity({
+        ...activity,
+        phase: activity.uploadedCount > 0 ? "uploading" : "saved_local",
+        nextRetryAt: null,
+        failureCode: null,
+        retryable: false,
+        updatedAt: Date.now(),
+      });
+      trackEvent("meeting_upload_attempt", { retry_now: true });
+      void pump();
+      return true;
+    },
+    [activities, uid, recordActivity, pump],
+  );
+
   return {
     recording,
     paused,
@@ -563,6 +722,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
     dismissCapBlocked,
     captureNow,
     stopCapture,
-    lastCompletedMeetingId,
+    activities,
+    retryNow,
   };
 }

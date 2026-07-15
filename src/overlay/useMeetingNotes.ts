@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { load, type Store } from "@tauri-apps/plugin-store";
-import { fetchMeeting, fetchRecentMeetings, type MeetingDoc } from "../lib/meetings";
+import {
+  fetchMeeting,
+  fetchRecentMeetings,
+  retryMeeting,
+  type MeetingDoc,
+} from "../lib/meetings";
+import type { MeetingActivity } from "../lib/meetingActivity";
 import { localDateString } from "../lib/memory";
 import { trackEvent } from "../lib/analytics";
 import { logError } from "../lib/log";
@@ -36,7 +42,9 @@ function prunedToRecent(map: IdDateMap | undefined): IdDateMap {
 export interface MeetingNotesState {
   visible: boolean;
   doc: MeetingDoc | null;
+  activity: MeetingActivity | null;
   dismiss: () => void;
+  retry: () => void;
   turnOff: () => void;
   /** Silent clear (sign-out, call start); dismiss() is the user-facing one. */
   reset: () => void;
@@ -47,8 +55,10 @@ interface MeetingNotesInputs {
   signedIn: boolean;
   callLive: boolean;
   draftActive: boolean;
-  /** From useMeetingCapture: the meeting most recently handed to synthesis. */
-  lastCompletedMeetingId: string | null;
+  activities: MeetingActivity[];
+  retryUpload: (meetingId: string) => void;
+  /** Ready/attention events arriving after the foreground polling window. */
+  notificationMeetingIds: string[];
 }
 
 /**
@@ -61,10 +71,19 @@ interface MeetingNotesInputs {
  * catch-up card's consumed-day rule.
  */
 export function useMeetingNotes(inputs: MeetingNotesInputs): MeetingNotesState {
-  const { presentation, signedIn, callLive, draftActive, lastCompletedMeetingId } = inputs;
+  const {
+    presentation,
+    signedIn,
+    callLive,
+    draftActive,
+    activities,
+    retryUpload,
+    notificationMeetingIds,
+  } = inputs;
 
   const [visible, setVisible] = useState(false);
   const [doc, setDoc] = useState<MeetingDoc | null>(null);
+  const [activity, setActivity] = useState<MeetingActivity | null>(null);
 
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
@@ -91,7 +110,8 @@ export function useMeetingNotes(inputs: MeetingNotesInputs): MeetingNotesState {
   /** Shows one ready note if allowed; returns whether it rendered. */
   const present = useCallback(
     async (candidate: MeetingDoc): Promise<boolean> => {
-      if (candidate.status !== "ready" || candidate.note === null) return false;
+      if (candidate.status === "ready" && candidate.note === null) return false;
+      if (!["ready", "excluded", "failed"].includes(candidate.status)) return false;
       if (callLiveRef.current || draftActiveRef.current) return false;
       try {
         const store = await getStore();
@@ -100,14 +120,16 @@ export function useMeetingNotes(inputs: MeetingNotesInputs): MeetingNotesState {
         if (seenRef.current[candidate.meetingId]) return false;
 
         setDoc(candidate);
+        setActivity(null);
         setVisible(true);
         // Seen is consumed only now, when a card actually rendered.
         seenRef.current = { ...seenRef.current, [candidate.meetingId]: localDateString() };
         await store.set(SEEN_KEY, seenRef.current);
         await store.save();
         trackEvent("meeting_note_card_shown", {
-          action_items: candidate.note.actionItems.length,
-          one_sided: candidate.note.oneSided,
+          status: candidate.status,
+          action_items: candidate.note?.actionItems.length ?? 0,
+          one_sided: candidate.note?.oneSided ?? false,
         });
         return true;
       } catch (err) {
@@ -118,18 +140,20 @@ export function useMeetingNotes(inputs: MeetingNotesInputs): MeetingNotesState {
     [getStore, ensureSeenLoaded],
   );
 
-  // Trigger 1: poll a just-completed capture to ready.
+  const processingActivity = activities.find((item) => item.phase === "processing") ?? null;
+
+  // Trigger 1: poll the newest completed capture to a committed terminal state.
   useEffect(() => {
-    if (!signedIn || !lastCompletedMeetingId) return;
+    if (!signedIn || !processingActivity) return;
     let cancelled = false;
     const deadline = Date.now() + READY_POLL_DEADLINE_MS;
 
     const tick = async () => {
       if (cancelled || Date.now() > deadline) return;
-      const fetched = await fetchMeeting(lastCompletedMeetingId, FETCH_BUDGET_MS);
+      const fetched = await fetchMeeting(processingActivity.meetingId, FETCH_BUDGET_MS);
       if (cancelled) return;
       if (fetched && (fetched.status === "ready" || fetched.status === "excluded" || fetched.status === "failed")) {
-        if (fetched.status === "ready") void present(fetched);
+        void present(fetched);
         return; // terminal either way - stop polling
       }
       timer = setTimeout(() => void tick(), READY_POLL_INTERVAL_MS);
@@ -139,7 +163,48 @@ export function useMeetingNotes(inputs: MeetingNotesInputs): MeetingNotesState {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [signedIn, lastCompletedMeetingId, present]);
+  }, [signedIn, processingActivity?.meetingId, present]);
+
+  // Durable local queue state is immediately user-visible and survives restart.
+  useEffect(() => {
+    if (presentation !== "panel" || !signedIn || callLive || draftActive) return;
+    const candidate = activities[0];
+    if (!candidate || candidate.phase === "ready") return;
+    if (doc?.meetingId === candidate.meetingId
+      && ["ready", "excluded", "failed"].includes(doc.status)) return;
+    const seenKey = `${candidate.meetingId}:${candidate.phase}`;
+    void ensureSeenLoaded().then(() => {
+      if (seenRef.current[seenKey]) return;
+      setActivity(candidate);
+      setDoc(null);
+      setVisible(true);
+    });
+  }, [
+    presentation,
+    signedIn,
+    callLive,
+    draftActive,
+    activities,
+    doc,
+    ensureSeenLoaded,
+  ]);
+
+  // An outbox event is the continuation path after foreground polling ends.
+  useEffect(() => {
+    if (!signedIn || notificationMeetingIds.length === 0) return;
+    let cancelled = false;
+    void Promise.all(
+      notificationMeetingIds.map((meetingId) => fetchMeeting(meetingId, FETCH_BUDGET_MS)),
+    ).then((rows) => {
+      if (cancelled) return;
+      const terminal = rows.find((row) =>
+        row !== null && ["ready", "excluded", "failed"].includes(row.status));
+      if (terminal) void present(terminal);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [signedIn, notificationMeetingIds, present]);
 
   // Trigger 2: entering the signed-in panel, latest ready-and-unseen note.
   useEffect(() => {
@@ -154,9 +219,10 @@ export function useMeetingNotes(inputs: MeetingNotesInputs): MeetingNotesState {
         await ensureSeenLoaded();
         const recent = await fetchRecentMeetings(RECENT_LIMIT, FETCH_BUDGET_MS);
         if (cancelled || recent === null) return;
-        const candidate = recent.find(
-          (item) => item.status === "ready" && item.note !== null && !seenRef.current[item.meetingId],
-        );
+        const candidate = recent.find((item) =>
+          ["ready", "excluded", "failed"].includes(item.status)
+          && (item.status !== "ready" || item.note !== null)
+          && !seenRef.current[item.meetingId]);
         if (candidate) await present(candidate);
       } catch (err) {
         logError("useMeetingNotes: panel trigger", err);
@@ -173,6 +239,7 @@ export function useMeetingNotes(inputs: MeetingNotesInputs): MeetingNotesState {
     if (!visibleRef.current) return;
     setVisible(false);
     setDoc(null);
+    setActivity(null);
   }, []);
 
   // A call or draft taking the slot clears the card silently.
@@ -182,9 +249,29 @@ export function useMeetingNotes(inputs: MeetingNotesInputs): MeetingNotesState {
 
   const dismiss = useCallback(() => {
     if (!visibleRef.current) return;
+    if (activity) {
+      const seenKey = `${activity.meetingId}:${activity.phase}`;
+      seenRef.current = { ...seenRef.current, [seenKey]: localDateString() };
+      void getStore().then(async (store) => {
+        await store.set(SEEN_KEY, seenRef.current);
+        await store.save();
+      });
+    }
     reset();
     trackEvent("meeting_note_card_dismissed", {});
-  }, [reset]);
+  }, [activity, getStore, reset]);
+
+  const retry = useCallback(() => {
+    if (activity?.retryable) {
+      retryUpload(activity.meetingId);
+      return;
+    }
+    if (doc?.retryable) {
+      void retryMeeting(doc.meetingId).catch((err) =>
+        logError("useMeetingNotes: retry processing", err),
+      );
+    }
+  }, [activity, doc, retryUpload]);
 
   const turnOff = useCallback(() => {
     (async () => {
@@ -200,5 +287,5 @@ export function useMeetingNotes(inputs: MeetingNotesInputs): MeetingNotesState {
     trackEvent("meeting_note_card_toggle_off", {});
   }, [getStore, reset]);
 
-  return { visible, doc, dismiss, turnOff, reset };
+  return { visible, doc, activity, dismiss, retry, turnOff, reset };
 }

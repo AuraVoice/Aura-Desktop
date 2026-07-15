@@ -25,9 +25,8 @@ export class MeetingClaimConflictError extends Error {
   }
 }
 
-/** The backend no longer knows this meeting (404). Retrying can never
- * succeed; the upload pump acks the local entry away instead of backing off
- * against it for the full retention window. */
+/** The backend did not resolve this meeting. The upload pump retains the local
+ * encrypted queue because a generic 404 is not a destructive-delete contract. */
 export class MeetingGoneError extends Error {
   constructor() {
     super("Meeting no longer exists on the backend");
@@ -61,12 +60,28 @@ export type MeetingStatus =
   | "excluded"
   | "failed";
 
+export type MeetingProcessingStage =
+  | "capturing"
+  | "uploading"
+  | "queued"
+  | "transcribing"
+  | "building_insights"
+  | "ready";
+
 export interface MeetingDoc {
   meetingId: string;
   eventId: string;
   title: string;
   status: MeetingStatus;
+  processingStage: MeetingProcessingStage | null;
+  failureCode: string | null;
+  failureMessage: string | null;
+  retryable: boolean;
+  attemptCount: number;
+  lastErrorAt: string | null;
+  statusRevision: number;
   createdAt: string;
+  updatedAt: string;
   note: MeetingNote | null;
 }
 
@@ -201,20 +216,56 @@ function parseNote(raw: unknown): MeetingNote | null {
   };
 }
 
-function parseMeetingDoc(raw: unknown): MeetingDoc | null {
+const meetingStatuses = new Set<MeetingStatus>([
+  "capturing",
+  "uploaded",
+  "synthesizing",
+  "ready",
+  "excluded",
+  "failed",
+]);
+const processingStages = new Set<MeetingProcessingStage>([
+  "capturing",
+  "uploading",
+  "queued",
+  "transcribing",
+  "building_insights",
+  "ready",
+]);
+
+export function parseMeetingDoc(raw: unknown): MeetingDoc | null {
   if (typeof raw !== "object" || raw === null) return null;
   const row = raw as Record<string, unknown>;
   const meetingId = typeof row.meeting_id === "string" ? row.meeting_id : "";
   const status = typeof row.status === "string" ? row.status : "";
-  if (!meetingId || !status) return null;
+  if (!meetingId || !meetingStatuses.has(status as MeetingStatus)) return null;
+  const processingStage = typeof row.processing_stage === "string"
+    && processingStages.has(row.processing_stage as MeetingProcessingStage)
+    ? row.processing_stage as MeetingProcessingStage
+    : null;
   return {
     meetingId,
     eventId: typeof row.event_id === "string" ? row.event_id : "",
     title: typeof row.title === "string" ? row.title : "",
     status: status as MeetingStatus,
+    processingStage,
+    failureCode: typeof row.failure_code === "string" ? row.failure_code : null,
+    failureMessage: typeof row.failure_message === "string" ? row.failure_message : null,
+    retryable: row.retryable === true,
+    attemptCount: typeof row.attempt_count === "number" ? row.attempt_count : 0,
+    lastErrorAt: typeof row.last_error_at === "string" ? row.last_error_at : null,
+    statusRevision: typeof row.status_revision === "number" ? row.status_revision : 0,
     createdAt: typeof row.created_at === "string" ? row.created_at : "",
+    updatedAt: typeof row.updated_at === "string" ? row.updated_at : "",
     note: parseNote(row.note),
   };
+}
+
+export async function retryMeeting(meetingId: string): Promise<void> {
+  const response = await authFetch(`/meetings/${meetingId}/retry`, { method: "POST" });
+  if (!response.ok && response.status !== 409) {
+    throw new Error(`Meeting retry failed (${response.status})`);
+  }
 }
 
 /** Ambient-surface read (null on every failure), like fetchUpcomingMeetings:

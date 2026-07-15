@@ -1,0 +1,242 @@
+/* Notification inbox card, same slot and visual language as the meeting-notes
+   and catch-up cards. Heights must agree with OverlayRoot: BAR_HEIGHT 64 + gap
+   12 (overlay-column) + card 288 = NOTIFICATION_INBOX_CARD_HEIGHT 300 extra.
+   The card fills the extra window height; the row list scrolls internally. */
+
+.glass-surface.notification-inbox-card {
+  flex: 1 1 auto;
+  min-height: 0;
+  border-radius: 28px;
+  animation: notification-inbox-card-enter 0.22s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+
+@keyframes notification-inbox-card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .glass-surface.notification-inbox-card {
+    animation: none;
+  }
+}
+
+.notification-inbox-card-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+  padding: 14px 14px 12px 18px;
+  box-sizing: border-box;
+}
+
+.notification-inbox-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.notification-inbox-card-title {
+  flex: 1;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--glass-text-dim);
+  white-space: nowrap;
+}
+
+.notification-inbox-card-mark-all {
+  font-family: var(--font-body);
+  font-size: 11px;
+  color: var(--glass-text-dim);
+  background: none;
+  border: none;
+  padding: 2px 0;
+  cursor: pointer;
+  text-decoration: underline;
+  transition: color 0.15s ease;
+}
+
+.notification-inbox-card-mark-all:hover {
+  color: var(--glass-text-bright);
+}
+
+.notification-permission-explainer {
+  flex-shrink: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--glass-border-flat);
+  border-radius: 14px;
+  background: var(--glass-field-fill);
+}
+
+.notification-permission-explainer p {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--glass-text-bright);
+}
+
+.notification-permission-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.notification-permission-actions button {
+  border: none;
+  padding: 0;
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--glass-text-bright);
+  background: none;
+  cursor: pointer;
+  text-decoration: underline;
+}
+
+.notification-permission-actions button:first-child {
+  color: var(--glass-accent);
+}
+
+.notification-inbox-card-empty {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--glass-text-dim);
+  font-family: var(--font-body);
+  font-size: 12.5px;
+}
+
+.notification-inbox-card-empty svg {
+  width: 26px;
+  height: 26px;
+  opacity: 0.5;
+}
+
+.notification-inbox-card-list {
+  flex: 1;
+  min-height: 0;
+  margin: 0;
+  padding: 0 6px 0 0;
+  list-style: none;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.notification-inbox-card-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.notification-inbox-card-list::-webkit-scrollbar-thumb {
+  background: var(--glass-border-flat);
+  border-radius: 3px;
+}
+
+.notification-inbox-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 8px 4px 8px 2px;
+  border-bottom: 1px solid var(--glass-border-flat);
+}
+
+.notification-inbox-row:last-child {
+  border-bottom: none;
+}
+
+.notification-inbox-row-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--glass-accent);
+  opacity: 0.35;
+}
+
+.notification-inbox-row-unread .notification-inbox-row-dot {
+  opacity: 1;
+}
+
+.notification-inbox-row-warning .notification-inbox-row-dot,
+.notification-inbox-row-error .notification-inbox-row-dot {
+  background: var(--glass-danger);
+}
+
+.notification-inbox-row-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.notification-inbox-row-line {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.notification-inbox-row-title {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--glass-text-bright);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.notification-inbox-row-time {
+  flex-shrink: 0;
+  font-family: var(--font-body);
+  font-size: 10.5px;
+  color: var(--glass-text-dim);
+}
+
+.notification-inbox-row-text {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--glass-text-dim);
+  overflow-wrap: break-word;
+}
+
+.notification-inbox-row-action {
+  align-self: flex-start;
+  margin-top: 2px;
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--glass-text-bright);
+  background: none;
+  border: none;
+  padding: 2px 0;
+  cursor: pointer;
+  text-decoration: underline;
+  transition: color 0.15s ease;
+}
+
+.notification-inbox-row-action:hover {
+  color: var(--glass-accent);
+}

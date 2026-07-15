@@ -39,4 +39,31 @@ export const meetingNotes = {
   viewAll: "View all",
   dismissTooltip: "Dismiss",
   turnOff: "Turn these cards off",
+  savedLocal: (segments: number) =>
+    `Saved securely on this device${segments > 0 ? ` (${segments} segment${segments === 1 ? "" : "s"})` : ""}.`,
+  uploading: (uploaded: number, total: number) =>
+    `Uploading ${Math.min(uploaded + 1, total)} of ${total} saved segments.`,
+  processingTranscript: "Processing the transcript securely.",
+  buildingInsights: "Building your meeting insights.",
+  processing: "Processing your meeting.",
+  retryNow: "Retry now",
 } as const;
+
+const failureCopy: Record<string, string> = {
+  upload_storage_unavailable:
+    "Your recording is safe on this device. Aura could not upload it yet.",
+  upload_auth_required: "Sign in to finish processing this meeting.",
+  upload_expired: "This saved recording expired before it could be processed.",
+  no_audio: "Aura did not capture enough audio to create insights.",
+  audio_rejected: "Aura could not read this recording.",
+  transcription_unavailable: "Transcription is taking longer than expected.",
+  insight_generation_failed: "Aura could not build insights for this recording.",
+  excluded_sensitive: "This meeting was skipped by your private-meeting rules.",
+  processing_timeout: "Processing did not finish in time.",
+};
+
+export function meetingFailureCopy(code: string | null): string {
+  return code && failureCopy[code]
+    ? failureCopy[code]
+    : "Aura could not finish this meeting yet.";
+}

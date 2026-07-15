@@ -1,6 +1,6 @@
 [package]
 name = "aura-desktop"
-version = "0.2.3"
+version = "0.2.4"
 description = "Aura Desktop companion app"
 authors = ["Aura"]
 edition = "2021"
@@ -35,6 +35,7 @@ tauri-plugin-process = "2.3.1"
 tauri-plugin-http = "2.5.9"
 tauri-plugin-autostart = "2.5.1"
 tauri-plugin-clipboard-manager = "2"
+tauri-plugin-notification = "2"
 # Only for time::sleep in updater.rs's re-check loop - tauri already pulls
 # tokio in, this just makes it directly usable.
 tokio = { version = "1", features = ["time"] }

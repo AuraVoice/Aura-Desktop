@@ -1,7 +1,7 @@
 import { GlassSurface } from "./GlassSurface";
 import { BarIconButton } from "./BarIconButton";
 import { CloseIcon } from "./icons";
-import { meetingNotes as copy } from "../lib/meetingCopy";
+import { meetingFailureCopy, meetingNotes as copy } from "../lib/meetingCopy";
 import { openDashboard } from "../lib/dashboardLink";
 import type { MeetingNotesState } from "./useMeetingNotes";
 import "./MeetingNotesCard.css";
@@ -15,34 +15,59 @@ import "./MeetingNotesCard.css";
  */
 export function MeetingNotesCard({ card }: { card: MeetingNotesState }) {
   const doc = card.doc;
-  if (!doc || !doc.note) return null;
-  const note = doc.note;
+  const activity = card.activity;
+  if (!doc && !activity) return null;
+  const note = doc?.note ?? null;
 
-  const caveat = note.oneSided
+  const caveat = note?.oneSided
     ? copy.oneSidedCaveat
-    : note.partial
+    : note?.partial
       ? copy.partialCaveat
-      : note.language && !note.language.startsWith("en")
+      : note?.language && !note.language.startsWith("en")
         ? copy.languageCaveat(note.language)
         : null;
-  const bullets = note.actionItems.length > 0 ? note.actionItems : note.decisions;
+  const bullets = note
+    ? note.actionItems.length > 0
+      ? note.actionItems
+      : note.decisions
+    : [];
   const bulletsHeading =
-    note.actionItems.length > 0 ? copy.actionItemsHeading : copy.decisionsHeading;
+    note && note.actionItems.length > 0 ? copy.actionItemsHeading : copy.decisionsHeading;
+  const statusMessage = activity
+    ? activity.phase === "saved_local"
+      ? copy.savedLocal(activity.segmentCount)
+      : activity.phase === "uploading"
+        ? copy.uploading(activity.uploadedCount, activity.segmentCount)
+        : activity.phase === "processing"
+          ? copy.processing
+          : activity.phase === "recording"
+            ? "Recording this meeting securely."
+            : meetingFailureCopy(activity.failureCode)
+    : doc?.status === "excluded"
+      ? meetingFailureCopy(doc.failureCode ?? "excluded_sensitive")
+      : doc?.status === "failed"
+        ? meetingFailureCopy(doc.failureCode)
+        : doc?.processingStage === "building_insights"
+          ? copy.buildingInsights
+          : doc?.processingStage === "transcribing"
+            ? copy.processingTranscript
+            : copy.processing;
+  const retryable = activity?.retryable === true || doc?.retryable === true;
 
   return (
     <GlassSurface className="meeting-notes-card" draggable={false}>
       <div className="meeting-notes-card-inner">
         <div className="meeting-notes-card-header">
           <span className="meeting-notes-card-title">{copy.cardTitle}</span>
-          <span className="meeting-notes-card-meeting" title={doc.title}>
-            {doc.title}
+          <span className="meeting-notes-card-meeting" title={doc?.title ?? ""}>
+            {doc?.title ?? "Meeting activity"}
           </span>
           <BarIconButton title={copy.dismissTooltip} onClick={card.dismiss}>
             <CloseIcon />
           </BarIconButton>
         </div>
 
-        <p className="meeting-notes-card-summary">{note.summary}</p>
+        <p className="meeting-notes-card-summary">{note?.summary || statusMessage}</p>
 
         {bullets.length > 0 && (
           <div className="meeting-notes-card-items">
@@ -65,6 +90,15 @@ export function MeetingNotesCard({ card }: { card: MeetingNotesState }) {
           >
             {copy.viewAll}
           </button>
+          {retryable && (
+            <button
+              type="button"
+              className="meeting-notes-card-retry"
+              onClick={card.retry}
+            >
+              {copy.retryNow}
+            </button>
+          )}
           <button type="button" className="meeting-notes-card-turn-off" onClick={card.turnOff}>
             {copy.turnOff}
           </button>
