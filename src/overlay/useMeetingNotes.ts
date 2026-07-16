@@ -51,7 +51,7 @@ export interface MeetingNotesState {
 }
 
 interface MeetingNotesInputs {
-  presentation: "hidden" | "panel" | "pill" | "pointing";
+  presentation: "hidden" | "panel" | "companion" | "pointing";
   signedIn: boolean;
   callLive: boolean;
   draftActive: boolean;
@@ -167,7 +167,7 @@ export function useMeetingNotes(inputs: MeetingNotesInputs): MeetingNotesState {
 
   // Durable local queue state is immediately user-visible and survives restart.
   useEffect(() => {
-    if (presentation !== "panel" || !signedIn || callLive || draftActive) return;
+    if (presentation !== "companion" || !signedIn || callLive || draftActive) return;
     const candidate = activities[0];
     if (!candidate || candidate.phase === "ready") return;
     if (doc?.meetingId === candidate.meetingId
@@ -208,7 +208,7 @@ export function useMeetingNotes(inputs: MeetingNotesInputs): MeetingNotesState {
 
   // Trigger 2: entering the signed-in panel, latest ready-and-unseen note.
   useEffect(() => {
-    if (presentation !== "panel" || !signedIn || callLive || draftActive) return;
+    if (presentation !== "companion" || !signedIn || callLive || draftActive) return;
     if (visibleRef.current || fetchInFlightRef.current) return;
     let cancelled = false;
     fetchInFlightRef.current = true;

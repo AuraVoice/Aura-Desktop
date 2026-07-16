@@ -11,9 +11,10 @@ mod security;
 mod sentry_setup;
 mod tray;
 mod updater;
+mod voice_toggle_key;
 mod win_focus;
 
-use log::error;
+use log::{error, info};
 use tauri::{AppHandle, Manager, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
@@ -57,16 +58,6 @@ fn set_onboarding_step(app: AppHandle, step: OnboardingStep) {
 }
 
 #[tauri::command]
-fn pill_activated(app: AppHandle) {
-    overlay::pill_activated(&app);
-}
-
-#[tauri::command]
-fn minimize_to_pill(app: AppHandle) {
-    overlay::minimize_to_pill(&app);
-}
-
-#[tauri::command]
 fn set_session_cached(app: AppHandle, has_session: bool) {
     auth_cache::set_cached_session(&app, has_session);
 }
@@ -78,6 +69,16 @@ fn set_session_cached(app: AppHandle, has_session: bool) {
 #[tauri::command]
 fn summon(app: AppHandle) {
     overlay::summon(&app);
+}
+
+#[tauri::command]
+fn summon_bar(app: AppHandle) {
+    overlay::summon_bar(&app);
+}
+
+#[tauri::command]
+fn dismiss_bar(app: AppHandle) {
+    overlay::dismiss_bar(&app);
 }
 
 /// Guarded natively: pointing takes the window fullscreen and click-through,
@@ -98,7 +99,9 @@ fn point_at(
     label: String,
 ) -> Result<(), String> {
     security::authorize(&app, security::Operation::PointAt)?;
-    overlay::point_at(&app, target_x, target_y, monitor_x, monitor_y, monitor_w, monitor_h, &label);
+    overlay::point_at(
+        &app, target_x, target_y, monitor_x, monitor_y, monitor_w, monitor_h, &label,
+    );
     Ok(())
 }
 
@@ -150,6 +153,7 @@ pub fn run() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(OverlayStateHandle::default())
         .manage(security::SecurityHandle::default())
         .manage(ForegroundGeneration::default())
@@ -163,11 +167,12 @@ pub fn run() {
             set_voice_active,
             set_panel_variant,
             set_slot_height,
+            tray::set_tray_unread,
             set_onboarding_step,
-            pill_activated,
-            minimize_to_pill,
             set_session_cached,
             summon,
+            summon_bar,
+            dismiss_bar,
             point_at,
             cancel_pointing,
             security::set_auth_state,
@@ -178,6 +183,7 @@ pub fn run() {
             updater::just_updated_version,
             logging::read_recent_log_lines,
             screenshot::capture_cursor_display_with_geometry,
+            screenshot::capture_and_save_screenshot,
             entitlement::cache_entitlement,
             entitlement::cached_entitlement,
             entitlement::clear_entitlement_cache,
@@ -190,10 +196,17 @@ pub fn run() {
             meeting::mark_meeting_acked,
             meeting::start_join_watch,
             meeting::stop_join_watch,
-            meeting::debug_force_join
+            meeting::debug_force_join,
+            voice_toggle_key::voice_toggle_key_status
         ])
         .setup(|app| {
             logging::install_panic_hook();
+
+            // The low-level keyboard callback only forwards an isolated
+            // configured-key tap into a channel. Event emission happens outside
+            // the hook on Tauri's async runtime, and the managed handle asks
+            // the hook thread to unhook when the process exits.
+            app.manage(voice_toggle_key::start(app.handle().clone()));
 
             // tauri.conf.json's `skipTaskbar: true` keeps this off the Windows
             // taskbar but has no macOS equivalent - Accessory is the matching
@@ -254,12 +267,10 @@ pub fn run() {
                 });
             }
 
-            // Pre-seed panel_variant from the last-known auth state so the
-            // very first summon sizes/shows the right panel immediately,
-            // rather than booting into Setup and flashing to Bar a frame
-            // later once the webview's own auth listener resolves.
+            // Pre-seed summon routing from the last-known auth state while
+            // keeping the native window hidden until an explicit summon.
             let initial_variant = if auth_cache::has_cached_session(app.handle()) {
-                PanelVariant::Bar
+                PanelVariant::Companion
             } else {
                 PanelVariant::Setup
             };
@@ -278,21 +289,18 @@ pub fn run() {
                     just_updated.clone();
             }
 
-            // Launched by Windows at login (the autostart entry passes
-            // --autostart): stay tray-only instead of popping the panel over
-            // whatever the user is signing in to do. Manual launches keep the
-            // summon-on-start behavior; the hotkey and tray still summon.
-            let is_boot_launch = std::env::args().any(|arg| arg == "--autostart");
-            if !is_boot_launch || just_updated.is_some() {
-                overlay::summon(app.handle());
-            }
-
             // Drop upload-queue entries whose captures went unsent past the
             // retention window (fs work, runs on a blocking thread inside).
             meeting::startup_maintenance(app.handle());
 
             let updater_handle = app.handle().clone();
             tauri::async_runtime::spawn(updater::run_update_loop(updater_handle));
+
+            info!("Aura Desktop is ready and running in the tray.");
+            info!(
+                "Double-tap {} to start voice, or left-click the Aura tray icon to show the bar.",
+                voice_toggle_key::configured_key_label()
+            );
 
             Ok(())
         })

@@ -29,7 +29,7 @@ const SUMMONED_KEY = "auto_summoned_events";
 const ALERTS_DISABLED_KEY = "alerts_disabled";
 
 interface MeetingsInputs {
-  presentation: "hidden" | "panel" | "pill" | "pointing";
+  presentation: "hidden" | "panel" | "companion" | "pointing";
   signedIn: boolean;
   callLive: boolean;
 }
@@ -243,7 +243,7 @@ export function useMeetings(inputs: MeetingsInputs): MeetingsState {
   }, [signedIn, poll]);
 
   useEffect(() => {
-    if (signedIn && presentation === "panel") void poll();
+    if (signedIn && presentation === "companion") void poll();
   }, [signedIn, presentation, poll]);
 
   // Recompute on every event-list change and on a steady local tick.

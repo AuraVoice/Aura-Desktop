@@ -39,11 +39,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       invoke("set_session_cached", { hasSession: nextUser !== null }).catch((err) =>
         logError("AuthProvider: set_session_cached", err),
       );
-      // Setup/Bar is a pure mirror of live auth state now (OverlayRoot's own
+      // Setup/Companion is a pure mirror of live auth state now (OverlayRoot's own
       // content decision already reads useAuth() directly) - this only
       // drives Rust's window sizing, so it's safe to push unconditionally on
       // every callback, including the first, unlike the old two-mode design.
-      invoke("set_panel_variant", { variant: nextUser ? "bar" : "setup" }).catch((err) =>
+      invoke("set_panel_variant", { variant: nextUser ? "companion" : "setup" }).catch((err) =>
         logError("AuthProvider: set_panel_variant", err),
       );
 

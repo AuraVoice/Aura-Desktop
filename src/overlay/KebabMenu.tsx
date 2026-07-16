@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { GlassSurface } from "./GlassSurface";
-import { BellIcon, CalendarIcon, DashboardIcon, FeedbackIcon, RecordDotIcon, SignOutIcon } from "./icons";
+import { BellIcon, CalendarIcon, DashboardIcon, FeedbackIcon, RecordDotIcon, SignOutIcon, UpdateIcon } from "./icons";
 import { kebabMenu as copy, subscription as subCopy } from "../lib/copy";
 import { meetingNotes as notesCopy } from "../lib/meetingCopy";
 import { notifications as notifCopy } from "../lib/notificationCopy";
@@ -36,7 +36,10 @@ export function KebabMenu({
   capturing,
   onNotifications,
   unreadCount,
+  updateVersion,
+  onUpdate,
   onSignOut,
+  onClose,
 }: {
   voiceStatus: string;
   entitlement: EntitlementState;
@@ -47,7 +50,10 @@ export function KebabMenu({
   /** Open the notification inbox (below-bar slot). */
   onNotifications: () => void;
   unreadCount: number;
+  updateVersion: string | null;
+  onUpdate: () => void;
   onSignOut: () => void;
+  onClose: () => void;
 }) {
   const [feedbackSending, setFeedbackSending] = useState(false);
   const [feedbackJustSent, setFeedbackJustSent] = useState(false);
@@ -62,6 +68,7 @@ export function KebabMenu({
 
   function handleFeedback() {
     if (feedbackSending) return;
+    onClose();
     setFeedbackSending(true);
     sendFeedback(voiceStatus)
       .then(() => {
@@ -80,6 +87,7 @@ export function KebabMenu({
   function handleUpgrade() {
     if (checkoutBusy || entitlement.checkout.phase === "upgraded") return;
     entitlement.startCheckout(UPGRADE_TIER, UPGRADE_PERIOD);
+    onClose();
   }
 
   return (
@@ -108,10 +116,19 @@ export function KebabMenu({
             <CalendarIcon />
             <span>{copy.calendar}</span>
           </button>
+          {updateVersion && (
+            <button type="button" className="kebab-menu-item" onClick={onUpdate}>
+              <UpdateIcon />
+              <span>{`Install update v${updateVersion}`}</span>
+            </button>
+          )}
           <button
             type="button"
             className="kebab-menu-item"
-            onClick={onCaptureNow}
+            onClick={() => {
+              onClose();
+              onCaptureNow();
+            }}
             disabled={capturing}
           >
             <RecordDotIcon />
@@ -124,7 +141,14 @@ export function KebabMenu({
               <span className="kebab-menu-badge">{unreadCount > 9 ? "9+" : unreadCount}</span>
             )}
           </button>
-          <button type="button" className="kebab-menu-item" onClick={() => void openDashboard()}>
+          <button
+            type="button"
+            className="kebab-menu-item"
+            onClick={() => {
+              onClose();
+              void openDashboard();
+            }}
+          >
             <DashboardIcon />
             <span>{copy.dashboard}</span>
           </button>

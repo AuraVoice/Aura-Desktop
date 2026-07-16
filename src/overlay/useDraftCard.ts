@@ -156,11 +156,11 @@ export function useDraftCard(
   const ensurePanelVisible = useCallback(async () => {
     // Requested text must be visible even when the user hid or minimized Buddy.
     // Pointing is allowed to finish; if it restores Hidden, the effect below
-    // summons the panel immediately afterward.
+    // restores the companion immediately afterward.
     const current = presentationRef.current;
-    if (current !== "pill" && current !== "hidden") return;
+    if (current !== "hidden") return;
     try {
-      await invoke(current === "pill" ? "pill_activated" : "summon");
+      await invoke("summon");
     } catch (err) {
       logError("useDraftCard: ensure panel visible", err);
     }

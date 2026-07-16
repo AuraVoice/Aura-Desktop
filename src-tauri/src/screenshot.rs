@@ -1,4 +1,6 @@
 use std::io::Cursor;
+use std::path::Path;
+use std::sync::Mutex;
 
 use image::ImageFormat;
 use tauri::{ipc::Response, AppHandle, Manager};
@@ -21,6 +23,22 @@ struct ScreenFrameGeometry {
 /// Byte length of the header `write_le` produces - 7 little-endian 4-byte
 /// fields. `useScreenSight.ts`'s `DataView` reads must match this layout.
 const GEOMETRY_HEADER_LEN: usize = 4 * 7;
+
+static SCREENSHOT_NAME_STATE: Mutex<(i64, u64)> = Mutex::new((-1, 0));
+
+struct CapturedFrame {
+    payload: Vec<u8>,
+}
+
+impl CapturedFrame {
+    fn jpeg_bytes(&self) -> &[u8] {
+        &self.payload[GEOMETRY_HEADER_LEN..]
+    }
+
+    fn into_response(self) -> Response {
+        Response::new(self.payload)
+    }
+}
 
 impl ScreenFrameGeometry {
     fn write_le(&self, out: &mut Vec<u8>) {
@@ -49,8 +67,7 @@ pub async fn capture_cursor_display_with_geometry(app: AppHandle) -> Result<Resp
     // Native authorization, not the frontend's armed boolean: capture needs a
     // signed-in session, a live voice call, and screen sight armed - all
     // tracked in security.rs, all cleared on sign-out/disconnect/restart.
-    let ticket =
-        crate::security::authorize(&app, crate::security::Operation::CaptureScreen)?;
+    let ticket = crate::security::authorize(&app, crate::security::Operation::CaptureScreen)?;
 
     let window = app
         .get_webview_window("main")
@@ -59,22 +76,79 @@ pub async fn capture_cursor_display_with_geometry(app: AppHandle) -> Result<Resp
     let cursor_x = cursor.x as i32;
     let cursor_y = cursor.y as i32;
 
-    let result = tauri::async_runtime::spawn_blocking(move || capture_frame(cursor_x, cursor_y))
+    let frame = tauri::async_runtime::spawn_blocking(move || capture_frame(cursor_x, cursor_y))
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())??;
 
     // A disarm/sign-out that landed during the capture+encode window drops
     // the frame instead of returning it (the JS side already applied the same
     // rule to its own armed flag; this makes it authoritative).
     crate::security::recheck(&app, crate::security::Operation::CaptureScreen, &ticket)?;
     crate::security::note_capture(&app);
-    result
+    Ok(frame.into_response())
+}
+
+#[tauri::command]
+pub async fn capture_and_save_screenshot(app: AppHandle) -> Result<Response, String> {
+    let ticket = crate::security::authorize(&app, crate::security::Operation::SaveScreenshot)?;
+
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    let cursor = window.cursor_position().map_err(|e| e.to_string())?;
+    let cursor_x = cursor.x as i32;
+    let cursor_y = cursor.y as i32;
+
+    let frame = tauri::async_runtime::spawn_blocking(move || capture_frame(cursor_x, cursor_y))
+        .await
+        .map_err(|e| e.to_string())??;
+
+    crate::security::recheck(&app, crate::security::Operation::SaveScreenshot, &ticket)?;
+
+    let screenshots_dir = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("screenshots");
+    let jpeg_bytes = frame.jpeg_bytes().to_vec();
+    tauri::async_runtime::spawn_blocking(move || save_screenshot(&screenshots_dir, &jpeg_bytes))
+        .await
+        .map_err(|e| e.to_string())??;
+
+    crate::security::recheck(&app, crate::security::Operation::SaveScreenshot, &ticket)?;
+    crate::security::note_capture(&app);
+    Ok(frame.into_response())
+}
+
+fn save_screenshot(base_dir: &Path, jpeg_bytes: &[u8]) -> Result<(), String> {
+    std::fs::create_dir_all(base_dir).map_err(|e| e.to_string())?;
+    let now_ms = crate::meeting::now_ms();
+    let filename = {
+        let mut name_state = SCREENSHOT_NAME_STATE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if name_state.0 == now_ms {
+            name_state.1 = name_state.1.saturating_add(1);
+        } else {
+            *name_state = (now_ms, 0);
+        }
+        if name_state.1 == 0 {
+            format!("{now_ms}.jpg")
+        } else {
+            format!("{now_ms}-{}.jpg", name_state.1)
+        }
+    };
+    let path = base_dir.join(&filename);
+    let tmp = base_dir.join(format!("{filename}.tmp"));
+    std::fs::write(&tmp, jpeg_bytes).map_err(|e| e.to_string())?;
+    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 /// Returns a raw IPC response: the `GEOMETRY_HEADER_LEN`-byte geometry header
 /// followed directly by the JPEG bytes, so the frontend reads it as an
 /// `ArrayBuffer` with no base64 encode/decode round trip.
-fn capture_frame(cursor_x: i32, cursor_y: i32) -> Result<Response, String> {
+fn capture_frame(cursor_x: i32, cursor_y: i32) -> Result<CapturedFrame, String> {
     let monitor = Monitor::from_point(cursor_x, cursor_y).map_err(|e| e.to_string())?;
     let captured = monitor.capture_image().map_err(|e| e.to_string())?;
     let rgb_image = image::DynamicImage::ImageRgba8(captured).into_rgb8();
@@ -99,5 +173,5 @@ fn capture_frame(cursor_x: i32, cursor_y: i32) -> Result<Response, String> {
     geometry.write_le(&mut payload);
     payload.extend_from_slice(&jpeg_bytes);
 
-    Ok(Response::new(payload))
+    Ok(CapturedFrame { payload })
 }

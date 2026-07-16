@@ -26,7 +26,7 @@ export function SetupPanel() {
         <span className="setup-panel-title">{barCopy.title}</span>
         <span className="setup-panel-spacer" />
         <HotkeyHint keys={hotkeyHints.summon.keys} action={hotkeyHints.summon.action} />
-        <HotkeyHint keys={hotkeyHints.hide.keys} action={hotkeyHints.hide.action} />
+        <HotkeyHint keys={hotkeyHints.voice.keys} action={hotkeyHints.voice.action} />
       </div>
       <div className="setup-panel-content">
         <OnboardingFlow />

@@ -7,6 +7,7 @@ import { AuthRequiredError, routeToDashboardForExpiredSession } from "../lib/api
 import { logError, logInfo } from "../lib/log";
 import { trackEvent } from "../lib/analytics";
 import { micCaptureFailedCode, voiceCapReachedCode, voiceErrorMessageForCode } from "../lib/voiceErrorCopy";
+import { shouldArmInitialAgentSilenceWatchdog } from "./voiceSessionTiming";
 
 export type VoiceSessionStatus =
   | "disconnected"
@@ -89,6 +90,12 @@ export function useVoiceBar() {
   // own counter and retry forever.
   const retryAttemptRef = useRef(0);
   const startSessionRef = useRef<() => void>(() => {});
+  // The user's intent is separate from LiveKit's current transport state.
+  // A generation invalidates every in-flight await from an older start, so a
+  // fast second toggle can never enable the microphone after the user ended.
+  const desiredActiveRef = useRef(false);
+  const sessionGenerationRef = useRef(0);
+  const [desiredActive, setDesiredActive] = useState(false);
 
   const clearWatchdogs = useCallback(() => {
     if (joinWatchdogRef.current) {
@@ -120,6 +127,11 @@ export function useVoiceBar() {
         setLastErrorCode(code);
         setStatus("error");
         setVoiceActive(false);
+        if (code !== null && NON_RETRYABLE_CODES.has(code)) {
+          desiredActiveRef.current = false;
+          sessionGenerationRef.current += 1;
+          setDesiredActive(false);
+        }
         activeRoom?.disconnect().catch((err) => logError("useVoiceBar: enterErrorState disconnect", err));
       } catch (err) {
         logError("useVoiceBar: enterErrorState", err);
@@ -160,14 +172,23 @@ export function useVoiceBar() {
   // watchdog and start waiting for the agent's first real output the same way.
   const handleAgentJoined = useCallback(
     (participant: RemoteParticipant, source: string) => {
-      logInfo("useVoiceBar: agent joined", `source=${source} identity=${participant.identity}`);
+      const shouldArm = shouldArmInitialAgentSilenceWatchdog(
+        didReceiveAssistantOutputRef.current,
+      );
+      logInfo(
+        "useVoiceBar: agent joined",
+        `source=${source} identity=${participant.identity} initialSilenceWatchdog=${shouldArm ? "armed" : "skipped"}`,
+      );
       clearWatchdogs();
-      armSilenceWatchdog();
+      if (shouldArm) armSilenceWatchdog();
     },
     [armSilenceWatchdog, clearWatchdogs],
   );
 
   const endSession = useCallback(async () => {
+    desiredActiveRef.current = false;
+    sessionGenerationRef.current += 1;
+    setDesiredActive(false);
     clearWatchdogs();
     const activeRoom = roomRef.current;
     roomRef.current = null;
@@ -178,6 +199,13 @@ export function useVoiceBar() {
     if (startedAt !== null) {
       trackEvent("voice_session_ended", { durationSeconds: Math.round((Date.now() - startedAt) / 1000) });
     }
+    // Native authorization and the updater gate close synchronously with the
+    // user's toggle. Muting and disconnecting are best-effort cleanups after
+    // that boundary, not prerequisites for it.
+    setVoiceActive(false);
+    activeRoom?.localParticipant
+      .setMicrophoneEnabled(false)
+      .catch((err) => logError("useVoiceBar: endSession disable microphone", err));
     try {
       await activeRoom?.disconnect();
     } catch (err) {
@@ -187,10 +215,15 @@ export function useVoiceBar() {
     setAssistantCaption("");
     setErrorMessage(null);
     setLastErrorCode(null);
-    setVoiceActive(false);
   }, [clearWatchdogs]);
 
   const startSession = useCallback(async () => {
+    if (!desiredActiveRef.current) {
+      desiredActiveRef.current = true;
+      sessionGenerationRef.current += 1;
+      setDesiredActive(true);
+    }
+    const generation = sessionGenerationRef.current;
     if (roomRef.current) {
       logInfo("useVoiceBar: startSession", "ignored - a room is already live");
       return;
@@ -207,6 +240,10 @@ export function useVoiceBar() {
     const newRoom = new Room();
     roomRef.current = newRoom;
     setRoom(newRoom);
+    const sessionStillWanted = () =>
+      desiredActiveRef.current &&
+      sessionGenerationRef.current === generation &&
+      roomRef.current === newRoom;
 
     newRoom.on(RoomEvent.Disconnected, (reason) => {
       try {
@@ -227,6 +264,9 @@ export function useVoiceBar() {
           clearWatchdogs();
           roomRef.current = null;
           setRoom(null);
+          desiredActiveRef.current = false;
+          sessionGenerationRef.current += 1;
+          setDesiredActive(false);
           const startedAt = sessionStartedAtRef.current;
           sessionStartedAtRef.current = null;
           if (startedAt !== null) {
@@ -408,9 +448,21 @@ export function useVoiceBar() {
     try {
       logInfo("useVoiceBar: startSession", "requesting voice token");
       const { token, url, room: roomName } = await fetchVoiceToken();
+      if (!sessionStillWanted()) {
+        await newRoom.disconnect().catch((disconnectErr) =>
+          logError("useVoiceBar: cancelled after token fetch", disconnectErr),
+        );
+        return;
+      }
       roomNameRef.current = roomName;
       logInfo("useVoiceBar: startSession", `got token for room=${roomName}, connecting to LiveKit`);
       await newRoom.connect(url, token);
+      if (!sessionStillWanted()) {
+        await newRoom.disconnect().catch((disconnectErr) =>
+          logError("useVoiceBar: cancelled after connect", disconnectErr),
+        );
+        return;
+      }
       didConnectRef.current = true;
       sessionStartedAtRef.current = Date.now();
       logInfo("useVoiceBar: startSession", `connected to room=${roomName}, enabling microphone`);
@@ -436,19 +488,29 @@ export function useVoiceBar() {
       // undefined (not a thrown error) if the webview never actually got a
       // usable mic track, which would otherwise pass through here silently.
       const micPublication = await newRoom.localParticipant.setMicrophoneEnabled(true);
+      if (!sessionStillWanted()) {
+        await newRoom.localParticipant.setMicrophoneEnabled(false).catch((disableErr) =>
+          logError("useVoiceBar: cancelled after microphone enable", disableErr),
+        );
+        await newRoom.disconnect().catch((disconnectErr) =>
+          logError("useVoiceBar: cancelled microphone disconnect", disconnectErr),
+        );
+        return;
+      }
       const mediaTrack = micPublication?.track?.mediaStreamTrack;
       logInfo(
         "useVoiceBar: startSession",
         `microphone enabled, waiting for agent to join room=${roomName} - publication=${micPublication ? "present" : "UNDEFINED"} muted=${micPublication?.isMuted} trackReadyState=${mediaTrack?.readyState} trackEnabled=${mediaTrack?.enabled}`,
       );
     } catch (err) {
+      if (!sessionStillWanted()) {
+        await newRoom.disconnect().catch((disconnectErr) =>
+          logError("useVoiceBar: cancelled start cleanup", disconnectErr),
+        );
+        return;
+      }
       if (err instanceof AuthRequiredError) {
-        clearWatchdogs();
-        // Without this, the voice_active flag set at the top of startSession
-        // stays latched true across the re-auth flow (Rust would keep
-        // treating a voice session as live for the updater gate and the
-        // security state).
-        setVoiceActive(false);
+        await endSession();
         await routeToDashboardForExpiredSession();
         return;
       }
@@ -461,7 +523,15 @@ export function useVoiceBar() {
       logError("useVoiceBar: startSession", err);
       enterErrorState(null, "Couldn't start the call. Give it another shot in a sec?");
     }
-  }, [armSilenceWatchdog, clearWatchdogs, enterErrorState, handleAgentJoined, markAssistantResponded, pokeSilenceWatchdog]);
+  }, [armSilenceWatchdog, clearWatchdogs, endSession, enterErrorState, handleAgentJoined, markAssistantResponded, pokeSilenceWatchdog]);
+
+  const toggleSession = useCallback(() => {
+    if (desiredActiveRef.current) {
+      void endSession();
+    } else {
+      void startSession();
+    }
+  }, [endSession, startSession]);
 
   // Lets the retry effect below call the latest startSession without being a
   // dependency of it (would be circular - the effect reacts to error state
@@ -477,6 +547,7 @@ export function useVoiceBar() {
   // double-schedule for the same failure.
   useEffect(() => {
     if (status !== "error") return;
+    if (!desiredActiveRef.current) return;
     const code = lastErrorCode;
     if (code !== null && NON_RETRYABLE_CODES.has(code)) {
       logInfo("useVoiceBar: retry", `not retrying - code=${code} requires user action`);
@@ -485,6 +556,10 @@ export function useVoiceBar() {
     if (retryAttemptRef.current >= MAX_AUTO_RETRIES) {
       logInfo("useVoiceBar: retry", `exhausted after ${MAX_AUTO_RETRIES} attempts, code=${code ?? "none"}`);
       trackEvent("voice_retry_exhausted", { code: code ?? "unknown", attempts: MAX_AUTO_RETRIES });
+      desiredActiveRef.current = false;
+      sessionGenerationRef.current += 1;
+      setDesiredActive(false);
+      setVoiceActive(false);
       return;
     }
     retryAttemptRef.current += 1;
@@ -494,6 +569,7 @@ export function useVoiceBar() {
     trackEvent("voice_retry_attempt", { attempt, delayMs: delay, code: code ?? "unknown" });
     const timeoutId = setTimeout(() => {
       try {
+        if (!desiredActiveRef.current) return;
         startSessionRef.current();
       } catch (err) {
         logError("useVoiceBar: retry", err);
@@ -504,8 +580,11 @@ export function useVoiceBar() {
 
   useEffect(() => {
     return () => {
+      desiredActiveRef.current = false;
+      sessionGenerationRef.current += 1;
       clearWatchdogs();
       roomRef.current?.disconnect().catch((err) => logError("useVoiceBar: unmount disconnect", err));
+      setVoiceActive(false);
     };
   }, [clearWatchdogs]);
 
@@ -521,8 +600,10 @@ export function useVoiceBar() {
     errorMessage,
     showMicSettingsHint,
     isVoiceCapped,
+    desiredActive,
     startSession,
     endSession,
+    toggleSession,
     room,
   };
 }

@@ -13,23 +13,18 @@ const OVERLAY_STORE: &str = "overlay-window.json";
 const CENTER_X_KEY: &str = "overlay_center_x";
 const CENTER_Y_KEY: &str = "overlay_center_y";
 
-// 480 = the old 600 shrunk ~20% once Dashboard/Feedback/Sign-out moved off the
-// bar into the kebab menu, leaving only screen-sight/minimize/mic/kebab inline.
-const BAR_WIDTH: f64 = 480.0;
-const BAR_HEIGHT: f64 = 64.0;
-const PILL_WIDTH: f64 = 280.0;
-// Canvas height is sized to the model's own aspect ratio (modelHalfWidth /
-// modelHalfHeight = 0.83 / 1.0 in AvatarPill.tsx), not a round number: when
-// frameCamera() there picks max(distanceForHeight, distanceForWidth), any
-// aspect ratio taller than the model's own leaves the non-binding (height)
-// axis with margin to spare, which rendered as dead transparent space
-// between Buddy's feet and the caption below. 280 / 0.83 (canvas) + ~36
-// (caption's own padding + line-height) ~= 374. Keep this in sync with
-// AvatarPill.tsx's modelHalfWidth/modelHalfHeight if either changes.
-const PILL_HEIGHT: f64 = 374.0;
+// The signed-in window stays wide enough for the existing cards while the owl
+// itself is centered in the transparent base area. Opening a surface adds
+// height above this base; the persisted center is the owl anchor.
+const COMPANION_WIDTH: f64 = 480.0;
+const COMPANION_HEIGHT: f64 = 400.0;
+const BAR_WIDTH: f64 = 460.0;
+const BAR_HEIGHT: f64 = 72.0;
+const BAR_TOP_OFFSET: f64 = 0.0;
 const SETUP_WIDTH: f64 = 600.0;
 const SETUP_HEIGHT: f64 = 340.0;
 const TOP_MARGIN: f64 = 48.0;
+const COMPANION_SURFACE_RESERVE: f64 = 340.0;
 // The single below-bar slot's extra window height is owned by React, not Rust:
 // whichever surface wins the slot (draft > callback > calendar agenda > kebab
 // menu, resolved in OverlayRoot.tsx) passes its own fixed height via
@@ -43,7 +38,8 @@ const TOP_MARGIN: f64 = 48.0;
 pub enum OverlayPresentation {
     Hidden,
     Panel,
-    Pill,
+    Bar,
+    Companion,
     Pointing,
 }
 
@@ -51,7 +47,7 @@ pub enum OverlayPresentation {
 #[serde(rename_all = "lowercase")]
 pub enum PanelVariant {
     Setup,
-    Bar,
+    Companion,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -79,10 +75,10 @@ pub struct OverlayState {
     panel_variant: PanelVariant,
     onboarding_step: OnboardingStep,
     voice_active: bool,
-    // Extra height (logical px) of the one below-bar slot, or None for bar-only.
+    // Extra height (logical px) of the one above-companion slot.
     // React owns which surface fills the slot and its content; it passes the
     // height via set_slot_height, and Rust only grows/shrinks the window for it
-    // (Panel+Bar only). The former per-card draft_card_open/callback_card_open
+    // (Companion only). The former per-card draft_card_open/callback_card_open
     // booleans collapsed into this single field once the priority tiebreak
     // moved entirely into OverlayRoot.tsx.
     slot_height: Option<f64>,
@@ -167,7 +163,11 @@ pub fn load_persisted_center(app: &AppHandle) {
         .unwrap_or(false);
 
     if on_screen {
-        handle.0.lock().unwrap_or_else(|e| e.into_inner()).user_center = Some((x, y));
+        handle
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .user_center = Some((x, y));
     }
 }
 
@@ -197,12 +197,7 @@ fn active_display_bounds(window: &WebviewWindow) -> (LogicalPosition<f64>, Logic
     let monitor = window
         .cursor_position()
         .ok()
-        .and_then(|cursor| {
-            window
-                .monitor_from_point(cursor.x, cursor.y)
-                .ok()
-                .flatten()
-        })
+        .and_then(|cursor| window.monitor_from_point(cursor.x, cursor.y).ok().flatten())
         .or_else(|| window.primary_monitor().ok().flatten());
 
     match monitor {
@@ -228,14 +223,23 @@ fn default_position(window: &WebviewWindow, size: LogicalSize<f64>) -> LogicalPo
     )
 }
 
-/// Whether the below-bar slot is occupied (some surface is showing under the
-/// bar); drives the bar-top window anchoring in position_for/capture_user_
-/// position. The slot only exists in Panel+Bar; Pill/Setup/Pointing ignore the
-/// height entirely.
+/// Whether the draft slot is showing. Setup and Pointing ignore its remembered
+/// height.
 fn slot_showing(state: &OverlayState) -> bool {
     state.slot_height.is_some()
-        && state.presentation == OverlayPresentation::Panel
-        && state.panel_variant == PanelVariant::Bar
+        && matches!(
+            state.presentation,
+            OverlayPresentation::Bar | OverlayPresentation::Companion
+        )
+}
+
+fn default_companion_position(window: &WebviewWindow) -> LogicalPosition<f64> {
+    let (display_pos, display_size) = active_display_bounds(window);
+    let available_above = (display_size.height - COMPANION_HEIGHT - TOP_MARGIN).max(0.0);
+    LogicalPosition::new(
+        display_pos.x + (display_size.width - COMPANION_WIDTH) / 2.0,
+        display_pos.y + TOP_MARGIN + COMPANION_SURFACE_RESERVE.min(available_above),
+    )
 }
 
 fn position_for(
@@ -243,29 +247,48 @@ fn position_for(
     window: &WebviewWindow,
     size: LogicalSize<f64>,
 ) -> LogicalPosition<f64> {
+    // The notch stays fixed at the display's top edge. Adding a draft only grows the
+    // window downward, and v1 deliberately ignores the persisted drag center.
+    if state.presentation == OverlayPresentation::Bar {
+        let (display_pos, display_size) = active_display_bounds(window);
+        return LogicalPosition::new(
+            display_pos.x + (display_size.width - size.width) / 2.0,
+            display_pos.y + BAR_TOP_OFFSET,
+        );
+    }
+
     match state.user_center {
-        // user_center always means the BAR's center: with the slot open the
-        // window is taller, but anchoring the top edge at cy - BAR_HEIGHT/2
-        // keeps the bar pinned in place and grows the slot downward instead of
-        // re-centering the whole window around it.
-        Some((cx, cy)) if slot_showing(state) => {
-            LogicalPosition::new(cx - size.width / 2.0, cy - BAR_HEIGHT / 2.0)
-        }
+        // user_center always means the OWL BASE's center. Moving the window's
+        // top upward by the slot height keeps that base pinned in place.
+        Some((cx, cy)) if slot_showing(state) => LogicalPosition::new(
+            cx - size.width / 2.0,
+            cy - COMPANION_HEIGHT / 2.0 - state.slot_height.unwrap_or(0.0),
+        ),
         Some((cx, cy)) => LogicalPosition::new(cx - size.width / 2.0, cy - size.height / 2.0),
+        None if slot_showing(state) => {
+            let base = default_companion_position(window);
+            LogicalPosition::new(base.x, base.y - state.slot_height.unwrap_or(0.0))
+        }
+        None if state.presentation == OverlayPresentation::Companion => {
+            default_companion_position(window)
+        }
         None => default_position(window, size),
     }
 }
 
 fn size_for(state: &OverlayState) -> LogicalSize<f64> {
     match (state.presentation, state.panel_variant) {
-        (OverlayPresentation::Pill, _) => LogicalSize::new(PILL_WIDTH, PILL_HEIGHT),
-        (OverlayPresentation::Panel, PanelVariant::Bar) => {
+        (OverlayPresentation::Bar, _) => {
             LogicalSize::new(BAR_WIDTH, BAR_HEIGHT + state.slot_height.unwrap_or(0.0))
         }
+        (OverlayPresentation::Companion, _) => LogicalSize::new(
+            COMPANION_WIDTH,
+            COMPANION_HEIGHT + state.slot_height.unwrap_or(0.0),
+        ),
         (OverlayPresentation::Panel, PanelVariant::Setup) => {
             LogicalSize::new(SETUP_WIDTH, SETUP_HEIGHT)
         }
-        _ => LogicalSize::new(BAR_WIDTH, BAR_HEIGHT),
+        _ => LogicalSize::new(COMPANION_WIDTH, COMPANION_HEIGHT),
     }
 }
 
@@ -320,16 +343,26 @@ pub fn apply(app: &AppHandle) {
 
     if state.presentation == OverlayPresentation::Hidden {
         let from = (state.applied_presentation, state.applied_variant);
-        state.applied_presentation = Some(state.presentation);
-        state.applied_variant = Some(state.panel_variant);
-        state.applied_slot_height = Some(state.slot_height);
+        let presentation = state.presentation;
+        let panel_variant = state.panel_variant;
+        let slot_height = state.slot_height;
         drop(state);
         info!("overlay::apply: hiding (from {from:?})");
         if let Err(e) = window.hide() {
             error!("overlay::apply: failed to hide window: {e}");
+            return;
+        }
+        {
+            let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+            state.applied_presentation = Some(presentation);
+            state.applied_variant = Some(panel_variant);
+            state.applied_slot_height = Some(slot_height);
         }
         emit_overlay_changed(app);
-        info!("overlay::apply: hide complete in {:?}", started_at.elapsed());
+        info!(
+            "overlay::apply: hide complete in {:?}",
+            started_at.elapsed()
+        );
         return;
     }
 
@@ -349,28 +382,30 @@ pub fn apply(app: &AppHandle) {
 
     info!("overlay::apply: applying presentation={presentation:?} variant={panel_variant:?}");
 
-    let result = window.set_size(size).and_then(|_| window.set_position(position));
+    let result = window
+        .set_size(size)
+        .and_then(|_| window.set_position(position))
+        .and_then(|_| window.show())
+        .and_then(|_| window.set_ignore_cursor_events(false));
 
-    handle.0.lock().unwrap_or_else(|e| e.into_inner()).applying_bounds = false;
+    handle
+        .0
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .applying_bounds = false;
 
     if let Err(e) = result {
-        error!("overlay::apply: failed to resize/reposition window: {e}");
+        error!("overlay::apply: failed to resize/reposition/show window: {e}");
         return;
     }
-
-    if let Err(e) = window.show() {
-        error!("overlay::apply: failed to show window: {e}");
-    }
-    // Belt-and-suspenders alongside cancel_pointing's own reset: apply() is
-    // the sole path back to a normal (non-Pointing) presentation from
-    // anywhere - summon/hotkey/sign-out can all reach here while the window
-    // is still click-through from a point_at() takeover, not just
-    // cancel_pointing's own flow. Never actually a no-op cost since it's
-    // already false in the common case.
-    if let Err(e) = window.set_ignore_cursor_events(false) {
-        error!("overlay::apply: failed to restore cursor events: {e}");
-    }
-    if presentation == OverlayPresentation::Panel && is_fresh_show {
+    // apply() is the sole path back to a normal presentation. The chained
+    // result above includes restoring cursor input after a pointing takeover,
+    // so the applied cache is written only once every window operation worked.
+    if matches!(
+        presentation,
+        OverlayPresentation::Panel | OverlayPresentation::Bar
+    ) && is_fresh_show
+    {
         win_focus::force_foreground(app, &window);
     }
 
@@ -389,7 +424,11 @@ pub fn apply(app: &AppHandle) {
 
 fn set_presentation(app: &AppHandle, presentation: OverlayPresentation) {
     if let Some(handle) = state_handle(app) {
-        handle.0.lock().unwrap_or_else(|e| e.into_inner()).presentation = presentation;
+        handle
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .presentation = presentation;
     }
     apply(app);
 }
@@ -402,78 +441,76 @@ pub fn is_voice_active(app: &AppHandle) -> bool {
         .unwrap_or(false)
 }
 
-fn hide_ending_voice(app: &AppHandle) {
-    let voice_active = state_handle(app)
-        .map(|h| h.0.lock().unwrap_or_else(|e| e.into_inner()).voice_active)
-        .unwrap_or(false);
-    if voice_active {
-        if let Some(window) = main_window(app) {
-            let _ = window.emit("end-voice-session", ());
-        }
-    }
-    if let Some(handle) = state_handle(app) {
-        handle.0.lock().unwrap_or_else(|e| e.into_inner()).voice_active = false;
-    }
-    // Mirror the teardown into the security state directly - waiting on the
-    // webview's own endSession -> set_voice_active round trip would leave
-    // screen-capture authorization live exactly as long as a hung webview
-    // stays hung. (No overlay lock is held here; security's is a leaf lock.)
-    crate::security::note_voice_active(app, false);
-    set_presentation(app, OverlayPresentation::Hidden);
-}
-
-/// Ctrl+Alt+B: hidden/pill -> panel, panel -> hidden (ending any live voice
-/// session first). Ignored mid-pointing-flight.
+/// Ctrl+Alt+B reveals and focuses the persistent companion/setup window.
 pub fn hotkey_pressed(app: &AppHandle) {
-    let presentation = state_handle(app).map(|h| h.0.lock().unwrap_or_else(|e| e.into_inner()).presentation);
-    match presentation {
-        Some(OverlayPresentation::Hidden) | Some(OverlayPresentation::Pill) => {
-            set_presentation(app, OverlayPresentation::Panel)
-        }
-        Some(OverlayPresentation::Panel) => hide_ending_voice(app),
-        _ => {}
-    }
+    summon(app);
 }
 
-/// Tray "Open Buddy" / second-instance launch: bring the panel up, or just
-/// refocus it if it's already showing.
+/// Tray "Open Buddy" / second-instance launch: reveal the correct persistent
+/// presentation, or just refocus it if it is already showing.
 pub fn summon(app: &AppHandle) {
-    let already_panel = state_handle(app)
-        .map(|h| h.0.lock().unwrap_or_else(|e| e.into_inner()).presentation == OverlayPresentation::Panel)
+    let desired = state_handle(app).map(|h| {
+        let state = h.0.lock().unwrap_or_else(|e| e.into_inner());
+        if state.panel_variant == PanelVariant::Companion {
+            OverlayPresentation::Bar
+        } else {
+            OverlayPresentation::Panel
+        }
+    });
+    let Some(desired) = desired else {
+        return;
+    };
+    let already_visible = state_handle(app)
+        .map(|h| h.0.lock().unwrap_or_else(|e| e.into_inner()).presentation == desired)
         .unwrap_or(false);
-    if already_panel {
+    if already_visible {
         if let Some(window) = main_window(app) {
             let _ = window.show();
             win_focus::force_foreground(app, &window);
         }
         return;
     }
-    set_presentation(app, OverlayPresentation::Panel);
+    set_presentation(app, desired);
+    if let Some(window) = main_window(app) {
+        win_focus::force_foreground(app, &window);
+    }
+}
+
+pub fn summon_bar(app: &AppHandle) {
+    let Some(handle) = state_handle(app) else {
+        return;
+    };
+    {
+        let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        if state.presentation == OverlayPresentation::Pointing {
+            return;
+        }
+        state.presentation = OverlayPresentation::Bar;
+    }
+    apply(app);
+    if let Some(window) = main_window(app) {
+        win_focus::force_foreground(app, &window);
+    }
+}
+
+pub fn dismiss_bar(app: &AppHandle) {
+    if let Some(window) = main_window(app) {
+        if let Err(e) = window.emit("end-voice-session", ()) {
+            error!("overlay::dismiss_bar: failed to emit end-voice-session: {e}");
+        }
+    }
+    if let Some(handle) = state_handle(app) {
+        let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        state.presentation = OverlayPresentation::Hidden;
+        state.pre_pointing = None;
+    }
+    apply(app);
 }
 
 pub fn esc_pressed(app: &AppHandle) {
-    hide_ending_voice(app);
-}
-
-pub fn pill_activated(app: &AppHandle) {
-    set_presentation(app, OverlayPresentation::Panel);
-}
-
-/// VoiceBar's minimize button: collapses the panel to the small pill without
-/// ending the call. Only takes effect while a call is actually live and the
-/// panel is showing - `Pill` is only ever meant to be reached while
-/// `voice_active` is true, matching the `set_voice_active` guard that sends
-/// Pill straight to Hidden once the call ends.
-pub fn minimize_to_pill(app: &AppHandle) {
-    let should_minimize = state_handle(app)
-        .map(|h| {
-            let state = h.0.lock().unwrap_or_else(|e| e.into_inner());
-            state.voice_active && state.presentation == OverlayPresentation::Panel
-        })
-        .unwrap_or(false);
-    if should_minimize {
-        set_presentation(app, OverlayPresentation::Pill);
-    }
+    // React consumes Escape to close the active menu/card first. Once the
+    // companion itself is resting there is nothing to collapse.
+    let _ = app;
 }
 
 /// Ctrl+Shift+D: a deliberate, non-Flutter-parity power-user shortcut. Tells
@@ -496,40 +533,48 @@ pub fn set_voice_active(app: &AppHandle, active: bool) {
     let Some(handle) = state_handle(app) else {
         return;
     };
-    let presentation = {
-        let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
-        state.voice_active = active;
-        state.presentation
-    };
-    if active && presentation == OverlayPresentation::Hidden {
-        set_presentation(app, OverlayPresentation::Panel);
-    } else if !active && presentation == OverlayPresentation::Pill {
-        set_presentation(app, OverlayPresentation::Hidden);
-    }
+    handle
+        .0
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .voice_active = active;
 }
 
 pub fn set_panel_variant(app: &AppHandle, variant: PanelVariant) {
     if let Some(handle) = state_handle(app) {
-        handle.0.lock().unwrap_or_else(|e| e.into_inner()).panel_variant = variant;
+        let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        let changed = state.panel_variant != variant;
+        state.panel_variant = variant;
+        // Auth changes update future summon routing without making the window
+        // visible. If setup was open while sign-in completed, hide it so the
+        // signed-in resting state is tray-only.
+        if changed && state.presentation != OverlayPresentation::Pointing {
+            state.presentation = OverlayPresentation::Hidden;
+        }
     }
     apply(app);
 }
 
-/// The below-bar slot's extra height, driven by React (OverlayRoot resolves
-/// which surface wins the slot and passes its fixed height, or None to collapse
-/// back to a bare bar). Only changes window geometry in Panel+Bar; the height
-/// is remembered across presentations so a draft that arrives mid-pill still
-/// has its space once the panel is back.
+/// The draft slot's extra height, driven by React. The height is remembered
+/// across a temporary pointing takeover.
 pub fn set_slot_height(app: &AppHandle, height: Option<f64>) {
     if let Some(handle) = state_handle(app) {
-        handle.0.lock().unwrap_or_else(|e| e.into_inner()).slot_height = height;
+        handle
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .slot_height = height;
     }
     apply(app);
 }
 
 pub fn set_onboarding_step(app: &AppHandle, step: OnboardingStep) {
     if let Some(handle) = state_handle(app) {
-        handle.0.lock().unwrap_or_else(|e| e.into_inner()).onboarding_step = step;
+        handle
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .onboarding_step = step;
     }
 }
 
@@ -542,20 +587,31 @@ pub fn capture_user_position(app: &AppHandle, x: f64, y: f64) {
     };
     let center = {
         let state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
-        if state.applying_bounds || state.presentation == OverlayPresentation::Hidden {
+        if state.applying_bounds
+            || matches!(
+                state.presentation,
+                OverlayPresentation::Hidden | OverlayPresentation::Bar
+            )
+        {
             return;
         }
         let size = size_for(&state);
-        // With the slot open, user_center must keep meaning "the bar's
-        // center" (matching position_for's anchoring), or a drag while a card
-        // is showing would shift the bar the moment the card closes.
+        // With the slot open, user_center keeps meaning the owl base center,
+        // so dragging while a card shows cannot shift the owl when it closes.
         if slot_showing(&state) {
-            (x + size.width / 2.0, y + BAR_HEIGHT / 2.0)
+            (
+                x + size.width / 2.0,
+                y + state.slot_height.unwrap_or(0.0) + COMPANION_HEIGHT / 2.0,
+            )
         } else {
             (x + size.width / 2.0, y + size.height / 2.0)
         }
     };
-    handle.0.lock().unwrap_or_else(|e| e.into_inner()).user_center = Some(center);
+    handle
+        .0
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .user_center = Some(center);
     persist_center(app, center.0, center.1);
 }
 
@@ -582,10 +638,6 @@ pub fn point_at(
             state.pre_pointing = Some((state.presentation, state.panel_variant));
         }
         state.presentation = OverlayPresentation::Pointing;
-        // Byptrue apply()'s diffing here (this takeover isn't routed through
-        // apply()), but keep its cache in sync so the eventual cancel_pointing
-        // -> apply() call sees a real transition and actually restores.
-        state.applied_presentation = Some(OverlayPresentation::Pointing);
         state.applying_bounds = true;
     }
 
@@ -595,11 +647,33 @@ pub fn point_at(
         .and_then(|_| window.set_ignore_cursor_events(true))
         .and_then(|_| window.show());
 
-    handle.0.lock().unwrap_or_else(|e| e.into_inner()).applying_bounds = false;
+    handle
+        .0
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .applying_bounds = false;
 
     if let Err(e) = result {
         error!("overlay::point_at: failed to take over monitor: {e}");
+        {
+            let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+            let (presentation, variant) = state
+                .pre_pointing
+                .take()
+                .unwrap_or((OverlayPresentation::Bar, PanelVariant::Companion));
+            state.presentation = presentation;
+            state.panel_variant = variant;
+            state.applied_presentation = None;
+        }
+        apply(app);
+        return;
     }
+
+    handle
+        .0
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .applied_presentation = Some(OverlayPresentation::Pointing);
 
     // Without this, the frontend's own `presentation` state (only ever
     // updated by this event) never becomes "pointing", so OverlayRoot never
@@ -640,11 +714,11 @@ pub fn cancel_pointing(app: &AppHandle) {
         }
         let (presentation, variant) = state.pre_pointing.take().unwrap_or_else(|| {
             error!(
-                "overlay::cancel_pointing: pre_pointing was None, falling back to Hidden/Setup \
+                "overlay::cancel_pointing: pre_pointing was None, falling back to Companion \
                  - point_at should always populate this first, so this indicates a regression \
                  in point_at's call sites"
             );
-            (OverlayPresentation::Hidden, PanelVariant::Setup)
+            (OverlayPresentation::Bar, PanelVariant::Companion)
         });
         state.presentation = presentation;
         state.panel_variant = variant;
