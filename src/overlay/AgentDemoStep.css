@@ -1,0 +1,12 @@
+.agent-demo-status {
+  margin: 0;
+  min-height: 40px;
+  max-width: 380px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-family: var(--font-body);
+  font-size: 14px;
+  color: var(--glass-text-dim);
+}

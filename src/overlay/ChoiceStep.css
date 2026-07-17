@@ -1,0 +1,41 @@
+.onboarding-choice-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  max-width: 380px;
+}
+
+.onboarding-choice {
+  font-family: var(--font-body);
+  font-size: 14px;
+  text-align: left;
+  padding: 10px 14px;
+  border-radius: var(--button-radius);
+  border: 1px solid var(--glass-border-flat);
+  background: var(--glass-field-fill);
+  color: var(--glass-text-bright);
+  cursor: pointer;
+}
+
+.onboarding-choice-selected {
+  border-color: var(--glass-accent);
+  background: var(--glass-field-fill);
+  box-shadow: inset 0 0 0 1px var(--glass-accent);
+}
+
+.onboarding-other-input {
+  width: 100%;
+  max-width: 380px;
+  font-family: var(--font-body);
+  font-size: 14px;
+  padding: 10px 14px;
+  border-radius: var(--button-radius);
+  border: 1px solid var(--glass-border-flat);
+  background: var(--glass-field-fill);
+  color: var(--glass-text-bright);
+}
+
+.onboarding-other-input::placeholder {
+  color: var(--glass-text-dim);
+}

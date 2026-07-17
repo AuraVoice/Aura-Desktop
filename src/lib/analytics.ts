@@ -45,3 +45,54 @@ export function trackEvent(event: string, properties?: Record<string, unknown>):
     })
     .catch((err) => logError(`analytics: trackEvent (${event})`, err));
 }
+
+/** Shared fire-and-forget POST to PostHog's capture endpoint, used by the
+ * person-property and alias calls below. Same failure posture as trackEvent:
+ * analytics never breaks a flow, so errors only log. */
+function postCapture(label: string, payload: Record<string, unknown>): void {
+  fetch(`${HOST}/capture/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      api_key: PROJECT_TOKEN,
+      timestamp: new Date().toISOString(),
+      ...payload,
+    }),
+  })
+    .then((response) => {
+      if (!response.ok) {
+        logError(`analytics: ${label}`, `HTTP ${response.status}`);
+      }
+    })
+    .catch((err) => logError(`analytics: ${label}`, err));
+}
+
+/** Sets person properties on a PostHog person via a $set on an $identify event.
+ * `distinctId` lets pre-sign-in callers attach properties to the per-install
+ * anonymous id (desktop_anon_id) rather than the shared "anonymous" fallback;
+ * post-sign-in callers pass the uid. */
+export function setPersonProperties(
+  properties: Record<string, unknown>,
+  distinctId?: string,
+): void {
+  if (!telemetryEnabled) return;
+  const id = distinctId ?? auth.currentUser?.uid ?? "anonymous";
+  postCapture("setPersonProperties", {
+    event: "$identify",
+    distinct_id: id,
+    properties: { ...STATIC_PROPERTIES, $set: properties },
+  });
+}
+
+/** Merges the pre-sign-in anonymous person (captured under `anonId`) into the
+ * real user (`uid`) so attribution set before sign-in follows the account.
+ * We alias a per-install id, never the literal "anonymous" - see
+ * desktopAnonIdKey in copy.ts for why. */
+export function aliasAnonymousToUser(anonId: string, uid: string): void {
+  if (!telemetryEnabled) return;
+  postCapture("aliasAnonymousToUser", {
+    event: "$create_alias",
+    distinct_id: uid,
+    properties: { ...STATIC_PROPERTIES, alias: anonId },
+  });
+}

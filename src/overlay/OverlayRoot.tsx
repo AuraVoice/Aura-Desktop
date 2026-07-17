@@ -5,6 +5,8 @@ import { useAuth } from "../state/AuthProvider";
 import { logError } from "../lib/log";
 import { useVoiceBar } from "./useVoiceBar";
 import { useNotchGesture } from "./useNotchGesture";
+import { useOnboardingTail } from "./useOnboardingTail";
+import { OnboardingTail } from "./OnboardingTail";
 import { useTurnScreenCapture } from "./useTurnScreenCapture";
 import { useDraftCard } from "./useDraftCard";
 import { useUpdateReady } from "./useUpdateReady";
@@ -29,7 +31,15 @@ export function OverlayRoot() {
   const { user } = useAuth();
   const [presentation, setPresentation] = useState<OverlayPresentation>("hidden");
   const voice = useVoiceBar();
-  const notchGesture = useNotchGesture(user !== null, voice, presentation === "pointing");
+  const tail = useOnboardingTail(user !== null);
+  // Suppress the double-tap-Ctrl notch gesture while the first-run tail is up,
+  // so the live demo stays inside the onboarding panel (its own Start button
+  // drives the call) instead of jumping to the notch mid-tour.
+  const notchGesture = useNotchGesture(
+    user !== null,
+    voice,
+    presentation === "pointing" || tail.status === "active",
+  );
   useUpdateReady();
   const screenCapture = useTurnScreenCapture(voice.room);
   const notchNotice =
@@ -108,6 +118,25 @@ export function OverlayRoot() {
     return () => unlisten?.();
   }, [endSession]);
 
+  const startSession = voice.startSession;
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen("start-voice-requested", async () => {
+      if (!user || voice.desiredActive) return;
+      try {
+        await invoke("summon_bar");
+        await startSession();
+      } catch (err) {
+        logError("OverlayRoot: start voice requested", err);
+      }
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch((err) => logError("OverlayRoot: listen start-voice-requested", err));
+    return () => unlisten?.();
+  }, [user, voice.desiredActive, startSession]);
+
   useEffect(() => {
     if (!user) return;
     function onKeyDown(event: KeyboardEvent) {
@@ -132,6 +161,19 @@ export function OverlayRoot() {
       <div className="overlay-column">
         <GlassSurface>
           <SetupPanel />
+        </GlassSurface>
+      </div>
+    );
+  }
+
+  // Signed in, but still finishing first-run: the hotkey tour + live demo run
+  // here (OnboardingFlow only mounts signed-out), in a panel-sized surface,
+  // before the user lands in the dashboard.
+  if (tail.status === "active") {
+    return (
+      <div className="overlay-column">
+        <GlassSurface>
+          <OnboardingTail voice={voice} onComplete={tail.complete} />
         </GlassSurface>
       </div>
     );

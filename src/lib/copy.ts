@@ -39,6 +39,60 @@ export const onboarding = {
   newHereLink: "New here?",
 } as const;
 
+// First-run attribution question. Answers go to PostHog (person properties) and
+// the backend profile - see analytics.ts and profile.ts. Options are stable ids
+// (sent to analytics), labels are display-only.
+export const whereHeard = {
+  heading: "How did you find Buddy?",
+  body: "Quick one so we know what's working. Pick the closest.",
+  options: [
+    { id: "search", label: "Google or search" },
+    { id: "youtube", label: "YouTube" },
+    { id: "social", label: "X, Reddit, or another feed" },
+    { id: "friend", label: "A friend or colleague" },
+    { id: "work", label: "Someone at work" },
+    { id: "other", label: "Somewhere else" },
+  ],
+  otherPlaceholder: "Where, exactly? (optional)",
+  button: "Continue",
+} as const;
+
+// First-run role question. Same destinations as whereHeard.
+export const role = {
+  heading: "What best describes you?",
+  body: "This helps Buddy show up the way you'd want.",
+  options: [
+    { id: "founder", label: "Founder or building something" },
+    { id: "engineer", label: "Engineer or developer" },
+    { id: "sales_marketing", label: "Sales or marketing" },
+    { id: "student", label: "Student" },
+    { id: "creator", label: "Creator or freelancer" },
+    { id: "other", label: "Something else" },
+  ],
+  otherPlaceholder: "Tell us in a few words (optional)",
+  button: "Continue",
+} as const;
+
+// The hotkey tour step teaches the shortcuts before the live demo. Keycap data
+// comes from hotkeyHints below; this is the surrounding copy.
+export const hotkeyTour = {
+  heading: "Your shortcuts",
+  body: "These work anywhere on your PC, even when Buddy is tucked away.",
+  button: "Got it, let's try it",
+} as const;
+
+// The live "talk to Buddy" demo step, shown right after sign-in.
+export const agentDemo = {
+  heading: "Say hi to Buddy",
+  body: "Double-tap Left Ctrl, or hit the button, and just start talking. End it whenever you're ready.",
+  start: "Start talking",
+  finish: "Finish",
+  skip: "Skip for now",
+  connecting: "Connecting you to Buddy...",
+  live: "Buddy's listening. Say something.",
+  errorHint: "Couldn't start the call. Check your mic, or skip for now.",
+} as const;
+
 export const signIn = {
   pairingPrompt: "On your phone: Aura -> Settings -> Link this PC",
   emailPrompt: "Sign in to bring Buddy to your desktop",
@@ -64,6 +118,7 @@ export const hotkeyHints = {
   summon: { keys: ["Ctrl", "Alt", "B"], action: "summon Buddy anywhere" },
   voice: { keys: ["Left Ctrl twice"], action: "start or end voice" },
   screenSight: { keys: ["Ctrl", "Alt", "S"], action: "toggle screen sight" },
+  dashboard: { keys: ["Ctrl", "Alt", "D"], action: "open your dashboard" },
 } as const;
 
 export const bar = {
@@ -212,3 +267,20 @@ export const desktopOnboardingSeenKey = "desktop_onboarding_seen";
 // already has one incident from two concerns sharing state in this same store
 // file. Telemetry is enabled/disabled by this same flag - see analytics.ts.
 export const desktopConsentAcceptedKey = "desktop_consent_accepted";
+// First-run attribution answers (option id + optional freetext) and the guard
+// that the post-sign-in profile sync ran once. Each is its own key for the same
+// reason as the two above - they gate independent concerns in the shared store.
+export const desktopWhereHeardKey = "desktop_where_heard";
+export const desktopRoleKey = "desktop_role";
+// Set once the post-sign-in profile sync (PostHog alias + $set, backend POST)
+// succeeds, so it never re-runs for a returning user.
+export const desktopProfileSyncedKey = "desktop_profile_synced";
+// Per-install anonymous id used as the PostHog distinct_id for pre-sign-in
+// attribution capture, then aliased to the real uid on sign-in. Deliberately
+// NOT the literal "anonymous" - aliasing that would chain-merge every signed-out
+// install into a single PostHog person.
+export const desktopAnonIdKey = "desktop_anon_id";
+// The onboarding phase, persisted so the first-run flow survives the sign-in
+// auth transition (OnboardingFlow unmounts once `user` is set; the tail - hotkey
+// tour + live demo - reads this to know it should keep running).
+export const desktopOnboardingPhaseKey = "desktop_onboarding_phase";
