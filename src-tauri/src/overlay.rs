@@ -401,11 +401,14 @@ pub fn apply(app: &AppHandle) {
     // apply() is the sole path back to a normal presentation. The chained
     // result above includes restoring cursor input after a pointing takeover,
     // so the applied cache is written only once every window operation worked.
-    if matches!(
-        presentation,
-        OverlayPresentation::Panel | OverlayPresentation::Bar
-    ) && is_fresh_show
-    {
+    // Only the Setup panel has real inputs (sign-in) that need keyboard focus.
+    // The notch/Bar is a passive, hotkey-controlled HUD, and forcing our overlay
+    // to the foreground for it does active harm: the Alt tap win_focus injects to
+    // win SetForegroundWindow pushes the newly-foreground window into Windows'
+    // keyboard menu mode, which then swallows the next Left Ctrl double-tap until
+    // the user clicks another window (the documented "fail to dismiss" bug).
+    // Always-on-top already keeps the notch visible without stealing focus.
+    if matches!(presentation, OverlayPresentation::Panel) && is_fresh_show {
         win_focus::force_foreground(app, &window);
     }
 
@@ -463,16 +466,24 @@ pub fn summon(app: &AppHandle) {
     let already_visible = state_handle(app)
         .map(|h| h.0.lock().unwrap_or_else(|e| e.into_inner()).presentation == desired)
         .unwrap_or(false);
+    // Only the focus-bearing Setup panel forces foreground; the notch/Bar must
+    // not, or the injected Alt tap traps the next Ctrl double-tap in menu mode
+    // (see apply() above).
+    let wants_focus = desired == OverlayPresentation::Panel;
     if already_visible {
         if let Some(window) = main_window(app) {
             let _ = window.show();
-            win_focus::force_foreground(app, &window);
+            if wants_focus {
+                win_focus::force_foreground(app, &window);
+            }
         }
         return;
     }
     set_presentation(app, desired);
-    if let Some(window) = main_window(app) {
-        win_focus::force_foreground(app, &window);
+    if wants_focus {
+        if let Some(window) = main_window(app) {
+            win_focus::force_foreground(app, &window);
+        }
     }
 }
 
@@ -487,10 +498,10 @@ pub fn summon_bar(app: &AppHandle) {
         }
         state.presentation = OverlayPresentation::Bar;
     }
+    // No force_foreground here: the notch is summon-on-demand and always-on-top,
+    // so it appears without stealing focus. Forcing foreground would inject the
+    // Alt tap that traps the dismiss double-tap in menu mode (see apply()).
     apply(app);
-    if let Some(window) = main_window(app) {
-        win_focus::force_foreground(app, &window);
-    }
 }
 
 pub fn dismiss_bar(app: &AppHandle) {
