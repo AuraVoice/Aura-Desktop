@@ -1,14 +1,14 @@
 # Aura Desktop
 
-Tauri v2 (Rust) + React 19 (TypeScript) Windows companion app. One borderless, transparent, always-on-top overlay window that resizes itself between a few presentations instead of using separate windows. It's a from-scratch rewrite of the sibling Flutter app (`../Aura`, "Buddy"), talking to the same backend (`juno-backend` on Cloud Run) and Firebase project (`juno-2ea45`).
+Tauri v2 (Rust) + React 19 (TypeScript) Windows companion app. It has two native windows: the opaque dashboard is the primary app surface, and the borderless transparent overlay remains the signed-in voice companion. It's a from-scratch rewrite of the sibling Flutter app (`../Aura`, "Buddy"), talking to the same backend (`juno-backend` on Cloud Run) and Firebase project (`juno-2ea45`).
 
 ## System overview
 
 ```mermaid
 flowchart LR
     subgraph Desktop["Aura Desktop (this repo)"]
-        Rust["Rust shell\nwindow / hotkeys / tray\nsrc-tauri/src"]
-        React["React UI\nsrc/overlay"]
+        Rust["Rust shell\nwindows / hotkeys / tray\nsrc-tauri/src"]
+        React["React UI\nsrc/dashboard + src/overlay"]
         Rust <-->|"Tauri IPC\ncommands + events"| React
     end
 
@@ -27,7 +27,13 @@ flowchart LR
     React <-->|"mic audio,\nDataReceived events,\nstreamBytes(screen_frame)"| LiveKit
 ```
 
-Rust owns the window: geometry, global hotkeys, tray, and stealing OS focus. React owns everything rendered inside it, plus Firebase auth and the LiveKit call. They talk over Tauri's IPC (`invoke` for React-to-Rust calls, `emit`/`listen` for Rust-to-React events).
+Rust owns both windows: dashboard creation and focus, overlay geometry, global hotkeys, tray, and foreground handling. React owns the dashboard, overlay rendering, Firebase auth, and the LiveKit call. The dashboard has a read-only Firebase subscription. The hidden main webview keeps the `AuthProvider` side effects that synchronize auth state to Rust. They talk over Tauri IPC (`invoke` for React-to-Rust calls, `emit`/`listen` for cross-window and Rust events).
+
+## App windows
+
+`main` is the transparent, always-on-top overlay used only for signed-in companion interactions. `dashboard` is a decorated, resizable application window with a 720x520 minimum size. `src/main.tsx` routes each webview by its label.
+
+Manual launch, a second instance, and signed-out overlay summons open or focus `dashboard`. First-run onboarding also runs there, guarded by `desktop_onboarding_seen`. A dashboard request to start a conversation emits `start-voice-requested` to `main`; the overlay summons its notch and starts its own `useVoiceBar` session. The dashboard's onboarding demo has a separate `useVoiceBar` instance by design.
 
 ## The overlay state machine
 
