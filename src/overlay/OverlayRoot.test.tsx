@@ -93,6 +93,7 @@ describe("OverlayRoot meeting background services", () => {
       events: [event],
       isArmed,
       armRevision: 4,
+      automaticCapture: true,
     });
   });
 });

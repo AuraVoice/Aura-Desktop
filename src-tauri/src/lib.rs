@@ -7,6 +7,8 @@ mod meeting;
 mod overlay;
 mod redact;
 mod screenshot;
+#[cfg(windows)]
+mod screenshot_store;
 mod security;
 mod sentry_setup;
 mod tray;
@@ -311,6 +313,8 @@ pub fn run() {
             // v0.3.0 briefly persisted every spoken-turn frame as plaintext.
             // Turn frames are memory-only now, so remove that legacy directory.
             screenshot::startup_maintenance(app.handle());
+            #[cfg(windows)]
+            screenshot_store::startup_maintenance(app.handle());
 
             let updater_handle = app.handle().clone();
             tauri::async_runtime::spawn(updater::run_update_loop(updater_handle));

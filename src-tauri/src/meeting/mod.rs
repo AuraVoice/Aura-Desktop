@@ -15,7 +15,7 @@ pub mod queue;
 #[cfg(windows)]
 mod audio;
 #[cfg(windows)]
-mod crypto;
+pub(crate) mod crypto;
 #[cfg(windows)]
 pub mod detect;
 #[cfg(windows)]
@@ -638,7 +638,7 @@ pub(crate) fn finalize_capture(
             active: false,
             meeting_id: Some(meeting_id.to_string()),
             event_id: Some(event_id.to_string()),
-            started_at_ms: None,
+            started_at_ms: Some(started_at_ms),
             paused: false,
             reason: reason.to_string(),
         },

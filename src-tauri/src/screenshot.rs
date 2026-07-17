@@ -28,6 +28,7 @@ const LEGACY_SCREENSHOTS_DIR: &str = "screenshots";
 
 struct CapturedFrame {
     payload: Vec<u8>,
+    jpeg_bytes: Vec<u8>,
 }
 
 impl CapturedFrame {
@@ -80,6 +81,14 @@ pub async fn capture_cursor_display_with_geometry(app: AppHandle) -> Result<Resp
     // the frame instead of returning it (the JS side already applied the same
     // rule to its own armed flag; this makes it authoritative).
     crate::security::recheck(&app, crate::security::Operation::CaptureScreen, &ticket)?;
+    let persistence_app = app.clone();
+    let frame = tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(windows)]
+        crate::screenshot_store::save_capture(&persistence_app, "explicit", &frame.jpeg_bytes)?;
+        Ok::<CapturedFrame, String>(frame)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     crate::security::note_capture(&app);
     Ok(frame.into_response())
 }
@@ -99,9 +108,15 @@ pub async fn capture_turn_screen_with_geometry(app: AppHandle) -> Result<Respons
         .await
         .map_err(|e| e.to_string())??;
 
-    // The turn frame is intentionally memory-only. The frontend streams this
-    // response directly to LiveKit and drops it after the write completes.
     crate::security::recheck(&app, crate::security::Operation::CaptureTurnScreen, &ticket)?;
+    let persistence_app = app.clone();
+    let frame = tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(windows)]
+        crate::screenshot_store::save_capture(&persistence_app, "turn", &frame.jpeg_bytes)?;
+        Ok::<CapturedFrame, String>(frame)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
     crate::security::note_capture(&app);
     Ok(frame.into_response())
 }
@@ -157,7 +172,10 @@ fn capture_frame(cursor_x: i32, cursor_y: i32) -> Result<CapturedFrame, String> 
     geometry.write_le(&mut payload);
     payload.extend_from_slice(&jpeg_bytes);
 
-    Ok(CapturedFrame { payload })
+    Ok(CapturedFrame {
+        payload,
+        jpeg_bytes,
+    })
 }
 
 #[cfg(test)]

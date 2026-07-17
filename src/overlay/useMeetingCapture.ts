@@ -22,6 +22,10 @@ import {
   upsertMeetingActivity,
 } from "../lib/meetingActivity";
 import { notifyLocal } from "../lib/desktopNotifications";
+import {
+  ensureMeetingNotificationPermission,
+  sendMeetingCaptureEndedNotification,
+} from "../lib/meetingDesktopNotification";
 
 /** Fallback meeting length when the calendar event has no end time. */
 const DEFAULT_MEETING_MS = 60 * 60_000;
@@ -66,6 +70,7 @@ interface CaptureStatePayload {
   eventId: string | null;
   paused: boolean;
   reason: string;
+  startedAtMs: number | null;
 }
 
 // Same transport normalization as useScreenSight's asArrayBuffer: the IPC
@@ -106,6 +111,9 @@ interface MeetingCaptureInputs {
   isArmed: (eventId: string) => boolean;
   /** Arm-state revision counter so watch scheduling reruns on toggles. */
   armRevision: number;
+  /** Temporary test mode. Eligible calendar meetings are watched without the
+   * persisted arm decision. Keep the arm inputs intact for the consent gate. */
+  automaticCapture?: boolean;
 }
 
 /**
@@ -118,7 +126,7 @@ interface MeetingCaptureInputs {
  * (a plan state, surfaced with an Upgrade pointer, mirroring the voice cap).
  */
 export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureState {
-  const { uid, appHidden, events, isArmed, armRevision } = inputs;
+  const { uid, appHidden, events, isArmed, armRevision, automaticCapture = false } = inputs;
   const signedIn = uid !== null;
 
   const [recording, setRecording] = useState(false);
@@ -152,6 +160,9 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
   /** A join re-detected while the previous engine was still flushing; replayed
    * once the capture-state event says the teardown finished. */
   const pendingRejoinRef = useRef<string | null>(null);
+  /** Live captures awaiting their end toast. The upload pump may upload audio
+   * while this is set, but it cannot hand completion to transcription. */
+  const endNotificationPendingRef = useRef<Set<string>>(new Set());
 
   // A direct A -> B switch never passes through signedIn=false. Treat UID as
   // the state-machine identity and invalidate every account-scoped cache and
@@ -165,6 +176,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
     claimInFlightRef.current = null;
     activeEventRef.current = null;
     pendingRejoinRef.current = null;
+    endNotificationPendingRef.current.clear();
     recordingRef.current = false;
     setRecording(false);
     setPaused(false);
@@ -181,6 +193,11 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
         })
         .catch((err) => logError("useMeetingCapture: hydrate activity", err));
     }
+  }, [uid]);
+
+  useEffect(() => {
+    if (!uid) return;
+    void ensureMeetingNotificationPermission();
   }, [uid]);
 
   const recordActivity = useCallback(
@@ -212,7 +229,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
     const now = Date.now();
     const desired = new Map<string, { startMs: number; endMs: number }>();
     for (const event of events) {
-      if (!isEligibleForNotes(event) || !isArmed(event.id)) continue;
+      if (!isEligibleForNotes(event) || (!automaticCapture && !isArmed(event.id))) continue;
       const start = Date.parse(event.startTime);
       if (Number.isNaN(start)) continue;
       const parsedEnd = Date.parse(event.endTime);
@@ -246,7 +263,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
         windowEndMs: window.endMs,
       }).catch((err) => logError("useMeetingCapture: start_join_watch", err));
     }
-  }, [uid, signedIn, events, isArmed, armRevision]);
+  }, [uid, signedIn, events, isArmed, armRevision, automaticCapture]);
 
   // ── Claim + capture ─────────────────────────────────────────────────────
   const startCaptureFor = useCallback(
@@ -267,6 +284,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
             claimsRef.current.set(eventId, claim.meetingId);
             holdUntilRef.current.delete(claim.meetingId);
             activeEventRef.current = eventId;
+            endNotificationPendingRef.current.add(claim.meetingId);
             await invoke("start_meeting_capture", {
               meetingId: claim.meetingId,
               eventId,
@@ -287,6 +305,10 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
             trackEvent("meeting_capture_started", { rejoined: claim.rejoined });
             return;
           } catch (err) {
+            const claimedMeetingId = claimsRef.current.get(eventId);
+            if (claimedMeetingId && !recordingRef.current) {
+              endNotificationPendingRef.current.delete(claimedMeetingId);
+            }
             if (!isCurrent()) return;
             if (err instanceof MeetingCapError) {
               setCapBlocked(true);
@@ -332,7 +354,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
       }
       const event = eventsRef.current.find((candidate) => candidate.id === eventId);
       if (event) {
-        if (!isArmedRef.current(eventId)) return; // disarmed after the watch started
+        if (!automaticCapture && !isArmedRef.current(eventId)) return;
         void startCaptureFor(eventId, event.title, event.startTime, event.endTime);
         return;
       }
@@ -346,7 +368,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
         new Date(now.getTime() + DEFAULT_MEETING_MS).toISOString(),
       );
     },
-    [startCaptureFor],
+    [startCaptureFor, automaticCapture],
   );
 
   const captureNow = useCallback(() => {
@@ -476,7 +498,12 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
             (await invoke<{ meetingId: string | null }>("capture_status")).meetingId ===
               meetingId;
           if (!isCurrent()) return;
-          if (meeting.completed && hold <= now && !activelyCapturing) {
+          if (
+            meeting.completed
+            && hold <= now
+            && !activelyCapturing
+            && !endNotificationPendingRef.current.has(meetingId)
+          ) {
             // Segments may have just been marked uploaded above; re-check via
             // a fresh snapshot only when the stale view said no.
             if (allUploaded || (await allSegmentsUploaded(meetingId, run.uid, run.epoch))) {
@@ -617,19 +644,28 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
       listen<CaptureStatePayload>("meeting-capture-state", (event) => {
         const payload = event.payload;
         if (payload.ownerUid !== uidRef.current) return;
+        if (payload.active && payload.meetingId) {
+          endNotificationPendingRef.current.add(payload.meetingId);
+        }
         recordingRef.current = payload.active;
         setRecording(payload.active);
         setPaused(payload.active && payload.paused);
         if (!payload.active) {
           activeEventRef.current = null;
           if (payload.meetingId) {
-            if (payload.reason === "meeting_left") {
+            if (payload.reason === "meeting_left" && !automaticCapture) {
               // Hold /complete for a rejoin; the watch window is still open,
               // and a re-detected join reclaims the same meeting id.
               holdUntilRef.current.set(payload.meetingId, Date.now() + REJOIN_HOLD_MS);
               setTimeout(() => void pump(), REJOIN_HOLD_MS + 1000);
             }
-            void pump();
+            const completedMeetingId = payload.meetingId;
+            void sendMeetingCaptureEndedNotification()
+              .catch((err) => logError("useMeetingCapture: capture-end notification", err))
+              .finally(() => {
+                endNotificationPendingRef.current.delete(completedMeetingId);
+                void pump();
+              });
           }
           if (payload.reason === "capture_failed") {
             trackEvent("meeting_capture_failed", {});
@@ -655,7 +691,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
       disposed = true;
       unlisteners.forEach((unlisten) => unlisten());
     };
-  }, [handleJoinDetected, pump]);
+  }, [handleJoinDetected, pump, automaticCapture]);
 
   // Recording is a per-user consent grant: signing out (or being signed out)
   // must end any live capture immediately, not just stop future watches.
@@ -675,13 +711,21 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
   // but a webview reload during dev can).
   useEffect(() => {
     if (!uid) return;
-    void invoke<{ active: boolean; paused: boolean; eventId: string | null }>("capture_status")
+    void invoke<{
+      active: boolean;
+      paused: boolean;
+      eventId: string | null;
+      meetingId: string | null;
+    }>("capture_status")
       .then((status) => {
         if (uidRef.current !== uid) return;
         recordingRef.current = status.active;
         setRecording(status.active);
         setPaused(status.active && status.paused);
         activeEventRef.current = status.eventId;
+        if (status.active && status.meetingId) {
+          endNotificationPendingRef.current.add(status.meetingId);
+        }
       })
       .catch((err) => logError("useMeetingCapture: capture_status", err));
     void pump();

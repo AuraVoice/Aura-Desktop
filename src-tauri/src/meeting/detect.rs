@@ -1,6 +1,6 @@
 //! Zoom/Teams join detection - one polling thread per armed meeting window.
 //!
-//! React (useMeetingCapture.ts) arms a watch for each armed meeting's time
+//! React (useMeetingCapture.ts) arms a watch for each eligible meeting's time
 //! window; this module polls the desktop every 5s inside that window looking
 //! for an in-call Zoom/Teams window (process name is the primary signal,
 //! window title the confirmation), emits `meeting-join-detected` once on
@@ -10,8 +10,8 @@
 //! treats it as a continuation). The thread self-expires at the window's end:
 //! a meeting the user never joins costs nothing and emits nothing.
 //!
-//! Google Meet has no detector by design - it lives in a browser tab with no
-//! distinct process; Meet capture is manual-arm only (KebabMenu).
+//! Browser-hosted Google Meet, Teams, and Zoom calls are recognized from the
+//! visible browser window title while the matching calendar window is live.
 //!
 //! Win32 discipline mirrors win_focus.rs: HWNDs never cross threads (only
 //! the data read from them does), and nothing here ever touches the
@@ -103,6 +103,7 @@ fn watch_thread(
 ) {
     info!("meeting.detect: watching {event_id} until {window_end_ms}");
     let mut joined = false;
+    let mut joined_in_browser = false;
     let mut misses: u32 = 0;
 
     loop {
@@ -117,12 +118,25 @@ fn watch_thread(
         if now >= window_end_ms && !joined {
             break;
         }
+        if now >= window_end_ms && joined_in_browser {
+            info!("meeting.detect: browser meeting ended for {event_id}");
+            if let Err(e) = app.emit(
+                "meeting-left",
+                LeftPayload {
+                    event_id: event_id.clone(),
+                },
+            ) {
+                error!("meeting.detect: emit left failed: {e}");
+            }
+            break;
+        }
         if now >= window_start_ms {
             match find_meeting_window() {
                 Some((app_name, title)) => {
                     misses = 0;
                     if !joined {
                         joined = true;
+                        joined_in_browser = app_name.ends_with("web") || app_name == "google-meet";
                         info!("meeting.detect: join detected for {event_id} ({app_name})");
                         if let Err(e) = app.emit("meeting-join-detected", JoinPayload {
                             event_id: event_id.clone(),
@@ -135,6 +149,14 @@ fn watch_thread(
                 }
                 None => {
                     if joined {
+                        // EnumWindows exposes only a browser's active tab
+                        // title. Switching tabs must not look like leaving an
+                        // already detected browser meeting. The calendar end
+                        // bounds these captures instead.
+                        if joined_in_browser {
+                            std::thread::sleep(POLL_INTERVAL);
+                            continue;
+                        }
                         misses += 1;
                         if misses >= LEFT_AFTER_MISSES {
                             joined = false;
@@ -182,24 +204,62 @@ fn find_meeting_window() -> Option<(String, String)> {
         let Some(exe_stem) = process_stem_for_window(hwnd_raw) else {
             continue;
         };
-        // Zoom's in-call window titles: "Zoom Meeting", "Zoom Webinar",
-        // sometimes suffixed with the meeting topic.
-        if exe_stem == "zoom"
-            && (title_lower.contains("zoom meeting") || title_lower.contains("zoom webinar"))
-        {
-            return Some(("zoom".to_string(), title));
-        }
-        // New Teams is ms-teams.exe, classic is teams.exe. The main window
-        // titles itself "... | Microsoft Teams" all day long, so require a
-        // call-ish keyword too. Known limitation: localized UI languages
-        // won't match - the manual "Capture this call" path still works.
-        if (exe_stem == "ms-teams" || exe_stem == "teams")
-            && (title_lower.contains("meeting") || title_lower.contains("call"))
-        {
-            return Some(("teams".to_string(), title));
+        if let Some(app_name) = meeting_app_for_window(&exe_stem, &title_lower) {
+            return Some((app_name.to_string(), title));
         }
     }
     None
+}
+
+fn meeting_app_for_window<'a>(exe_stem: &str, title_lower: &'a str) -> Option<&'a str> {
+    if exe_stem == "zoom"
+        && (title_lower.contains("zoom meeting") || title_lower.contains("zoom webinar"))
+    {
+        return Some("zoom");
+    }
+    if (exe_stem == "ms-teams" || exe_stem == "teams")
+        && (title_lower.contains("meeting") || title_lower.contains("call"))
+    {
+        return Some("teams");
+    }
+    let browser = matches!(exe_stem, "chrome" | "msedge" | "brave" | "firefox");
+    if !browser {
+        return None;
+    }
+    if title_lower.contains("google meet") || title_lower.starts_with("meet -") {
+        return Some("google-meet");
+    }
+    if title_lower.contains("microsoft teams")
+        && (title_lower.contains("meeting") || title_lower.contains("call"))
+    {
+        return Some("teams-web");
+    }
+    if title_lower.contains("zoom meeting") || title_lower.contains("zoom webinar") {
+        return Some("zoom-web");
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::meeting_app_for_window;
+
+    #[test]
+    fn recognizes_native_and_browser_meeting_windows() {
+        assert_eq!(
+            meeting_app_for_window("zoom", "weekly sync - zoom meeting"),
+            Some("zoom")
+        );
+        assert_eq!(
+            meeting_app_for_window("chrome", "meet - abc-defg-hij - google chrome"),
+            Some("google-meet")
+        );
+        assert_eq!(
+            meeting_app_for_window("msedge", "project call | microsoft teams"),
+            Some("teams-web")
+        );
+        assert_eq!(meeting_app_for_window("chrome", "google calendar"), None);
+    }
 }
 
 unsafe extern "system" fn enum_callback(

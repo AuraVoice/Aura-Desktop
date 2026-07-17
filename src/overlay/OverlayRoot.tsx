@@ -55,6 +55,7 @@ export function OverlayRoot() {
     events: meetings.events,
     isArmed: meetingArm.isArmed,
     armRevision: meetingArm.revision,
+    automaticCapture: true,
   });
   const resetDraftCard = draftCard.reset;
   const showDraftCard = user !== null && draftCard.phase !== "idle";
