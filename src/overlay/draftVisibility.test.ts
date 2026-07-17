@@ -11,7 +11,7 @@ describe("pendingDraftRestoreAction", () => {
     expect(pendingDraftRestoreAction(true, "shown", "hidden")).toBe("restore");
   });
 
-  it("clears a pending restore when pointer mode returns to a visible panel", () => {
-    expect(pendingDraftRestoreAction(true, "shown", "panel")).toBe("clear");
+  it("clears a pending restore when pointer mode returns to the companion", () => {
+    expect(pendingDraftRestoreAction(true, "shown", "companion")).toBe("clear");
   });
 });

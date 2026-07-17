@@ -1,4 +1,4 @@
-export type DraftPresentation = "hidden" | "panel" | "pill" | "pointing";
+export type DraftPresentation = "hidden" | "panel" | "bar" | "companion" | "pointing";
 export type DraftVisibilityPhase = "idle" | "generating" | "shown" | "refining" | "error";
 export type PendingDraftRestoreAction = "none" | "wait" | "clear" | "restore";
 

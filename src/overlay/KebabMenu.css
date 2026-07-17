@@ -15,12 +15,12 @@
 
 .glass-surface.kebab-menu {
   position: absolute;
-  top: 0;
+  bottom: 0;
   right: 0;
   width: 216px;
   height: auto;
   border-radius: 20px;
-  transform-origin: top right;
+  transform-origin: bottom right;
   animation: kebab-menu-enter 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 

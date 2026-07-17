@@ -13,7 +13,7 @@ export const createEventUrl = "https://calendar.google.com/calendar/u/0/r/evente
 
 export const consent = {
   heading: "Before we get started",
-  body: "Aura Desktop uses your voice (and, only while you explicitly turn on screen sight, your screen) to power Buddy. By continuing, you agree to Aura's Privacy Policy and Terms of Service, including the desktop addendum covering screen sight, the global hotkeys, and telemetry.",
+  body: "Aura Desktop uses your voice (and, only while you explicitly turn on screen sight, your screen) to power Buddy. Aura also detects a Left Ctrl double-tap to start or end voice, without storing or transmitting keyboard input. By continuing, you agree to Aura's Privacy Policy and Terms of Service, including the desktop addendum covering screen sight, global shortcuts, and telemetry.",
   ageLabel: "I confirm I am 18 years of age or older",
   privacyLabel: "Privacy Policy",
   termsLabel: "Terms of Service",
@@ -62,7 +62,7 @@ export const signIn = {
 
 export const hotkeyHints = {
   summon: { keys: ["Ctrl", "Alt", "B"], action: "summon Buddy anywhere" },
-  hide: { keys: ["Esc"], action: "hide" },
+  voice: { keys: ["Left Ctrl twice"], action: "start or end voice" },
   screenSight: { keys: ["Ctrl", "Alt", "S"], action: "toggle screen sight" },
 } as const;
 

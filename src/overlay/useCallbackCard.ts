@@ -46,7 +46,7 @@ const INITIAL: CallbackCardData = {
 };
 
 interface CallbackCardInputs {
-  presentation: "hidden" | "panel" | "pill" | "pointing";
+  presentation: "hidden" | "panel" | "companion" | "pointing";
   signedIn: boolean;
   callLive: boolean;
   draftActive: boolean;
@@ -95,7 +95,7 @@ export function useCallbackCard(inputs: CallbackCardInputs): CallbackCardState {
 
   // The trigger: entering the signed-in bar, at most once per local day.
   useEffect(() => {
-    if (presentation !== "panel" || !signedIn || callLive || draftActive) return;
+    if (presentation !== "companion" || !signedIn || callLive || draftActive) return;
     if (dataRef.current.visible || fetchInFlightRef.current) return;
 
     let cancelled = false;
@@ -113,7 +113,7 @@ export function useCallbackCard(inputs: CallbackCardInputs): CallbackCardState {
         if (cancelled || payload === null) return;
         // Re-check the world after the await: a call or draft may have
         // started while the fetch was in flight.
-        if (presentation !== "panel") return;
+        if (presentation !== "companion") return;
 
         setData({ ...INITIAL, visible: true, line: payload.line, chips: payload.chips });
         shownAtRef.current = Date.now();

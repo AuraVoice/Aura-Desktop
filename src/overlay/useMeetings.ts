@@ -29,9 +29,13 @@ const SUMMONED_KEY = "auto_summoned_events";
 const ALERTS_DISABLED_KEY = "alerts_disabled";
 
 interface MeetingsInputs {
-  presentation: "hidden" | "panel" | "pill" | "pointing";
+  presentation: "hidden" | "panel" | "bar" | "companion" | "pointing";
   signedIn: boolean;
   callLive: boolean;
+  /** Whether an imminent event may reveal the signed-in surface. The notch UI
+   * keeps this false while still using the calendar events for background
+   * meeting capture. */
+  autoSummon?: boolean;
 }
 
 export interface SoonestMeeting {
@@ -82,7 +86,7 @@ function prunedToToday(map: IdDateMap | undefined, today: string): IdDateMap {
  * ambient surface that must never surface an error.
  */
 export function useMeetings(inputs: MeetingsInputs): MeetingsState {
-  const { presentation, signedIn, callLive } = inputs;
+  const { presentation, signedIn, callLive, autoSummon = true } = inputs;
 
   const [connected, setConnected] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -109,6 +113,8 @@ export function useMeetings(inputs: MeetingsInputs): MeetingsState {
   presentationRef.current = presentation;
   const callLiveRef = useRef(callLive);
   callLiveRef.current = callLive;
+  const autoSummonRef = useRef(autoSummon);
+  autoSummonRef.current = autoSummon;
   const signedInRef = useRef(signedIn);
   signedInRef.current = signedIn;
   const alertsDisabledRef = useRef(alertsDisabled);
@@ -182,6 +188,7 @@ export function useMeetings(inputs: MeetingsInputs): MeetingsState {
 
     if (
       best &&
+      autoSummonRef.current &&
       !alertsDisabledRef.current &&
       best.ms <= AUTOSUMMON_LEAD_MIN * 60_000 &&
       presentationRef.current === "hidden" &&
@@ -243,7 +250,7 @@ export function useMeetings(inputs: MeetingsInputs): MeetingsState {
   }, [signedIn, poll]);
 
   useEffect(() => {
-    if (signedIn && presentation === "panel") void poll();
+    if (signedIn && presentation === "companion") void poll();
   }, [signedIn, presentation, poll]);
 
   // Recompute on every event-list change and on a steady local tick.
