@@ -13,6 +13,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify release tag matches app versions
+        shell: pwsh
+        run: |
+          $tagVersion = "${{ github.ref_name }}" -replace '^v', ''
+          $packageVersion = (Get-Content -Raw package.json | ConvertFrom-Json).version
+          $tauriVersion = (Get-Content -Raw src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          $cargoVersion = (Select-String -Path src-tauri/Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          $versions = [ordered]@{
+            "package.json" = $packageVersion
+            "src-tauri/tauri.conf.json" = $tauriVersion
+            "src-tauri/Cargo.toml" = $cargoVersion
+          }
+          $mismatches = @($versions.GetEnumerator() | Where-Object { $_.Value -ne $tagVersion })
+          if ($mismatches.Count -gt 0) {
+            $details = ($versions.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ", "
+            throw "Release tag ${{ github.ref_name }} does not match app versions: $details"
+          }
+
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*

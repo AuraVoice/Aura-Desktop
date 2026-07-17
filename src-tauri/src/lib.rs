@@ -76,6 +76,15 @@ fn summon_bar(app: AppHandle) -> Result<(), String> {
     overlay::summon_bar(&app)
 }
 
+fn should_summon_on_start<I, S>(args: I, just_updated: bool) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let is_boot_launch = args.into_iter().any(|arg| arg.as_ref() == "--autostart");
+    !is_boot_launch || just_updated
+}
+
 #[tauri::command]
 fn dismiss_bar(app: AppHandle) {
     overlay::dismiss_bar(&app);
@@ -289,6 +298,13 @@ pub fn run() {
                     just_updated.clone();
             }
 
+            // A direct install or explicit app launch must show a useful surface,
+            // especially for a signed-out user who needs the setup and sign-in UI.
+            // Windows boot launches stay tray-only so Aura does not interrupt login.
+            if should_summon_on_start(std::env::args(), just_updated.is_some()) {
+                overlay::summon(app.handle());
+            }
+
             // Drop upload-queue entries whose captures went unsent past the
             // retention window (fs work, runs on a blocking thread inside).
             meeting::startup_maintenance(app.handle());
@@ -309,4 +325,30 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_summon_on_start;
+
+    #[test]
+    fn manual_launch_summons_the_app() {
+        assert!(should_summon_on_start(["aura-desktop.exe"], false));
+    }
+
+    #[test]
+    fn windows_autostart_stays_hidden() {
+        assert!(!should_summon_on_start(
+            ["aura-desktop.exe", "--autostart"],
+            false,
+        ));
+    }
+
+    #[test]
+    fn update_restart_summons_even_with_autostart_args() {
+        assert!(should_summon_on_start(
+            ["aura-desktop.exe", "--autostart"],
+            true,
+        ));
+    }
 }
