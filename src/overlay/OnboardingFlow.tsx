@@ -5,8 +5,12 @@ import QRCode from "react-qr-code";
 import {
   onboarding as copy,
   consent as consentCopy,
+  whereHeard as whereHeardCopy,
+  role as roleCopy,
   desktopOnboardingSeenKey,
   desktopConsentAcceptedKey,
+  desktopWhereHeardKey,
+  desktopRoleKey,
   getAuraAppUrl,
   overlayStorePath,
   privacyUrl,
@@ -14,14 +18,18 @@ import {
 } from "../lib/copy";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { exit } from "@tauri-apps/plugin-process";
-import { setTelemetryEnabled } from "../lib/analytics";
+import { setPersonProperties, setTelemetryEnabled } from "../lib/analytics";
+import { getOrCreateAnonId, type StoredAnswer } from "../lib/profile";
 import { initSentryIfEnabled } from "../lib/sentry";
 import { logError, logInfo } from "../lib/log";
+import { ChoiceStep } from "./ChoiceStep";
 import { SignInForm, type Mode as SignInMode } from "./SignInForm";
 import "./OnboardingFlow.css";
 
-type Step = "welcome" | "getApp" | "link";
-const STEPS: Step[] = ["welcome", "getApp", "link"];
+type Step = "welcome" | "getApp" | "whereHeard" | "role" | "link";
+// Dots cover the pre-sign-in sequence only; the sign-in ("link") step has no dot
+// so a user can't skip the attribution questions by clicking ahead.
+const DOT_STEPS: Step[] = ["welcome", "getApp", "whereHeard", "role"];
 // This store file is shared with overlay.rs's window-position persistence,
 // which writes to it on every WindowEvent::Moved - a burst of which fires
 // exactly when SetupPanel first mounts post-sign-out (the Bar->Setup
@@ -121,6 +129,8 @@ export function OnboardingFlow() {
   const [resolved, setResolved] = useState(false);
   const [consentAccepted, setConsentAccepted] = useState(false);
   const [initialSignInMode, setInitialSignInMode] = useState<SignInMode>("pairing");
+  const [whereHeardAnswer, setWhereHeardAnswer] = useState<StoredAnswer | null>(null);
+  const [roleAnswer, setRoleAnswer] = useState<StoredAnswer | null>(null);
   const storeRef = useRef<Store | null>(null);
   const forcedRef = useRef(false);
 
@@ -151,8 +161,12 @@ export function OnboardingFlow() {
         storeRef.current = store;
         const seen = await store.get<boolean>(desktopOnboardingSeenKey);
         const accepted = await store.get<boolean>(desktopConsentAcceptedKey);
+        const whereHeard = await store.get<StoredAnswer>(desktopWhereHeardKey);
+        const role = await store.get<StoredAnswer>(desktopRoleKey);
         if (cancelled) return;
         setConsentAccepted(Boolean(accepted));
+        setWhereHeardAnswer(whereHeard ?? null);
+        setRoleAnswer(role ?? null);
         clearTimeout(timeoutId);
         logInfo("OnboardingFlow: load store", `resolved seen=${Boolean(seen)} in ${Date.now() - startedAt}ms`);
         // The timeout above already forced a render - a late resolution
@@ -160,7 +174,12 @@ export function OnboardingFlow() {
         // since re-driving step/resolved now could stomp on-screen
         // navigation the user has already made.
         if (forcedRef.current) return;
-        if (seen) setStep("link");
+        // Resume where an interrupted first-run left off: a returning user
+        // (seen) or one who already finished the questions (role answered)
+        // jumps straight to sign-in; a partial answerer resumes at the next
+        // unanswered question rather than re-asking.
+        if (seen || role) setStep("link");
+        else if (whereHeard) setStep("role");
         setResolved(true);
       })
       .catch((err) => {
@@ -176,15 +195,35 @@ export function OnboardingFlow() {
 
   useEffect(() => {
     if (!resolved) return;
+    // The onboarding_seen flag is now written at the very end of the flow
+    // (after the post-sign-in tour + demo, in OnboardingTail), not here - so an
+    // interrupted first-run resumes instead of being marked complete at sign-in.
     invoke("set_onboarding_step", { step }).catch((err) =>
       logError("OnboardingFlow: set_onboarding_step", err),
     );
-    if (step === "link") {
-      storeRef.current?.set(desktopOnboardingSeenKey, true).catch((err) =>
-        logError("OnboardingFlow: persist onboarding_seen", err),
-      );
-    }
   }, [step, resolved]);
+
+  // Persists a question answer, mirrors it to PostHog under the per-install
+  // anonymous id (aliased to the uid post-sign-in), then advances. Referral is
+  // captured here, pre-sign-in, so it survives even if the user never finishes.
+  async function persistAnswer(
+    key: typeof desktopWhereHeardKey | typeof desktopRoleKey,
+    property: "where_heard" | "role",
+    answer: StoredAnswer,
+  ) {
+    const store = storeRef.current;
+    if (!store) return;
+    await store.set(key, answer).catch((err) =>
+      logError("OnboardingFlow: persist answer", err),
+    );
+    const anonId = await getOrCreateAnonId(store).catch((err) => {
+      logError("OnboardingFlow: anon id", err);
+      return undefined;
+    });
+    const props: Record<string, unknown> = { [property]: answer.id };
+    if (answer.other) props[`${property}_other`] = answer.other;
+    setPersonProperties(props, anonId ?? undefined);
+  }
 
   function acceptConsent() {
     storeRef.current?.set(desktopConsentAcceptedKey, true).catch((err) =>
@@ -227,27 +266,57 @@ export function OnboardingFlow() {
       )}
       {step === "getApp" && (
         <GetAppStep
-          onNext={() => {
+          onNext={() => setStep("whereHeard")}
+          onBack={() => setStep("welcome")}
+        />
+      )}
+      {step === "whereHeard" && (
+        <ChoiceStep
+          heading={whereHeardCopy.heading}
+          body={whereHeardCopy.body}
+          options={whereHeardCopy.options}
+          otherPlaceholder={whereHeardCopy.otherPlaceholder}
+          buttonLabel={whereHeardCopy.button}
+          initial={whereHeardAnswer ?? undefined}
+          onSubmit={(answer) => {
+            setWhereHeardAnswer(answer);
+            void persistAnswer(desktopWhereHeardKey, "where_heard", answer);
+            setStep("role");
+          }}
+        />
+      )}
+      {step === "role" && (
+        <ChoiceStep
+          heading={roleCopy.heading}
+          body={roleCopy.body}
+          options={roleCopy.options}
+          otherPlaceholder={roleCopy.otherPlaceholder}
+          buttonLabel={roleCopy.button}
+          initial={roleAnswer ?? undefined}
+          onSubmit={(answer) => {
+            setRoleAnswer(answer);
+            void persistAnswer(desktopRoleKey, "role", answer);
             setInitialSignInMode("pairing");
             setStep("link");
           }}
-          onBack={() => setStep("welcome")}
         />
       )}
       {step === "link" && <SignInForm initialMode={initialSignInMode} />}
 
       <div className="onboarding-footer">
-        <div className="onboarding-progress-dots">
-          {STEPS.map((s) => (
-            <button
-              key={s}
-              type="button"
-              className={`onboarding-dot${s === step ? " onboarding-dot-active" : ""}`}
-              onClick={() => setStep(s)}
-              aria-label={`Go to ${s} step`}
-            />
-          ))}
-        </div>
+        {step !== "link" && (
+          <div className="onboarding-progress-dots">
+            {DOT_STEPS.map((s) => (
+              <button
+                key={s}
+                type="button"
+                className={`onboarding-dot${s === step ? " onboarding-dot-active" : ""}`}
+                onClick={() => setStep(s)}
+                aria-label={`Go to ${s} step`}
+              />
+            ))}
+          </div>
+        )}
         {step === "link" && (
           <button type="button" className="onboarding-link-button onboarding-new-here" onClick={() => setStep("welcome")}>
             {copy.newHereLink}

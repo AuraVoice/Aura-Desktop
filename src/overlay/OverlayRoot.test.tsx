@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   useMeetings: vi.fn(),
   useMeetingArm: vi.fn(),
   useMeetingCapture: vi.fn(),
+  useOnboardingTail: vi.fn(),
 }));
 
 vi.mock("../state/AuthProvider", () => ({
@@ -47,6 +48,8 @@ vi.mock("./useUpdateReady", () => ({ useUpdateReady: vi.fn() }));
 vi.mock("./useMeetings", () => ({ useMeetings: mocks.useMeetings }));
 vi.mock("./useMeetingArm", () => ({ useMeetingArm: mocks.useMeetingArm }));
 vi.mock("./useMeetingCapture", () => ({ useMeetingCapture: mocks.useMeetingCapture }));
+vi.mock("./useOnboardingTail", () => ({ useOnboardingTail: mocks.useOnboardingTail }));
+vi.mock("./OnboardingTail", () => ({ OnboardingTail: () => <div>tail</div> }));
 vi.mock("./NotchBar", () => ({ NotchBar: () => <div>notch</div> }));
 vi.mock("./DraftCard", () => ({ DraftCard: () => <div>draft</div> }));
 
@@ -75,6 +78,7 @@ describe("OverlayRoot meeting background services", () => {
     mocks.useMeetings.mockReturnValue({ events: [event] });
     mocks.useMeetingArm.mockReturnValue({ isArmed, revision: 4 });
     mocks.useMeetingCapture.mockReturnValue({});
+    mocks.useOnboardingTail.mockReturnValue({ status: "done", complete: vi.fn() });
 
     act(() => {
       renderer = create(<OverlayRoot />);
@@ -95,5 +99,20 @@ describe("OverlayRoot meeting background services", () => {
       armRevision: 4,
       automaticCapture: true,
     });
+  });
+
+  it("renders the onboarding tail instead of the notch while first-run is active", () => {
+    mocks.useMeetings.mockReturnValue({ events: [] });
+    mocks.useMeetingArm.mockReturnValue({ isArmed: vi.fn(() => false), revision: 0 });
+    mocks.useMeetingCapture.mockReturnValue({});
+    mocks.useOnboardingTail.mockReturnValue({ status: "active", complete: vi.fn() });
+
+    act(() => {
+      renderer = create(<OverlayRoot />);
+    });
+
+    const text = JSON.stringify(renderer!.toJSON());
+    expect(text).toContain("tail");
+    expect(text).not.toContain("notch");
   });
 });

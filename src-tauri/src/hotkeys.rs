@@ -1,11 +1,17 @@
 use tauri::AppHandle;
 use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
 
-use crate::{overlay, security};
+use crate::{dashboard, overlay, security};
 
 /// Summon/hide the overlay.
 pub fn summon_shortcut() -> Shortcut {
     Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyB)
+}
+
+/// Opens (or focuses) the in-app dashboard window. Ctrl+Alt+D is free;
+/// Ctrl+Shift+D is the sign-out shortcut, a different modifier set.
+pub fn open_dashboard_shortcut() -> Shortcut {
+    Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyD)
 }
 
 /// Power-user shortcut (not present in the Flutter source): sign out
@@ -19,9 +25,32 @@ pub fn screen_sight_shortcut() -> Shortcut {
     Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyS)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn open_dashboard_is_ctrl_alt_d() {
+        assert_eq!(
+            open_dashboard_shortcut(),
+            Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyD)
+        );
+    }
+
+    #[test]
+    fn open_dashboard_is_distinct_from_sign_out() {
+        // Ctrl+Alt+D vs Ctrl+Shift+D: same key, different modifiers.
+        assert_ne!(open_dashboard_shortcut(), sign_out_shortcut());
+    }
+}
+
 pub fn handle(app: &AppHandle, shortcut: &Shortcut) {
     if shortcut == &summon_shortcut() {
         overlay::hotkey_pressed(app);
+    } else if shortcut == &open_dashboard_shortcut() {
+        if let Err(e) = dashboard::open_dashboard_window(app) {
+            log::error!("hotkeys: open dashboard failed: {e}");
+        }
     } else if shortcut == &sign_out_shortcut() {
         overlay::sign_out_requested(app);
     } else if shortcut == &screen_sight_shortcut() {

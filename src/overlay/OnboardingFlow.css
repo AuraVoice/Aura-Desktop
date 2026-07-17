@@ -129,3 +129,12 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+.onboarding-hotkey-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+  max-width: 380px;
+  margin: 4px 0;
+}

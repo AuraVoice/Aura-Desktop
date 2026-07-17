@@ -22,7 +22,11 @@ const BAR_WIDTH: f64 = 460.0;
 const BAR_HEIGHT: f64 = 72.0;
 const BAR_TOP_OFFSET: f64 = 0.0;
 const SETUP_WIDTH: f64 = 600.0;
-const SETUP_HEIGHT: f64 = 340.0;
+// Tall enough for the first-run question steps (heading + up to six choices +
+// optional freetext + button). Sign-in and consent fit comfortably within this
+// with extra whitespace. A single global constant keeps the panel one fixed
+// size across all setup steps rather than resizing per step.
+const SETUP_HEIGHT: f64 = 460.0;
 const TOP_MARGIN: f64 = 48.0;
 const COMPANION_SURFACE_RESERVE: f64 = 340.0;
 // The single below-bar slot's extra window height is owned by React, not Rust:
@@ -55,7 +59,11 @@ pub enum PanelVariant {
 pub enum OnboardingStep {
     Welcome,
     GetApp,
+    WhereHeard,
+    Role,
     Link,
+    HotkeyTour,
+    AgentDemo,
 }
 
 #[derive(Clone, Copy, Serialize)]
@@ -466,6 +474,14 @@ pub fn summon(app: &AppHandle) {
     let Some(desired) = desired else {
         return;
     };
+    if desired == OverlayPresentation::Panel {
+        // First-run and signed-out flows live exclusively in the dashboard
+        // window. Keep the overlay panel as a fallback if that window fails.
+        if crate::dashboard::open_dashboard_window(app).is_ok() {
+            return;
+        }
+        error!("overlay::summon: dashboard open failed; falling back to setup panel");
+    }
     let already_visible = state_handle(app)
         .map(|h| h.0.lock().unwrap_or_else(|e| e.into_inner()).presentation == desired)
         .unwrap_or(false);
@@ -504,6 +520,27 @@ pub fn summon_bar(app: &AppHandle) -> Result<(), String> {
     // No force_foreground here: the notch is summon-on-demand and always-on-top,
     // so it appears without stealing focus. Forcing foreground would inject the
     // Alt tap that traps the dismiss double-tap in menu mode (see apply()).
+    apply_result(app)
+}
+
+/// Shows the window as a panel-sized surface for the post-sign-in onboarding
+/// tail (hotkey tour + live demo). Sign-in flips the variant to Companion and
+/// hides the window (set_panel_variant); the tail calls this to re-reveal it.
+/// Unlike `summon`, which routes a signed-in user to the notch Bar, this forces
+/// the Panel presentation so the tail's full-size UI is visible. No foreground
+/// forcing: the tail's buttons are clickable without it, and forcing it would
+/// inject the Alt tap that traps the next Ctrl double-tap (see apply()).
+pub fn summon_onboarding_panel(app: &AppHandle) -> Result<(), String> {
+    let Some(handle) = state_handle(app) else {
+        return Err("overlay state unavailable".to_string());
+    };
+    {
+        let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        if state.presentation == OverlayPresentation::Pointing {
+            return Err("cannot show onboarding panel while pointing".to_string());
+        }
+        state.presentation = OverlayPresentation::Panel;
+    }
     apply_result(app)
 }
 

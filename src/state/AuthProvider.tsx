@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { auth } from "../lib/firebase";
 import { logError } from "../lib/log";
+import { syncProfileOnSignIn } from "../lib/profile";
 
 interface AuthContextValue {
   user: User | null;
@@ -49,6 +50,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       setUser(nextUser);
       setInitializing(false);
+
+      // Sign-in choke point: sync first-run attribution (PostHog alias + $set,
+      // backend profile) exactly once. Self-guards on desktop_profile_synced
+      // and is a cheap no-op for returning users, so it's safe to fire on
+      // every signed-in callback including the initial one.
+      if (nextUser) {
+        void syncProfileOnSignIn(nextUser.uid).catch((err) =>
+          logError("AuthProvider: syncProfileOnSignIn", err),
+        );
+      }
     });
 
     return unsubscribe;
