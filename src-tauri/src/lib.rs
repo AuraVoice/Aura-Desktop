@@ -1,5 +1,6 @@
 mod auth_cache;
 mod autostart;
+mod dashboard;
 mod entitlement;
 mod hotkeys;
 mod logging;
@@ -78,6 +79,19 @@ fn summon_bar(app: AppHandle) -> Result<(), String> {
     overlay::summon_bar(&app)
 }
 
+/// Shows the panel-sized onboarding surface for the post-sign-in tail (hotkey
+/// tour + live demo), re-revealing the window that sign-in hid.
+#[tauri::command]
+fn summon_onboarding_panel(app: AppHandle) -> Result<(), String> {
+    overlay::summon_onboarding_panel(&app)
+}
+
+/// Opens or focuses the in-app dashboard window (also bound to Ctrl+Alt+D).
+#[tauri::command]
+fn open_dashboard_window(app: AppHandle) -> Result<(), String> {
+    dashboard::open_dashboard_window(&app)
+}
+
 fn should_summon_on_start<I, S>(args: I, just_updated: bool) -> bool
 where
     I: IntoIterator<Item = S>,
@@ -137,7 +151,12 @@ pub fn run() {
     // debugging cycle to spot; see lessons-learnt.txt 2026-07-08).
     if !cfg!(debug_assertions) {
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            overlay::summon(app);
+            // Relaunching the installed app brings the full app window forward,
+            // not the overlay notch; fall back to the overlay if it can't build.
+            if let Err(e) = dashboard::open_dashboard_window(app) {
+                error!("single-instance: open dashboard failed: {e}; falling back to overlay");
+                overlay::summon(app);
+            }
         }));
     }
 
@@ -183,6 +202,8 @@ pub fn run() {
             set_session_cached,
             summon,
             summon_bar,
+            summon_onboarding_panel,
+            open_dashboard_window,
             dismiss_bar,
             point_at,
             cancel_pointing,
@@ -237,6 +258,7 @@ pub fn run() {
             // with nothing on screen (this exact panic reached Sentry from a real install).
             for (name, shortcut) in [
                 ("summon", hotkeys::summon_shortcut()),
+                ("open-dashboard", hotkeys::open_dashboard_shortcut()),
                 ("sign-out", hotkeys::sign_out_shortcut()),
                 ("screen-sight", hotkeys::screen_sight_shortcut()),
             ] {
@@ -300,11 +322,17 @@ pub fn run() {
                     just_updated.clone();
             }
 
-            // A direct install or explicit app launch must show a useful surface,
-            // especially for a signed-out user who needs the setup and sign-in UI.
-            // Windows boot launches stay tray-only so Aura does not interrupt login.
+            // A direct install or explicit app launch opens the full app window:
+            // onboarding for a new/signed-out user, Home for a returning one. The
+            // overlay notch stays a tray/Ctrl+Alt+B companion. Windows boot
+            // launches stay tray-only so Aura does not interrupt login. If the
+            // window fails to build, fall back to the overlay so the user is never
+            // left with no surface at all.
             if should_summon_on_start(std::env::args(), just_updated.is_some()) {
-                overlay::summon(app.handle());
+                if let Err(e) = dashboard::open_dashboard_window(app.handle()) {
+                    error!("failed to open dashboard window on start: {e}; falling back to overlay");
+                    overlay::summon(app.handle());
+                }
             }
 
             // Drop upload-queue entries whose captures went unsent past the
