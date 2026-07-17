@@ -29,70 +29,26 @@ flowchart LR
 
 Rust owns the window: geometry, global hotkeys, tray, and stealing OS focus. React owns everything rendered inside it, plus Firebase auth and the LiveKit call. They talk over Tauri's IPC (`invoke` for React-to-Rust calls, `emit`/`listen` for Rust-to-React events).
 
-## Repo layout
-
-**Rust (`src-tauri/src/`)**
-
-| File | Owns |
-|---|---|
-| `main.rs` | Entry point; hides the console window in release builds |
-| `lib.rs` | Tauri builder: plugins, command registration, setup, launch-at-login policy, tray, initial presentation, and update loop |
-| `overlay.rs` | The state machine: presentation/variant/voice/position, and `apply()` which pushes it onto the real window |
-| `hotkeys.rs` | The three global shortcuts and what each one does |
-| `voice_toggle_key.rs` | Windows listener for isolated taps of the key selected by `VOICE_TOGGLE_KEY`; emits a sequenced toggle only after a double-tap and never logs or stores key input |
-| `win_focus.rs` | Forces foreground focus on Windows via a synthesized Alt tap + `SetForegroundWindow` (Windows denies that call while another app owns focus); plain `set_focus` fallback on non-Windows |
-| `tray.rs` | System tray icon + menu: Open Buddy, Open Dashboard, a "Start with Windows" checkbox, version label, update install, quit |
-| `screenshot.rs` | Memory-only screen capture commands (async, off the main thread, raw binary IPC responses) plus one-time cleanup of legacy plaintext turn captures |
-| `auth_cache.rs` | Persisted "has a session" flag, so cold start knows Setup vs. Bar before the webview's own Firebase listener resolves |
-| `autostart.rs` | Launch-at-login policy: on by default, opt-out persisted in `settings.json`, re-asserted on every start (release builds only); keeps the tray checkbox synced to the real registry state |
-| `logging.rs` | File + stdout logging, panic hook |
-| `sentry_setup.rs` | Rust-side Sentry init (native crash/error reporting; the React side has its own `lib/sentry.ts`); dev builds init with no DSN, so `tauri dev` crashes never reach the project |
-| `updater.rs` | Update lifecycle: checks the GitHub releases feed at startup and every 6 hours, downloads in the background, then gates the install on the user accepting the restart notice and on no voice call being live |
-
-**React (`src/`)**
-
-| File | Owns |
-|---|---|
-| `App.tsx` | Mounts `ErrorBoundary` + `AuthProvider` around `OverlayRoot`; top-level listeners for telemetry consent and the tray's `open-dashboard-requested` event |
-| `ErrorBoundary.tsx` | Error boundary around the app root; reports render crashes to Sentry |
-| `state/AuthProvider.tsx` | Firebase `onAuthStateChanged` listener; mirrors session state into Rust |
-| `overlay/OverlayRoot.tsx` | Reads overlay state from Rust, picks which presentation to render |
-| `overlay/GlassSurface.tsx` | Shared translucent surface, the whole-window drag region |
-| `overlay/SetupPanel.tsx`, `OnboardingFlow.tsx`, `SignInForm.tsx` | Signed-out flow: welcome → QR code → pairing code, email, or Google sign-in |
-| `overlay/useWebAuthSignIn.ts` | Browser-based Google sign-in/sign-up handshake: request a session code, open the system browser to Aura-Web, poll until it completes |
-| `overlay/NotchBar.tsx` | Signed-in notch surface for voice state, captions, errors, capture notices, and update state |
-| `overlay/useNotchGesture.ts` | Deduplicates native Left Ctrl double-tap sequences and starts or ends the notch voice session |
-| `overlay/BarIconButton.tsx`, `overlay/icons.tsx` | Shared icon-button chrome and the overlay icon set |
-| `overlay/HotkeyHint.tsx` | Renders a keycap + action label pair (used for the hotkey hints shown in the setup flow) |
-| `overlay/PointingOverlay.tsx` | PointerBuddy flight animation (orb → ring → label) |
-| `overlay/useVoiceBar.ts` | LiveKit `Room` lifecycle + call status state machine |
-| `overlay/useTurnScreenCapture.ts` | Captures one memory-only frame per spoken turn, streams it to LiveKit, and accepts pointer coordinates only for an exact frame id from the current room |
-| `overlay/useMeetings.ts`, `overlay/useMeetingArm.ts`, `overlay/useMeetingCapture.ts` | Background calendar polling, persisted recording consent, Zoom/Teams join watches, encrypted audio capture, upload, completion, and restart recovery |
-| `overlay/DraftCard.tsx`, `overlay/useDraftCard.ts` | Visible artifact card rendered below the bar: consumes backward-compatible `draft.*` data-channel events, renders exact code or safe GFM Markdown, exposes copy/refine actions, and drives `set_slot_height` so the window grows for it |
-| `overlay/useUpdateReady.ts` | Listens for the Rust `update-ready` event, exposes the "Restart to install vX.Y.Z" state to the bar, and shows the one-time "Updated to vX" caption after a restart |
-| `lib/api.ts`, `lib/voice.ts`, `lib/firebase.ts`, `lib/firebaseConfig.ts` | Backend and Firebase clients |
-| `lib/copy.ts`, `lib/pairingCopy.ts`, `lib/pairingCodeFormat.ts`, `lib/voiceErrorCopy.ts`, `lib/webAuthCopy.ts` | UI copy and formatting, ported verbatim from the Flutter app where applicable |
-| `lib/draft.ts` | Buddy Drafts client contract: the `draft.*` payload types and `POST /desktop/draft-outbound/refine` (mirrors the worker's data-channel payloads) |
-| `lib/dashboardLink.ts` | Mints a single-use code (`POST /devices/dashboard-link/start`) and opens the web dashboard already signed in; shared by the tray's "Open Dashboard" item and the bar's dashboard button |
-| `lib/feedback.ts` | "Send feedback" mail composer: app version, OS, overlay state, and a token-redacted log tail |
-| `lib/log.ts` | Durable error logging to the app's log file |
-| `lib/sentry.ts` | Sentry init for the webview side (consent-gated, disabled in dev sessions) |
-| `lib/analytics.ts` | PostHog event tracking (plain HTTP POST, same project as the Flutter app) |
-
 ## The overlay state machine
 
 ```mermaid
 stateDiagram-v2
     [*] --> Hidden
-    Hidden --> Panel: summon while signed out
-    Hidden --> Bar: summon or voice toggle while signed in
-    Panel --> Hidden: authentication succeeds
-    Bar --> Hidden: second voice toggle or Escape
-    Bar --> Pointing: point_at (current-room element.point)
-    Pointing --> Bar: cancel_pointing after ~3.4s
+
+    Hidden --> Panel: Ctrl+Alt+B (hotkey_pressed)
+    Hidden --> Panel: tray click / 2nd instance (summon)
+    Hidden --> Panel: call starts while hidden (set_voice_active true)
+    Panel --> Hidden: Ctrl+Alt+B again, or Esc\n(hide_ending_voice - ends any live call)
+
+    Panel --> Pointing: point_at (screen-sight "element.point")
+    Pointing --> Panel: cancel_pointing (after ~3.4s hold)
+
+    Panel --> Pill: VoiceBar minimize button, call still live (minimize_to_pill)
+    Pill --> Panel: click/tap the pill (pill_activated)
+    Pill --> Hidden: call ends while collapsed (set_voice_active false)
 ```
 
-`Panel` is signed-out setup. The authenticated resting state is `Hidden`; `Bar` is the signed-in notch revealed by a summon or voice toggle. Firebase auth updates future summon routing through `set_panel_variant`, and successful sign-in hides the setup window. A draft card adds height to the notch window through `set_slot_height`.
+`Panel` also carries a **variant**, `setup` or `bar`, driven by Firebase auth state (`AuthProvider.tsx` calls `set_panel_variant` on every `onAuthStateChanged`, and `lib.rs` pre-seeds it from the cached auth flag at cold start so the first `summon()` sizes the right panel immediately).
 
 ## IPC surface
 
@@ -101,11 +57,10 @@ stateDiagram-v2
 | Command | Args | Does |
 |---|---|---|
 | `current_overlay_state` | – | Returns `{ presentation, panelVariant }` |
-| `esc_pressed` | – | Compatibility no-op; React handles Escape by ending voice and dismissing the bar |
-| `set_voice_active` | `active: bool` | Mirrors voice activity into native authorization and updater gates |
-| `set_panel_variant` | `variant: "setup" \| "companion"` | Routes future summons to signed-out setup or the signed-in bar; an auth change hides the current non-pointing window |
-| `set_slot_height` | `height: number \| null` | Adds or removes the draft surface above the notch |
-| `voice_toggle_key_status` | – | Returns `{ available, keyLabel, reason? }` for the configured native voice-key listener |
+| `esc_pressed` | – | Collapses to Hidden, ends any live call |
+| `set_voice_active` | `active: bool` | Marks a call live/ended; may flip Hidden ↔ Panel/Pill |
+| `set_panel_variant` | `variant: "setup" \| "bar"` | Switches panel content + resizes |
+| `set_slot_height` | `height: number \| null` | Grows/shrinks the bar window for the single below-bar slot (Panel+Bar only; the bar's top edge stays fixed and the slot grows downward). OverlayRoot resolves which surface wins the slot (draft > agenda > menu > meeting note > catch-up) and passes the winner's height, or null to collapse |
 | `start_meeting_capture` | `meetingId, eventId` | Starts WASAPI mic+loopback capture for a claimed meeting (async; capture runs on dedicated threads) |
 | `stop_meeting_capture` | `reason` | Asks the capture engine to flush and finish |
 | `capture_status` | – | `{ active, meetingId, eventId, startedAtMs, paused }` |
@@ -117,23 +72,22 @@ stateDiagram-v2
 | `stop_join_watch` | `eventId` | Disarms a watch |
 | `debug_force_join` | `eventId` | Dev builds only: emits `meeting-join-detected` without a detector |
 | `set_onboarding_step` | `step: "welcome" \| "getApp" \| "link"` | Tracks onboarding progress in Rust |
+| `pill_activated` | – | Pill → Panel |
+| `minimize_to_pill` | – | Panel → Pill, only while a call is live |
 | `set_session_cached` | `hasSession: bool` | Persists the auth flag used for cold-start panel choice |
-| `summon` | – | Reveals setup for signed-out users or the notch bar for signed-in users |
-| `summon_bar` | – | Shows the signed-in notch without stealing focus; returns an error if native presentation fails |
-| `dismiss_bar` | – | Ends voice, hides the notch, and clears a pointing takeover |
+| `summon` | – | Bring the panel to front, or open it |
 | `point_at` | `targetX, targetY, monitorX, monitorY, monitorW, monitorH, label` | Fullscreen click-through takeover for PointerBuddy |
 | `cancel_pointing` | – | Ends the takeover, restores whatever was showing before |
 | `capture_cursor_display_with_geometry` | – | Captures the monitor under the cursor as JPEG; async, off the main thread; returns a raw `ArrayBuffer` (28-byte geometry header + JPEG bytes, no base64) |
-| `capture_turn_screen_with_geometry` | – | Captures a spoken-turn frame into memory and returns the same geometry header plus JPEG bytes; no screenshot file is written |
 
 **Events** (Rust emits, React listens with `listen("name", cb)`):
 
 | Event | Payload | Fired when |
 |---|---|---|
 | `overlay-changed` | `{ presentation, panelVariant }` | Any state change that goes through `apply()` |
-| `aura-toggle` | `{ sequence }` | A valid Left Ctrl double-tap completes; React deduplicates the sequence |
+| `end-voice-session` | – | Rust collapses the overlay while a call is live |
 | `sign-out-requested` | – | Ctrl+Shift+D |
-| `screen-sight-hotkey` | – | Legacy Ctrl+Alt+S event; the current React root does not mount a manual screen-sight control |
+| `screen-sight-hotkey` | – | Ctrl+Alt+S |
 | `pointing-target` | `{ x, y, label }` (window-relative) | `point_at` |
 | `open-dashboard-requested` | – | Tray "Open Dashboard" click; `App.tsx` responds by minting a dashboard link and opening the browser |
 | `meeting-join-detected` | `{ eventId, app, windowTitle }` | The join detector matched an in-call Zoom/Teams window for an armed meeting |
@@ -143,14 +97,14 @@ stateDiagram-v2
 
 **Over the LiveKit data channel** (backend agent → desktop, JSON, not a Tauri event): only
 `error`/`session.error`, `element.point`, `screen_save.created` (a saved-screen-item
-confirmation, shown briefly in the notch caption), and the Buddy Drafts
+confirmation, shown briefly as a "Saved to ..." caption in the bar), and the Buddy Drafts
 events `draft.generating`/`draft.created`/`draft.updated`/`draft.failed` (consumed by
 `useDraftCard.ts`, rendered by `DraftCard.tsx` below the bar) are ever actually sent -
 confirmed by grepping every `publish_data` call in the backend. Everything else voice state comes from native LiveKit
 primitives, not the data channel - see below.
 
 **Visible artifacts and Buddy Drafts:** email replies and DMs are triggered by voice during a
-call. The backend drafts from the current spoken-turn frame in the user's own
+call with screen-sight armed. The backend drafts from the current screen frame in the user's own
 tone (UserAura profile) and pushes the draft over the data channel; the card shows it with
 copy-to-clipboard and refine chips (shorter/longer/more formal/warmer/regenerate).
 Chips always hit `POST /desktop/draft-outbound/refine` over REST (works during and after the
@@ -175,9 +129,8 @@ analyze their text. If the overlay is hidden or pointing when one arrives, it is
 pointer cleanup so a successfully published artifact cannot remain invisible.
 
 **Meeting Notes** (MEETING_NOTES_PLAN.md, v1): capture is user-armed, never default-on.
-Consent previously saved by the removed agenda controls remains keyed by uid in `calendar.json`.
-`OverlayRoot` mounts the calendar, arm, and capture hooks as background services while keeping
-the removed agenda, recording controls, and meeting-note cards out of the notch UI.
+A global "Auto meeting notes" toggle (default OFF) plus per-meeting overrides live in the
+calendar agenda card (`useMeetingArm.ts`, keyed by uid in `calendar.json`).
 
 **60-minute clamp, for now (product decision 2026-07-11):** meeting notes only supports
 meetings up to one hour. Events scheduled longer than 60 minutes (classes, workshops, all-day
@@ -192,18 +145,17 @@ For armed meetings, Rust polls for an in-call Zoom/Teams window (`meeting/detect
 inside the event's own scheduled window, start to end - no lead, no tail - which is exposure
 control, not just thrift: detection is not link-matched in v1, so the armed window is also the
 window in which an unrelated call could be misattributed to the event. Google Meet has no
-detector, and its former manual capture control is intentionally not mounted. On a detected
-Zoom/Teams join, `useMeetingCapture.ts`
+detector and uses the kebab menu's "Capture this call" instead. On join, `useMeetingCapture.ts`
 claims the meeting (`POST /meetings/claim`, monthly cap server-side: 5/month on Free and
 Companion, unlimited count on Pro, 402 mirrors the voice-cap shape) and starts
 `meeting/audio.rs`: WASAPI mic + render-loopback, both autoconverted to 16 kHz mono, written as
 5-minute 2-channel FLAC segments (ch0 = you, ch1 = everyone else), AES-256-GCM encrypted at
-rest (DPAPI-wrapped key). The tray tooltip carries the recording state; the removed in-window
-recording controls are not restored. Capture pauses while the session is locked and defers a pending update
+rest (DPAPI-wrapped key). A red recording indicator shows in the bar the whole time (tray
+tooltip too), capture pauses while the session is locked, and defers any pending update
 install. The JS pump uploads segments over REST, sends `/complete`, and the backend synthesizes
 (Deepgram nova-3 multichannel + LLM) into `users/{uid}/meetings/{id}` (7-day TTL on non-pro),
-deleting the raw audio immediately. Finished notes are read in the web dashboard; desktop note
-card delivery is intentionally not mounted. In dev builds, `window.__meetingDebug.forceJoin("evt-1")` (see
+deleting the raw audio immediately. The finished note arrives as a below-bar card
+(`MeetingNotesCard.tsx`). In dev builds, `window.__meetingDebug.forceJoin("evt-1")` (see
 `src/debug/meetingDebug.ts`) drives the whole loop with no Zoom/Teams installed.
 
 ## Voice session flow
@@ -229,19 +181,16 @@ long the timeout was. The real signals:
 ```mermaid
 sequenceDiagram
     actor User
-    participant Key as Left Ctrl listener
-    participant Notch as useNotchGesture
+    participant Bar as VoiceBar (React)
     participant Hook as useVoiceBar
     participant Rust as overlay.rs
     participant Backend as juno-backend
     participant LK as LiveKit room
 
-    User->>Key: double-tap Left Ctrl
-    Key->>Notch: aura-toggle { sequence }
-    Notch->>Rust: invoke summon_bar
-    Rust-->>Notch: notch is visible
-    Notch->>Hook: startSession()
+    User->>Bar: click mic
+    Bar->>Hook: startSession()
     Hook->>Rust: invoke set_voice_active(true)
+    Rust-->>Hook: Hidden -> Panel, if needed
     Hook->>Backend: GET /voice/token (Firebase ID token)
     Backend-->>Hook: { token, url, room }
     Hook->>LK: Room.connect(url, token)
@@ -251,16 +200,13 @@ sequenceDiagram
     loop call is live
         LK-->>Hook: ParticipantAttributesChanged (lk.agent.state) -> status
         LK-->>Hook: TranscriptionReceived -> assistantCaption
-        Hook->>Notch: status, assistantCaption
+        Hook->>Bar: status, assistantCaption
     end
-    User->>Key: double-tap Left Ctrl again
-    Key->>Notch: next toggle sequence
-    Notch->>Hook: endSession()
+    User->>Bar: click mic again (or Esc / Ctrl+Alt+B)
+    Bar->>Hook: endSession()
+    Hook->>LK: room.disconnect()
     Hook->>Rust: invoke set_voice_active(false)
-    Hook->>LK: disable microphone and room.disconnect()
 ```
-
-Left Ctrl used with another key is cancelled as a tap candidate and passes through as a normal shortcut. `VOICE_TOGGLE_KEY` is the single native selector for Left Ctrl, Right Ctrl, or either Ctrl. Voice startup begins only after Rust confirms that the notch is visible. Generation counters in the gesture and voice hooks are checked after notch presentation, token fetch, room connect, and microphone enable, so a second double-tap during startup invalidates the partial room before it can leave the microphone active.
 
 Two client-side watchdogs turn a hung/silent call into a visible error instead of an endless
 spinner: a 30s join timeout (no agent participant yet) and a 15s silence timeout (no track/
@@ -278,16 +224,15 @@ PostHog via `src/lib/analytics.ts` - the same project the Flutter app reports to
 ```mermaid
 sequenceDiagram
     actor User
-    participant JS as useTurnScreenCapture (React)
+    participant JS as useScreenSight (React)
     participant Rust as screenshot.rs
     participant LK as LiveKit room
     participant Agent as Voice agent
 
-    User->>JS: begins a spoken turn
-    JS->>Rust: invoke capture_turn_screen_with_geometry
+    User->>JS: Ctrl+Alt+S, or the eye icon
+    JS->>Rust: invoke capture_cursor_display_with_geometry
     Note over Rust: spawn_blocking: xcap capture -> JPEG encode
     Rust-->>JS: ArrayBuffer (28-byte header + JPEG bytes)
-    Note over JS,Rust: frame remains in memory; no screenshot file is written
     JS->>LK: localParticipant.streamBytes(topic "screen_frame")
     LK->>Agent: frame delivered
     Agent-->>LK: DataReceived "element.point" { x, y, frame_id, label }
@@ -299,29 +244,30 @@ sequenceDiagram
     Rust->>Rust: cancel_pointing after ~3.4s, restore prior presentation
 ```
 
-While a voice room is live, the hook sends at most one frame per spoken turn and resets at the next final transcription. Rust rechecks native authorization after capture, and startup maintenance deletes the legacy plaintext `screenshots` directory created by earlier builds.
+Push-to-look, never ambient: a frame is sent on arm, on `session.ready`, and once per spoken turn while armed - never on a timer or in the background (`useScreenSight.ts`).
 
-Geometry is scoped to the current LiveKit room. An `element.point` message must name an exact retained frame id; missing, unknown, or prior-room ids are ignored. Capture failures and `screen_save.created` confirmations appear in the notch caption area, with voice errors taking precedence.
+When the agent saves something it saw (a `screen_save.created` data-channel message), the bar's caption shows a brief "Saved to ..." confirmation before yielding back to the normal caption (`useScreenSight.ts` feeding `VoiceBar.tsx`).
 
 ## Pairing / sign-in flow
 
 ```mermaid
 sequenceDiagram
-    actor Mobile as Aura mobile app
-    actor User
-    participant Form as SignInForm (React)
-    participant Backend as juno-backend
+    participant Mobile as Aura mobile app
+    participant User
+    participant Form as Desktop sign-in form
+    participant Backend as Aura backend
     participant FB as Firebase Auth
     participant Auth as AuthProvider
+    participant Native as Tauri shell
 
-    Mobile->>User: shows an 8-char pairing code
-    User->>Form: types the code (auto-submits at full length)
-    Form->>Backend: POST /devices/pair/claim { code, device_name }
-    Backend-->>Form: { custom_token }
-    Form->>FB: signInWithCustomToken(custom_token)
-    FB-->>Auth: onAuthStateChanged(user)
-    Auth->>Auth: invoke set_session_cached(true), set_panel_variant("companion")
-    Note over Form: SetupPanel hides; future summons reveal NotchBar
+    Mobile->>User: Show pairing code
+    User->>Form: Enter the full code
+    Form->>Backend: Claim pairing code
+    Backend-->>Form: Return Firebase custom token
+    Form->>FB: Sign in with custom token
+    FB-->>Auth: Publish signed-in user
+    Auth->>Native: Cache session and select bar variant
+    Native-->>Form: Hide setup panel
 ```
 
 Email/password sign-in is a second path in the same `SignInForm`, skipping the pairing/backend hop straight to `signInWithEmailAndPassword`.
@@ -330,29 +276,29 @@ A third path, "Sign in/up with Google," is a device-authorization-style handshak
 
 ```mermaid
 sequenceDiagram
-    actor User
-    participant Form as SignInForm (React)
-    participant Hook as useWebAuthSignIn
-    participant Backend as juno-backend
+    participant User
+    participant Form as Desktop sign-in form
+    participant Hook as Web auth hook
+    participant Backend as Aura backend
     participant Browser as System browser
-    participant Web as Aura-Web (auravoiceapp.com/auth)
+    participant Web as Aura Web
     participant FB as Firebase Auth
 
-    User->>Form: click "Sign in/up with Google"
-    Form->>Hook: start()
-    Hook->>Backend: POST /devices/web-auth/start
-    Backend-->>Hook: { code, expiresInSeconds }
-    Hook->>Browser: openUrl(auravoiceapp.com/auth?session=code)
-    Browser->>Web: loads the Google sign-in page
-    User->>Web: picks an account (in the browser, not the overlay)
-    Web->>Backend: reports success/failure for that code
-    loop poll every 2s until deadline
-        Hook->>Backend: POST /devices/web-auth/status { code }
-        Backend-->>Hook: pending | completed | expired | failed
+    User->>Form: Choose Google sign-in
+    Form->>Hook: Start browser authentication
+    Hook->>Backend: Create web auth session
+    Backend-->>Hook: Return session code and expiry
+    Hook->>Browser: Open Aura Web auth page
+    Browser->>Web: Load sign-in page
+    User->>Web: Choose a Google account
+    Web->>Backend: Complete the web auth session
+    loop Every 2 seconds until expiry
+        Hook->>Backend: Poll session status
+        Backend-->>Hook: Return current status
     end
-    Hook->>FB: signInWithCustomToken(customToken)
-    Note over Hook: never force-focuses the window - the\nconfirmation lives in the browser tab
-    FB-->>Form: AuthProvider's onAuthStateChanged takes it from here
+    Backend-->>Hook: Return Firebase custom token
+    Hook->>FB: Sign in with custom token
+    FB-->>Form: Publish signed-in user
 ```
 
 The desktop side never touches Google credentials directly - `pollWebAuthStatusOnce` only ever sees a terminal status (`completed`/`expired`/`failed`/`not_found`) or a Firebase custom token, the same posture as `claimPairingCode`. This flow spans three independently-deployed repos, which has its own failure mode - see [`CLAUDE.md`](./CLAUDE.md).
@@ -376,6 +322,17 @@ npx tsc --noEmit              # TypeScript type-checks
 ```
 
 CI (`.github/workflows/ci.yml`) runs those same two checks plus dependency audits (`npm audit --audit-level=high`, `cargo audit`) on every PR and push to `main`; `release.yml` builds and publishes tagged releases.
+
+### Regenerating the avatar model
+
+`src/assets/models/buddy.glb` (the model `AvatarPill.tsx` loads) is a committed, optimized build artifact, not something edited directly. Its source lives in `Avatars/` at the repo root (gitignored - large FBX/intermediate GLB files, not meant for git). To regenerate after a source change:
+
+1. Convert FBX → GLB with [`FBX2glTF`](https://github.com/facebookincubator/FBX2glTF) (`--binary --pbr-metallic-roughness`) if starting from a raw `.fbx`, or skip straight to step 2 if already GLB with animations merged in.
+2. Optimize with `@gltf-transform/cli`: `gltf-transform optimize <in>.glb buddy.glb --compress draco --texture-size 1024 --texture-compress webp` (add `--simplify false` if the mesh is already decimated - re-simplifying an already-decimated mesh degrades it further for no reason).
+3. Sanity-check with `gltf-transform inspect buddy.glb` before committing - confirm the animation clips you expect are actually present with a real (non-zero) duration, not just a bind pose. A tool's own conversion log isn't proof of this; the last time this ran, `FBX2glTF`'s log line looked fine but the baked "animation" was actually a single static frame.
+4. Copy the result to `src/assets/models/buddy.glb`.
+
+`AvatarPill.tsx` plays whichever clip is named `"Idle"`, falling back to the first clip in the file if none matches.
 
 Config worth knowing about:
 - `src-tauri/tauri.conf.json` - window geometry/decorations, updater endpoint.
