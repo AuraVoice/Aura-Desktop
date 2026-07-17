@@ -72,8 +72,8 @@ fn summon(app: AppHandle) {
 }
 
 #[tauri::command]
-fn summon_bar(app: AppHandle) {
-    overlay::summon_bar(&app);
+fn summon_bar(app: AppHandle) -> Result<(), String> {
+    overlay::summon_bar(&app)
 }
 
 #[tauri::command]
@@ -183,7 +183,7 @@ pub fn run() {
             updater::just_updated_version,
             logging::read_recent_log_lines,
             screenshot::capture_cursor_display_with_geometry,
-            screenshot::capture_and_save_screenshot,
+            screenshot::capture_turn_screen_with_geometry,
             entitlement::cache_entitlement,
             entitlement::cached_entitlement,
             entitlement::clear_entitlement_cache,
@@ -292,6 +292,9 @@ pub fn run() {
             // Drop upload-queue entries whose captures went unsent past the
             // retention window (fs work, runs on a blocking thread inside).
             meeting::startup_maintenance(app.handle());
+            // v0.3.0 briefly persisted every spoken-turn frame as plaintext.
+            // Turn frames are memory-only now, so remove that legacy directory.
+            screenshot::startup_maintenance(app.handle());
 
             let updater_handle = app.handle().clone();
             tauri::async_runtime::spawn(updater::run_update_loop(updater_handle));

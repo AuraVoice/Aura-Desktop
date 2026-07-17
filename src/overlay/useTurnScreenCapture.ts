@@ -72,7 +72,9 @@ export function useTurnScreenCapture(room: Room | null) {
   const capturedThisTurnRef = useRef(false);
   const frameCounterRef = useRef(0);
   const sentGeometryRef = useRef<Map<string, ScreenFrameGeometry>>(new Map());
+  const activeRoomRef = useRef<Room | null>(room);
   const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  activeRoomRef.current = room;
 
   const showNotice = useCallback((message: string) => {
     if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current);
@@ -85,9 +87,10 @@ export function useTurnScreenCapture(room: Room | null) {
 
   const captureAndSend = useCallback(async () => {
     if (!room) return;
+    const captureRoom = room;
     let buffer: ArrayBuffer;
     try {
-      buffer = asArrayBuffer(await invoke("capture_and_save_screenshot"));
+      buffer = asArrayBuffer(await invoke("capture_turn_screen_with_geometry"));
     } catch (err) {
       logError("useTurnScreenCapture: capture", err);
       showNotice("Couldn't capture this turn.");
@@ -103,6 +106,10 @@ export function useTurnScreenCapture(room: Room | null) {
       showNotice("Couldn't read this turn's capture.");
       return;
     }
+    // A capture can finish after a disconnect/retry replaced the LiveKit Room.
+    // Drop it before it can populate the new room's geometry map or stream to
+    // the old participant.
+    if (activeRoomRef.current !== captureRoom) return;
     frameCounterRef.current += 1;
     const frameId = `f${frameCounterRef.current}`;
     sentGeometryRef.current.set(frameId, geometry);
@@ -139,15 +146,16 @@ export function useTurnScreenCapture(room: Room | null) {
 
   useEffect(() => {
     capturedThisTurnRef.current = false;
+    frameCounterRef.current = 0;
+    sentGeometryRef.current.clear();
     if (!room) return;
 
     function handleElementPoint(payload: Record<string, unknown>) {
       const x = payload.x;
       const y = payload.y;
       if (typeof x !== "number" || typeof y !== "number") return;
-      const frameId = typeof payload.frame_id === "string" ? payload.frame_id : "";
-      const values = Array.from(sentGeometryRef.current.values());
-      const geometry = sentGeometryRef.current.get(frameId) ?? values[values.length - 1];
+      if (typeof payload.frame_id !== "string" || !payload.frame_id) return;
+      const geometry = sentGeometryRef.current.get(payload.frame_id);
       if (!geometry) return;
       const label = typeof payload.label === "string" ? payload.label.trim() : "";
       const point = screenPointFor(geometry, x, y);
@@ -207,6 +215,8 @@ export function useTurnScreenCapture(room: Room | null) {
     return () => {
       room.off(RoomEvent.DataReceived, onDataReceived);
       room.off(RoomEvent.TranscriptionReceived, onTranscriptionReceived);
+      capturedThisTurnRef.current = false;
+      sentGeometryRef.current.clear();
     };
   }, [room, captureAndSend, showNotice]);
 

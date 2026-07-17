@@ -34,6 +34,7 @@ export function useNotchGesture(
   const pointingRef = useRef(pointing);
   const sessionActiveRef = useRef(voice.desiredActive);
   const lastSequenceRef = useRef(0);
+  const actionGenerationRef = useRef(0);
   signedInRef.current = signedIn;
   voiceRef.current = voice;
   pointingRef.current = pointing;
@@ -52,6 +53,8 @@ export function useNotchGesture(
         return;
       }
       lastSequenceRef.current = sequence;
+      actionGenerationRef.current += 1;
+      const actionGeneration = actionGenerationRef.current;
       const receivedAtMs = Date.now();
       const emittedAtMs = event.payload?.emittedAtMs;
       const latencyMs =
@@ -101,23 +104,35 @@ export function useNotchGesture(
         sessionActiveRef.current = true;
         logInfo("useNotchGesture: action", `sequence=${sequence} action=start`);
         const actionStartedAtMs = Date.now();
-        invoke("summon_bar")
-          .then(() => {
+        void (async () => {
+          try {
+            await invoke("summon_bar");
             logInfo(
               "useNotchGesture: bar summoned",
               `sequence=${sequence} elapsedMs=${Date.now() - actionStartedAtMs}`,
             );
-          })
-          .catch((err) => logError("useNotchGesture: summon_bar", err));
-        void currentVoice
-          .startSession()
-          .then(() => {
+            // A second toggle may have stopped this request while native window
+            // operations were still in flight. Never resurrect that cancelled
+            // attempt after the notch becomes visible.
+            if (
+              actionGenerationRef.current !== actionGeneration ||
+              !sessionActiveRef.current
+            ) {
+              await invoke("dismiss_bar").catch((err) =>
+                logError("useNotchGesture: dismiss cancelled start", err),
+              );
+              return;
+            }
+            await currentVoice.startSession();
             logInfo(
               "useNotchGesture: start settled",
               `sequence=${sequence} elapsedMs=${Date.now() - actionStartedAtMs} status=${voiceRef.current.status}`,
             );
-          })
-          .catch((err) => logError("useNotchGesture: startSession", err));
+          } catch (err) {
+            sessionActiveRef.current = false;
+            logError("useNotchGesture: summon/start", err);
+          }
+        })();
       }
     })
       .then((fn) => {

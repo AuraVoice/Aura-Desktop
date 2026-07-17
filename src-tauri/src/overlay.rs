@@ -325,9 +325,9 @@ fn emit_overlay_changed(app: &AppHandle) {
 /// `std::sync::Mutex` isn't reentrant, so holding the guard across it
 /// self-deadlocks the thread permanently. Every state read/write here is its
 /// own short-lived lock instead.
-pub fn apply(app: &AppHandle) {
+fn apply_result(app: &AppHandle) -> Result<(), String> {
     let (Some(handle), Some(window)) = (state_handle(app), main_window(app)) else {
-        return;
+        return Err("overlay state or main window unavailable".to_string());
     };
 
     let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -336,7 +336,7 @@ pub fn apply(app: &AppHandle) {
         && state.applied_variant == Some(state.panel_variant)
         && state.applied_slot_height == Some(state.slot_height);
     if unchanged {
-        return;
+        return Ok(());
     }
 
     let started_at = Instant::now();
@@ -348,10 +348,9 @@ pub fn apply(app: &AppHandle) {
         let slot_height = state.slot_height;
         drop(state);
         info!("overlay::apply: hiding (from {from:?})");
-        if let Err(e) = window.hide() {
-            error!("overlay::apply: failed to hide window: {e}");
-            return;
-        }
+        window
+            .hide()
+            .map_err(|e| format!("failed to hide window: {e}"))?;
         {
             let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
             state.applied_presentation = Some(presentation);
@@ -363,7 +362,7 @@ pub fn apply(app: &AppHandle) {
             "overlay::apply: hide complete in {:?}",
             started_at.elapsed()
         );
-        return;
+        return Ok(());
     }
 
     let presentation = state.presentation;
@@ -394,10 +393,7 @@ pub fn apply(app: &AppHandle) {
         .unwrap_or_else(|e| e.into_inner())
         .applying_bounds = false;
 
-    if let Err(e) = result {
-        error!("overlay::apply: failed to resize/reposition/show window: {e}");
-        return;
-    }
+    result.map_err(|e| format!("failed to resize/reposition/show window: {e}"))?;
     // apply() is the sole path back to a normal presentation. The chained
     // result above includes restoring cursor input after a pointing takeover,
     // so the applied cache is written only once every window operation worked.
@@ -423,6 +419,13 @@ pub fn apply(app: &AppHandle) {
         "overlay::apply: presentation={presentation:?} variant={panel_variant:?} applied in {:?}",
         started_at.elapsed()
     );
+    Ok(())
+}
+
+pub fn apply(app: &AppHandle) {
+    if let Err(e) = apply_result(app) {
+        error!("overlay::apply: {e}");
+    }
 }
 
 fn set_presentation(app: &AppHandle, presentation: OverlayPresentation) {
@@ -487,21 +490,21 @@ pub fn summon(app: &AppHandle) {
     }
 }
 
-pub fn summon_bar(app: &AppHandle) {
+pub fn summon_bar(app: &AppHandle) -> Result<(), String> {
     let Some(handle) = state_handle(app) else {
-        return;
+        return Err("overlay state unavailable".to_string());
     };
     {
         let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
         if state.presentation == OverlayPresentation::Pointing {
-            return;
+            return Err("cannot show voice notch while pointing".to_string());
         }
         state.presentation = OverlayPresentation::Bar;
     }
     // No force_foreground here: the notch is summon-on-demand and always-on-top,
     // so it appears without stealing focus. Forcing foreground would inject the
     // Alt tap that traps the dismiss double-tap in menu mode (see apply()).
-    apply(app);
+    apply_result(app)
 }
 
 pub fn dismiss_bar(app: &AppHandle) {

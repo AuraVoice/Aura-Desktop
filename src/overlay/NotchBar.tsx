@@ -15,9 +15,9 @@ interface NotchBarProps {
   notice?: string | null;
 }
 
-export function NotchBar({ voice }: NotchBarProps) {
+export function NotchBar({ voice, notice }: NotchBarProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const caption = voice.assistantCaption.trim();
+  const caption = (voice.errorMessage ?? notice ?? voice.assistantCaption).trim();
   useAudioLevels(voice.room, voice.status, canvasRef);
 
   return (

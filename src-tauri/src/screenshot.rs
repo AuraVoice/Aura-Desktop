@@ -1,8 +1,8 @@
 use std::io::Cursor;
 use std::path::Path;
-use std::sync::Mutex;
 
 use image::ImageFormat;
+use log::{info, warn};
 use tauri::{ipc::Response, AppHandle, Manager};
 use xcap::Monitor;
 
@@ -24,17 +24,13 @@ struct ScreenFrameGeometry {
 /// fields. `useScreenSight.ts`'s `DataView` reads must match this layout.
 const GEOMETRY_HEADER_LEN: usize = 4 * 7;
 
-static SCREENSHOT_NAME_STATE: Mutex<(i64, u64)> = Mutex::new((-1, 0));
+const LEGACY_SCREENSHOTS_DIR: &str = "screenshots";
 
 struct CapturedFrame {
     payload: Vec<u8>,
 }
 
 impl CapturedFrame {
-    fn jpeg_bytes(&self) -> &[u8] {
-        &self.payload[GEOMETRY_HEADER_LEN..]
-    }
-
     fn into_response(self) -> Response {
         Response::new(self.payload)
     }
@@ -89,8 +85,8 @@ pub async fn capture_cursor_display_with_geometry(app: AppHandle) -> Result<Resp
 }
 
 #[tauri::command]
-pub async fn capture_and_save_screenshot(app: AppHandle) -> Result<Response, String> {
-    let ticket = crate::security::authorize(&app, crate::security::Operation::SaveScreenshot)?;
+pub async fn capture_turn_screen_with_geometry(app: AppHandle) -> Result<Response, String> {
+    let ticket = crate::security::authorize(&app, crate::security::Operation::CaptureTurnScreen)?;
 
     let window = app
         .get_webview_window("main")
@@ -103,46 +99,34 @@ pub async fn capture_and_save_screenshot(app: AppHandle) -> Result<Response, Str
         .await
         .map_err(|e| e.to_string())??;
 
-    crate::security::recheck(&app, crate::security::Operation::SaveScreenshot, &ticket)?;
-
-    let screenshots_dir = app
-        .path()
-        .app_local_data_dir()
-        .map_err(|e| e.to_string())?
-        .join("screenshots");
-    let jpeg_bytes = frame.jpeg_bytes().to_vec();
-    tauri::async_runtime::spawn_blocking(move || save_screenshot(&screenshots_dir, &jpeg_bytes))
-        .await
-        .map_err(|e| e.to_string())??;
-
-    crate::security::recheck(&app, crate::security::Operation::SaveScreenshot, &ticket)?;
+    // The turn frame is intentionally memory-only. The frontend streams this
+    // response directly to LiveKit and drops it after the write completes.
+    crate::security::recheck(&app, crate::security::Operation::CaptureTurnScreen, &ticket)?;
     crate::security::note_capture(&app);
     Ok(frame.into_response())
 }
 
-fn save_screenshot(base_dir: &Path, jpeg_bytes: &[u8]) -> Result<(), String> {
-    std::fs::create_dir_all(base_dir).map_err(|e| e.to_string())?;
-    let now_ms = crate::meeting::now_ms();
-    let filename = {
-        let mut name_state = SCREENSHOT_NAME_STATE
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        if name_state.0 == now_ms {
-            name_state.1 = name_state.1.saturating_add(1);
-        } else {
-            *name_state = (now_ms, 0);
-        }
-        if name_state.1 == 0 {
-            format!("{now_ms}.jpg")
-        } else {
-            format!("{now_ms}-{}.jpg", name_state.1)
-        }
+/// Removes plaintext turn screenshots written by v0.3.0 before turn capture
+/// became memory-only. Runs once per process on a blocking worker.
+pub fn startup_maintenance(app: &AppHandle) {
+    let Ok(base_dir) = app.path().app_local_data_dir() else {
+        warn!("screenshot maintenance: app-local data directory unavailable");
+        return;
     };
-    let path = base_dir.join(&filename);
-    let tmp = base_dir.join(format!("{filename}.tmp"));
-    std::fs::write(&tmp, jpeg_bytes).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
-    Ok(())
+    tauri::async_runtime::spawn_blocking(move || match remove_legacy_screenshots(&base_dir) {
+        Ok(true) => info!("screenshot maintenance: removed legacy plaintext turn captures"),
+        Ok(false) => {}
+        Err(e) => warn!("screenshot maintenance: failed to remove legacy captures: {e}"),
+    });
+}
+
+fn remove_legacy_screenshots(base_dir: &Path) -> Result<bool, String> {
+    let screenshots_dir = base_dir.join(LEGACY_SCREENSHOTS_DIR);
+    if !screenshots_dir.exists() {
+        return Ok(false);
+    }
+    std::fs::remove_dir_all(screenshots_dir).map_err(|e| e.to_string())?;
+    Ok(true)
 }
 
 /// Returns a raw IPC response: the `GEOMETRY_HEADER_LEN`-byte geometry header
@@ -174,4 +158,31 @@ fn capture_frame(cursor_x: i32, cursor_y: i32) -> Result<CapturedFrame, String> 
     payload.extend_from_slice(&jpeg_bytes);
 
     Ok(CapturedFrame { payload })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn startup_maintenance_removes_only_the_legacy_screenshot_directory() {
+        let base = std::env::temp_dir().join(format!(
+            "aura-screenshot-maintenance-{}-{}",
+            std::process::id(),
+            crate::meeting::now_ms()
+        ));
+        let screenshots = base.join(LEGACY_SCREENSHOTS_DIR);
+        let sibling = base.join("meeting-captures");
+        std::fs::create_dir_all(&screenshots).unwrap();
+        std::fs::create_dir_all(&sibling).unwrap();
+        std::fs::write(screenshots.join("legacy.jpg"), b"jpeg").unwrap();
+        std::fs::write(sibling.join("keep.enc"), b"encrypted").unwrap();
+
+        assert!(remove_legacy_screenshots(&base).unwrap());
+        assert!(!screenshots.exists());
+        assert!(sibling.join("keep.enc").exists());
+        assert!(!remove_legacy_screenshots(&base).unwrap());
+
+        std::fs::remove_dir_all(base).unwrap();
+    }
 }

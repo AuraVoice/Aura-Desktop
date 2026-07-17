@@ -8,6 +8,9 @@ import { useNotchGesture } from "./useNotchGesture";
 import { useTurnScreenCapture } from "./useTurnScreenCapture";
 import { useDraftCard } from "./useDraftCard";
 import { useUpdateReady } from "./useUpdateReady";
+import { useMeetings } from "./useMeetings";
+import { useMeetingArm } from "./useMeetingArm";
+import { useMeetingCapture } from "./useMeetingCapture";
 import { GlassSurface } from "./GlassSurface";
 import { SetupPanel } from "./SetupPanel";
 import { PointingOverlay } from "./PointingOverlay";
@@ -33,6 +36,26 @@ export function OverlayRoot() {
     screenCapture.notice ??
     (!notchGesture.checking && !notchGesture.available ? notchGesture.reason : null);
   const draftCard = useDraftCard(voice.room, presentation);
+  const callLive =
+    voice.status !== "disconnected" && voice.status !== "ended" && voice.status !== "error";
+  // Meeting capture is a background service, not part of the notch UI. Keep
+  // polling, join watches, durable upload recovery, and completion alive even
+  // while the native window is hidden. The removed meeting controls/cards stay
+  // intentionally absent from this visual root.
+  const meetings = useMeetings({
+    presentation,
+    signedIn: user !== null,
+    callLive,
+    autoSummon: false,
+  });
+  const meetingArm = useMeetingArm(user?.uid ?? null);
+  useMeetingCapture({
+    uid: user?.uid ?? null,
+    appHidden: presentation !== "bar",
+    events: meetings.events,
+    isArmed: meetingArm.isArmed,
+    armRevision: meetingArm.revision,
+  });
   const resetDraftCard = draftCard.reset;
   const showDraftCard = user !== null && draftCard.phase !== "idle";
   const slotHeight = showDraftCard ? DRAFT_CARD_HEIGHT : null;

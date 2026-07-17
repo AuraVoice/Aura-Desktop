@@ -92,7 +92,7 @@ impl Default for SecurityHandle {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Operation {
     CaptureScreen,
-    SaveScreenshot,
+    CaptureTurnScreen,
     PointAt,
     ArmScreenSight,
     StartMeetingCapture,
@@ -162,7 +162,7 @@ impl SecurityState {
             return Err(Denied::SignedOut);
         };
         match op {
-            Operation::SaveScreenshot => {
+            Operation::CaptureTurnScreen => {
                 if !self.voice_active {
                     return Err(Denied::VoiceInactive);
                 }
@@ -491,7 +491,7 @@ mod tests {
 
     const GATED_OPS: [Operation; 11] = [
         Operation::CaptureScreen,
-        Operation::SaveScreenshot,
+        Operation::CaptureTurnScreen,
         Operation::PointAt,
         Operation::ArmScreenSight,
         Operation::StartMeetingCapture,
@@ -537,15 +537,15 @@ mod tests {
     }
 
     #[test]
-    fn screenshot_save_needs_voice_but_not_armed() {
+    fn turn_screen_capture_needs_voice_but_not_armed() {
         let s = signed_in();
         assert_eq!(
-            s.authorize(Operation::SaveScreenshot).unwrap_err(),
+            s.authorize(Operation::CaptureTurnScreen).unwrap_err(),
             Denied::VoiceInactive
         );
 
         let s = in_voice_session();
-        assert!(s.authorize(Operation::SaveScreenshot).is_ok());
+        assert!(s.authorize(Operation::CaptureTurnScreen).is_ok());
         assert!(!s.screen_sight_armed);
     }
 
