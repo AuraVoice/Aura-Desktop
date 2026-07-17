@@ -10,10 +10,29 @@ import {
 import { logError } from "../lib/log";
 import type { VoiceSessionStatus } from "./useVoiceBar";
 
-const BAR_COUNT = 27;
+const BAR_COUNT = 13;
 const SMOOTHING_FACTOR = 0.24;
 const NOISE_FLOOR = 0.06;
 const SIGNAL_GAIN = 2.4;
+
+// A fixed, symmetric sound-wave silhouette (fraction of the available
+// half-height, 0..1). The recorder renders this even at rest so it always
+// reads as a waveform icon instead of a flat row of dots; audio just adds
+// energy on top of it.
+const ICON_BASELINE = buildIconBaseline(BAR_COUNT);
+
+function buildIconBaseline(count: number): Float32Array {
+  const profile = new Float32Array(count);
+  for (let index = 0; index < count; index += 1) {
+    const centered = (index / Math.max(1, count - 1)) * 2 - 1;
+    const envelope = 1 - Math.abs(centered) * 0.34;
+    const detail =
+      0.55 * Math.abs(Math.cos(centered * Math.PI * 2.3)) +
+      0.45 * Math.abs(Math.cos(centered * Math.PI * 5.7));
+    profile[index] = 0.3 + 0.7 * envelope * (0.28 + 0.72 * detail);
+  }
+  return profile;
+}
 
 type AnalyzableAudioTrack = LocalAudioTrack | RemoteAudioTrack;
 
@@ -124,20 +143,19 @@ export function useAudioLevels(
       return { width, height };
     }
 
-    function calmTarget(now: number) {
-      const breath = (Math.sin(now / 900) + 1) / 2;
-      return 2.5 + breath * 0.8;
+    function idleTarget(index: number, maxHalfHeight: number, now: number) {
+      // Each bar bobs on its own phase so the cluster visibly moves up and
+      // down even with no audio, like a live equalizer.
+      const bob = (Math.sin(now / 470 + index * 0.7) + 1) / 2;
+      return ICON_BASELINE[index] * maxHalfHeight * (0.35 + 0.5 * bob);
     }
 
-    function processingTarget(index: number, now: number) {
-      const midpoint = (BAR_COUNT - 1) / 2;
-      const distanceFromCenter = Math.abs(index - midpoint) / midpoint;
-      const centerWeight = 0.45 + (1 - distanceFromCenter) * 0.55;
-      const breath = (Math.sin(now / 720) + 1) / 2;
-      return 2.6 + centerWeight * (2.2 + breath * 3.8);
+    function processingTarget(index: number, maxHalfHeight: number, now: number) {
+      const pulse = (Math.sin(now / 320 - index * 0.42) + 1) / 2;
+      return ICON_BASELINE[index] * maxHalfHeight * (0.7 + 0.55 * pulse);
     }
 
-    function audioTargets(maxHalfHeight: number, now: number) {
+    function audioTargets(maxHalfHeight: number) {
       if (!analyserBundle || !frequencyData) return null;
 
       analyserBundle.analyser.getByteFrequencyData(frequencyData);
@@ -155,7 +173,6 @@ export function useAudioLevels(
       if (activity < 0.04) return null;
 
       const targets = new Float32Array(BAR_COUNT);
-      const calm = calmTarget(now);
       for (let index = 0; index < BAR_COUNT; index += 1) {
         const position = index / Math.max(1, BAR_COUNT - 1);
         const curvedPosition = Math.pow(position, 1.45);
@@ -170,8 +187,11 @@ export function useAudioLevels(
         const bandLevel = bandSum / bandSamples;
         const normalized = clamp((bandLevel - NOISE_FLOOR) * SIGNAL_GAIN, 0, 1);
         const shaped = Math.pow(normalized, 0.72);
-        const reactiveHeight = calm + shaped * activity * (maxHalfHeight - calm);
-        targets[index] = clamp(reactiveHeight, calm, maxHalfHeight);
+        // Keep the waveform silhouette as a floor so quiet bars never collapse
+        // back into dots while the mic or agent is live.
+        const floor = ICON_BASELINE[index] * maxHalfHeight * 0.5;
+        const reactiveHeight = floor + shaped * activity * (maxHalfHeight - floor);
+        targets[index] = clamp(reactiveHeight, floor, maxHalfHeight);
       }
       return targets;
     }
@@ -184,22 +204,29 @@ export function useAudioLevels(
       const maxHalfHeight = Math.max(3, centerY - 2);
       const reactiveTargets =
         status === "listening" || status === "speaking"
-          ? audioTargets(maxHalfHeight, now)
+          ? audioTargets(maxHalfHeight)
           : null;
 
       for (let index = 0; index < BAR_COUNT; index += 1) {
-        let target = calmTarget(now);
+        let target: number;
         if (status === "processing") {
-          target = processingTarget(index, now);
+          target = processingTarget(index, maxHalfHeight, now);
         } else if (reactiveTargets) {
           target = reactiveTargets[index];
+        } else {
+          target = idleTarget(index, maxHalfHeight, now);
         }
-        if (staticFrame) target = status === "processing" ? 5 : 3;
+        if (staticFrame) target = ICON_BASELINE[index] * maxHalfHeight * 0.82;
+        target = clamp(target, 1, maxHalfHeight);
         heights[index] += (target - heights[index]) * (staticFrame ? 1 : SMOOTHING_FACTOR);
       }
 
-      const barWidth = clamp(width / (BAR_COUNT * 2.8), 3, 5);
-      const gap = (width - BAR_COUNT * barWidth) / Math.max(1, BAR_COUNT - 1);
+      // Chunky bars kept as a compact cluster centered in the notch, not
+      // spread edge to edge.
+      const barWidth = clamp(width / 46, 4, 6);
+      const gap = barWidth * 1.5;
+      const clusterWidth = BAR_COUNT * barWidth + (BAR_COUNT - 1) * gap;
+      const startX = (width - clusterWidth) / 2;
       const gradient = context.createLinearGradient(0, 0, 0, height);
       gradient.addColorStop(0, "rgba(104, 221, 205, 0.48)");
       gradient.addColorStop(0.5, "rgba(151, 240, 225, 0.96)");
@@ -209,7 +236,7 @@ export function useAudioLevels(
       context.shadowBlur = 7;
 
       for (let index = 0; index < BAR_COUNT; index += 1) {
-        const x = index * (barWidth + gap);
+        const x = startX + index * (barWidth + gap);
         const halfHeight = heights[index];
         context.beginPath();
         context.roundRect(
