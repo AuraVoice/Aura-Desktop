@@ -14,6 +14,7 @@ import { TopBar } from "./TopBar";
 import { HomePage } from "./pages/HomePage";
 import { ConversationsPage } from "./pages/ConversationsPage";
 import { SavedPage } from "./pages/SavedPage";
+import { MeetingsPage } from "./pages/MeetingsPage";
 import { UsagePage } from "./pages/UsagePage";
 import { AccountPage } from "./pages/AccountPage";
 import { BillingPage } from "./pages/BillingPage";
@@ -35,6 +36,7 @@ export const dashboardPages: Record<string, ReactElement> = {
   "/conversations": <ConversationsPage />,
   "/drafts": <DraftsPage />,
   "/saved": <SavedPage />,
+  "/meetings": <MeetingsPage />,
   "/usage": <UsagePage />,
   "/account": <AccountPage />,
   "/billing": <BillingPage />,

@@ -41,11 +41,17 @@ export interface MeetingClaim {
   rejoined: boolean;
 }
 
+export interface TranscriptTurn {
+  speaker: string;
+  text: string;
+}
+
 export interface MeetingNote {
   summary: string;
   decisions: string[];
   actionItems: string[];
   openQuestions: string[];
+  transcript: TranscriptTurn[];
   language: string;
   oneSided: boolean;
   /** Some captured segments carried gaps (device change mid-segment). */
@@ -205,11 +211,23 @@ function parseNote(raw: unknown): MeetingNote | null {
   const row = raw as Record<string, unknown>;
   const strings = (value: unknown): string[] =>
     Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+  const transcript = Array.isArray(row.transcript)
+    && row.transcript.every((turn) => {
+      if (typeof turn !== "object" || turn === null) return false;
+      const entry = turn as Record<string, unknown>;
+      return typeof entry.speaker === "string" && typeof entry.text === "string";
+    })
+    ? row.transcript.map((turn) => {
+        const entry = turn as Record<string, string>;
+        return { speaker: entry.speaker, text: entry.text };
+      })
+    : [];
   return {
     summary: typeof row.summary === "string" ? row.summary : "",
     decisions: strings(row.decisions),
     actionItems: strings(row.action_items),
     openQuestions: strings(row.open_questions),
+    transcript,
     language: typeof row.language === "string" ? row.language : "",
     oneSided: row.one_sided === true,
     partial: row.partial === true,

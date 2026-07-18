@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 import { Bookmark, ExternalLink } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { getScreenSaves, type RawScreenSave } from "../../lib/dashboardApi";
+import { resolveSavedImages } from "../../lib/savedImageCache";
 import { logError } from "../../lib/log";
 import { useDashboardResource } from "../useDashboardResource";
 import { CardGrid } from "../components/CardGrid";
@@ -13,10 +14,12 @@ import { RefreshIndicator } from "../components/RefreshIndicator";
 import type { CardModel } from "../components/DashboardCard";
 import { shortDateTime } from "../format";
 
-function saveToCard(save: RawScreenSave): CardModel {
+function saveToCard(save: RawScreenSave, localSrc?: string | null): CardModel {
   return {
     id: save.item_id,
-    media: { imageUrl: save.image_url, alt: save.title },
+    // Prefer the local encrypted copy over the ephemeral signed URL so the
+    // thumbnail survives offline and expired URLs.
+    media: { imageUrl: localSrc ?? save.image_url, alt: save.title },
     badge: { Icon: Bookmark, label: save.collection_name || "Saved" },
     title: save.title || "Saved item",
     meta: save.note?.trim() || shortDateTime(save.created_at),
@@ -37,10 +40,33 @@ export function SavedPage() {
   );
   const [selected, setSelected] = useState<string | null>(null);
   const [zoomed, setZoomed] = useState(false);
+  const [localImages, setLocalImages] = useState<Map<string, string>>(new Map());
 
   const saves = useMemo(() => res.data ?? [], [res.data]);
-  const models = useMemo(() => saves.map(saveToCard), [saves]);
+
+  // Cache each save's image bytes encrypted on disk and swap in local blob URLs
+  // as they resolve, so thumbnails render offline and after signed URLs expire.
+  useEffect(() => {
+    if (saves.length === 0) return;
+    let active = true;
+    void resolveSavedImages(saves)
+      .then((map) => {
+        if (active) setLocalImages(map);
+      })
+      .catch((err) => logError("SavedPage: resolve images", err));
+    return () => {
+      active = false;
+    };
+  }, [saves]);
+
+  const models = useMemo(
+    () => saves.map((s) => saveToCard(s, localImages.get(s.item_id))),
+    [saves, localImages],
+  );
   const selectedSave = selected ? saves.find((s) => s.item_id === selected) ?? null : null;
+  const selectedImgSrc = selectedSave
+    ? localImages.get(selectedSave.item_id) ?? selectedSave.image_url
+    : null;
 
   const closeDetail = () => {
     setSelected(null);
@@ -86,9 +112,9 @@ export function SavedPage() {
       >
         {selectedSave && (
           <div className="db-detail">
-            {selectedSave.image_url && (
-              // Signed URL from the live fetch only - not persisted. Click to
-              // zoom into a full-viewport lightbox.
+            {selectedImgSrc && (
+              // Local encrypted copy when cached, else the live signed URL.
+              // Click to zoom into a full-viewport lightbox.
               <button
                 type="button"
                 className="db-detail-img-btn"
@@ -96,7 +122,7 @@ export function SavedPage() {
                 aria-label="Expand image"
               >
                 <img
-                  src={selectedSave.image_url}
+                  src={selectedImgSrc}
                   alt={selectedSave.title}
                   className="db-detail-img"
                   decoding="async"
@@ -132,12 +158,12 @@ export function SavedPage() {
       </DetailModal>
 
       {zoomed &&
-        selectedSave?.image_url &&
+        selectedImgSrc &&
         createPortal(
           <div className="db-lightbox" onClick={() => setZoomed(false)}>
             <img
-              src={selectedSave.image_url}
-              alt={selectedSave.title}
+              src={selectedImgSrc}
+              alt={selectedSave?.title}
               className="db-lightbox-img"
               decoding="async"
             />

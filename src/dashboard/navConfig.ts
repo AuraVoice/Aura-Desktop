@@ -3,6 +3,7 @@ import {
   MessageSquare,
   FileText,
   Bookmark,
+  Video,
   LineChart,
   BookOpen,
   Code2,
@@ -29,8 +30,8 @@ export interface NavSection {
 }
 
 /** Sidebar structure for the dashboard window. Order and grouping match the
- * approved design. Home, Conversations, Drafts, Saved, and the account/settings
- * group are real pages; the Tools group still routes to a "coming soon"
+ * approved design. Home, Conversations, Drafts, Saved, Meetings, and the
+ * account/settings group are real pages; the Tools group still routes to a "coming soon"
  * placeholder. */
 export const navSections: NavSection[] = [
   {
@@ -39,6 +40,7 @@ export const navSections: NavSection[] = [
       { to: "/conversations", label: "Conversations", Icon: MessageSquare },
       { to: "/drafts", label: "Drafts", Icon: FileText },
       { to: "/saved", label: "Saved", Icon: Bookmark },
+      { to: "/meetings", label: "Meetings", Icon: Video },
     ],
   },
   {

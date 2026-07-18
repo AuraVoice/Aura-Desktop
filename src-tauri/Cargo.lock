@@ -340,6 +340,7 @@ dependencies = [
  "image",
  "log",
  "regex",
+ "reqwest 0.13.4",
  "sentry",
  "serde",
  "serde_json",

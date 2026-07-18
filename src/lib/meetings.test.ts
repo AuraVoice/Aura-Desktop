@@ -50,4 +50,30 @@ describe("meeting processing contract", () => {
     expect(meetingFailureCopy("upload_storage_unavailable")).toContain("safe on this device");
     expect(meetingFailureCopy("future_failure")).toBe("Aura could not finish this meeting yet.");
   });
+
+  it("parses transcript turns and drops a malformed transcript defensively", () => {
+    const base = {
+      meeting_id: "m1",
+      status: "ready",
+      note: {
+        summary: "A useful meeting",
+        transcript: [
+          { speaker: "Speaker 1", text: "First point" },
+          { speaker: "Speaker 2", text: "Second point" },
+        ],
+      },
+    };
+
+    expect(parseMeetingDoc(base)?.note?.transcript).toEqual([
+      { speaker: "Speaker 1", text: "First point" },
+      { speaker: "Speaker 2", text: "Second point" },
+    ]);
+    expect(parseMeetingDoc({
+      ...base,
+      note: {
+        ...base.note,
+        transcript: [{ speaker: "Speaker 1", text: "Valid" }, { speaker: 2 }],
+      },
+    })?.note?.transcript).toEqual([]);
+  });
 });

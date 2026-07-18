@@ -7,6 +7,7 @@ mod logging;
 mod meeting;
 mod overlay;
 mod redact;
+mod saved_images;
 mod screenshot;
 #[cfg(windows)]
 mod screenshot_store;
@@ -219,6 +220,9 @@ pub fn run() {
             entitlement::cache_entitlement,
             entitlement::cached_entitlement,
             entitlement::clear_entitlement_cache,
+            saved_images::cache_saved_image,
+            saved_images::read_saved_image,
+            saved_images::prune_saved_images,
             meeting::start_meeting_capture,
             meeting::stop_meeting_capture,
             meeting::capture_status,

@@ -1,5 +1,6 @@
 import { authFetch } from "./api";
 import type { DraftChannel, DraftLength } from "./draft";
+import { parseMeetingDoc, type MeetingDoc } from "./meetings";
 
 /**
  * Typed client for the desktop dashboard's data, layered on authFetch (Firebase
@@ -23,6 +24,8 @@ import type { DraftChannel, DraftLength } from "./draft";
  *     -> RawSessionDetail (summary fields + raw_turns + messages)
  *   GET /drafts       -> { items: RawDraft[] }
  *   GET /screen-saves -> { items: RawScreenSave[] }
+ *   GET /meetings/recent?limit=20 -> { items: MeetingDoc[] }
+ *   GET /meetings/{id}            -> MeetingDoc
  *
  * The three list endpoints are un-paginated (backend returns the full capped
  * set, ~30 each; drafts auto-expire server-side after 7 days). Range scoping is
@@ -202,6 +205,28 @@ interface RawScreenSavesResponse {
 export async function getScreenSaves(signal?: AbortSignal): Promise<RawScreenSave[]> {
   const raw = await authGetJson<RawScreenSavesResponse>("/screen-saves", signal);
   return raw.items ?? [];
+}
+
+interface RawMeetingsResponse {
+  items?: unknown;
+}
+
+export async function getMeetings(signal?: AbortSignal): Promise<MeetingDoc[]> {
+  const raw = await authGetJson<RawMeetingsResponse>("/meetings/recent?limit=20", signal);
+  return Array.isArray(raw.items)
+    ? raw.items.map(parseMeetingDoc).filter((meeting): meeting is MeetingDoc => meeting !== null)
+    : [];
+}
+
+export async function getMeeting(
+  meetingId: string,
+  signal?: AbortSignal,
+): Promise<MeetingDoc | null> {
+  const raw = await authGetJson<unknown>(
+    `/meetings/${encodeURIComponent(meetingId)}`,
+    signal,
+  );
+  return parseMeetingDoc(raw);
 }
 
 // ── Usage ────────────────────────────────────────────────────────────────
