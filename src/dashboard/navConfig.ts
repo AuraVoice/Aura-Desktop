@@ -29,8 +29,9 @@ export interface NavSection {
 }
 
 /** Sidebar structure for the dashboard window. Order and grouping match the
- * approved design. Only Home has a real page today; the rest route to a
- * "coming soon" placeholder with proper empty states (see the plan doc). */
+ * approved design. Home, Conversations, Drafts, Saved, and the account/settings
+ * group are real pages; the Tools group still routes to a "coming soon"
+ * placeholder. */
 export const navSections: NavSection[] = [
   {
     items: [

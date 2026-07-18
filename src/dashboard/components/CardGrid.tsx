@@ -18,12 +18,18 @@ export function CardGrid({
   models,
   loading,
   withMedia = false,
+  tall = false,
+  columns = "auto",
   onOpen,
   empty,
 }: {
   models: CardModel[];
   loading: boolean;
   withMedia?: boolean;
+  /** Email-like taller cards (Drafts). */
+  tall?: boolean;
+  /** "auto" fills by min column width; "three" pins to a 3-up responsive grid. */
+  columns?: "auto" | "three";
   onOpen: (id: string) => void;
   empty: ReactNode;
 }) {
@@ -56,11 +62,13 @@ export function CardGrid({
     return () => observer.disconnect();
   }, [hasMore, models.length]);
 
+  const gridClass = `db-card-grid${columns === "three" ? " db-card-grid-3" : ""}`;
+
   if (loading && models.length === 0) {
     return (
-      <div className="db-card-grid">
+      <div className={gridClass}>
         {Array.from({ length: SKELETON_COUNT }).map((_, i) => (
-          <CardSkeleton key={i} withMedia={withMedia} />
+          <CardSkeleton key={i} withMedia={withMedia} tall={tall} />
         ))}
       </div>
     );
@@ -72,12 +80,13 @@ export function CardGrid({
 
   return (
     <>
-      <div className="db-card-grid">
+      <div className={gridClass}>
         {visible.map((model, i) => (
           <DashboardCard
             key={model.id}
             model={model}
             onOpen={onOpen}
+            tall={tall}
             // Stagger the entrance a touch, but cap the delay so late items in a
             // freshly grown window don't wait noticeably.
             style={{ animationDelay: `${Math.min(i, 8) * 24}ms` }}

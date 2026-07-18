@@ -1,33 +1,29 @@
 import { useMemo, useState } from "react";
 import { FileText } from "lucide-react";
 import { getDrafts, type RawDraft } from "../../lib/dashboardApi";
-import type { DraftChannel } from "../../lib/draft";
 import { useDashboardResource } from "../useDashboardResource";
 import { CardGrid } from "../components/CardGrid";
 import { DetailModal } from "../components/DetailModal";
 import { EmptyState } from "../components/EmptyState";
 import { PageError } from "../components/PageError";
 import { RefreshIndicator } from "../components/RefreshIndicator";
+import { channelVisual } from "../components/channelIcons";
+import { CopyButton } from "../components/CopyButton";
 import type { CardModel } from "../components/DashboardCard";
-import { deriveDraftTitle, shortDateTime } from "../format";
-
-const CHANNEL_LABEL: Record<DraftChannel, string> = {
-  email_reply: "Email reply",
-  cold_dm: "Cold DM",
-  snippet: "Snippet",
-};
+import { bodyAfterTitle, deriveDraftTitle, shortDateTime } from "../format";
 
 function draftToCard(draft: RawDraft): CardModel {
+  const { Icon, label } = channelVisual(draft.channel);
   const recipient = draft.recipient_hint.trim();
-  const badgeLabel = [CHANNEL_LABEL[draft.channel] ?? draft.channel, recipient]
-    .filter(Boolean)
-    .join(" · ");
+  const badgeLabel = [label, recipient].filter(Boolean).join(" · ");
   return {
     id: draft.draft_id,
-    badge: { Icon: FileText, label: badgeLabel },
+    badge: { Icon, label: badgeLabel },
     title: deriveDraftTitle(draft.text),
     meta: shortDateTime(draft.updated_at || draft.created_at),
-    preview: draft.context_summary || undefined,
+    // Show the actual email body, not the AI context summary (that stays in the
+    // detail view). deriveDraftTitle already used the opening line as the title.
+    preview: bodyAfterTitle(draft.text) || undefined,
   };
 }
 
@@ -56,6 +52,8 @@ export function DraftsPage() {
         <CardGrid
           models={models}
           loading={res.loading}
+          tall
+          columns="three"
           onOpen={setSelected}
           empty={
             <EmptyState
@@ -69,13 +67,13 @@ export function DraftsPage() {
 
       <DetailModal
         open={selectedDraft != null}
-        title={selectedDraft ? CHANNEL_LABEL[selectedDraft.channel] ?? "Draft" : "Draft"}
+        title={selectedDraft ? channelVisual(selectedDraft.channel).label : "Draft"}
         onClose={() => setSelected(null)}
       >
         {selectedDraft && (
           <div className="db-detail">
             <div className="db-detail-tags">
-              <span className="db-tag">{CHANNEL_LABEL[selectedDraft.channel] ?? selectedDraft.channel}</span>
+              <span className="db-tag">{channelVisual(selectedDraft.channel).label}</span>
               <span className="db-tag">{selectedDraft.length}</span>
               {selectedDraft.recipient_hint.trim() && (
                 <span className="db-tag">{selectedDraft.recipient_hint.trim()}</span>
@@ -85,7 +83,10 @@ export function DraftsPage() {
               Updated {shortDateTime(selectedDraft.updated_at || selectedDraft.created_at)}
               {selectedDraft.revision > 0 ? ` · revision ${selectedDraft.revision}` : ""}
             </p>
-            <p className="db-detail-text db-detail-text-body">{selectedDraft.text}</p>
+            <div className="db-detail-text-body db-draft-body">
+              <CopyButton text={selectedDraft.text} compact />
+              <p className="db-detail-text">{selectedDraft.text}</p>
+            </div>
             {selectedDraft.context_summary && (
               <p className="db-detail-context">{selectedDraft.context_summary}</p>
             )}

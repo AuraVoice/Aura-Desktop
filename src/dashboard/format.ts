@@ -64,3 +64,18 @@ export function deriveSessionTitle(summary: string | null | undefined): string {
 export function deriveDraftTitle(text: string | null | undefined): string {
   return deriveTitle(text, "Draft");
 }
+
+/** The body of a draft after its opening line (the greeting used as the title),
+ * whitespace-collapsed to a single flowing preview. Empty when there is only
+ * one line. */
+export function bodyAfterTitle(text: string | null | undefined): string {
+  if (!text) return "";
+  const lines = text.split("\n").map((line) => line.trim());
+  const firstIndex = lines.findIndex((line) => line.length > 0);
+  if (firstIndex === -1) return "";
+  return lines
+    .slice(firstIndex + 1)
+    .filter((line) => line.length > 0)
+    .join(" ")
+    .replace(/\s+/g, " ");
+}

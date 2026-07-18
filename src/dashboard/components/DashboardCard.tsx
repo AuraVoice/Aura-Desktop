@@ -1,14 +1,15 @@
 import { useState, type ReactNode } from "react";
-import type { LucideIcon } from "lucide-react";
+import type { IconComponent } from "./channelIcons";
 
 /** The single JSON/props model that drives every card. A page maps its raw
- * backend rows into this shape; the fixed visual shell below never changes. */
+ * backend rows into this shape; the fixed visual shell below never changes.
+ * `Icon` accepts any {size,className} component - a lucide glyph or a brand SVG. */
 export interface CardModel {
   id: string;
   /** Optional leading image. `imageUrl` may be a short-lived signed URL that
    * is only ever passed from a live fetch, never from cache. */
   media?: { imageUrl: string | null; alt?: string };
-  badge: { Icon: LucideIcon; label: string };
+  badge: { Icon: IconComponent; label: string };
   title: string;
   meta: string;
   preview?: string;
@@ -22,17 +23,21 @@ export function DashboardCard({
   model,
   onOpen,
   style,
+  tall = false,
 }: {
   model: CardModel;
   onOpen: (id: string) => void;
   style?: React.CSSProperties;
+  /** Email-like layout: more body, taller shell, timestamp in a bottom-right
+   * footer instead of a prominent line under the title. */
+  tall?: boolean;
 }) {
   const { media, badge, title, meta, preview } = model;
   const { Icon } = badge;
   return (
     <button
       type="button"
-      className="db-card2"
+      className={`db-card2${tall ? " db-card2-tall" : ""}`}
       style={style}
       onClick={() => onOpen(model.id)}
     >
@@ -42,8 +47,13 @@ export function DashboardCard({
         <span className="db-card2-badge-label">{badge.label}</span>
       </div>
       <p className="db-card2-title">{title}</p>
-      <p className="db-card2-meta">{meta}</p>
+      {!tall && <p className="db-card2-meta">{meta}</p>}
       {preview && <p className="db-card2-preview">{preview}</p>}
+      {tall && (
+        <div className="db-card2-foot">
+          <span className="db-card2-meta">{meta}</span>
+        </div>
+      )}
     </button>
   );
 }

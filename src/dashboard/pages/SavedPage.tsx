@@ -1,6 +1,9 @@
 import { useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 import { Bookmark, ExternalLink } from "lucide-react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { getScreenSaves, type RawScreenSave } from "../../lib/dashboardApi";
+import { logError } from "../../lib/log";
 import { useDashboardResource } from "../useDashboardResource";
 import { CardGrid } from "../components/CardGrid";
 import { DetailModal } from "../components/DetailModal";
@@ -33,13 +36,21 @@ export function SavedPage() {
     { toCache: stripImageUrls },
   );
   const [selected, setSelected] = useState<string | null>(null);
+  const [zoomed, setZoomed] = useState(false);
 
   const saves = useMemo(() => res.data ?? [], [res.data]);
   const models = useMemo(() => saves.map(saveToCard), [saves]);
   const selectedSave = selected ? saves.find((s) => s.item_id === selected) ?? null : null;
 
+  const closeDetail = () => {
+    setSelected(null);
+    setZoomed(false);
+  };
+  const zoomTarget =
+    (typeof document !== "undefined" && document.querySelector(".db-app")) || document.body;
+
   return (
-    <div className="db-page db-page-wide">
+    <div className="db-page db-page-full">
       <div className="db-page-toolbar db-page-toolbar-end">
         <RefreshIndicator
           refreshing={res.refreshing}
@@ -56,6 +67,7 @@ export function SavedPage() {
           models={models}
           loading={res.loading}
           withMedia
+          columns="three"
           onOpen={setSelected}
           empty={
             <EmptyState
@@ -70,18 +82,27 @@ export function SavedPage() {
       <DetailModal
         open={selectedSave != null}
         title={selectedSave?.title || "Saved item"}
-        onClose={() => setSelected(null)}
+        onClose={closeDetail}
       >
         {selectedSave && (
           <div className="db-detail">
             {selectedSave.image_url && (
-              // Signed URL from the live fetch only - not persisted.
-              <img
-                src={selectedSave.image_url}
-                alt={selectedSave.title}
-                className="db-detail-img"
-                decoding="async"
-              />
+              // Signed URL from the live fetch only - not persisted. Click to
+              // zoom into a full-viewport lightbox.
+              <button
+                type="button"
+                className="db-detail-img-btn"
+                onClick={() => setZoomed(true)}
+                aria-label="Expand image"
+              >
+                <img
+                  src={selectedSave.image_url}
+                  alt={selectedSave.title}
+                  className="db-detail-img"
+                  decoding="async"
+                />
+                <span className="db-detail-img-hint">Click to expand</span>
+              </button>
             )}
             <div className="db-detail-tags">
               <span className="db-tag">{selectedSave.collection_name || "Saved"}</span>
@@ -94,18 +115,35 @@ export function SavedPage() {
               <p className="db-detail-context">{selectedSave.note}</p>
             )}
             {selectedSave.source_url && (
-              <a
+              <button
+                type="button"
                 className="db-detail-link"
-                href={selectedSave.source_url}
-                target="_blank"
-                rel="noreferrer"
+                onClick={() =>
+                  void openUrl(selectedSave.source_url!).catch((err) =>
+                    logError("SavedPage: open source", err),
+                  )
+                }
               >
                 <ExternalLink size={14} /> Open source
-              </a>
+              </button>
             )}
           </div>
         )}
       </DetailModal>
+
+      {zoomed &&
+        selectedSave?.image_url &&
+        createPortal(
+          <div className="db-lightbox" onClick={() => setZoomed(false)}>
+            <img
+              src={selectedSave.image_url}
+              alt={selectedSave.title}
+              className="db-lightbox-img"
+              decoding="async"
+            />
+          </div>,
+          zoomTarget,
+        )}
     </div>
   );
 }
