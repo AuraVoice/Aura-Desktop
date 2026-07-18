@@ -1,46 +1,39 @@
 import { authFetch } from "./api";
+import type { DraftChannel, DraftLength } from "./draft";
 
 /**
  * Typed client for the desktop dashboard's data, layered on authFetch (Firebase
  * ID token + platform headers, base URL = juno-backend). Every call requires a
  * signed-in user; authFetch throws AuthRequiredError otherwise.
  *
- * ── BACKEND CONTRACTS (juno-backend, separate repo — implement there) ────────
+ * ── BACKEND CONTRACTS (juno-backend, already live and consumed by Aura-Web) ──
+ * These are the SAME endpoints the production web dashboard uses, so the desktop
+ * dashboard shows the user's real cross-surface data (not the desktop-only
+ * `/desktop/*` projections, which filter to `surface == "desktop"` and a
+ * different memory collection and therefore render empty for most accounts).
  * All responses are JSON, snake_case; this client maps them to camelCase.
- * All endpoints are authenticated (Bearer Firebase ID token, verified server
- * side) and scoped to the calling user.
  *
- *   GET /desktop/home/stats
- *     -> { last_used_at: string|null (ISO 8601),
- *          last_session_seconds: number|null,
- *          sessions_this_week: number }
+ *   GET /desktop/home/stats            -> home summary (Home page)
+ *   GET /desktop/activity?limit=<n>    -> merged recent activity (Home page)
+ *   GET /desktop/usage                 -> plan usage (Usage page)
  *
- *   GET /desktop/activity?limit=<n>
- *     -> { items: [ { id: string,
- *                     kind: "voice"|"draft"|"saved",
- *                     title: string,
- *                     subtitle?: string,
- *                     timestamp: string (ISO 8601) } ] }
+ *   GET /history/sessions?since=<ISO?>
+ *     -> { sessions: RawHistorySession[], archive: HistoryArchive|null }
+ *   GET /history/sessions/{id}
+ *     -> RawSessionDetail (summary fields + raw_turns + messages)
+ *   GET /drafts       -> { items: RawDraft[] }
+ *   GET /screen-saves -> { items: RawScreenSave[] }
  *
- *   GET /desktop/conversations?limit=<n>&cursor=<opaque?>
- *     -> { items: [ { id: string, title: string, preview?: string,
- *                     started_at: string (ISO), duration_seconds?: number } ],
- *          next_cursor?: string }
+ * The three list endpoints are un-paginated (backend returns the full capped
+ * set, ~30 each; drafts auto-expire server-side after 7 days). Range scoping is
+ * only via `?since=` on /history/sessions.
  *
- *   GET /desktop/saved?limit=<n>
- *     -> { items: [ { id: string, label: string, value?: string,
- *                     saved_at: string (ISO) } ] }
- *
- *   GET /desktop/usage
- *     -> { voice_minutes_used: number, voice_minutes_limit: number|null,
- *          drafts_used: number, drafts_limit: number|null,
- *          period_start: string (ISO), period_end: string (ISO) }
- *
- * Until these ship, calls reject and pages render their error/empty states.
+ * Each function accepts an optional AbortSignal so callers (the SWR hook) can
+ * cancel or time out without changing authFetch's signature.
  */
 
-async function authGetJson<T>(path: string): Promise<T> {
-  const response = await authFetch(path);
+async function authGetJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const response = await authFetch(path, signal ? { signal } : undefined);
   if (!response.ok) {
     throw new Error(`GET ${path} -> HTTP ${response.status}`);
   }
@@ -95,57 +88,120 @@ export async function getRecentActivity(limit = 8): Promise<ActivityItem[]> {
   return raw.items ?? [];
 }
 
-// ── Conversations ────────────────────────────────────────────────────────
-export interface ConversationSummary {
-  id: string;
+// ── Conversations (voice history) ─────────────────────────────────────────
+// Shapes mirror Aura-Web src/lib/activity.ts verbatim; this is the wire
+// contract the production dashboard reads. Kept snake_case (raw) at the client
+// boundary; pages map the fields they render.
+export interface RawHistorySession {
+  session_id: string;
+  started_at: string;
+  ended_at: string;
+  total_duration: string;
+  num_of_turns: number;
+  num_of_tool_calls: number;
+  summary: string;
+  screen_sight_frame_count: number;
+}
+
+export interface HistoryArchive {
+  archive_summary: string;
+  sessions_archived_count: number;
+  oldest_archived_session_at: string;
+  newest_archived_session_at: string;
+}
+
+export interface HistorySessions {
+  sessions: RawHistorySession[];
+  archive: HistoryArchive | null;
+}
+
+interface RawHistorySessionsResponse {
+  sessions?: RawHistorySession[];
+  archive?: HistoryArchive | null;
+}
+
+export async function getHistorySessions(
+  sinceIso?: string,
+  signal?: AbortSignal,
+): Promise<HistorySessions> {
+  const query = sinceIso ? `?since=${encodeURIComponent(sinceIso)}` : "";
+  const raw = await authGetJson<RawHistorySessionsResponse>(
+    `/history/sessions${query}`,
+    signal,
+  );
+  return {
+    sessions: raw.sessions ?? [],
+    archive: raw.archive ?? null,
+  };
+}
+
+export interface RawSessionTurn {
+  role: string;
+  text: string;
+  timestamp?: string;
+  message_id?: string;
+  voice_run_id?: string;
+}
+
+export interface RawSessionDetail extends RawHistorySession {
+  raw_turns?: RawSessionTurn[];
+  messages?: unknown[];
+}
+
+export async function getSessionDetail(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<RawSessionDetail> {
+  return authGetJson<RawSessionDetail>(
+    `/history/sessions/${encodeURIComponent(sessionId)}`,
+    signal,
+  );
+}
+
+// ── Drafts ────────────────────────────────────────────────────────────────
+export interface RawDraft {
+  draft_id: string;
+  channel: DraftChannel;
+  length: DraftLength;
+  text: string;
+  context_summary: string;
+  recipient_hint: string;
+  revision: number;
+  created_at: string;
+  updated_at: string;
+}
+
+interface RawDraftsResponse {
+  items?: RawDraft[];
+}
+
+export async function getDrafts(signal?: AbortSignal): Promise<RawDraft[]> {
+  const raw = await authGetJson<RawDraftsResponse>("/drafts", signal);
+  return raw.items ?? [];
+}
+
+// ── Saved (screen saves / visual bookmarks) ────────────────────────────────
+// `image_url` is a short-lived signed GCS URL minted per response. Never
+// persist it: the cache layer strips it and the UI renders it only from a live
+// fetch.
+export interface RawScreenSave {
+  item_id: string;
   title: string;
-  preview?: string;
-  startedAt: string;
-  durationSeconds?: number;
+  description: string;
+  collection_name: string;
+  note: string;
+  source_url: string | null;
+  image_url: string | null;
+  created_at: string;
 }
 
-interface RawConversations {
-  items: Array<{
-    id: string;
-    title: string;
-    preview?: string;
-    started_at: string;
-    duration_seconds?: number;
-  }>;
-  next_cursor?: string;
+interface RawScreenSavesResponse {
+  items?: RawScreenSave[];
 }
 
-export async function getConversations(limit = 30): Promise<ConversationSummary[]> {
-  const raw = await authGetJson<RawConversations>(`/desktop/conversations?limit=${limit}`);
-  return (raw.items ?? []).map((item) => ({
-    id: item.id,
-    title: item.title,
-    preview: item.preview,
-    startedAt: item.started_at,
-    durationSeconds: item.duration_seconds,
-  }));
-}
-
-// ── Saved items ──────────────────────────────────────────────────────────
-export interface SavedItem {
-  id: string;
-  label: string;
-  value?: string;
-  savedAt: string;
-}
-
-interface RawSaved {
-  items: Array<{ id: string; label: string; value?: string; saved_at: string }>;
-}
-
-export async function getSavedItems(limit = 50): Promise<SavedItem[]> {
-  const raw = await authGetJson<RawSaved>(`/desktop/saved?limit=${limit}`);
-  return (raw.items ?? []).map((item) => ({
-    id: item.id,
-    label: item.label,
-    value: item.value,
-    savedAt: item.saved_at,
-  }));
+export async function getScreenSaves(signal?: AbortSignal): Promise<RawScreenSave[]> {
+  const raw = await authGetJson<RawScreenSavesResponse>("/screen-saves", signal);
+  return raw.items ?? [];
 }
 
 // ── Usage ────────────────────────────────────────────────────────────────

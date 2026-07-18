@@ -52,9 +52,9 @@ export function DashboardShell({ user }: { user: User | null }) {
 
   return (
     <div className={`db-app${collapsed ? " db-app-collapsed" : ""}`}>
-      <Sidebar collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} user={user} />
+      <Sidebar collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} />
       <div className="db-main">
-        <TopBar title={title} />
+        <TopBar title={title} user={user} />
         <div className="db-content">
           <Routes>
             <Route path="/" element={<Navigate to="/home" replace />} />

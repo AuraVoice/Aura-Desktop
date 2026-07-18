@@ -40,3 +40,27 @@ export function count(n: number | null | undefined): string {
   if (n === null || n === undefined || Number.isNaN(n)) return DASH;
   return String(n);
 }
+
+const TITLE_MAX = 80;
+
+/** First meaningful line of a block of text, whitespace-collapsed and capped.
+ * Falls back to `fallback` when the text is blank. Used to turn a session
+ * summary or a draft body into a card title. */
+export function deriveTitle(text: string | null | undefined, fallback: string): string {
+  if (!text) return fallback;
+  const firstLine = text
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.length > 0);
+  if (!firstLine) return fallback;
+  const collapsed = firstLine.replace(/\s+/g, " ");
+  return collapsed.length > TITLE_MAX ? `${collapsed.slice(0, TITLE_MAX - 1).trimEnd()}…` : collapsed;
+}
+
+export function deriveSessionTitle(summary: string | null | undefined): string {
+  return deriveTitle(summary, "Voice conversation");
+}
+
+export function deriveDraftTitle(text: string | null | undefined): string {
+  return deriveTitle(text, "Draft");
+}
