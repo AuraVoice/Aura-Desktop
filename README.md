@@ -35,6 +35,14 @@ Rust owns both windows: dashboard creation and focus, overlay geometry, global h
 
 Manual launch, a second instance, and signed-out overlay summons open or focus `dashboard`. First-run onboarding also runs there, guarded by `desktop_onboarding_seen`. A dashboard request to start a conversation emits `start-voice-requested` to `main`; the overlay summons its notch and starts its own `useVoiceBar` session. The dashboard's onboarding demo has a separate `useVoiceBar` instance by design.
 
+## Dashboard data pages (Conversations / Drafts / Saved)
+
+The dashboard's Conversations, Drafts, and Saved pages show the signed-in user's real cross-surface data by calling the **same live `juno-backend` endpoints the Aura-Web dashboard uses** - `GET /history/sessions?since=<ISO>` (+ `/history/sessions/{id}` for a transcript), `GET /drafts`, and `GET /screen-saves` - not the `surface`-filtered `/desktop/*` projections, which exclude data created on mobile/web. No backend changes were needed; auth is the existing `authFetch` (Firebase ID token) in `src/lib/api.ts`. The typed client lives in `src/lib/dashboardApi.ts`.
+
+Fetching is a stale-while-revalidate hook, `src/dashboard/useDashboardResource.ts`: a two-tier cache (in-memory over a versioned on-disk `plugin-store`, `src/lib/dashboardCache.ts`), a freshness gate that skips redundant loads, single-flight de-duplication, a hard request timeout so nothing hangs, and an out-of-order guard so the newest fetch wins. Screen-save `image_url`s are short-lived signed URLs, so they are stripped before caching and only ever rendered from a live fetch.
+
+The UI is a data-driven fixed card shell (`src/dashboard/components/`: `DashboardCard` fed a `CardModel`, `CardGrid` with skeletons and windowed reveal, `DetailModal`, `RangeChips`) rewritten per page under `src/dashboard/pages/`. Cards open a detail popup; Drafts carry platform icons (Gmail / LinkedIn / sparkle) and an in-body copy action; Saved cards open a full-viewport image lightbox and an "open source" link via `openUrl`.
+
 ## The overlay state machine
 
 ```mermaid
