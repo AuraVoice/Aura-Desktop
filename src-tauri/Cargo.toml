@@ -1,6 +1,6 @@
 [package]
 name = "aura-desktop"
-version = "0.5.1"
+version = "0.5.2"
 description = "Aura Desktop companion app"
 authors = ["Aura"]
 edition = "2021"
@@ -80,3 +80,7 @@ aes-gcm = "0.10"
 # their bytes. rustls-tls keeps it off any native OpenSSL. Windows-only: the
 # cache commands no-op on other platforms.
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+# Actionable Windows toasts (toast.rs): the notification plugin cannot route a
+# toast click on Windows (its action API is mobile-only), this crate can via
+# the in-process Activated handler.
+tauri-winrt-notification = "0.7"

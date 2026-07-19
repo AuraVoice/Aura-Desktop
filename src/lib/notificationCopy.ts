@@ -28,6 +28,29 @@ export const notifications = {
   permissionEnable: "Turn on alerts",
   permissionDismiss: "Not now",
 
+  // Absolute date + time stamp for the dashboard notification center, where a
+  // row can be days old and "3d ago" alone is not enough. `now` is injectable
+  // for tests.
+  stampTime: (ms: number, now: number = Date.now()): string => {
+    const at = new Date(ms);
+    const ref = new Date(now);
+    const time = at.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+    const sameDay = (a: Date, b: Date) =>
+      a.getFullYear() === b.getFullYear() &&
+      a.getMonth() === b.getMonth() &&
+      a.getDate() === b.getDate();
+    if (sameDay(at, ref)) return `Today at ${time}`;
+    const yesterday = new Date(ref);
+    yesterday.setDate(ref.getDate() - 1);
+    if (sameDay(at, yesterday)) return `Yesterday at ${time}`;
+    const date = at.toLocaleDateString([], {
+      month: "short",
+      day: "numeric",
+      ...(at.getFullYear() !== ref.getFullYear() ? { year: "numeric" as const } : {}),
+    });
+    return `${date} at ${time}`;
+  },
+
   // Relative-time helper for a row timestamp.
   relativeTime: (ms: number): string => {
     const seconds = Math.max(0, Math.floor((Date.now() - ms) / 1000));

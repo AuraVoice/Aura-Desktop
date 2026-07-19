@@ -11,6 +11,7 @@
 //     from the notification TYPE, never its title/body, so a meeting title or
 //     insight can never reach a lock screen.
 
+import { invoke } from "@tauri-apps/api/core";
 import {
   isPermissionGranted,
   requestPermission,
@@ -103,16 +104,44 @@ export async function bindOwner(uid: string): Promise<void> {
   });
 }
 
+function sortRows(inbox: Record<string, StoredNotification>): StoredNotification[] {
+  return Object.values(inbox).sort((a, b) => b.receivedAt - a.receivedAt);
+}
+
 /** Non-expired inbox rows, newest first. Fails closed to an empty list. */
 export async function loadInbox(): Promise<StoredNotification[]> {
   try {
     const store = await getStore();
-    const inbox = prune(await readInbox(store), Date.now());
-    return Object.values(inbox).sort((a, b) => b.receivedAt - a.receivedAt);
+    return sortRows(prune(await readInbox(store), Date.now()));
   } catch (err) {
     logError("desktopNotifications: loadInbox", err);
     return [];
   }
+}
+
+/** The uid the durable store is currently bound to, or null. Read-only: the
+ *  overlay owns binding (bindOwner); the dashboard uses this to fail closed on
+ *  an owner mismatch instead of racing a second bind against the overlay's. */
+export async function currentOwner(): Promise<string | null> {
+  try {
+    return (await (await getStore()).get<string>(OWNER_KEY)) ?? null;
+  } catch (err) {
+    logError("desktopNotifications: currentOwner", err);
+    return null;
+  }
+}
+
+/** Cross-window live inbox subscription. The store plugin holds ONE Rust-side
+ *  store per file and emits key-change events app-wide, so the dashboard sees
+ *  rows the overlay's broker ingests (and vice versa) without polling. Returns
+ *  an unlisten function. */
+export async function subscribeInbox(
+  callback: (rows: StoredNotification[]) => void,
+): Promise<() => void> {
+  const store = await getStore();
+  return store.onKeyChange<Record<string, StoredNotification>>(INBOX_KEY, (value) => {
+    callback(sortRows(prune(value ?? {}, Date.now())));
+  });
 }
 
 export async function isDisabled(): Promise<boolean> {
@@ -212,7 +241,21 @@ async function maybeToast(
     delivered[notification.notificationId] = new Date().toISOString();
     await store.set(DELIVERED_KEY, delivered);
     await store.save();
-    sendNotification({ title: "Aura", body: toastBodyFor(notification) });
+    // Prefer the Rust actionable toast: it lands in Action Center under the
+    // app's identity and clicking it opens the dashboard to the responsible
+    // action. Fall back to the plugin's fire-and-forget toast so delivery is
+    // never lost if the native path fails.
+    try {
+      await invoke("show_actionable_toast", {
+        notificationId: notification.notificationId,
+        action: notification.action,
+        title: "Aura",
+        body: toastBodyFor(notification),
+      });
+    } catch (invokeErr) {
+      logError("desktopNotifications: actionable toast, using plugin fallback", invokeErr);
+      sendNotification({ title: "Aura", body: toastBodyFor(notification) });
+    }
     trackEvent("desktop_notification_toast_shown", {
       type: notification.type,
       policy: notification.toastPolicy,

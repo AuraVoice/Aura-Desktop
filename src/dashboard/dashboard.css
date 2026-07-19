@@ -283,6 +283,215 @@
   background: var(--db-teal);
   border: 1.5px solid var(--db-content-bg);
 }
+.db-badge-count {
+  top: 4px;
+  right: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: auto;
+  min-width: 16px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 999px;
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+/* Notification center: pop-down panel anchored to the TopBar's right edge. */
+.db-notif-menu {
+  position: static;
+}
+.db-notif-panel {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 10px);
+  right: 32px;
+  display: flex;
+  flex-direction: column;
+  width: 384px;
+  max-height: min(540px, calc(100vh - 120px));
+  overflow: hidden;
+  border: 1px solid rgba(31, 35, 40, 0.09);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: var(--db-shadow-pop);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  animation: db-popover-in 0.18s var(--db-ease) both;
+}
+.db-notif-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 13px 16px 10px;
+  border-bottom: 1px solid var(--db-border);
+}
+.db-notif-title {
+  font-size: 13px;
+  font-weight: 650;
+}
+.db-notif-mark-all {
+  padding: 3px 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--db-teal);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s var(--db-ease);
+}
+.db-notif-mark-all:hover {
+  background: var(--db-hover);
+}
+.db-notif-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  overflow-y: auto;
+  /* Re-enable a slim on-brand scrollbar; the app-wide .db-app * rule hides
+     the default one (same pattern as .db-modal-body). */
+  scrollbar-width: thin;
+  scrollbar-color: rgba(31, 35, 40, 0.22) transparent;
+}
+.db-notif-list::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.db-notif-list::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background-color: rgba(31, 35, 40, 0.18);
+  background-clip: padding-box;
+}
+.db-notif-list::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(31, 35, 40, 0.32);
+  background-clip: padding-box;
+}
+.db-notif-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 3px 1fr 26px;
+  gap: 10px;
+  align-items: start;
+  border-radius: 12px;
+  transition: background 0.15s var(--db-ease);
+}
+.db-notif-row:hover {
+  background: var(--db-hover);
+}
+.db-notif-row-unread {
+  background: rgba(30, 200, 176, 0.07);
+}
+.db-notif-accent {
+  align-self: stretch;
+  width: 3px;
+  margin: 8px 0;
+  border-radius: 2px;
+  background: var(--db-text-mute);
+}
+.db-notif-sev-success .db-notif-accent {
+  background: var(--db-teal);
+}
+.db-notif-sev-warning .db-notif-accent {
+  background: #b8860b;
+}
+.db-notif-sev-error .db-notif-accent {
+  background: #b43c34;
+}
+.db-notif-row-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 9px 0;
+  border: none;
+  background: transparent;
+  color: var(--db-text);
+  font-family: var(--font-body, system-ui, sans-serif);
+  text-align: left;
+  cursor: pointer;
+}
+.db-notif-row-line {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+.db-notif-dot {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--db-teal);
+}
+.db-notif-row-title {
+  overflow: hidden;
+  color: var(--db-text-dim);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.db-notif-row-unread .db-notif-row-title {
+  color: var(--db-text);
+  font-weight: 650;
+}
+.db-notif-row-body {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--db-text-dim);
+  font-size: 12px;
+  line-height: 1.45;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.db-notif-row-time {
+  color: var(--db-text-mute);
+  font-size: 11px;
+  line-height: 1.3;
+}
+.db-notif-dismiss {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-top: 8px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--db-text-mute);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 0.12s var(--db-ease), background 0.15s var(--db-ease),
+    color 0.15s var(--db-ease);
+}
+.db-notif-row:hover .db-notif-dismiss,
+.db-notif-dismiss:focus-visible {
+  opacity: 1;
+}
+.db-notif-dismiss:hover {
+  background: rgba(31, 35, 40, 0.08);
+  color: var(--db-text);
+}
+.db-notif-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 9px;
+  padding: 30px 16px 34px;
+  color: var(--db-text-dim);
+  font-size: 13px;
+}
+.db-notif-empty svg {
+  color: var(--db-text-mute);
+}
 
 /* Account control and popover are separate from .db-account, which styles
    the Account page's details panel. */

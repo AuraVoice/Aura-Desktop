@@ -13,13 +13,23 @@ import { useUpdateReady } from "./useUpdateReady";
 import { useMeetings } from "./useMeetings";
 import { useMeetingArm } from "./useMeetingArm";
 import { useMeetingCapture } from "./useMeetingCapture";
+import { useCallbackCard } from "./useCallbackCard";
+import { useDesktopNotifications } from "../state/useDesktopNotifications";
+import { openDashboard } from "../lib/dashboardLink";
+import type { StoredNotification } from "../lib/desktopNotifications";
 import { GlassSurface } from "./GlassSurface";
 import { SetupPanel } from "./SetupPanel";
 import { PointingOverlay } from "./PointingOverlay";
 import { DraftCard } from "./DraftCard";
+import { CallbackCard } from "./CallbackCard";
+import { NotificationInboxCard } from "./NotificationInboxCard";
 import { NotchBar } from "./NotchBar";
 
+// Below-bar slot heights, one per surface. Each must agree with its CSS
+// (DraftCard.css, NotificationInboxCard.css, CallbackCard.css).
 const DRAFT_CARD_HEIGHT = 270;
+const NOTIFICATION_INBOX_CARD_HEIGHT = 300;
+const CALLBACK_CARD_HEIGHT = 180;
 
 type OverlayPresentation = "hidden" | "panel" | "bar" | "companion" | "pointing";
 
@@ -59,7 +69,7 @@ export function OverlayRoot() {
     autoSummon: false,
   });
   const meetingArm = useMeetingArm(user?.uid ?? null);
-  useMeetingCapture({
+  const meetingCapture = useMeetingCapture({
     uid: user?.uid ?? null,
     appHidden: presentation !== "bar",
     events: meetings.events,
@@ -69,7 +79,36 @@ export function OverlayRoot() {
   });
   const resetDraftCard = draftCard.reset;
   const showDraftCard = user !== null && draftCard.phase !== "idle";
-  const slotHeight = showDraftCard ? DRAFT_CARD_HEIGHT : null;
+
+  const notifications = useDesktopNotifications({
+    signedIn: user !== null,
+    uid: user?.uid ?? null,
+    appHidden: presentation !== "bar",
+  });
+  const [inboxOpen, setInboxOpen] = useState(false);
+  // useCallbackCard predates the companion->notch rename and still keys its
+  // trigger off the old "companion" presentation; map today's "bar" onto it
+  // rather than rewriting the (tested) hook.
+  const callbackCard = useCallbackCard({
+    presentation: presentation === "bar" ? "companion" : presentation,
+    signedIn: user !== null,
+    callLive,
+    draftActive: showDraftCard,
+  });
+
+  // Slot priority (CLAUDE.md): draft > agenda > kebab menu > meeting note >
+  // daily catch-up. Only draft, the inbox (opened via kebab/tray, so it sits
+  // at the kebab-menu tier), and the daily catch-up are mounted today.
+  const showInbox = user !== null && inboxOpen && !showDraftCard;
+  const showCallbackCard =
+    user !== null && callbackCard.visible && !showDraftCard && !showInbox;
+  const slotHeight = showDraftCard
+    ? DRAFT_CARD_HEIGHT
+    : showInbox
+      ? NOTIFICATION_INBOX_CARD_HEIGHT
+      : showCallbackCard
+        ? CALLBACK_CARD_HEIGHT
+        : null;
 
   useEffect(() => {
     invoke("set_slot_height", { height: slotHeight }).catch((err) =>
@@ -77,14 +116,50 @@ export function OverlayRoot() {
     );
   }, [slotHeight]);
 
+  const unreadCount = notifications.unreadCount;
+  useEffect(() => {
+    invoke("set_tray_unread", { count: unreadCount }).catch((err) =>
+      logError("OverlayRoot: set_tray_unread", err),
+    );
+  }, [unreadCount]);
+
+  // Tray "Notifications" item: Rust summons the bar, then hands off here to
+  // fill the below-bar slot with the inbox.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen("open-notifications-requested", () => setInboxOpen(true))
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch((err) =>
+        logError("OverlayRoot: listen open-notifications-requested", err),
+      );
+    return () => unlisten?.();
+  }, []);
+
+  const resetCallbackCard = callbackCard.reset;
   useEffect(() => {
     if (!user) {
       resetDraftCard();
+      resetCallbackCard();
+      setInboxOpen(false);
       invoke("dismiss_bar").catch((err) =>
         logError("OverlayRoot: dismiss_bar after sign-out", err),
       );
     }
-  }, [user, resetDraftCard]);
+  }, [user, resetDraftCard, resetCallbackCard]);
+
+  function handleNotificationAction(notification: StoredNotification) {
+    notifications.acknowledgeAction(notification);
+    if (notification.action === "view_meeting") {
+      void openDashboard();
+    } else if (
+      notification.action === "retry_meeting_upload"
+      && notification.resourceId
+    ) {
+      meetingCapture.retryNow(notification.resourceId);
+    }
+  }
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -180,8 +255,16 @@ export function OverlayRoot() {
   }
 
   return (
-    <div className={`notch-column${showDraftCard ? " notch-column-with-draft" : ""}`}>
+    <div className={`notch-column${slotHeight !== null ? " notch-column-with-draft" : ""}`}>
       {showDraftCard && <DraftCard card={draftCard} />}
+      {showInbox && (
+        <NotificationInboxCard
+          notifications={notifications}
+          onClose={() => setInboxOpen(false)}
+          onAction={handleNotificationAction}
+        />
+      )}
+      {showCallbackCard && <CallbackCard card={callbackCard} />}
       <NotchBar key={presentation} voice={voice} notice={notchNotice} />
     </div>
   );

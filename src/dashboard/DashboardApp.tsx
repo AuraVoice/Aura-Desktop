@@ -25,6 +25,7 @@ import { MobileAppPage } from "./pages/MobileAppPage";
 import { ComingSoonPage } from "./pages/ComingSoonPage";
 import { DashboardOnboarding } from "./DashboardOnboarding";
 import { useDashboardUser } from "./useDashboardUser";
+import { useDashboardNotifications } from "./useDashboardNotifications";
 import { navSections, navTitles } from "./navConfig";
 import { desktopOnboardingSeenKey, overlayStorePath } from "../lib/copy";
 import { logError } from "../lib/log";
@@ -49,6 +50,7 @@ export function DashboardShell({ user }: { user: User | null }) {
   const [collapsed, setCollapsed] = useState(false);
   const location = useLocation();
   const title = navTitles[location.pathname] ?? "Home";
+  const notifications = useDashboardNotifications(user?.uid ?? null);
 
   const routes = navSections.flatMap((section) => section.items);
 
@@ -56,7 +58,7 @@ export function DashboardShell({ user }: { user: User | null }) {
     <div className={`db-app${collapsed ? " db-app-collapsed" : ""}`}>
       <Sidebar collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} />
       <div className="db-main">
-        <TopBar title={title} user={user} />
+        <TopBar title={title} user={user} notifications={notifications} />
         <div className="db-content">
           <Routes>
             <Route path="/" element={<Navigate to="/home" replace />} />

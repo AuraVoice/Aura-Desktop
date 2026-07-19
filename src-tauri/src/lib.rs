@@ -13,6 +13,7 @@ mod screenshot;
 mod screenshot_store;
 mod security;
 mod sentry_setup;
+mod toast;
 mod tray;
 mod updater;
 mod voice_toggle_key;
@@ -192,6 +193,7 @@ pub fn run() {
         .manage(updater::UpdatedNotice::default())
         .manage(meeting::MeetingCaptureHandle::default())
         .manage(meeting::JoinWatchHandle::default())
+        .manage(toast::PendingToastActivation::default())
         .invoke_handler(tauri::generate_handler![
             current_overlay_state,
             esc_pressed,
@@ -233,7 +235,9 @@ pub fn run() {
             meeting::start_join_watch,
             meeting::stop_join_watch,
             meeting::debug_force_join,
-            voice_toggle_key::voice_toggle_key_status
+            voice_toggle_key::voice_toggle_key_status,
+            toast::show_actionable_toast,
+            toast::take_pending_toast_activation
         ])
         .setup(|app| {
             logging::install_panic_hook();
