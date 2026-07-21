@@ -94,6 +94,7 @@ pub enum Operation {
     CaptureScreen,
     CaptureTurnScreen,
     PointAt,
+    DesktopControl,
     ArmScreenSight,
     StartMeetingCapture,
     QueueSnapshot,
@@ -183,6 +184,17 @@ impl SecurityState {
                 }
                 if !self.captured_this_voice_session {
                     return Err(Denied::NoCaptureThisSession);
+                }
+            }
+            // A desktop-control message (launch app, open URL, media key) is
+            // only ever legitimate as the answer to something the user just
+            // spoke, so a live voice session is the whole gate - the same
+            // reasoning as turn capture. The per-verb allowlist (which URL
+            // schemes, which apps) lives in system_control.rs; here we only
+            // decide whether ANY desktop action is currently authorized.
+            Operation::DesktopControl => {
+                if !self.voice_active {
+                    return Err(Denied::VoiceInactive);
                 }
             }
             // Arm-before-call is supported UX, so no voice requirement here.
@@ -489,10 +501,11 @@ mod tests {
         s
     }
 
-    const GATED_OPS: [Operation; 11] = [
+    const GATED_OPS: [Operation; 12] = [
         Operation::CaptureScreen,
         Operation::CaptureTurnScreen,
         Operation::PointAt,
+        Operation::DesktopControl,
         Operation::ArmScreenSight,
         Operation::StartMeetingCapture,
         Operation::QueueSnapshot,
@@ -534,6 +547,22 @@ mod tests {
 
         let s = armed_in_voice_session();
         assert!(s.authorize(Operation::CaptureScreen).is_ok());
+    }
+
+    #[test]
+    fn desktop_control_needs_voice_but_not_armed_or_capture() {
+        let s = signed_in();
+        assert_eq!(
+            s.authorize(Operation::DesktopControl).unwrap_err(),
+            Denied::VoiceInactive
+        );
+
+        // A live voice session is the whole gate: no arming, no prior capture,
+        // unlike PointAt (which answers a frame we sent).
+        let s = in_voice_session();
+        assert!(s.authorize(Operation::DesktopControl).is_ok());
+        assert!(!s.screen_sight_armed);
+        assert!(!s.captured_this_voice_session);
     }
 
     #[test]

@@ -1,4 +1,5 @@
 import { authFetch } from "./api";
+import { advertiseManifest } from "./desktopCapabilities";
 import { voiceCapReachedCode } from "./voiceErrorCopy";
 
 export interface VoiceTokenResponse {
@@ -36,7 +37,14 @@ async function parseCapDenial(response: Response): Promise<VoiceCapError | null>
 }
 
 export async function fetchVoiceToken(): Promise<VoiceTokenResponse> {
-  const response = await authFetch("/voice/token?surface=desktop");
+  // The client advertises which desktop-control verbs this build supports so
+  // the agent can scope its single `run_desktop_capability` tool to them (and
+  // omit it entirely for clients - like mobile - that advertise nothing).
+  // Sent as a query param, not a POST body, so the current live GET endpoint
+  // keeps working unchanged and the backend can start reading it whenever it
+  // ships (forced release order, same class as the agentData.ts contract).
+  const manifestParam = encodeURIComponent(JSON.stringify(advertiseManifest()));
+  const response = await authFetch(`/voice/token?surface=desktop&manifest=${manifestParam}`);
   if (response.status === 402) {
     const capError = await parseCapDenial(response);
     if (capError) throw capError;

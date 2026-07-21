@@ -111,6 +111,18 @@ fn try_set_foreground(hwnd: HWND) -> bool {
     }
 }
 
+/// Brings an arbitrary top-level window (identified by its raw HWND value, the
+/// same isize-across-threads convention used throughout) to the foreground,
+/// reusing the overlay's own last-input-event trick so no input queue is ever
+/// shared. Used by system_control's focus_window verb. The caller MUST run
+/// this off the window's message-pump thread - `SetForegroundWindow` is an
+/// unbounded cross-process OS call. Returns whether the OS granted the change.
+#[cfg(target_os = "windows")]
+pub fn set_foreground_raw(hwnd_raw: isize) -> bool {
+    let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
+    try_set_foreground(hwnd)
+}
+
 /// Synthesizes an Alt key-down immediately followed by a key-up. Never
 /// forwarded anywhere as a real keystroke - `SendInput` only makes it count
 /// as "the last input event", which is all `SetForegroundWindow` checks for.

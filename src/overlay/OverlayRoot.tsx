@@ -8,6 +8,7 @@ import { useNotchGesture } from "./useNotchGesture";
 import { useOnboardingTail } from "./useOnboardingTail";
 import { OnboardingTail } from "./OnboardingTail";
 import { useTurnScreenCapture } from "./useTurnScreenCapture";
+import { useSystemControl } from "./useSystemControl";
 import { useDraftCard } from "./useDraftCard";
 import { useUpdateReady } from "./useUpdateReady";
 import { useMeetings } from "./useMeetings";
@@ -52,6 +53,9 @@ export function OverlayRoot() {
   );
   useUpdateReady();
   const screenCapture = useTurnScreenCapture(voice.room);
+  // Desktop control: dispatches the agent's `desktop.run` messages to native
+  // commands. Native side gates on a live voice session, so no extra guard here.
+  useSystemControl(voice.room);
   const notchNotice =
     screenCapture.notice ??
     (!notchGesture.checking && !notchGesture.available ? notchGesture.reason : null);

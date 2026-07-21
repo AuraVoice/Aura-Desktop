@@ -13,6 +13,7 @@ mod screenshot;
 mod screenshot_store;
 mod security;
 mod sentry_setup;
+mod system_control;
 mod toast;
 mod tray;
 mod updater;
@@ -210,6 +211,7 @@ pub fn run() {
             dismiss_bar,
             point_at,
             cancel_pointing,
+            system_control::run_desktop_capability,
             security::set_auth_state,
             security::toggle_screen_sight_armed,
             security::screen_sight_armed,
