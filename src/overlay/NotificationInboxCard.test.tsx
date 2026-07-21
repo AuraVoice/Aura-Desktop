@@ -34,6 +34,8 @@ it("renders unread state, permission explainer, and the allowlisted action", () 
     acknowledgeAction: vi.fn(),
     permissionPromptVisible: true,
     enablePermission: vi.fn(),
+    notificationsEnabled: true,
+    setNotificationsEnabled: vi.fn(),
     dismissPermissionPrompt: vi.fn(),
     reset: vi.fn(),
   };

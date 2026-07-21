@@ -62,6 +62,41 @@ export async function fetchDesktopOutboxPage(cursor: string): Promise<DesktopOut
   };
 }
 
+export interface DesktopNotificationPreferences {
+  enabled: boolean;
+  committed_enabled: boolean;
+  proactive_enabled: boolean;
+  account_enabled: boolean;
+}
+
+export async function updateDesktopNotificationPreferences(
+  preferences: DesktopNotificationPreferences,
+): Promise<DesktopNotificationPreferences> {
+  const response = await authFetch("/desktop/notifications/preferences", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(preferences),
+  });
+  if (!response.ok) {
+    throw new Error(`Desktop notification preference update failed (${response.status})`);
+  }
+  const body = (await response.json()) as Partial<DesktopNotificationPreferences>;
+  if (
+    typeof body.enabled !== "boolean" ||
+    typeof body.committed_enabled !== "boolean" ||
+    typeof body.proactive_enabled !== "boolean" ||
+    typeof body.account_enabled !== "boolean"
+  ) {
+    throw new Error("Desktop notification preference response was invalid");
+  }
+  return {
+    enabled: body.enabled,
+    committed_enabled: body.committed_enabled,
+    proactive_enabled: body.proactive_enabled,
+    account_enabled: body.account_enabled,
+  };
+}
+
 export type DesktopAcknowledgementStatus = "received" | "seen" | "acted";
 
 export async function acknowledgeDesktopNotification(

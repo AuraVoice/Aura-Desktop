@@ -12,11 +12,13 @@ import {
   dismiss as dismissRow,
   ensurePermission,
   ingest,
+  isDisabled,
   loadInbox,
   markAllSeen as markAllSeenBroker,
   markSeen as markSeenBroker,
   permissionAlreadyAsked,
   permissionGranted,
+  setDisabled,
   type StoredNotification,
   unreadCount as countUnread,
 } from "../lib/desktopNotifications";
@@ -28,6 +30,7 @@ import {
   fetchDesktopOutboxPage,
   resetOutboxCursor,
   saveOutboxCursor,
+  updateDesktopNotificationPreferences,
 } from "../lib/desktopNotificationOutbox";
 
 const OUTBOX_POLL_INTERVAL_MS = 60_000;
@@ -44,6 +47,8 @@ export interface DesktopNotificationsState {
   permissionPromptVisible: boolean;
   enablePermission: () => void;
   dismissPermissionPrompt: () => void;
+  notificationsEnabled: boolean;
+  setNotificationsEnabled: (enabled: boolean) => void;
   reset: () => void;
 }
 
@@ -60,6 +65,7 @@ export function useDesktopNotifications({
 }): DesktopNotificationsState {
   const [inbox, setInbox] = useState<StoredNotification[]>([]);
   const [permissionPromptVisible, setPermissionPromptVisible] = useState(false);
+  const [notificationsEnabled, setNotificationsEnabledState] = useState(true);
   const [ownerReady, setOwnerReady] = useState(false);
   const boundUidRef = useRef<string | null>(null);
   const outboxCursorRef = useRef("");
@@ -89,19 +95,21 @@ export function useDesktopNotifications({
       .then(async () => {
         if (cancelled) return null;
         boundUidRef.current = uid;
-        const [rows, alreadyAsked, alreadyGranted, cursor] = await Promise.all([
+        const [rows, alreadyAsked, alreadyGranted, cursor, disabled] = await Promise.all([
           loadInbox(),
           permissionAlreadyAsked(),
           permissionGranted(),
           bindOutboxOwner(uid),
+          isDisabled(),
         ]);
-        return { rows, alreadyAsked, alreadyGranted, cursor };
+        return { rows, alreadyAsked, alreadyGranted, cursor, disabled };
       })
       .then((result) => {
         if (!cancelled && result) {
-          const { rows, alreadyAsked, alreadyGranted, cursor } = result;
+          const { rows, alreadyAsked, alreadyGranted, cursor, disabled } = result;
           outboxCursorRef.current = cursor;
           setInbox(rows);
+          setNotificationsEnabledState(!disabled);
           setOwnerReady(true);
           setPermissionPromptVisible(!alreadyAsked && !alreadyGranted);
         }
@@ -133,11 +141,40 @@ export function useDesktopNotifications({
     return () => unlisten?.();
   }, [signedIn, uid, ownerReady, refresh]);
 
+  // Register capability independently from hydration. A transient API failure
+  // must not prevent local inbox ownership or future polling, and is retried
+  // until the backend has a current authenticated desktop heartbeat.
+  useEffect(() => {
+    if (!signedIn || !uid || !ownerReady) return;
+    let cancelled = false;
+    const syncCapability = async () => {
+      try {
+        const disabled = await isDisabled();
+        await updateDesktopNotificationPreferences({
+          enabled: !disabled,
+          committed_enabled: true,
+          proactive_enabled: true,
+          account_enabled: true,
+        });
+      } catch (err) {
+        if (!cancelled) {
+          logError("useDesktopNotifications: capability heartbeat", err);
+        }
+      }
+    };
+    void syncCapability();
+    const interval = setInterval(() => void syncCapability(), 5 * 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [signedIn, uid, ownerReady]);
+
   // Cursor polling is deliberately thin: the backend owns policy and the
   // broker owns validation/dedup/toasts. Cursor persistence happens only after
   // a page has been ingested, so a crash replays safely through local dedup.
   useEffect(() => {
-    if (!signedIn || !uid) return;
+    if (!signedIn || !uid || !ownerReady || !notificationsEnabled) return;
     let cancelled = false;
     let running = false;
 
@@ -195,7 +232,7 @@ export function useDesktopNotifications({
       cancelled = true;
       clearInterval(interval);
     };
-  }, [signedIn, uid, refresh]);
+  }, [signedIn, uid, ownerReady, notificationsEnabled, refresh]);
 
   const markSeen = useCallback(
     (id: string) => {
@@ -239,12 +276,27 @@ export function useDesktopNotifications({
   const dismissPermissionPrompt = useCallback(() => {
     setPermissionPromptVisible(false);
   }, []);
+  const setNotificationsEnabled = useCallback((enabled: boolean) => {
+    setNotificationsEnabledState(enabled);
+    void setDisabled(!enabled);
+    void updateDesktopNotificationPreferences({
+      enabled,
+      committed_enabled: true,
+      proactive_enabled: true,
+      account_enabled: true,
+    }).catch((err) => {
+      setNotificationsEnabledState(!enabled);
+      void setDisabled(enabled);
+      logError("useDesktopNotifications: update preference", err);
+    });
+  }, []);
   const reset = useCallback(() => {
     boundUidRef.current = null;
     setOwnerReady(false);
     outboxCursorRef.current = "";
     setInbox([]);
     setPermissionPromptVisible(false);
+    setNotificationsEnabledState(true);
   }, []);
 
   return {
@@ -258,6 +310,8 @@ export function useDesktopNotifications({
     permissionPromptVisible,
     enablePermission,
     dismissPermissionPrompt,
+    notificationsEnabled,
+    setNotificationsEnabled,
     reset,
   };
 }

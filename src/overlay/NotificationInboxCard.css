@@ -3,6 +3,32 @@
    12 (overlay-column) + card 288 = NOTIFICATION_INBOX_CARD_HEIGHT 300 extra.
    The card fills the extra window height; the row list scrolls internally. */
 
+.notification-inbox-preference {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+}
+
+.notification-inbox-preference span {
+  display: grid;
+  gap: 2px;
+}
+
+.notification-inbox-preference small {
+  color: var(--text-muted, rgba(255, 255, 255, 0.62));
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.notification-inbox-preference input {
+  accent-color: #a78bfa;
+}
+
 .glass-surface.notification-inbox-card {
   flex: 1 1 auto;
   min-height: 0;

@@ -29,6 +29,8 @@ export function NotificationInboxCard({
     permissionPromptVisible,
     enablePermission,
     dismissPermissionPrompt,
+    notificationsEnabled,
+    setNotificationsEnabled,
   } = notifications;
 
   return (
@@ -49,6 +51,18 @@ export function NotificationInboxCard({
             <CloseIcon />
           </BarIconButton>
         </div>
+
+        <label className="notification-inbox-preference">
+          <span>
+            <strong>Desktop notifications</strong>
+            <small>Show account, reminder, and personalized updates on this computer.</small>
+          </span>
+          <input
+            type="checkbox"
+            checked={notificationsEnabled}
+            onChange={(event) => setNotificationsEnabled(event.target.checked)}
+          />
+        </label>
 
         {permissionPromptVisible && (
           <div className="notification-permission-explainer">
