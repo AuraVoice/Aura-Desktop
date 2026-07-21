@@ -24,7 +24,7 @@ use log::{error, info};
 use tauri::{AppHandle, Manager, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
-use overlay::{OnboardingStep, OverlaySnapshot, OverlayStateHandle, PanelVariant};
+use overlay::{NotchEdge, OnboardingStep, OverlaySnapshot, OverlayStateHandle, PanelVariant};
 use win_focus::ForegroundGeneration;
 
 #[tauri::command]
@@ -138,6 +138,31 @@ fn cancel_pointing(app: AppHandle) {
     overlay::cancel_pointing(&app);
 }
 
+/// Docks the notch to a screen edge (top/bottom/left/right) and persists it.
+#[tauri::command]
+fn set_notch_edge(app: AppHandle, edge: NotchEdge) {
+    overlay::set_notch_edge(&app, edge);
+}
+
+/// Long-press drag-to-dock, step 1: takes the active display fullscreen and
+/// cursor-live so the frontend can render the edge-picker drag surface.
+#[tauri::command]
+fn begin_notch_move(app: AppHandle) -> Result<(), String> {
+    overlay::begin_notch_move(&app)
+}
+
+/// Step 2: release on `edge` docks the notch there and restores the bar.
+#[tauri::command]
+fn commit_notch_move(app: AppHandle, edge: NotchEdge) {
+    overlay::commit_notch_move(&app, edge);
+}
+
+/// Step 2 (cancel/Escape): restores the bar at its current edge unchanged.
+#[tauri::command]
+fn cancel_notch_move(app: AppHandle) {
+    overlay::cancel_notch_move(&app);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Held for the whole process lifetime (run() doesn't return until the app
@@ -211,6 +236,10 @@ pub fn run() {
             dismiss_bar,
             point_at,
             cancel_pointing,
+            set_notch_edge,
+            begin_notch_move,
+            commit_notch_move,
+            cancel_notch_move,
             system_control::run_desktop_capability,
             security::set_auth_state,
             security::toggle_screen_sight_armed,

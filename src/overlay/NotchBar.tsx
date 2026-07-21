@@ -1,53 +1,65 @@
 import { useRef } from "react";
+import type { PointerEventHandler } from "react";
 import { GlassSurface } from "./GlassSurface";
 import type { VoiceBarState } from "./useVoiceBar";
+import type { NotchEdge } from "./notchEdge";
 import { useAudioLevels } from "./useAudioLevels";
 import "./NotchBar.css";
 
-// The "\_/" bucket silhouette: a full-width flush top (it hangs off the top
-// screen edge) whose sides sweep inward to a flatter, rounded base. Authored in
-// the bar's fixed 460x72 logical space (BAR_WIDTH/BAR_HEIGHT in overlay.rs), so
-// the coordinates map 1:1 to CSS pixels at any display scale.
-const NOTCH_PATH = "M0,0 H460 V14 C460,46 430,72 384,72 H76 C30,72 0,46 0,14 Z";
+// The compact waveform-only pill (subtitle removed): a "\_/" bucket silhouette
+// authored in a fixed 184x29 logical space (40% of the old 460x72 bar, matching
+// NOTCH_MAIN/NOTCH_CROSS in overlay.rs) with its flat side flush to the screen
+// edge and its rounded side facing center. The per-edge rotation that hugs each
+// edge lives in NotchBar.css (.notch-shell-<edge>); the shape is authored once
+// here for the Top orientation and rotated as a whole.
+const NOTCH_PATH = "M0,0 H184 V5.6 C184,18.4 172,28.8 153.6,28.8 H30.4 C12,28.8 0,18.4 0,5.6 Z";
+
+// Pointer handlers the move gesture (useNotchMove) attaches to the pill so a
+// press-and-drag can lift it into edge-picking. Optional so NotchBar still
+// renders standalone (tests, onboarding) without the gesture wired.
+export interface NotchDragHandlers {
+  onPointerDown?: PointerEventHandler<HTMLDivElement>;
+  onPointerMove?: PointerEventHandler<HTMLDivElement>;
+  onPointerUp?: PointerEventHandler<HTMLDivElement>;
+  onPointerLeave?: PointerEventHandler<HTMLDivElement>;
+  onPointerCancel?: PointerEventHandler<HTMLDivElement>;
+}
 
 interface NotchBarProps {
   voice: VoiceBarState;
-  notice?: string | null;
+  edge: NotchEdge;
+  dragHandlers?: NotchDragHandlers;
 }
 
-export function NotchBar({ voice, notice }: NotchBarProps) {
+export function NotchBar({ voice, edge, dragHandlers }: NotchBarProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const caption = (voice.errorMessage ?? notice ?? voice.assistantCaption).trim();
   useAudioLevels(voice.room, voice.status, canvasRef);
 
   return (
-    <GlassSurface className={`notch-bar notch-bar-${voice.status}`} draggable={false}>
-      <div className="notch-shape">
-        <div className={`notch-bar-inner${caption ? " notch-bar-inner-captioned" : ""}`}>
-          {caption && (
-            <div className="notch-copy" aria-live="polite">
-              <span className="notch-caption">{caption}</span>
+    <div className={`notch-shell notch-shell-${edge}`} {...dragHandlers}>
+      <GlassSurface className={`notch-bar notch-bar-${voice.status}`} draggable={false}>
+        <div className="notch-shape">
+          <div className="notch-bar-inner">
+            <div className="notch-recorder" aria-hidden="true">
+              <canvas ref={canvasRef} className="notch-visualizer" />
             </div>
-          )}
-          <div className="notch-recorder" aria-hidden="true">
-            <canvas ref={canvasRef} className="notch-visualizer" />
           </div>
         </div>
-      </div>
-      <svg
-        className="notch-outline"
-        viewBox="0 0 460 72"
-        preserveAspectRatio="none"
-        aria-hidden="true"
-      >
-        <defs>
-          <linearGradient id="notch-stroke" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0" stopColor="var(--glass-border-top)" />
-            <stop offset="1" stopColor="var(--glass-border-bottom)" />
-          </linearGradient>
-        </defs>
-        <path d={NOTCH_PATH} fill="none" stroke="url(#notch-stroke)" strokeWidth="1" />
-      </svg>
-    </GlassSurface>
+        <svg
+          className="notch-outline"
+          viewBox="0 0 184 29"
+          preserveAspectRatio="none"
+          aria-hidden="true"
+        >
+          <defs>
+            <linearGradient id="notch-stroke" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stopColor="var(--glass-border-top)" />
+              <stop offset="1" stopColor="var(--glass-border-bottom)" />
+            </linearGradient>
+          </defs>
+          <path d={NOTCH_PATH} fill="none" stroke="url(#notch-stroke)" strokeWidth="1" />
+        </svg>
+      </GlassSurface>
+    </div>
   );
 }

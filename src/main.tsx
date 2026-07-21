@@ -9,6 +9,14 @@ import { DashboardApp } from "./dashboard/DashboardApp";
 const label = getCurrentWebviewWindow().label;
 const Root = label === "dashboard" ? DashboardApp : App;
 
+// The overlay window is sized exactly to its content and must never scroll: mark
+// it so overflow is clipped there (scoped to the overlay only - the dashboard
+// still scrolls). A stray scrollbar here means a native OS scrollbar over the
+// transparent HUD, which is what the compact/rotated notch was triggering.
+if (label !== "dashboard") {
+  document.documentElement.classList.add("is-overlay");
+}
+
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <Root />

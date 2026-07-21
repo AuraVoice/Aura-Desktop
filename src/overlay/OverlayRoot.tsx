@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useAuth } from "../state/AuthProvider";
@@ -25,6 +25,9 @@ import { DraftCard } from "./DraftCard";
 import { CallbackCard } from "./CallbackCard";
 import { NotificationInboxCard } from "./NotificationInboxCard";
 import { NotchBar } from "./NotchBar";
+import { NotchMoveOverlay } from "./NotchMoveOverlay";
+import { useNotchMove } from "./useNotchMove";
+import type { NotchEdge } from "./notchEdge";
 
 // Below-bar slot heights, one per surface. Each must agree with its CSS
 // (DraftCard.css, NotificationInboxCard.css, CallbackCard.css).
@@ -32,16 +35,27 @@ const DRAFT_CARD_HEIGHT = 270;
 const NOTIFICATION_INBOX_CARD_HEIGHT = 300;
 const CALLBACK_CARD_HEIGHT = 180;
 
-type OverlayPresentation = "hidden" | "panel" | "bar" | "companion" | "pointing";
+type OverlayPresentation =
+  | "hidden"
+  | "panel"
+  | "bar"
+  | "companion"
+  | "pointing"
+  | "movingnotch";
 
 interface OverlaySnapshot {
   presentation: OverlayPresentation;
+  notchEdge: NotchEdge;
 }
 
 export function OverlayRoot() {
   const { user } = useAuth();
   const [presentation, setPresentation] = useState<OverlayPresentation>("hidden");
+  const [notchEdge, setNotchEdge] = useState<NotchEdge>("top");
   const voice = useVoiceBar();
+  // Long-press-to-move is only armed on the resting bar (never mid-card or
+  // mid-onboarding); the notch itself is the drag handle.
+  const notchMove = useNotchMove(presentation === "bar");
   const tail = useOnboardingTail(user !== null);
   // Suppress the double-tap-Ctrl notch gesture while the first-run tail is up,
   // so the live demo stays inside the onboarding panel (its own Start button
@@ -52,14 +66,17 @@ export function OverlayRoot() {
     presentation === "pointing" || tail.status === "active",
   );
   useUpdateReady();
-  const screenCapture = useTurnScreenCapture(voice.room);
+  // Kept for its capture side effects; its transient per-turn notice no longer
+  // has a UI home (the subtitle is gone) and is already logged in the hook.
+  useTurnScreenCapture(voice.room);
   // Desktop control: dispatches the agent's `desktop.run` messages to native
   // commands. Native side gates on a live voice session, so no extra guard here.
   useSystemControl(voice.room);
-  const notchNotice =
-    screenCapture.notice ??
-    (!notchGesture.checking && !notchGesture.available ? notchGesture.reason : null);
-  const draftCard = useDraftCard(voice.room, presentation);
+  // The draft/meeting/callback hooks predate movingnotch and type their
+  // presentation param without it. Move-mode is a transient fullscreen takeover
+  // that starts and ends on the bar, so present it to them as "bar".
+  const hookPresentation = presentation === "movingnotch" ? "bar" : presentation;
+  const draftCard = useDraftCard(voice.room, hookPresentation);
   const callLive =
     voice.status !== "disconnected" && voice.status !== "ended" && voice.status !== "error";
   // Meeting capture is a background service, not part of the notch UI. Keep
@@ -67,7 +84,7 @@ export function OverlayRoot() {
   // while the native window is hidden. The removed meeting controls/cards stay
   // intentionally absent from this visual root.
   const meetings = useMeetings({
-    presentation,
+    presentation: hookPresentation,
     signedIn: user !== null,
     callLive,
     autoSummon: false,
@@ -94,7 +111,7 @@ export function OverlayRoot() {
   // trigger off the old "companion" presentation; map today's "bar" onto it
   // rather than rewriting the (tested) hook.
   const callbackCard = useCallbackCard({
-    presentation: presentation === "bar" ? "companion" : presentation,
+    presentation: hookPresentation === "bar" ? "companion" : hookPresentation,
     signedIn: user !== null,
     callLive,
     draftActive: showDraftCard,
@@ -119,6 +136,26 @@ export function OverlayRoot() {
       logError("OverlayRoot: set_slot_height", err),
     );
   }, [slotHeight]);
+
+  // The subtitle used to be the only place notices surfaced. With it gone,
+  // route the two that matter - an actionable voice error, or the voice shortcut
+  // being unavailable - to a toast so a failure is never silent. De-duped so the
+  // same message doesn't re-toast on every render.
+  const lastNoticeRef = useRef<string | null>(null);
+  const voiceError = voice.errorMessage;
+  const shortcutReason =
+    !notchGesture.checking && !notchGesture.available ? notchGesture.reason ?? null : null;
+  useEffect(() => {
+    const notice = voiceError ?? shortcutReason;
+    if (!notice || notice === lastNoticeRef.current) return;
+    lastNoticeRef.current = notice;
+    invoke("show_actionable_toast", {
+      notificationId: `overlay-notice-${Date.now()}`,
+      action: null,
+      title: "Aura",
+      body: notice,
+    }).catch((err) => logError("OverlayRoot: overlay notice toast", err));
+  }, [voiceError, shortcutReason]);
 
   const unreadCount = notifications.unreadCount;
   useEffect(() => {
@@ -169,6 +206,7 @@ export function OverlayRoot() {
     let unlisten: (() => void) | undefined;
     listen<OverlaySnapshot>("overlay-changed", (event) => {
       setPresentation(event.payload.presentation);
+      setNotchEdge(event.payload.notchEdge);
     })
       .then((fn) => {
         unlisten = fn;
@@ -178,6 +216,7 @@ export function OverlayRoot() {
     invoke<OverlaySnapshot>("current_overlay_state")
       .then((snapshot) => {
         setPresentation(snapshot.presentation);
+        setNotchEdge(snapshot.notchEdge);
       })
       .catch((err) => logError("OverlayRoot: current_overlay_state", err));
 
@@ -235,6 +274,10 @@ export function OverlayRoot() {
     return <PointingOverlay />;
   }
 
+  if (presentation === "movingnotch") {
+    return <NotchMoveOverlay />;
+  }
+
   if (!user) {
     return (
       <div className="overlay-column">
@@ -259,7 +302,11 @@ export function OverlayRoot() {
   }
 
   return (
-    <div className={`notch-column${slotHeight !== null ? " notch-column-with-draft" : ""}`}>
+    <div
+      className={`notch-column notch-column-${notchEdge}${
+        slotHeight !== null ? " notch-column-with-draft" : ""
+      }`}
+    >
       {showDraftCard && <DraftCard card={draftCard} />}
       {showInbox && (
         <NotificationInboxCard
@@ -269,7 +316,12 @@ export function OverlayRoot() {
         />
       )}
       {showCallbackCard && <CallbackCard card={callbackCard} />}
-      <NotchBar key={presentation} voice={voice} notice={notchNotice} />
+      <NotchBar
+        key={presentation}
+        voice={voice}
+        edge={notchEdge}
+        dragHandlers={notchMove.dragHandlers}
+      />
     </div>
   );
 }
