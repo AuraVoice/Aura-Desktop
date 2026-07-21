@@ -8,7 +8,7 @@ import { authFetch } from "./api";
  * carries the worker-minted draft_id and a successful refine updates the
  * stored copy too. */
 
-export type DraftChannel = "email_reply" | "cold_dm" | "snippet";
+export type DraftChannel = "on_screen" | "email_reply" | "cold_dm" | "snippet";
 export type DraftLength = "short" | "medium" | "detailed";
 export type RefineChip = "shorter" | "longer" | "more_formal" | "warmer" | "regenerate";
 export type ArtifactKind =

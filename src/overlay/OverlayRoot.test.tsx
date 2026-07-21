@@ -51,7 +51,10 @@ vi.mock("./useMeetingCapture", () => ({ useMeetingCapture: mocks.useMeetingCaptu
 vi.mock("./useOnboardingTail", () => ({ useOnboardingTail: mocks.useOnboardingTail }));
 vi.mock("./OnboardingTail", () => ({ OnboardingTail: () => <div>tail</div> }));
 vi.mock("./NotchBar", () => ({ NotchBar: () => <div>notch</div> }));
-vi.mock("./DraftCard", () => ({ DraftCard: () => <div>draft</div> }));
+vi.mock("./DraftCard", () => ({
+  DraftCard: () => <div>draft</div>,
+  INITIAL_DRAFT_SLOT_HEIGHT: 180,
+}));
 
 import { OverlayRoot } from "./OverlayRoot";
 

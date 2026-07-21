@@ -21,7 +21,7 @@ import type { StoredNotification } from "../lib/desktopNotifications";
 import { GlassSurface } from "./GlassSurface";
 import { SetupPanel } from "./SetupPanel";
 import { PointingOverlay } from "./PointingOverlay";
-import { DraftCard } from "./DraftCard";
+import { DraftCard, INITIAL_DRAFT_SLOT_HEIGHT } from "./DraftCard";
 import { CallbackCard } from "./CallbackCard";
 import { NotificationInboxCard } from "./NotificationInboxCard";
 import { NotchBar } from "./NotchBar";
@@ -29,9 +29,8 @@ import { NotchMoveOverlay } from "./NotchMoveOverlay";
 import { useNotchMove } from "./useNotchMove";
 import type { NotchEdge } from "./notchEdge";
 
-// Below-bar slot heights, one per surface. Each must agree with its CSS
-// (DraftCard.css, NotificationInboxCard.css, CallbackCard.css).
-const DRAFT_CARD_HEIGHT = 270;
+// Fixed heights remain for fixed-content surfaces. DraftCard reports its own
+// measured content height so a short reply stays compact and a long one grows.
 const NOTIFICATION_INBOX_CARD_HEIGHT = 300;
 const CALLBACK_CARD_HEIGHT = 180;
 
@@ -100,6 +99,11 @@ export function OverlayRoot() {
   });
   const resetDraftCard = draftCard.reset;
   const showDraftCard = user !== null && draftCard.phase !== "idle";
+  const [draftCardHeight, setDraftCardHeight] = useState(INITIAL_DRAFT_SLOT_HEIGHT);
+
+  useEffect(() => {
+    if (!showDraftCard) setDraftCardHeight(INITIAL_DRAFT_SLOT_HEIGHT);
+  }, [showDraftCard]);
 
   const notifications = useDesktopNotifications({
     signedIn: user !== null,
@@ -124,7 +128,7 @@ export function OverlayRoot() {
   const showCallbackCard =
     user !== null && callbackCard.visible && !showDraftCard && !showInbox;
   const slotHeight = showDraftCard
-    ? DRAFT_CARD_HEIGHT
+    ? draftCardHeight
     : showInbox
       ? NOTIFICATION_INBOX_CARD_HEIGHT
       : showCallbackCard
@@ -307,7 +311,7 @@ export function OverlayRoot() {
         slotHeight !== null ? " notch-column-with-draft" : ""
       }`}
     >
-      {showDraftCard && <DraftCard card={draftCard} />}
+      {showDraftCard && <DraftCard card={draftCard} onHeightChange={setDraftCardHeight} />}
       {showInbox && (
         <NotificationInboxCard
           notifications={notifications}

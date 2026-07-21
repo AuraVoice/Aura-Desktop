@@ -14,7 +14,7 @@ import {
   type DraftLength,
   type RefineChip,
 } from "../lib/draft";
-import { logError } from "../lib/log";
+import { logError, logInfo } from "../lib/log";
 import { installDraftDebugInjector } from "../debug/draftDebug";
 import {
   pendingDraftRestoreAction,
@@ -73,7 +73,10 @@ interface DraftEvent {
 }
 
 function asChannel(value: unknown): DraftChannel | null {
-  return value === "email_reply" || value === "cold_dm" || value === "snippet"
+  return value === "on_screen" ||
+    value === "email_reply" ||
+    value === "cold_dm" ||
+    value === "snippet"
     ? value
     : null;
 }
@@ -99,7 +102,7 @@ function asContentFormat(value: unknown, channel: DraftChannel): DraftContentFor
   return channel === "snippet" ? "code" : "plain_text";
 }
 
-function parseCreated(payload: Record<string, unknown>): DraftInfo | null {
+export function parseCreatedDraft(payload: Record<string, unknown>): DraftInfo | null {
   const channel = asChannel(payload.channel);
   const length = asLength(payload.length);
   const text = typeof payload.text === "string" ? payload.text : "";
@@ -204,7 +207,7 @@ export function useDraftCard(
           break;
         }
         case "draft.created": {
-          const draft = parseCreated(payload);
+          const draft = parseCreatedDraft(payload);
           if (!draft) {
             logError("useDraftCard: malformed draft.created", JSON.stringify(Object.keys(payload)));
             return;
@@ -235,6 +238,7 @@ export function useDraftCard(
         }
         case "draft.failed": {
           const reason = typeof payload.reason === "string" ? payload.reason : "model_error";
+          logInfo("useDraftCard: draft failed", `reason=${reason}`);
           if (dataRef.current.draft) {
             // A failed refine keeps the last good draft on screen.
             markRefineFailed();

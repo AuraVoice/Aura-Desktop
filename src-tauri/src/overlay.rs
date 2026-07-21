@@ -29,8 +29,8 @@ const NOTCH_MAIN: f64 = 184.0;
 const NOTCH_CROSS: f64 = 29.0;
 // The card that fills the below/beside-notch slot keeps a fixed readable size in
 // its natural orientation regardless of edge: CARD_CROSS wide, and as tall as the
-// slot extent React passes (draft 270 / inbox 300 / callback 180, via
-// set_slot_height). On Top/Bottom the card grows the window along its height; on
+// slot extent React passes (content-measured for drafts, fixed for other cards,
+// via set_slot_height). On Top/Bottom the card grows the window along its height; on
 // Left/Right it sits beside the notch and grows the window along its width.
 const CARD_CROSS: f64 = 380.0;
 // Gap between the notch and an open card (matches the CSS grid gap).
@@ -45,7 +45,7 @@ const TOP_MARGIN: f64 = 48.0;
 const COMPANION_SURFACE_RESERVE: f64 = 340.0;
 // The single below-bar slot's extra window height is owned by React, not Rust:
 // whichever surface wins the slot (draft > callback > calendar agenda > kebab
-// menu, resolved in OverlayRoot.tsx) passes its own fixed height via
+// menu, resolved in OverlayRoot.tsx) passes its current height via
 // set_slot_height, and Rust just grows the window by that much below the bar.
 // One `slot_height` replaces the former per-card booleans + their applied
 // caches, so there's no multi-place tiebreak to keep in sync and no way to

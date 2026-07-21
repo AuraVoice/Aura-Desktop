@@ -152,12 +152,14 @@ export const update = {
 } as const;
 
 export const draftCard = {
-  title: (channel: "email_reply" | "cold_dm" | "snippet") =>
+  title: (channel: "on_screen" | "email_reply" | "cold_dm" | "snippet") =>
     channel === "snippet"
       ? "Draft · Snippet"
       : channel === "cold_dm"
         ? "Draft · DM"
-        : "Draft · Email reply",
+        : channel === "email_reply"
+          ? "Draft · Email reply"
+          : "Draft",
   copyTooltip: "Copy draft",
   copyArtifactTooltip: "Copy text",
   copiedTooltip: "Copied!",
@@ -177,6 +179,10 @@ export const draftCard = {
     })[kind],
   refineFailed: "Couldn't update that. Try again.",
   failed: "That draft didn't come together. Ask Buddy to try again.",
+  failedTimeout: "That draft took too long. Ask Buddy to try again.",
+  failedModel: "The writing model rejected that draft. Ask Buddy to try again.",
+  failedInvalid: "Buddy couldn't understand that draft request. Ask again with what to write.",
+  failedNoFrame: "Buddy couldn't see the screen context. Turn on screen sight and try again.",
   quotaReached: "You've used today's free drafts. They reset tomorrow.",
   chips: {
     shorter: "Shorter",
