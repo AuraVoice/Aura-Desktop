@@ -155,11 +155,15 @@ synthesis caps are clamped to 60 on every tier as the defense-in-depth layer. Th
 ceilings to restore when long-meeting support lands (4h capture, 240min Pro synthesis) are
 documented at each clamp site.
 
-For armed meetings, Rust polls for an in-call Zoom/Teams window (`meeting/detect.rs`) ONLY
+For armed meetings, Rust polls for an in-call window (`meeting/detect.rs`) ONLY
 inside the event's own scheduled window, start to end - no lead, no tail - which is exposure
 control, not just thrift: detection is not link-matched in v1, so the armed window is also the
-window in which an unrelated call could be misattributed to the event. Google Meet has no
-detector and uses the kebab menu's "Capture this call" instead. On join, `useMeetingCapture.ts`
+window in which an unrelated call could be misattributed to the event. Native Zoom and Teams are
+matched by process name plus window title; browser-hosted Google Meet, Teams, and Zoom are matched
+by the active browser tab's title (`meeting_app_for_window`). The poller sees only the foreground
+tab, so a Meet in a background tab, or a pre-join lobby whose title is not yet "Meet - ...", is not
+detected. The kebab menu's "Capture this call" is the manual fallback for a call with no armed
+calendar event (an ad-hoc Meet) or one the poller cannot see. On join, `useMeetingCapture.ts`
 claims the meeting (`POST /meetings/claim`, monthly cap server-side: 5/month on Free and
 Companion, unlimited count on Pro, 402 mirrors the voice-cap shape) and starts
 `meeting/audio.rs`: WASAPI mic + render-loopback, both autoconverted to 16 kHz mono, written as
@@ -171,6 +175,21 @@ install. The JS pump uploads segments over REST, sends `/complete`, and the back
 deleting the raw audio immediately. The finished note arrives as a below-bar card
 (`MeetingNotesCard.tsx`). In dev builds, `window.__meetingDebug.forceJoin("evt-1")` (see
 `src/debug/meetingDebug.ts`) drives the whole loop with no Zoom/Teams installed.
+
+## Desktop notifications
+
+`src/lib/desktopNotifications.ts` is the single broker every producer calls: local Rust/JS events
+(upload pending, capture ended) and backend events polled from the outbox. It owns a durable inbox,
+deduplication, permission state, and a toast-once guarantee (delivered ids persist across restart).
+An important event fires one Windows toast plus one durable inbox row. Since 2026-07-21 the toast
+shows the notification's real title and body (`toastCopyFor`); it previously showed a generic
+privacy-safe line, so meeting titles now reach the Windows lock screen and Action Center. The
+contract's `sensitive` flag is the escape hatch to force generic copy again.
+
+Only a meeting that actually started capturing produces a toast: capture-ended, `meeting_upload_pending`,
+or the backend's `meeting_ready` after synthesis. A meeting that was never armed, never detected
+(Google Meet in a background tab, or started outside its scheduled window), or blocked by the
+monthly cap is silent by design - the cap surfaces only as an in-bar caption, not a toast.
 
 ## Voice session flow
 
