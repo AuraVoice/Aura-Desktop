@@ -96,6 +96,14 @@ export function useVoiceBar() {
   const desiredActiveRef = useRef(false);
   const sessionGenerationRef = useRef(0);
   const [desiredActive, setDesiredActive] = useState(false);
+  // The in-flight (or settled) prepareSession promise - activateSession awaits
+  // it so the gesture hook can run prepare in parallel with the native summon.
+  const preparePromiseRef = useRef<Promise<void> | null>(null);
+  // Timing marks for the connect pipeline. tapAtMs comes from the gesture hook
+  // (the native double-tap timestamp), the other two are set during prepare.
+  const tapAtMsRef = useRef<number | null>(null);
+  const connectResolvedAtRef = useRef<number | null>(null);
+  const agentJoinMsRef = useRef<number | null>(null);
 
   const clearWatchdogs = useCallback(() => {
     if (joinWatchdogRef.current) {
@@ -163,9 +171,29 @@ export function useVoiceBar() {
     clearWatchdogs();
     if (!didTrackFirstResponseRef.current) {
       didTrackFirstResponseRef.current = true;
-      trackEvent("voice_first_response");
+      // Measured from the user's actual keypress, so it spans summon, token,
+      // connect, agent join, and the first spoken/streamed output - the number
+      // the warm-pool + pre-dispatch work is supposed to shrink. Consumed once
+      // so an auto-retry's first response doesn't reuse a stale tap.
+      const tapAtMs = tapAtMsRef.current;
+      tapAtMsRef.current = null;
+      const tapToFirstResponseMs = tapAtMs !== null ? Math.max(0, Date.now() - tapAtMs) : null;
+      logInfo(
+        "useVoiceBar: first response",
+        `tapToFirstResponseMs=${tapToFirstResponseMs ?? "unknown"} agentJoinMs=${agentJoinMsRef.current ?? "unknown"}`,
+      );
+      const timing: Record<string, number> = {};
+      if (tapToFirstResponseMs !== null) timing.tapToFirstResponseMs = tapToFirstResponseMs;
+      if (agentJoinMsRef.current !== null) timing.agentJoinMs = agentJoinMsRef.current;
+      trackEvent("voice_first_response", timing);
     }
   }, [clearWatchdogs]);
+
+  // Called by the gesture hook with the native double-tap timestamp from
+  // voice_toggle_key.rs before it starts a session.
+  const noteTapTimestamp = useCallback((tapAtMs: number | null) => {
+    tapAtMsRef.current = tapAtMs;
+  }, []);
 
   // Shared by the live ParticipantConnected event and the already-present-
   // agent check right after connect (below) - both need to clear the join
@@ -175,9 +203,14 @@ export function useVoiceBar() {
       const shouldArm = shouldArmInitialAgentSilenceWatchdog(
         didReceiveAssistantOutputRef.current,
       );
+      const agentJoinMs =
+        connectResolvedAtRef.current !== null
+          ? Math.max(0, Date.now() - connectResolvedAtRef.current)
+          : null;
+      if (agentJoinMs !== null) agentJoinMsRef.current = agentJoinMs;
       logInfo(
         "useVoiceBar: agent joined",
-        `source=${source} identity=${participant.identity} initialSilenceWatchdog=${shouldArm ? "armed" : "skipped"}`,
+        `source=${source} identity=${participant.identity} agentJoinMs=${agentJoinMs ?? "unknown"} initialSilenceWatchdog=${shouldArm ? "armed" : "skipped"}`,
       );
       clearWatchdogs();
       if (shouldArm) armSilenceWatchdog();
@@ -194,6 +227,7 @@ export function useVoiceBar() {
     roomRef.current = null;
     setRoom(null);
     roomNameRef.current = null;
+    preparePromiseRef.current = null;
     const startedAt = sessionStartedAtRef.current;
     sessionStartedAtRef.current = null;
     if (startedAt !== null) {
@@ -217,7 +251,13 @@ export function useVoiceBar() {
     setLastErrorCode(null);
   }, [clearWatchdogs]);
 
-  const startSession = useCallback(async () => {
+  // Transport-only half of session start: token fetch, room creation, and
+  // connect - everything that dispatches the agent but nothing the user can
+  // perceive. Split from activateSession so the gesture hook can run this in
+  // parallel with the native summon, shaving the token+connect+agent-join
+  // window off tap-to-first-response. The returned promise never rejects;
+  // failures land in enterErrorState exactly as they did before the split.
+  const prepareSession = useCallback((): Promise<void> => {
     if (!desiredActiveRef.current) {
       desiredActiveRef.current = true;
       sessionGenerationRef.current += 1;
@@ -225,17 +265,18 @@ export function useVoiceBar() {
     }
     const generation = sessionGenerationRef.current;
     if (roomRef.current) {
-      logInfo("useVoiceBar: startSession", "ignored - a room is already live");
-      return;
+      logInfo("useVoiceBar: prepareSession", "ignored - a room is already live");
+      return preparePromiseRef.current ?? Promise.resolve();
     }
     setStatus("connecting");
     setErrorMessage(null);
     setLastErrorCode(null);
     setAssistantCaption("");
-    setVoiceActive(true);
     didConnectRef.current = false;
     didReceiveAssistantOutputRef.current = false;
     didTrackFirstResponseRef.current = false;
+    connectResolvedAtRef.current = null;
+    agentJoinMsRef.current = null;
 
     const newRoom = new Room();
     roomRef.current = newRoom;
@@ -445,85 +486,143 @@ export function useVoiceBar() {
       }
     });
 
+    const prepared = (async () => {
+      try {
+        logInfo("useVoiceBar: prepareSession", "requesting voice token");
+        const tokenRequestedAt = Date.now();
+        const { token, url, room: roomName } = await fetchVoiceToken();
+        const tokenMs = Date.now() - tokenRequestedAt;
+        if (!sessionStillWanted()) {
+          await newRoom.disconnect().catch((disconnectErr) =>
+            logError("useVoiceBar: cancelled after token fetch", disconnectErr),
+          );
+          return;
+        }
+        roomNameRef.current = roomName;
+        logInfo(
+          "useVoiceBar: prepareSession",
+          `got token for room=${roomName} tokenMs=${tokenMs}, connecting to LiveKit`,
+        );
+        const connectStartedAt = Date.now();
+        await newRoom.connect(url, token);
+        const connectMs = Date.now() - connectStartedAt;
+        if (!sessionStillWanted()) {
+          await newRoom.disconnect().catch((disconnectErr) =>
+            logError("useVoiceBar: cancelled after connect", disconnectErr),
+          );
+          return;
+        }
+        didConnectRef.current = true;
+        connectResolvedAtRef.current = Date.now();
+        sessionStartedAtRef.current = Date.now();
+        logInfo(
+          "useVoiceBar: prepareSession",
+          `connected to room=${roomName} tokenMs=${tokenMs} connectMs=${connectMs}`,
+        );
+
+        // Mirrors Flutter's local synthesis of session.ready on room-connect -
+        // nothing over the wire signals "the local half of the call is up."
+        setStatus("ready");
+        trackEvent("voice_session_started", { room: roomName, tokenMs, connectMs });
+
+        const existingAgent = Array.from(newRoom.remoteParticipants.values()).find((p) => p.isAgent);
+        if (existingAgent) {
+          // The agent was already in the room before our connect() resolved -
+          // ParticipantConnected never fires retroactively for it (confirmed
+          // empirically), so the live-join listener above would never catch it.
+          handleAgentJoined(existingAgent, "already-present");
+        } else {
+          joinWatchdogRef.current = setTimeout(() => {
+            enterErrorState("agent_join_timeout");
+          }, AGENT_JOIN_TIMEOUT_MS);
+        }
+      } catch (err) {
+        if (!sessionStillWanted()) {
+          await newRoom.disconnect().catch((disconnectErr) =>
+            logError("useVoiceBar: cancelled start cleanup", disconnectErr),
+          );
+          return;
+        }
+        if (err instanceof AuthRequiredError) {
+          await endSession();
+          await routeToDashboardForExpiredSession();
+          return;
+        }
+        if (err instanceof VoiceCapError) {
+          // Free-tier daily cap: a known state, not a failure. The code is
+          // non-retryable, so this shows the capped message and stays put.
+          enterErrorState(voiceCapReachedCode);
+          return;
+        }
+        logError("useVoiceBar: prepareSession", err);
+        enterErrorState(null, "Couldn't start the call. Give it another shot in a sec?");
+      }
+    })();
+    preparePromiseRef.current = prepared;
+    return prepared;
+  }, [armSilenceWatchdog, clearWatchdogs, endSession, enterErrorState, handleAgentJoined, markAssistantResponded, pokeSilenceWatchdog]);
+
+  // User-perceivable half of session start: mark the call live natively (which
+  // gates the updater and overlay state) and open the microphone. Waits for
+  // whatever prepareSession is in flight, so callers may fire the two in
+  // parallel. Safe against a prepare that failed or a session the user ended
+  // while this waited.
+  const activateSession = useCallback(async () => {
+    const generation = sessionGenerationRef.current;
+    setVoiceActive(true);
+    await (preparePromiseRef.current ?? Promise.resolve());
+    const activeRoom = roomRef.current;
+    const sessionStillWanted = () =>
+      desiredActiveRef.current &&
+      sessionGenerationRef.current === generation &&
+      roomRef.current === activeRoom;
+    if (!activeRoom || !didConnectRef.current || !sessionStillWanted()) {
+      // Prepare failed or the user cancelled while we waited. Undo the
+      // call-live mark only if no newer attempt owns it now.
+      if (sessionGenerationRef.current === generation && !roomRef.current) {
+        setVoiceActive(false);
+      }
+      return;
+    }
     try {
-      logInfo("useVoiceBar: startSession", "requesting voice token");
-      const { token, url, room: roomName } = await fetchVoiceToken();
-      if (!sessionStillWanted()) {
-        await newRoom.disconnect().catch((disconnectErr) =>
-          logError("useVoiceBar: cancelled after token fetch", disconnectErr),
-        );
-        return;
-      }
-      roomNameRef.current = roomName;
-      logInfo("useVoiceBar: startSession", `got token for room=${roomName}, connecting to LiveKit`);
-      await newRoom.connect(url, token);
-      if (!sessionStillWanted()) {
-        await newRoom.disconnect().catch((disconnectErr) =>
-          logError("useVoiceBar: cancelled after connect", disconnectErr),
-        );
-        return;
-      }
-      didConnectRef.current = true;
-      sessionStartedAtRef.current = Date.now();
-      logInfo("useVoiceBar: startSession", `connected to room=${roomName}, enabling microphone`);
-
-      // Mirrors Flutter's local synthesis of session.ready on room-connect -
-      // nothing over the wire signals "the local half of the call is up."
-      setStatus("ready");
-      trackEvent("voice_session_started", { room: roomName });
-
-      const existingAgent = Array.from(newRoom.remoteParticipants.values()).find((p) => p.isAgent);
-      if (existingAgent) {
-        // The agent was already in the room before our connect() resolved -
-        // ParticipantConnected never fires retroactively for it (confirmed
-        // empirically), so the live-join listener above would never catch it.
-        handleAgentJoined(existingAgent, "already-present");
-      } else {
-        joinWatchdogRef.current = setTimeout(() => {
-          enterErrorState("agent_join_timeout");
-        }, AGENT_JOIN_TIMEOUT_MS);
-      }
-
       // Capturing the return value, not just awaiting it - it resolves to
       // undefined (not a thrown error) if the webview never actually got a
       // usable mic track, which would otherwise pass through here silently.
-      const micPublication = await newRoom.localParticipant.setMicrophoneEnabled(true);
+      const micPublication = await activeRoom.localParticipant.setMicrophoneEnabled(true);
       if (!sessionStillWanted()) {
-        await newRoom.localParticipant.setMicrophoneEnabled(false).catch((disableErr) =>
+        await activeRoom.localParticipant.setMicrophoneEnabled(false).catch((disableErr) =>
           logError("useVoiceBar: cancelled after microphone enable", disableErr),
         );
-        await newRoom.disconnect().catch((disconnectErr) =>
+        await activeRoom.disconnect().catch((disconnectErr) =>
           logError("useVoiceBar: cancelled microphone disconnect", disconnectErr),
         );
         return;
       }
       const mediaTrack = micPublication?.track?.mediaStreamTrack;
       logInfo(
-        "useVoiceBar: startSession",
-        `microphone enabled, waiting for agent to join room=${roomName} - publication=${micPublication ? "present" : "UNDEFINED"} muted=${micPublication?.isMuted} trackReadyState=${mediaTrack?.readyState} trackEnabled=${mediaTrack?.enabled}`,
+        "useVoiceBar: activateSession",
+        `microphone enabled, waiting for agent to join room=${roomNameRef.current ?? "unknown"} - publication=${micPublication ? "present" : "UNDEFINED"} muted=${micPublication?.isMuted} trackReadyState=${mediaTrack?.readyState} trackEnabled=${mediaTrack?.enabled}`,
       );
     } catch (err) {
       if (!sessionStillWanted()) {
-        await newRoom.disconnect().catch((disconnectErr) =>
-          logError("useVoiceBar: cancelled start cleanup", disconnectErr),
+        await activeRoom.disconnect().catch((disconnectErr) =>
+          logError("useVoiceBar: cancelled activate cleanup", disconnectErr),
         );
         return;
       }
-      if (err instanceof AuthRequiredError) {
-        await endSession();
-        await routeToDashboardForExpiredSession();
-        return;
-      }
-      if (err instanceof VoiceCapError) {
-        // Free-tier daily cap: a known state, not a failure. The code is
-        // non-retryable, so this shows the capped message and stays put.
-        enterErrorState(voiceCapReachedCode);
-        return;
-      }
-      logError("useVoiceBar: startSession", err);
+      logError("useVoiceBar: activateSession", err);
       enterErrorState(null, "Couldn't start the call. Give it another shot in a sec?");
     }
-  }, [armSilenceWatchdog, clearWatchdogs, endSession, enterErrorState, handleAgentJoined, markAssistantResponded, pokeSilenceWatchdog]);
+  }, [enterErrorState]);
+
+  // The original single-call entry point, preserved for every caller that has
+  // no reason to split the phases (retry effect, tray/deep-link start, the
+  // onboarding demo). Prepare's sync section runs before activate, so the
+  // native call-live mark still lands ahead of the token fetch resolving.
+  const startSession = useCallback(async () => {
+    void prepareSession();
+    await activateSession();
+  }, [activateSession, prepareSession]);
 
   const toggleSession = useCallback(() => {
     if (desiredActiveRef.current) {
@@ -602,6 +701,9 @@ export function useVoiceBar() {
     isVoiceCapped,
     desiredActive,
     startSession,
+    prepareSession,
+    activateSession,
+    noteTapTimestamp,
     endSession,
     toggleSession,
     room,
