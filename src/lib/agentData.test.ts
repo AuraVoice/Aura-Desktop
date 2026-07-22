@@ -161,6 +161,62 @@ describe("per-type schema", () => {
     expect(long.kind === "valid" && long.message).toBe(undefined);
   });
 
+  it("strictly validates guide.step and its nested point", () => {
+    const valid = {
+      type: "guide.step",
+      payload: {
+        frame_id: "0123456789abcdef0123456789abcdef:9",
+        frame_seq: 9,
+        step_index: 2,
+        instruction: "  Click Save.  ",
+        point: {
+          frame_id: "0123456789abcdef0123456789abcdef:9",
+          x: 10,
+          y: 20,
+          label: " Save ",
+        },
+      },
+    };
+    const verdict = validateAgentDataMessage(encode(valid), agent, "agent_events");
+    expect(verdict.kind).toBe("valid");
+    if (verdict.kind === "valid") {
+      expect(verdict.payload.instruction).toBe("Click Save.");
+      expect((verdict.payload.point as Record<string, unknown>).label).toBe("Save");
+    }
+
+    for (const payload of [
+      { ...valid.payload, frame_seq: 8 },
+      { ...valid.payload, step_index: 0 },
+      { ...valid.payload, instruction: "   " },
+      { ...valid.payload, done: "yes" },
+      { ...valid.payload, point: { ...valid.payload.point, frame_id: "other:9" } },
+      { ...valid.payload, point: { ...valid.payload.point, x: Infinity } },
+      { ...valid.payload, point: { ...valid.payload.point, label: "x".repeat(301) } },
+    ]) {
+      expect(
+        validateAgentDataMessage(encode({ type: "guide.step", payload }), agent, "agent_events")
+          .kind,
+      ).toBe("agent-unknown");
+    }
+  });
+
+  it("keeps frame_seq correlation separate from task step_index", () => {
+    const verdict = validateAgentDataMessage(
+      encode({
+        type: "guide.step",
+        payload: {
+          frame_id: "0123456789abcdef0123456789abcdef:12",
+          frame_seq: 12,
+          step_index: 3,
+          instruction: "Try the same step again.",
+        },
+      }),
+      agent,
+      "agent_events",
+    );
+    expect(verdict.kind).toBe("valid");
+  });
+
   it("tolerates unknown extra fields (forward compatibility)", () => {
     const verdict = validateAgentDataMessage(
       encode({ type: "element.point", payload: { x: 1, y: 2, future_field: true } }),

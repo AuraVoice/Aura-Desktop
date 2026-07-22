@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewWindow};
 use tauri_plugin_store::StoreExt;
 
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::WindowsAndMessaging::{SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE};
+
 use crate::win_focus;
 
 const MAIN_WINDOW: &str = "main";
@@ -43,6 +46,7 @@ const SETUP_WIDTH: f64 = 600.0;
 const SETUP_HEIGHT: f64 = 460.0;
 const TOP_MARGIN: f64 = 48.0;
 const COMPANION_SURFACE_RESERVE: f64 = 340.0;
+const POINTING_TOTAL_HOLD_MS: u64 = 3400;
 // The single below-bar slot's extra window height is owned by React, not Rust:
 // whichever surface wins the slot (draft > callback > calendar agenda > kebab
 // menu, resolved in OverlayRoot.tsx) passes its current height via
@@ -162,6 +166,7 @@ pub struct OverlayState {
     applied_notch_edge: Option<NotchEdge>,
     applying_bounds: bool,
     pre_pointing: Option<(OverlayPresentation, PanelVariant)>,
+    pointing_generation: u64,
 }
 
 impl Default for OverlayState {
@@ -180,6 +185,7 @@ impl Default for OverlayState {
             applied_notch_edge: None,
             applying_bounds: false,
             pre_pointing: None,
+            pointing_generation: 0,
         }
     }
 }
@@ -199,6 +205,20 @@ impl Default for OverlayStateHandle {
 
 fn main_window(app: &AppHandle) -> Option<WebviewWindow> {
     app.get_webview_window(MAIN_WINDOW)
+}
+
+#[cfg(target_os = "windows")]
+pub fn exclude_main_window_from_capture(window: &WebviewWindow) -> Result<(), String> {
+    let hwnd = window
+        .hwnd()
+        .map_err(|e| format!("failed to get main window HWND: {e}"))?;
+    unsafe { SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) }
+        .map_err(|e| format!("SetWindowDisplayAffinity failed: {e}"))
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn exclude_main_window_from_capture(_window: &WebviewWindow) -> Result<(), String> {
+    Ok(())
 }
 
 fn state_handle(app: &AppHandle) -> Option<tauri::State<'_, OverlayStateHandle>> {
@@ -987,14 +1007,16 @@ pub fn point_at(
         return;
     };
 
-    {
+    let pointing_generation = {
         let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
         if state.pre_pointing.is_none() {
             state.pre_pointing = Some((state.presentation, state.panel_variant));
         }
         state.presentation = OverlayPresentation::Pointing;
         state.applying_bounds = true;
-    }
+        state.pointing_generation = state.pointing_generation.wrapping_add(1);
+        state.pointing_generation
+    };
 
     let result = window
         .set_size(LogicalSize::new(monitor_w, monitor_h))
@@ -1053,11 +1075,25 @@ pub fn point_at(
     ) {
         error!("overlay::point_at: failed to emit pointing-target: {e}");
     }
+
+    let watchdog_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(POINTING_TOTAL_HOLD_MS)).await;
+        cancel_pointing_if_generation(&watchdog_app, pointing_generation);
+    });
 }
 
 /// Ends the flight and hands the window back to whatever it was showing
 /// before `point_at` took over.
 pub fn cancel_pointing(app: &AppHandle) {
+    cancel_pointing_inner(app, None);
+}
+
+fn cancel_pointing_if_generation(app: &AppHandle, generation: u64) {
+    cancel_pointing_inner(app, Some(generation));
+}
+
+fn cancel_pointing_inner(app: &AppHandle, expected_generation: Option<u64>) {
     let (Some(handle), Some(window)) = (state_handle(app), main_window(app)) else {
         return;
     };
@@ -1065,6 +1101,9 @@ pub fn cancel_pointing(app: &AppHandle) {
     {
         let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
         if state.presentation != OverlayPresentation::Pointing {
+            return;
+        }
+        if expected_generation.is_some_and(|generation| generation != state.pointing_generation) {
             return;
         }
         let (presentation, variant) = state.pre_pointing.take().unwrap_or_else(|| {
@@ -1083,6 +1122,19 @@ pub fn cancel_pointing(app: &AppHandle) {
         error!("overlay::cancel_pointing: failed to restore cursor events: {e}");
     }
     apply(app);
+}
+
+pub fn is_pointing(app: &AppHandle) -> bool {
+    state_handle(app)
+        .map(|handle| {
+            handle
+                .0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .presentation
+                == OverlayPresentation::Pointing
+        })
+        .unwrap_or(false)
 }
 
 #[cfg(test)]

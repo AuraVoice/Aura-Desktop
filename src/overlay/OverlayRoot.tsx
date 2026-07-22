@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useAuth } from "../state/AuthProvider";
@@ -28,6 +28,9 @@ import { NotchBar } from "./NotchBar";
 import { NotchMoveOverlay } from "./NotchMoveOverlay";
 import { useNotchMove } from "./useNotchMove";
 import type { NotchEdge } from "./notchEdge";
+import { screenPointFor, type ScreenFrameGeometry } from "../lib/screenFrame";
+import { GuideCard, GUIDE_CARD_HEIGHT } from "./GuideCard";
+import { useGuideMode, type GuidePoint } from "./useGuideMode";
 
 // Fixed heights remain for fixed-content surfaces. DraftCard reports its own
 // measured content height so a short reply stays compact and a long one grows.
@@ -52,6 +55,28 @@ export function OverlayRoot() {
   const [presentation, setPresentation] = useState<OverlayPresentation>("hidden");
   const [notchEdge, setNotchEdge] = useState<NotchEdge>("top");
   const voice = useVoiceBar();
+  const handleGuidePoint = useCallback(
+    async (geometry: ScreenFrameGeometry, point: GuidePoint) => {
+      const target = screenPointFor(geometry, point.x, point.y);
+      await invoke("point_at", {
+        targetX: target.x,
+        targetY: target.y,
+        monitorX: target.monitorX,
+        monitorY: target.monitorY,
+        monitorW: target.monitorWidth,
+        monitorH: target.monitorHeight,
+        label: point.label,
+      });
+    },
+    [],
+  );
+  const guide = useGuideMode({
+    room: voice.room,
+    status: voice.status,
+    signedIn: user !== null,
+    startSession: voice.startSession,
+    onPoint: handleGuidePoint,
+  });
   // Long-press-to-move is only armed on the resting bar (never mid-card or
   // mid-onboarding); the notch itself is the drag handle.
   const notchMove = useNotchMove(presentation === "bar");
@@ -67,7 +92,7 @@ export function OverlayRoot() {
   useUpdateReady();
   // Kept for its capture side effects; its transient per-turn notice no longer
   // has a UI home (the subtitle is gone) and is already logged in the hook.
-  useTurnScreenCapture(voice.room);
+  useTurnScreenCapture(voice.room, guide.armed);
   // Desktop control: dispatches the agent's `desktop.run` messages to native
   // commands. Native side gates on a live voice session, so no extra guard here.
   useSystemControl(voice.room);
@@ -98,7 +123,8 @@ export function OverlayRoot() {
     automaticCapture: true,
   });
   const resetDraftCard = draftCard.reset;
-  const showDraftCard = user !== null && draftCard.phase !== "idle";
+  const showGuideCard = user !== null && guide.armed;
+  const showDraftCard = user !== null && !showGuideCard && draftCard.phase !== "idle";
   const [draftCardHeight, setDraftCardHeight] = useState(INITIAL_DRAFT_SLOT_HEIGHT);
 
   useEffect(() => {
@@ -124,11 +150,13 @@ export function OverlayRoot() {
   // Slot priority (CLAUDE.md): draft > agenda > kebab menu > meeting note >
   // daily catch-up. Only draft, the inbox (opened via kebab/tray, so it sits
   // at the kebab-menu tier), and the daily catch-up are mounted today.
-  const showInbox = user !== null && inboxOpen && !showDraftCard;
+  const showInbox = user !== null && inboxOpen && !showGuideCard && !showDraftCard;
   const showCallbackCard =
-    user !== null && callbackCard.visible && !showDraftCard && !showInbox;
-  const slotHeight = showDraftCard
-    ? draftCardHeight
+    user !== null && callbackCard.visible && !showGuideCard && !showDraftCard && !showInbox;
+  const slotHeight = showGuideCard
+    ? GUIDE_CARD_HEIGHT
+    : showDraftCard
+      ? draftCardHeight
     : showInbox
       ? NOTIFICATION_INBOX_CARD_HEIGHT
       : showCallbackCard
@@ -188,11 +216,12 @@ export function OverlayRoot() {
       resetDraftCard();
       resetCallbackCard();
       setInboxOpen(false);
+      if (guide.armed) guide.stop();
       invoke("dismiss_bar").catch((err) =>
         logError("OverlayRoot: dismiss_bar after sign-out", err),
       );
     }
-  }, [user, resetDraftCard, resetCallbackCard]);
+  }, [user, resetDraftCard, resetCallbackCard, guide.armed, guide.stop]);
 
   function handleNotificationAction(notification: StoredNotification) {
     notifications.acknowledgeAction(notification);
@@ -311,6 +340,15 @@ export function OverlayRoot() {
         slotHeight !== null ? " notch-column-with-draft" : ""
       }`}
     >
+      {showGuideCard && (
+        <GuideCard
+          step={guide.step}
+          stillChecking={guide.stillChecking}
+          blankWarning={guide.blankWarning}
+          onCheckNow={guide.checkNow}
+          onStop={guide.stop}
+        />
+      )}
       {showDraftCard && <DraftCard card={draftCard} onHeightChange={setDraftCardHeight} />}
       {showInbox && (
         <NotificationInboxCard
@@ -325,6 +363,11 @@ export function OverlayRoot() {
         voice={voice}
         edge={notchEdge}
         dragHandlers={notchMove.dragHandlers}
+        guideArmed={guide.armed}
+        onToggleGuide={() => {
+          if (guide.armed) guide.stop();
+          else invoke("arm_guide").catch((err) => logError("OverlayRoot: arm_guide", err));
+        }}
       />
     </div>
   );

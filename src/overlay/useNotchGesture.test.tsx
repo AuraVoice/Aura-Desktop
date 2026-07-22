@@ -51,6 +51,7 @@ function voiceState(
     endSession: vi.fn(async () => {}),
     toggleSession: vi.fn(),
     room: null,
+    sessionMode: "standard",
     ...overrides,
   };
 }

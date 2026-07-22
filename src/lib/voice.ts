@@ -8,6 +8,8 @@ export interface VoiceTokenResponse {
   room: string;
 }
 
+export type VoiceSessionMode = "standard" | "guide";
+
 // The backend denies /voice/token with 402 + voiceCapReachedCode when a
 // free-tier user is over the daily voice cap (SUBSCRIPTION_PLAN.md section 6,
 // contract in SUBSCRIPTION_IMPLEMENTATION_PROMPT.md Phase 1). 402
@@ -36,7 +38,7 @@ async function parseCapDenial(response: Response): Promise<VoiceCapError | null>
   }
 }
 
-export async function fetchVoiceToken(): Promise<VoiceTokenResponse> {
+export async function fetchVoiceToken(mode: VoiceSessionMode = "standard"): Promise<VoiceTokenResponse> {
   // The client advertises which desktop-control verbs this build supports so
   // the agent can scope its single `run_desktop_capability` tool to them (and
   // omit it entirely for clients - like mobile - that advertise nothing).
@@ -44,7 +46,10 @@ export async function fetchVoiceToken(): Promise<VoiceTokenResponse> {
   // keeps working unchanged and the backend can start reading it whenever it
   // ships (forced release order, same class as the agentData.ts contract).
   const manifestParam = encodeURIComponent(JSON.stringify(advertiseManifest()));
-  const response = await authFetch(`/voice/token?surface=desktop&manifest=${manifestParam}`);
+  const modeParam = mode === "guide" ? "&mode=guide" : "";
+  const response = await authFetch(
+    `/voice/token?surface=desktop&manifest=${manifestParam}${modeParam}`,
+  );
   if (response.status === 402) {
     const capError = await parseCapDenial(response);
     if (capError) throw capError;

@@ -30,6 +30,7 @@ function voiceState(
     endSession: async () => {},
     toggleSession: () => {},
     room: null as Room | null,
+    sessionMode: "standard",
     ...overrides,
   };
 }

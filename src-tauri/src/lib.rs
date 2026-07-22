@@ -2,6 +2,7 @@ mod auth_cache;
 mod autostart;
 mod dashboard;
 mod entitlement;
+mod guide;
 mod hotkeys;
 mod logging;
 mod meeting;
@@ -214,6 +215,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(OverlayStateHandle::default())
         .manage(security::SecurityHandle::default())
+        .manage(guide::GuideRuntimeHandle::default())
         .manage(ForegroundGeneration::default())
         .manage(updater::PendingUpdate::default())
         .manage(updater::UpdatedNotice::default())
@@ -244,6 +246,12 @@ pub fn run() {
             security::set_auth_state,
             security::toggle_screen_sight_armed,
             security::screen_sight_armed,
+            guide::arm_guide,
+            guide::disarm_guide,
+            guide::guide_armed_state,
+            guide::capture_guide_frame,
+            guide::commit_guide_frame,
+            guide::ack_guide_response,
             updater::install_update,
             updater::pending_update_version,
             updater::just_updated_version,
@@ -300,6 +308,7 @@ pub fn run() {
                 ("open-dashboard", hotkeys::open_dashboard_shortcut()),
                 ("sign-out", hotkeys::sign_out_shortcut()),
                 ("screen-sight", hotkeys::screen_sight_shortcut()),
+                ("guide-mode", hotkeys::guide_mode_shortcut()),
             ] {
                 if let Err(e) = app.global_shortcut().register(shortcut) {
                     error!("hotkeys: failed to register {name} ({e}) - another process holds it; continuing without it");
@@ -323,6 +332,7 @@ pub fn run() {
             tray::build(app.handle())?;
 
             if let Some(window) = app.get_webview_window("main") {
+                overlay::exclude_main_window_from_capture(&window)?;
                 let moved_handle = handle.clone();
                 window.on_window_event(move |event| {
                     if let WindowEvent::Moved(position) = event {

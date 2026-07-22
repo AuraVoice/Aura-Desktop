@@ -9,65 +9,16 @@ import {
 } from "livekit-client";
 import { validateAgentDataMessage } from "../lib/agentData";
 import { logError } from "../lib/log";
-
-interface ScreenFrameGeometry {
-  monitorLeftPx: number;
-  monitorTopPx: number;
-  monitorWidthPx: number;
-  monitorHeightPx: number;
-  scaleFactor: number;
-  jpegWidthPx: number;
-  jpegHeightPx: number;
-}
+import {
+  asArrayBuffer,
+  parseCapturedFrame,
+  screenPointFor,
+  type ScreenFrameGeometry,
+} from "../lib/screenFrame";
 
 const RETAINED_FRAME_GEOMETRY_COUNT = 4;
 const NOTICE_DURATION_MS = 3500;
-const GEOMETRY_HEADER_LEN = 4 * 7;
-
-function asArrayBuffer(raw: unknown): ArrayBuffer {
-  if (raw instanceof ArrayBuffer) return raw;
-  if (ArrayBuffer.isView(raw)) {
-    return raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) as ArrayBuffer;
-  }
-  if (Array.isArray(raw)) return Uint8Array.from(raw as number[]).buffer;
-  throw new Error(`capture returned ${Object.prototype.toString.call(raw)}, expected binary`);
-}
-
-function parseCapturedFrame(buffer: ArrayBuffer): {
-  geometry: ScreenFrameGeometry;
-  bytes: Uint8Array;
-} {
-  const view = new DataView(buffer);
-  const geometry: ScreenFrameGeometry = {
-    monitorLeftPx: view.getInt32(0, true),
-    monitorTopPx: view.getInt32(4, true),
-    monitorWidthPx: view.getUint32(8, true),
-    monitorHeightPx: view.getUint32(12, true),
-    scaleFactor: view.getFloat32(16, true),
-    jpegWidthPx: view.getUint32(20, true),
-    jpegHeightPx: view.getUint32(24, true),
-  };
-  return { geometry, bytes: new Uint8Array(buffer, GEOMETRY_HEADER_LEN) };
-}
-
-function screenPointFor(geometry: ScreenFrameGeometry, jpegX: number, jpegY: number) {
-  const clampedX = Math.min(Math.max(jpegX, 0), geometry.jpegWidthPx);
-  const clampedY = Math.min(Math.max(jpegY, 0), geometry.jpegHeightPx);
-  const physicalX =
-    geometry.monitorLeftPx + clampedX * (geometry.monitorWidthPx / geometry.jpegWidthPx);
-  const physicalY =
-    geometry.monitorTopPx + clampedY * (geometry.monitorHeightPx / geometry.jpegHeightPx);
-  return {
-    x: physicalX / geometry.scaleFactor,
-    y: physicalY / geometry.scaleFactor,
-    monitorX: geometry.monitorLeftPx / geometry.scaleFactor,
-    monitorY: geometry.monitorTopPx / geometry.scaleFactor,
-    monitorWidth: geometry.monitorWidthPx / geometry.scaleFactor,
-    monitorHeight: geometry.monitorHeightPx / geometry.scaleFactor,
-  };
-}
-
-export function useTurnScreenCapture(room: Room | null) {
+export function useTurnScreenCapture(room: Room | null, guideArmed = false) {
   const [notice, setNotice] = useState<string | null>(null);
   const capturedThisTurnRef = useRef(false);
   const frameCounterRef = useRef(0);
@@ -86,7 +37,7 @@ export function useTurnScreenCapture(room: Room | null) {
   }, []);
 
   const captureAndSend = useCallback(async () => {
-    if (!room) return;
+    if (!room || guideArmed) return;
     const captureRoom = room;
     let buffer: ArrayBuffer;
     try {
@@ -142,13 +93,13 @@ export function useTurnScreenCapture(room: Room | null) {
       logError("useTurnScreenCapture: send", err);
       showNotice("Screen captured, but it couldn't be shared.");
     }
-  }, [room, showNotice]);
+  }, [room, guideArmed, showNotice]);
 
   useEffect(() => {
     capturedThisTurnRef.current = false;
     frameCounterRef.current = 0;
     sentGeometryRef.current.clear();
-    if (!room) return;
+    if (!room || guideArmed) return;
 
     function handleElementPoint(payload: Record<string, unknown>) {
       const x = payload.x;
@@ -218,7 +169,7 @@ export function useTurnScreenCapture(room: Room | null) {
       capturedThisTurnRef.current = false;
       sentGeometryRef.current.clear();
     };
-  }, [room, captureAndSend, showNotice]);
+  }, [room, guideArmed, captureAndSend, showNotice]);
 
   useEffect(() => {
     return () => {

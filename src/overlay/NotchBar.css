@@ -74,7 +74,8 @@
    not a fixed 460). */
 .notch-column > .draft-card,
 .notch-column > .notification-inbox-card,
-.notch-column > .callback-card {
+.notch-column > .callback-card,
+.notch-column > .guide-card {
   align-self: stretch;
   justify-self: stretch;
   width: 100%;
@@ -89,17 +90,20 @@
    overrides touch only animation-name. */
 .notch-column-bottom > .draft-card,
 .notch-column-bottom > .notification-inbox-card,
-.notch-column-bottom > .callback-card {
+.notch-column-bottom > .callback-card,
+.notch-column-bottom > .guide-card {
   animation-name: card-enter-bottom;
 }
 .notch-column-left > .draft-card,
 .notch-column-left > .notification-inbox-card,
-.notch-column-left > .callback-card {
+.notch-column-left > .callback-card,
+.notch-column-left > .guide-card {
   animation-name: card-enter-left;
 }
 .notch-column-right > .draft-card,
 .notch-column-right > .notification-inbox-card,
-.notch-column-right > .callback-card {
+.notch-column-right > .callback-card,
+.notch-column-right > .guide-card {
   animation-name: card-enter-right;
 }
 
@@ -237,6 +241,33 @@
 .notch-recorder {
   width: 100%;
   height: 100%;
+}
+
+.notch-guide-button {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  display: grid;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  place-items: center;
+  transform: translateY(-50%);
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.notch-guide-button .bar-icon-button-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.35);
+}
+
+.notch-guide-button-active .bar-icon-button-dot {
+  background: #6ee7b7;
+  box-shadow: 0 0 8px rgba(110, 231, 183, 0.9);
 }
 
 .notch-visualizer {

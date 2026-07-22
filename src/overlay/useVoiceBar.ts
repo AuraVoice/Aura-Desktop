@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Room, RoomEvent, Track, type RemoteParticipant } from "livekit-client";
 import { invoke } from "@tauri-apps/api/core";
 import { validateAgentDataMessage } from "../lib/agentData";
-import { fetchVoiceToken, VoiceCapError } from "../lib/voice";
+import { fetchVoiceToken, VoiceCapError, type VoiceSessionMode } from "../lib/voice";
 import { AuthRequiredError, routeToDashboardForExpiredSession } from "../lib/api";
 import { logError, logInfo } from "../lib/log";
 import { trackEvent } from "../lib/analytics";
@@ -90,6 +90,7 @@ export function useVoiceBar() {
   // own counter and retry forever.
   const retryAttemptRef = useRef(0);
   const startSessionRef = useRef<() => void>(() => {});
+  const sessionModeRef = useRef<VoiceSessionMode>("standard");
   // The user's intent is separate from LiveKit's current transport state.
   // A generation invalidates every in-flight await from an older start, so a
   // fast second toggle can never enable the microphone after the user ended.
@@ -257,26 +258,29 @@ export function useVoiceBar() {
   // parallel with the native summon, shaving the token+connect+agent-join
   // window off tap-to-first-response. The returned promise never rejects;
   // failures land in enterErrorState exactly as they did before the split.
-  const prepareSession = useCallback((): Promise<void> => {
-    if (!desiredActiveRef.current) {
-      desiredActiveRef.current = true;
-      sessionGenerationRef.current += 1;
-      setDesiredActive(true);
-    }
-    const generation = sessionGenerationRef.current;
-    if (roomRef.current) {
-      logInfo("useVoiceBar: prepareSession", "ignored - a room is already live");
-      return preparePromiseRef.current ?? Promise.resolve();
-    }
-    setStatus("connecting");
-    setErrorMessage(null);
-    setLastErrorCode(null);
-    setAssistantCaption("");
-    didConnectRef.current = false;
-    didReceiveAssistantOutputRef.current = false;
-    didTrackFirstResponseRef.current = false;
-    connectResolvedAtRef.current = null;
-    agentJoinMsRef.current = null;
+  const prepareSession = useCallback(
+    (requestedMode?: VoiceSessionMode): Promise<void> => {
+      const mode = requestedMode ?? (desiredActiveRef.current ? sessionModeRef.current : "standard");
+      if (!desiredActiveRef.current) {
+        sessionModeRef.current = mode;
+        desiredActiveRef.current = true;
+        sessionGenerationRef.current += 1;
+        setDesiredActive(true);
+      }
+      const generation = sessionGenerationRef.current;
+      if (roomRef.current) {
+        logInfo("useVoiceBar: prepareSession", "ignored - a room is already live");
+        return preparePromiseRef.current ?? Promise.resolve();
+      }
+      setStatus("connecting");
+      setErrorMessage(null);
+      setLastErrorCode(null);
+      setAssistantCaption("");
+      didConnectRef.current = false;
+      didReceiveAssistantOutputRef.current = false;
+      didTrackFirstResponseRef.current = false;
+      connectResolvedAtRef.current = null;
+      agentJoinMsRef.current = null;
 
     const newRoom = new Room();
     roomRef.current = newRoom;
@@ -490,7 +494,7 @@ export function useVoiceBar() {
       try {
         logInfo("useVoiceBar: prepareSession", "requesting voice token");
         const tokenRequestedAt = Date.now();
-        const { token, url, room: roomName } = await fetchVoiceToken();
+        const { token, url, room: roomName } = await fetchVoiceToken(sessionModeRef.current);
         const tokenMs = Date.now() - tokenRequestedAt;
         if (!sessionStillWanted()) {
           await newRoom.disconnect().catch((disconnectErr) =>
@@ -619,8 +623,8 @@ export function useVoiceBar() {
   // no reason to split the phases (retry effect, tray/deep-link start, the
   // onboarding demo). Prepare's sync section runs before activate, so the
   // native call-live mark still lands ahead of the token fetch resolving.
-  const startSession = useCallback(async () => {
-    void prepareSession();
+  const startSession = useCallback(async (mode: VoiceSessionMode = "standard") => {
+    void prepareSession(mode);
     await activateSession();
   }, [activateSession, prepareSession]);
 
@@ -637,7 +641,7 @@ export function useVoiceBar() {
   // that startSession itself produces).
   useEffect(() => {
     startSessionRef.current = () => {
-      void startSession();
+      void startSession(sessionModeRef.current);
     };
   }, [startSession]);
 
@@ -707,6 +711,7 @@ export function useVoiceBar() {
     endSession,
     toggleSession,
     room,
+    sessionMode: sessionModeRef.current,
   };
 }
 

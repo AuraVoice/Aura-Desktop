@@ -64,6 +64,8 @@ pub struct SecurityState {
     session: Session,
     voice_active: bool,
     screen_sight_armed: bool,
+    guide_armed: bool,
+    guide_epoch: u64,
     /// A screen frame was actually captured (and authorized) during the
     /// current voice session - the precondition for `point_at`, since a
     /// legitimate `element.point` can only ever answer a frame we sent.
@@ -93,6 +95,7 @@ impl Default for SecurityHandle {
 pub enum Operation {
     CaptureScreen,
     CaptureTurnScreen,
+    CaptureGuide,
     PointAt,
     DesktopControl,
     ArmScreenSight,
@@ -112,6 +115,7 @@ pub enum Operation {
 pub struct Ticket {
     auth_epoch: u64,
     uid: String,
+    guide_epoch: Option<u64>,
 }
 
 impl Ticket {
@@ -131,6 +135,13 @@ pub struct SessionTransition {
     pub revoked: bool,
     /// The armed bit was cleared (caller emits screen-sight-armed).
     pub disarmed: bool,
+    pub guide_disarmed: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub struct VoiceTransition {
+    pub screen_sight_disarmed: bool,
+    pub guide_disarmed: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -138,8 +149,10 @@ pub enum Denied {
     SignedOut,
     VoiceInactive,
     NotArmed,
+    ModeConflict,
     NoCaptureThisSession,
     StaleAuth,
+    StaleGuide,
 }
 
 impl fmt::Display for Denied {
@@ -148,8 +161,10 @@ impl fmt::Display for Denied {
             Denied::SignedOut => "denied: no signed-in session",
             Denied::VoiceInactive => "denied: no active voice session",
             Denied::NotArmed => "denied: screen sight is not armed",
+            Denied::ModeConflict => "denied: another screen capture mode is active",
             Denied::NoCaptureThisSession => "denied: no screen capture in this voice session",
             Denied::StaleAuth => "denied: session changed while the operation was in flight",
+            Denied::StaleGuide => "denied: Guide session changed while the operation was in flight",
         };
         f.write_str(reason)
     }
@@ -164,15 +179,29 @@ impl SecurityState {
         };
         match op {
             Operation::CaptureTurnScreen => {
+                if self.guide_armed {
+                    return Err(Denied::ModeConflict);
+                }
                 if !self.voice_active {
                     return Err(Denied::VoiceInactive);
                 }
             }
             Operation::CaptureScreen => {
+                if self.guide_armed {
+                    return Err(Denied::ModeConflict);
+                }
                 if !self.voice_active {
                     return Err(Denied::VoiceInactive);
                 }
                 if !self.screen_sight_armed {
+                    return Err(Denied::NotArmed);
+                }
+            }
+            Operation::CaptureGuide => {
+                if !self.voice_active {
+                    return Err(Denied::VoiceInactive);
+                }
+                if !self.guide_armed {
                     return Err(Denied::NotArmed);
                 }
             }
@@ -198,7 +227,11 @@ impl SecurityState {
                 }
             }
             // Arm-before-call is supported UX, so no voice requirement here.
-            Operation::ArmScreenSight => {}
+            Operation::ArmScreenSight => {
+                if self.guide_armed {
+                    return Err(Denied::ModeConflict);
+                }
+            }
             // Signed-in is the whole gate: meeting-ID validity is anchored in
             // the Rust-written manifest (queue.rs), and restart-recovery
             // uploads of past meetings must work with no voice session.
@@ -219,6 +252,7 @@ impl SecurityState {
         Ok(Ticket {
             auth_epoch: self.auth_epoch,
             uid: uid.clone(),
+            guide_epoch: (op == Operation::CaptureGuide).then_some(self.guide_epoch),
         })
     }
 
@@ -231,6 +265,9 @@ impl SecurityState {
         }
         if !matches!(&self.session, Session::SignedIn { uid } if uid == &ticket.uid) {
             return Err(Denied::StaleAuth);
+        }
+        if op == Operation::CaptureGuide && ticket.guide_epoch != Some(self.guide_epoch) {
+            return Err(Denied::StaleGuide);
         }
         self.authorize(op).map(|_| ())
     }
@@ -250,11 +287,16 @@ impl SecurityState {
             Session::SignedOut
         };
         if next == self.session {
-            return SessionTransition { revoked: false, disarmed: false };
+            return SessionTransition {
+                revoked: false,
+                disarmed: false,
+                guide_disarmed: false,
+            };
         }
         let revoked = self.session != Session::SignedOut;
         self.session = next;
         let mut disarmed = false;
+        let mut guide_disarmed = false;
         if revoked {
             // Sign-out OR a direct account switch: everything the previous
             // account authorized dies - in-flight work (epoch), voice,
@@ -268,30 +310,41 @@ impl SecurityState {
                 self.screen_sight_armed = false;
                 disarmed = true;
             }
+            guide_disarmed = self.disarm_guide();
         }
-        SessionTransition { revoked, disarmed }
+        SessionTransition {
+            revoked,
+            disarmed,
+            guide_disarmed,
+        }
     }
 
     /// Voice session lifecycle. Only a true -> false transition tears down
     /// screen-sight authorization: a redundant `false` (enterErrorState fires
     /// one even when no call ever started) must not wipe an arm-before-call.
     /// Returns whether the armed bit was cleared.
-    pub fn set_voice(&mut self, active: bool) -> bool {
+    pub fn set_voice(&mut self, active: bool) -> VoiceTransition {
         if active == self.voice_active {
-            return false;
+            return VoiceTransition::default();
         }
         self.voice_active = active;
         if active {
             // Fresh session: captures from a previous session don't carry over.
             self.captured_this_voice_session = false;
-            false
+            VoiceTransition::default()
         } else {
             self.captured_this_voice_session = false;
             if self.screen_sight_armed {
                 self.screen_sight_armed = false;
-                true
+                VoiceTransition {
+                    screen_sight_disarmed: true,
+                    guide_disarmed: self.disarm_guide(),
+                }
             } else {
-                false
+                VoiceTransition {
+                    screen_sight_disarmed: false,
+                    guide_disarmed: self.disarm_guide(),
+                }
             }
         }
     }
@@ -303,6 +356,33 @@ impl SecurityState {
         }
         self.screen_sight_armed = !self.screen_sight_armed;
         Some(self.screen_sight_armed)
+    }
+
+    pub fn arm_guide(&mut self) -> Result<(u64, bool), String> {
+        if !matches!(self.session, Session::SignedIn { .. }) {
+            return Err(Denied::SignedOut.to_string());
+        }
+        let screen_sight_cleared = std::mem::take(&mut self.screen_sight_armed);
+        self.guide_epoch = self.guide_epoch.wrapping_add(1);
+        self.guide_armed = true;
+        Ok((self.guide_epoch, screen_sight_cleared))
+    }
+
+    pub fn disarm_guide(&mut self) -> bool {
+        if !self.guide_armed {
+            return false;
+        }
+        self.guide_armed = false;
+        self.guide_epoch = self.guide_epoch.wrapping_add(1);
+        true
+    }
+
+    pub fn guide_armed(&self) -> bool {
+        self.guide_armed
+    }
+
+    pub fn guide_epoch(&self) -> u64 {
+        self.guide_epoch
     }
 
     pub fn note_capture(&mut self, at_ms: i64) {
@@ -319,13 +399,13 @@ struct ArmedPayload {
 /// The single Rust -> React signal for the armed bit, fired on every change
 /// regardless of trigger (hotkey, eye button, voice end, sign-out). JS
 /// mirrors this instead of owning a competing boolean.
-fn emit_armed_changed(app: &AppHandle, armed: bool) {
+pub(crate) fn emit_screen_sight_armed(app: &AppHandle, armed: bool) {
     if let Err(e) = app.emit("screen-sight-armed", ArmedPayload { armed }) {
         log::error!("security: failed to emit screen-sight-armed: {e}");
     }
 }
 
-fn handle(app: &AppHandle) -> Option<tauri::State<'_, SecurityHandle>> {
+pub(crate) fn handle(app: &AppHandle) -> Option<tauri::State<'_, SecurityHandle>> {
     app.try_state::<SecurityHandle>()
 }
 
@@ -340,6 +420,14 @@ pub fn authorize(app: &AppHandle, op: Operation) -> Result<Ticket, String> {
         warn!("security: {op:?} refused - {d}");
         d.to_string()
     })
+}
+
+pub fn authorize_guide(app: &AppHandle, caller_epoch: u64) -> Result<Ticket, String> {
+    let ticket = authorize(app, Operation::CaptureGuide)?;
+    if ticket.guide_epoch != Some(caller_epoch) {
+        return Err("denied: stale Guide caller epoch".to_string());
+    }
+    Ok(ticket)
 }
 
 pub fn recheck(app: &AppHandle, op: Operation, ticket: &Ticket) -> Result<(), String> {
@@ -387,7 +475,10 @@ pub fn session_changed(app: &AppHandle, signed_in: bool, uid: Option<String>) {
     };
     info!("security: session -> {}", if signed_in { "signed-in" } else { "signed-out" });
     if transition.disarmed {
-        emit_armed_changed(app, false);
+        emit_screen_sight_armed(app, false);
+    }
+    if transition.guide_disarmed {
+        crate::guide::on_security_disarmed(app);
     }
     if transition.revoked {
         crate::meeting::request_stop(app, "signed_out");
@@ -399,16 +490,19 @@ pub fn session_changed(app: &AppHandle, signed_in: bool, uid: Option<String>) {
 /// overlay's native voice-end paths (Esc / summon hotkey), so a hung webview
 /// can't leave voice authorization latched.
 pub fn note_voice_active(app: &AppHandle, active: bool) {
-    let armed_cleared = {
+    let transition = {
         let Some(handle) = handle(app) else {
             return;
         };
         let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
         state.set_voice(active)
     };
-    if armed_cleared {
+    if transition.screen_sight_disarmed {
         info!("security: voice session ended - screen sight disarmed");
-        emit_armed_changed(app, false);
+        emit_screen_sight_armed(app, false);
+    }
+    if transition.guide_disarmed {
+        crate::guide::on_security_disarmed(app);
     }
 }
 
@@ -425,7 +519,7 @@ pub fn toggle_screen_sight(app: &AppHandle) {
     match toggled {
         Some(armed) => {
             info!("security: screen sight {} (hotkey)", if armed { "armed" } else { "disarmed" });
-            emit_armed_changed(app, armed);
+            emit_screen_sight_armed(app, armed);
         }
         None => info!("security: screen-sight hotkey ignored - not signed in"),
     }
@@ -462,7 +556,7 @@ pub fn toggle_screen_sight_armed(app: AppHandle) -> Result<bool, String> {
     match toggled {
         Some(armed) => {
             info!("security: screen sight {} (button)", if armed { "armed" } else { "disarmed" });
-            emit_armed_changed(&app, armed);
+            emit_screen_sight_armed(&app, armed);
             Ok(armed)
         }
         None => Err(Denied::SignedOut.to_string()),
@@ -501,9 +595,10 @@ mod tests {
         s
     }
 
-    const GATED_OPS: [Operation; 12] = [
+    const GATED_OPS: [Operation; 13] = [
         Operation::CaptureScreen,
         Operation::CaptureTurnScreen,
+        Operation::CaptureGuide,
         Operation::PointAt,
         Operation::DesktopControl,
         Operation::ArmScreenSight,
@@ -645,7 +740,7 @@ mod tests {
     fn voice_end_disarms_but_redundant_false_does_not() {
         let mut s = armed_in_voice_session();
         s.note_capture(1);
-        assert!(s.set_voice(false)); // true -> false clears the armed bit
+        assert!(s.set_voice(false).screen_sight_disarmed); // true -> false clears the armed bit
         assert_eq!(s.authorize(Operation::CaptureScreen).unwrap_err(), Denied::VoiceInactive);
         assert_eq!(s.authorize(Operation::PointAt).unwrap_err(), Denied::VoiceInactive);
 
@@ -653,7 +748,7 @@ mod tests {
         // fires one even when no call ever connected): the arm must survive.
         let mut s = signed_in();
         assert_eq!(s.toggle_armed(), Some(true));
-        assert!(!s.set_voice(false));
+        assert!(!s.set_voice(false).screen_sight_disarmed);
         assert!(s.screen_sight_armed);
     }
 
@@ -769,5 +864,54 @@ mod tests {
         let ticket = s.authorize(Operation::ReadSegment).unwrap();
         s.set_voice(false);
         assert!(s.recheck(Operation::ReadSegment, &ticket).is_ok());
+    }
+
+    #[test]
+    fn guide_arm_is_atomic_with_screen_sight_exclusion() {
+        let mut s = armed_in_voice_session();
+        let (epoch, screen_sight_cleared) = s.arm_guide().unwrap();
+        assert!(screen_sight_cleared);
+        assert!(s.guide_armed);
+        assert!(!s.screen_sight_armed);
+        assert_eq!(s.guide_epoch, epoch);
+        assert_eq!(
+            s.authorize(Operation::CaptureScreen).unwrap_err(),
+            Denied::ModeConflict
+        );
+        assert_eq!(
+            s.authorize(Operation::CaptureTurnScreen).unwrap_err(),
+            Denied::ModeConflict
+        );
+        assert!(s.authorize(Operation::CaptureGuide).is_ok());
+        assert_eq!(s.toggle_armed(), None);
+    }
+
+    #[test]
+    fn guide_epoch_invalidates_only_guide_tickets() {
+        let mut s = in_voice_session();
+        s.arm_guide().unwrap();
+        let guide_ticket = s.authorize(Operation::CaptureGuide).unwrap();
+        let meeting_ticket = s.authorize(Operation::ReadSegment).unwrap();
+        s.disarm_guide();
+        s.arm_guide().unwrap();
+        assert_eq!(
+            s.recheck(Operation::CaptureGuide, &guide_ticket).unwrap_err(),
+            Denied::StaleGuide
+        );
+        assert!(s.recheck(Operation::ReadSegment, &meeting_ticket).is_ok());
+    }
+
+    #[test]
+    fn voice_end_and_sign_out_clear_guide() {
+        let mut s = in_voice_session();
+        s.arm_guide().unwrap();
+        assert!(s.set_voice(false).guide_disarmed);
+        assert!(!s.guide_armed);
+
+        s.set_voice(true);
+        s.arm_guide().unwrap();
+        let transition = s.set_session(false, None);
+        assert!(transition.guide_disarmed);
+        assert!(!s.guide_armed);
     }
 }
