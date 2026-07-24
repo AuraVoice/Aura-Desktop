@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useAuth } from "../state/AuthProvider";
+import { signOut } from "firebase/auth";
+import { auth } from "../lib/firebase";
 import { logError } from "../lib/log";
 import { useVoiceBar } from "./useVoiceBar";
 import { useNotchGesture } from "./useNotchGesture";
@@ -16,7 +18,7 @@ import { useMeetingArm } from "./useMeetingArm";
 import { useMeetingCapture } from "./useMeetingCapture";
 import { useCallbackCard } from "./useCallbackCard";
 import { useDesktopNotifications } from "../state/useDesktopNotifications";
-import { openDashboard } from "../lib/dashboardLink";
+import { openDashboardWindow } from "../lib/dashboardWindow";
 import type { StoredNotification } from "../lib/desktopNotifications";
 import { GlassSurface } from "./GlassSurface";
 import { SetupPanel } from "./SetupPanel";
@@ -31,11 +33,14 @@ import type { NotchEdge } from "./notchEdge";
 import { screenPointFor, type ScreenFrameGeometry } from "../lib/screenFrame";
 import { useGuideMode, type GuidePoint } from "./useGuideMode";
 import { useGeneralSettings } from "../state/useGeneralSettings";
+import { useEntitlement } from "../state/useEntitlement";
+import { KebabMenu } from "./KebabMenu";
 
 // Fixed heights remain for fixed-content surfaces. DraftCard reports its own
 // measured content height so a short reply stays compact and a long one grows.
 const NOTIFICATION_INBOX_CARD_HEIGHT = 300;
 const CALLBACK_CARD_HEIGHT = 180;
+const KEBAB_MENU_HEIGHT = 470;
 
 type OverlayPresentation =
   | "hidden"
@@ -75,7 +80,6 @@ export function OverlayRoot() {
     room: voice.room,
     status: voice.status,
     signedIn: user !== null,
-    startSession: voice.startSession,
     onPoint: handleGuidePoint,
   });
   // Long-press-to-move is only armed on the resting bar (never mid-card or
@@ -99,7 +103,11 @@ export function OverlayRoot() {
     presentation === "pointing" || tail.status === "active",
     overlayVisible,
   );
-  useUpdateReady();
+  const updateReady = useUpdateReady();
+  const entitlement = useEntitlement({
+    signedIn: user !== null,
+    uid: user?.uid ?? null,
+  });
   // Kept for its capture side effects; its transient per-turn notice no longer
   // has a UI home (the subtitle is gone) and is already logged in the hook.
   useTurnScreenCapture(voice.room, guide.armed);
@@ -137,7 +145,11 @@ export function OverlayRoot() {
   const [draftCardHeight, setDraftCardHeight] = useState(INITIAL_DRAFT_SLOT_HEIGHT);
 
   useEffect(() => {
-    if (!showDraftCard) setDraftCardHeight(INITIAL_DRAFT_SLOT_HEIGHT);
+    if (!showDraftCard) {
+      setDraftCardHeight(INITIAL_DRAFT_SLOT_HEIGHT);
+      return;
+    }
+    setMenuOpen(false);
   }, [showDraftCard]);
 
   const notifications = useDesktopNotifications({
@@ -146,6 +158,7 @@ export function OverlayRoot() {
     appHidden: presentation !== "bar",
   });
   const [inboxOpen, setInboxOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   // useCallbackCard predates the companion->notch rename and still keys its
   // trigger off the old "companion" presentation; map today's "bar" onto it
   // rather than rewriting the (tested) hook.
@@ -160,13 +173,16 @@ export function OverlayRoot() {
   // Slot priority (CLAUDE.md): draft > agenda > kebab menu > meeting note >
   // daily catch-up. Only draft, the inbox (opened via kebab/tray, so it sits
   // at the kebab-menu tier), and the daily catch-up are mounted today.
-  const showInbox = user !== null && inboxOpen && !showDraftCard;
+  const showMenu = user !== null && menuOpen && !showDraftCard;
+  const showInbox = user !== null && inboxOpen && !showDraftCard && !showMenu;
   const showCallbackCard =
-    user !== null && callbackCard.visible && !showDraftCard && !showInbox;
+    user !== null && callbackCard.visible && !showDraftCard && !showInbox && !showMenu;
   const slotHeight = showDraftCard
     ? draftCardHeight
     : showInbox
       ? NOTIFICATION_INBOX_CARD_HEIGHT
+      : showMenu
+        ? KEBAB_MENU_HEIGHT
       : showCallbackCard
         ? CALLBACK_CARD_HEIGHT
         : null;
@@ -224,6 +240,7 @@ export function OverlayRoot() {
       resetDraftCard();
       resetCallbackCard();
       setInboxOpen(false);
+      setMenuOpen(false);
       if (guide.armed) guide.stop();
       invoke("dismiss_bar").catch((err) =>
         logError("OverlayRoot: dismiss_bar after sign-out", err),
@@ -234,7 +251,7 @@ export function OverlayRoot() {
   function handleNotificationAction(notification: StoredNotification) {
     notifications.acknowledgeAction(notification);
     if (notification.action === "view_meeting") {
-      void openDashboard();
+      void openDashboardWindow("/meetings");
     } else if (
       notification.action === "retry_meeting_upload"
       && notification.resourceId
@@ -356,6 +373,35 @@ export function OverlayRoot() {
           onAction={handleNotificationAction}
         />
       )}
+      {showMenu && (
+        <KebabMenu
+          voiceStatus={voice.status}
+          entitlement={entitlement}
+          onCalendar={() => {
+            setMenuOpen(false);
+            void openDashboardWindow("/connectors");
+          }}
+          onCaptureNow={meetingCapture.captureNow}
+          capturing={meetingCapture.recording}
+          onNotifications={() => {
+            setMenuOpen(false);
+            setInboxOpen(true);
+          }}
+          unreadCount={notifications.unreadCount}
+          updateVersion={updateReady.version}
+          onUpdate={() => {
+            setMenuOpen(false);
+            void invoke("install_update").catch((err) =>
+              logError("OverlayRoot: install update", err),
+            );
+          }}
+          onSignOut={() => {
+            setMenuOpen(false);
+            void signOut(auth).catch((err) => logError("OverlayRoot: sign out", err));
+          }}
+          onClose={() => setMenuOpen(false)}
+        />
+      )}
       {showCallbackCard && <CallbackCard card={callbackCard} />}
       <NotchBar
         key={presentation}
@@ -363,6 +409,11 @@ export function OverlayRoot() {
         edge={notchEdge}
         dragHandlers={notchMove.dragHandlers}
         guideArmed={guide.armed}
+        menuOpen={menuOpen}
+        onMenuToggle={() => {
+          setInboxOpen(false);
+          setMenuOpen((open) => !open);
+        }}
       />
     </div>
   );

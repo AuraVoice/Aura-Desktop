@@ -45,6 +45,7 @@ function voiceState(
     isVoiceCapped: false,
     desiredActive: false,
     startSession: vi.fn(async () => {}),
+    startBridgedSession: vi.fn(async () => {}),
     prepareSession: vi.fn(() => Promise.resolve()),
     activateSession: vi.fn(async () => {}),
     noteTapTimestamp: vi.fn(),
@@ -88,7 +89,7 @@ afterEach(() => {
 });
 
 describe("useNotchGesture visible-before-voice ordering", () => {
-  it("does not start voice until summon_bar confirms the notch is visible", async () => {
+  it("starts the bridged session immediately and never calls activateSession", async () => {
     const summon = deferred<void>();
     const voice = voiceState();
     mocks.invoke.mockImplementation((command: string) => {
@@ -103,13 +104,14 @@ describe("useNotchGesture visible-before-voice ordering", () => {
     });
 
     act(() => mocks.toggleListener?.({ payload: { sequence: 1 } }));
-    // Pre-dispatch fires the transport (token + connect + agent dispatch)
-    // immediately, but the microphone stays closed until the notch is visible.
-    expect(voice.prepareSession).toHaveBeenCalledTimes(1);
+    // The bridged start fires immediately (the instant Realtime leg + LiveKit warm run in
+    // parallel). The bridge coordinator owns the microphone - Realtime now, LiveKit at
+    // handover - so the gesture never calls activateSession, before or after summon_bar.
+    expect(voice.startBridgedSession).toHaveBeenCalledTimes(1);
     expect(voice.activateSession).not.toHaveBeenCalled();
 
     await act(async () => summon.resolve());
-    expect(voice.activateSession).toHaveBeenCalledTimes(1);
+    expect(voice.activateSession).not.toHaveBeenCalled();
   });
 
   it("does not start voice when native notch presentation fails", async () => {

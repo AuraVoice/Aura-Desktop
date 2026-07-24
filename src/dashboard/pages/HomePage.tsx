@@ -2,7 +2,10 @@ import {
   BarChart3,
   CalendarClock,
   Clock,
+  FileText,
   Flame,
+  ListChecks,
+  Sparkles,
   Timer,
   type LucideIcon,
 } from "lucide-react";
@@ -13,12 +16,15 @@ import { useNavigate } from "react-router-dom";
 import {
   getHistorySessions,
   getHomeStats,
+  getMeetings,
   getRecentActivity,
   type ActivityItem,
   type HomeStats,
 } from "../../lib/dashboardApi";
 import { fetchUpcomingMeetings, type UpcomingMeetings } from "../../lib/calendar";
 import { logError } from "../../lib/log";
+import type { MeetingDoc } from "../../lib/meetings";
+import { useGeneralSettings } from "../../state/useGeneralSettings";
 import { AnimatedHotkeyGuide } from "../AnimatedHotkeyGuide";
 import { DataView } from "../DataView";
 import { count, duration, relativeTime } from "../format";
@@ -75,20 +81,35 @@ function AnalyticsCard({
 function UpNext({
   state,
   activity,
+  meetings,
+  showCalendar,
 }: {
   state: ReturnType<typeof useAsyncData<UpcomingMeetings | null>>;
   activity: ReturnType<typeof useAsyncData<ActivityItem[]>>;
+  meetings: ReturnType<typeof useAsyncData<MeetingDoc[]>>;
+  showCalendar: boolean;
 }) {
   const [slideIndex, setSlideIndex] = useState(0);
   const slides = useMemo(
     () => [
-      ...(state.data?.events ?? []).map((event) => ({ kind: "event" as const, event })),
+      ...(showCalendar ? state.data?.events ?? [] : [])
+        .map((event) => ({ kind: "event" as const, event })),
       ...(activity.data ?? [])
         .filter((item) => item.kind === "saved")
         .slice(0, 3)
         .map((item) => ({ kind: "saved" as const, item })),
+      ...(meetings.data ?? [])
+        .flatMap((meeting) =>
+          (meeting.note?.actionItems ?? []).map((action, index) => ({
+            kind: "action" as const,
+            id: `${meeting.meetingId}:${index}`,
+            meetingTitle: meeting.title || "Meeting follow-up",
+            action,
+          })),
+        )
+        .slice(0, 3),
     ],
-    [state.data, activity.data],
+    [state.data, activity.data, meetings.data, showCalendar],
   );
 
   useEffect(() => {
@@ -175,6 +196,15 @@ function UpNext({
             View saved item
           </button>
         </div>
+      ) : slide?.kind === "action" ? (
+        <div className="db-hero-up-next-slide" key={`action:${slide.id}`}>
+          <div className="db-hero-up-next-time">ACTION ITEM</div>
+          <h3>{slide.action}</h3>
+          <p>From {slide.meetingTitle}</p>
+          <button type="button" onClick={() => { window.location.hash = "/meetings"; }}>
+            View meeting
+          </button>
+        </div>
       ) : (
         <div className="db-hero-up-next-slide" key="empty">
           <div className="db-hero-up-next-empty-mark">✓</div>
@@ -190,8 +220,96 @@ function UpNext({
   );
 }
 
+function TodayBriefing({
+  calendar,
+  activity,
+  meetings,
+  showCalendar,
+}: {
+  calendar: ReturnType<typeof useAsyncData<UpcomingMeetings | null>>;
+  activity: ReturnType<typeof useAsyncData<ActivityItem[]>>;
+  meetings: ReturnType<typeof useAsyncData<MeetingDoc[]>>;
+  showCalendar: boolean;
+}) {
+  const navigate = useNavigate();
+  const events = showCalendar ? calendar.data?.events ?? [] : [];
+  const resumeItem = activity.data?.find((item) => item.kind !== "voice") ?? null;
+  const actionItems = (meetings.data ?? []).flatMap((meeting) =>
+    (meeting.note?.actionItems ?? []).map((action) => ({
+      action,
+      meeting: meeting.title || "Recent meeting",
+    })),
+  );
+
+  return (
+    <section className="db-today-briefing">
+      <div className="db-today-briefing-head">
+        <div>
+          <span>DAILY BRIEFING</span>
+          <h3>Today, at a glance</h3>
+        </div>
+        <Sparkles size={18} aria-hidden />
+      </div>
+      <div className="db-today-briefing-grid">
+        <button type="button" onClick={() => navigate("/connectors")}>
+          <span className="db-today-briefing-icon"><CalendarClock size={17} aria-hidden /></span>
+          <span>
+            <small>Schedule</small>
+            <strong>
+              {!showCalendar
+                ? "Calendar hidden"
+                : events.length > 0
+                  ? `${events.length} event${events.length === 1 ? "" : "s"} remaining`
+                  : calendar.data?.connected
+                    ? "Calendar is clear"
+                    : "Connect Calendar"}
+            </strong>
+            <em>{events[0]?.title || "Manage calendar preferences"}</em>
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            navigate(
+              resumeItem?.kind === "draft"
+                ? "/drafts"
+                : resumeItem?.kind === "saved"
+                  ? "/saved"
+                  : "/conversations",
+            )
+          }
+        >
+          <span className="db-today-briefing-icon"><FileText size={17} aria-hidden /></span>
+          <span>
+            <small>Continue</small>
+            <strong>{resumeItem?.title || "Nothing waiting"}</strong>
+            <em>{resumeItem?.subtitle || "Your recent work will appear here"}</em>
+          </span>
+        </button>
+        <button type="button" onClick={() => navigate("/meetings")}>
+          <span className="db-today-briefing-icon"><ListChecks size={17} aria-hidden /></span>
+          <span>
+            <small>Follow-ups</small>
+            <strong>
+              {actionItems.length > 0
+                ? `${actionItems.length} action item${actionItems.length === 1 ? "" : "s"}`
+                : "Nothing pending"}
+            </strong>
+            <em>
+              {actionItems[0]
+                ? `${actionItems[0].action} · ${actionItems[0].meeting}`
+                : "Meeting actions will collect here"}
+            </em>
+          </span>
+        </button>
+      </div>
+    </section>
+  );
+}
+
 export function HomePage() {
   const navigate = useNavigate();
+  const generalSettings = useGeneralSettings();
   const stats = useAsyncData<HomeStats>(() => getHomeStats(), "home stats");
   const activity = useAsyncData<ActivityItem[]>(() => getRecentActivity(8), "recent activity");
   const calendar = useAsyncData<UpcomingMeetings | null>(
@@ -202,6 +320,7 @@ export function HomePage() {
     () => getHistorySessions(new Date(Date.now() - 31 * 86_400_000).toISOString()),
     "home streak",
   );
+  const meetings = useAsyncData<MeetingDoc[]>(() => getMeetings(), "home meetings");
   const streak = activeStreak(history.data?.sessions.map((session) => session.started_at) ?? []);
 
   function startConversation() {
@@ -219,7 +338,12 @@ export function HomePage() {
             <h2 className="db-hero-title">Your personal assistant, ready when you are.</h2>
             <AnimatedHotkeyGuide onTryVoice={startConversation} />
           </div>
-          <UpNext state={calendar} activity={activity} />
+          <UpNext
+            state={calendar}
+            activity={activity}
+            meetings={meetings}
+            showCalendar={generalSettings.calendarInBriefing}
+          />
         </div>
       </section>
 
@@ -305,6 +429,15 @@ export function HomePage() {
           </DataView>
         </aside>
       </div>
+
+      {generalSettings.dailyBriefing && (
+        <TodayBriefing
+          calendar={calendar}
+          activity={activity}
+          meetings={meetings}
+          showCalendar={generalSettings.calendarInBriefing}
+        />
+      )}
     </div>
   );
 }

@@ -8,6 +8,8 @@ import { logError, logInfo } from "../lib/log";
 import { trackEvent } from "../lib/analytics";
 import { micCaptureFailedCode, voiceCapReachedCode, voiceErrorMessageForCode } from "../lib/voiceErrorCopy";
 import { shouldArmInitialAgentSilenceWatchdog } from "./voiceSessionTiming";
+import { startRealtimeLeg } from "../lib/realtime";
+import { BridgeCoordinator } from "./bridgeCoordinator";
 
 export type VoiceSessionStatus =
   | "disconnected"
@@ -25,6 +27,11 @@ export type VoiceSessionStatus =
 // originate (they're client-generated, not sent by the backend).
 const AGENT_JOIN_TIMEOUT_MS = 30_000;
 const SILENCE_WATCHDOG_MS = 15_000;
+// Realtime is the fast first-turn leg, but it must never delay the normal voice
+// path when its session mint or WebRTC negotiation is unhealthy. LiveKit is warmed
+// in parallel, so this is the maximum extra time we are willing to wait before
+// handing the already-prepared room the microphone.
+const REALTIME_STARTUP_TIMEOUT_MS = 2_500;
 
 // Auto-retry budget for a failed call. Excludes mic-access codes below, since
 // those need the user to fix something in OS settings - retrying immediately
@@ -105,6 +112,29 @@ export function useVoiceBar() {
   const tapAtMsRef = useRef<number | null>(null);
   const connectResolvedAtRef = useRef<number | null>(null);
   const agentJoinMsRef = useRef<number | null>(null);
+  // Realtime bridge overlay (see bridgeCoordinator.ts). bridgedRef marks the current
+  // session as bridged so the room event handlers route agent audio/data to the
+  // coordinator instead of the normal cold path; bridgeRef holds the live coordinator.
+  // Both null/false for every non-bridge session, so the standard flow is untouched.
+  const bridgedRef = useRef(false);
+  const bridgeRef = useRef<BridgeCoordinator | null>(null);
+  const realtimeAudioElRef = useRef<HTMLAudioElement | null>(null);
+  const liveKitAudioElRef = useRef<HTMLAudioElement | null>(null);
+
+  const ensureAudioEl = (ref: React.MutableRefObject<HTMLAudioElement | null>): HTMLAudioElement => {
+    if (!ref.current) {
+      const el = new Audio();
+      el.autoplay = true;
+      ref.current = el;
+    }
+    return ref.current;
+  };
+
+  const teardownBridge = useCallback(() => {
+    bridgeRef.current?.teardown();
+    bridgeRef.current = null;
+    bridgedRef.current = false;
+  }, []);
 
   const clearWatchdogs = useCallback(() => {
     if (joinWatchdogRef.current) {
@@ -124,6 +154,7 @@ export function useVoiceBar() {
     (code: string | null, fallbackMessage?: string | null) => {
       try {
         clearWatchdogs();
+        teardownBridge();
         const activeRoom = roomRef.current;
         roomRef.current = null;
         setRoom(null);
@@ -146,7 +177,7 @@ export function useVoiceBar() {
         logError("useVoiceBar: enterErrorState", err);
       }
     },
-    [clearWatchdogs],
+    [clearWatchdogs, teardownBridge],
   );
 
   const armSilenceWatchdog = useCallback(() => {
@@ -224,6 +255,7 @@ export function useVoiceBar() {
     sessionGenerationRef.current += 1;
     setDesiredActive(false);
     clearWatchdogs();
+    teardownBridge();
     const activeRoom = roomRef.current;
     roomRef.current = null;
     setRoom(null);
@@ -250,7 +282,7 @@ export function useVoiceBar() {
     setAssistantCaption("");
     setErrorMessage(null);
     setLastErrorCode(null);
-  }, [clearWatchdogs]);
+  }, [clearWatchdogs, teardownBridge]);
 
   // Transport-only half of session start: token fetch, room creation, and
   // connect - everything that dispatches the agent but nothing the user can
@@ -378,6 +410,9 @@ export function useVoiceBar() {
           enterErrorState("agent_state_failed");
           return;
         }
+        // Secondary "agent is warm" confirmation for the bridge. The decision actually
+        // gates on the worker's hold_ready message, so this is best-effort logging only.
+        if (bridgeRef.current) bridgeRef.current.onAgentReady();
         setStatus(mapped);
       } catch (err) {
         logError("useVoiceBar: ParticipantAttributesChanged handler", err);
@@ -410,7 +445,14 @@ export function useVoiceBar() {
         // attached to a media element. Without this, the agent's voice
         // arrives over the wire and is silently discarded.
         if (track.kind === Track.Kind.Audio) {
-          track.attach();
+          // In bridge mode the LiveKit agent joins in HOLD; its audio must stay muted
+          // until handover_applied, so route it to the coordinator's muted sink instead
+          // of attaching (and becoming audible) here.
+          if (bridgeRef.current) {
+            bridgeRef.current.attachAgentAudio(track);
+          } else {
+            track.attach();
+          }
           markAssistantResponded();
         }
       } catch (err) {
@@ -479,6 +521,17 @@ export function useVoiceBar() {
         // a newer backend - is a sign of life (element.point and draft.*
         // share this same data channel).
         pokeSilenceWatchdog();
+        // Bridge control (hold_ready / handover_applied) rides this same verified-agent
+        // channel. Handled before the typed-message parse below, which only knows the
+        // legacy session.error shape.
+        if (bridgeRef.current) {
+          try {
+            const controlMsg = JSON.parse(new TextDecoder().decode(payload)) as Record<string, unknown>;
+            if (bridgeRef.current.handleDataMessage(controlMsg)) return;
+          } catch {
+            /* not a bridge control JSON payload */
+          }
+        }
         if (verdict.kind !== "valid") return;
         logInfo("useVoiceBar: DataReceived", `type=${verdict.type}`);
         if (verdict.type === "session.error") {
@@ -494,7 +547,7 @@ export function useVoiceBar() {
       try {
         logInfo("useVoiceBar: prepareSession", "requesting voice token");
         const tokenRequestedAt = Date.now();
-        const { token, url, room: roomName } = await fetchVoiceToken(sessionModeRef.current);
+        const { token, url, room: roomName } = await fetchVoiceToken(sessionModeRef.current, bridgedRef.current);
         const tokenMs = Date.now() - tokenRequestedAt;
         if (!sessionStillWanted()) {
           await newRoom.disconnect().catch((disconnectErr) =>
@@ -628,6 +681,83 @@ export function useVoiceBar() {
     await activateSession();
   }, [activateSession, prepareSession]);
 
+  // Bridged start: open the instant OpenAI Realtime leg AND warm LiveKit in parallel, then
+  // let BridgeCoordinator hand off. The one shared mic goes to Realtime first and is
+  // replaceTrack'd onto LiveKit at handover, so there is never double-capture. If Realtime
+  // is unavailable (bridge disabled server-side, secret mint fails, mic denied) we fall
+  // straight back to the normal cold LiveKit session - the user still gets voice, slower.
+  const startBridgedSession = useCallback(
+    async (mode: VoiceSessionMode = "standard") => {
+      setVoiceActive(true);
+      const controller = new AbortController();
+      let sharedTrack: MediaStreamTrack | null = null;
+      let realtimeTimeout: ReturnType<typeof setTimeout> | null = null;
+      try {
+        // Start the cold-path transport before waiting on Realtime. prepareSession
+        // only mints/connects LiveKit and does not enable its microphone, so the
+        // shared track remains exclusively owned by Realtime until handover.
+        // It must be marked bridged before prepareSession starts because the token
+        // request selects the worker's HOLD behavior.
+        bridgedRef.current = true;
+        const liveKitPrepare = prepareSession(mode);
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        });
+        sharedTrack = stream.getAudioTracks()[0] ?? null;
+        if (!sharedTrack) throw new Error("no audio track from getUserMedia");
+        const realtimeStart = startRealtimeLeg({
+          micTrack: sharedTrack,
+          audioEl: ensureAudioEl(realtimeAudioElRef),
+          signal: controller.signal,
+        });
+        const realtime = await Promise.race([
+          realtimeStart,
+          new Promise<never>((_, reject) => {
+            realtimeTimeout = setTimeout(() => {
+              reject(new Error(`realtime startup timed out (${REALTIME_STARTUP_TIMEOUT_MS}ms)`));
+            }, REALTIME_STARTUP_TIMEOUT_MS);
+          }),
+        ]);
+        if (realtimeTimeout) clearTimeout(realtimeTimeout);
+        // Realtime is live and about to greet. LiveKit has been warming in bridge
+        // mode (no mic yet) since the beginning of this function.
+        await liveKitPrepare;
+        const room = roomRef.current;
+        if (!room) throw new Error("bridge: room missing after prepareSession");
+        bridgeRef.current = new BridgeCoordinator({
+          room,
+          realtime,
+          sharedTrack,
+          liveKitAudioEl: ensureAudioEl(liveKitAudioElRef),
+          onFatal: (reason) => {
+            logError("useVoiceBar: bridge fatal", reason);
+            enterErrorState(null, "Voice had a hiccup. Give it another shot in a sec?");
+          },
+          onActive: () => {
+            markAssistantResponded();
+            logInfo("useVoiceBar: bridge active", "LiveKit owns the conversation");
+          },
+        });
+      } catch (err) {
+        if (realtimeTimeout) clearTimeout(realtimeTimeout);
+        controller.abort();
+        sharedTrack?.stop();
+        bridgeRef.current = null;
+        logInfo("useVoiceBar: bridge unavailable, falling back to cold path", String(err));
+        // A bridge-mode room cannot be activated as a normal session because its
+        // worker is waiting in HOLD. Drop that short-lived room, clear the bridge
+        // flag, and immediately start the ordinary LiveKit path. This is still fast
+        // because token mint/connect were already attempted in parallel.
+        if (!desiredActiveRef.current) return;
+        bridgedRef.current = false;
+        await endSession();
+        if (desiredActiveRef.current) return;
+        await startSession(mode);
+      }
+    },
+    [endSession, enterErrorState, markAssistantResponded, prepareSession, startSession],
+  );
+
   const toggleSession = useCallback(() => {
     if (desiredActiveRef.current) {
       void endSession();
@@ -686,10 +816,11 @@ export function useVoiceBar() {
       desiredActiveRef.current = false;
       sessionGenerationRef.current += 1;
       clearWatchdogs();
+      teardownBridge();
       roomRef.current?.disconnect().catch((err) => logError("useVoiceBar: unmount disconnect", err));
       setVoiceActive(false);
     };
-  }, [clearWatchdogs]);
+  }, [clearWatchdogs, teardownBridge]);
 
   const showMicSettingsHint = errorMessage === voiceErrorMessageForCode({ code: micCaptureFailedCode });
   // Rides the existing error status + code rather than a new VoiceSessionStatus
@@ -705,6 +836,7 @@ export function useVoiceBar() {
     isVoiceCapped,
     desiredActive,
     startSession,
+    startBridgedSession,
     prepareSession,
     activateSession,
     noteTapTimestamp,

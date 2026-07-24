@@ -116,13 +116,14 @@ export function useNotchGesture(
         currentVoice.noteTapTimestamp(
           typeof emittedAtMs === "number" && Number.isFinite(emittedAtMs) ? emittedAtMs : receivedAtMs,
         );
-        // Pre-dispatch: token fetch, room connect, and agent dispatch all start
-        // now, in parallel with the native summon, so the agent is already
-        // joining while the notch is still appearing. prepareSession never
-        // rejects; its failures surface through the voice error state. The
-        // visible-before-audible ordering below is unchanged - the microphone
-        // only opens via activateSession once summon_bar has resolved.
-        void currentVoice.prepareSession();
+        // Bridged pre-dispatch: the instant OpenAI Realtime leg opens the mic and speaks
+        // immediately, while LiveKit warms in parallel and hands off when ready (see
+        // bridgeCoordinator.ts). startBridgedSession falls back to the normal cold LiveKit
+        // path on its own if Realtime is unavailable, so this stays the single entry point.
+        // Unlike the old flow, there is no separate activateSession() step: the coordinator
+        // owns the microphone (Realtime now, LiveKit at handover), so summon_bar below only
+        // has to make the notch visible.
+        void currentVoice.startBridgedSession();
         void (async () => {
           try {
             await invoke("summon_bar");
@@ -133,7 +134,7 @@ export function useNotchGesture(
             // A second toggle may have stopped this request while native window
             // operations were still in flight. Never resurrect that cancelled
             // attempt after the notch becomes visible - the stop toggle's
-            // endSession() already tore down the prepared room.
+            // endSession() already tore down the prepared room and bridge.
             if (
               actionGenerationRef.current !== actionGeneration ||
               !sessionActiveRef.current
@@ -143,7 +144,6 @@ export function useNotchGesture(
               );
               return;
             }
-            await currentVoice.activateSession();
             logInfo(
               "useNotchGesture: start settled",
               `sequence=${sequence} elapsedMs=${Date.now() - actionStartedAtMs} status=${voiceRef.current.status}`,

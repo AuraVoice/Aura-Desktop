@@ -59,6 +59,13 @@ const mocks = vi.hoisted(() => {
     FakeRoom,
     roomEvents,
     fetchVoiceToken: vi.fn(),
+    startRealtimeLeg: vi.fn(),
+    BridgeCoordinator: class {
+      attachAgentAudio() {}
+      handleDataMessage() { return false; }
+      onAgentReady() {}
+      teardown() {}
+    },
     invoke: vi.fn(async () => {}),
   };
 });
@@ -82,6 +89,8 @@ vi.mock("../lib/agentData", () => ({
 }));
 vi.mock("../lib/log", () => ({ logError: vi.fn(), logInfo: vi.fn() }));
 vi.mock("../lib/analytics", () => ({ trackEvent: vi.fn() }));
+vi.mock("../lib/realtime", () => ({ startRealtimeLeg: mocks.startRealtimeLeg }));
+vi.mock("./bridgeCoordinator", () => ({ BridgeCoordinator: mocks.BridgeCoordinator }));
 
 import { useVoiceBar, type VoiceBarState } from "./useVoiceBar";
 
@@ -114,6 +123,32 @@ afterEach(() => {
 const token = { token: "token", url: "wss://livekit.test", room: "voice-room" };
 
 describe("useVoiceBar cancellation boundaries", () => {
+  it("warms LiveKit before Realtime fallback and retries with a normal worker", async () => {
+    const track = { stop: vi.fn() } as unknown as MediaStreamTrack;
+    vi.stubGlobal("navigator", {
+      mediaDevices: { getUserMedia: vi.fn(async () => ({ getAudioTracks: () => [track] })) },
+    });
+    vi.stubGlobal("Audio", class {
+      autoplay = false;
+      muted = false;
+      play = vi.fn(async () => {});
+      pause = vi.fn();
+      srcObject: MediaStream | null = null;
+    });
+    mocks.fetchVoiceToken.mockResolvedValue(token);
+    mocks.startRealtimeLeg.mockRejectedValue(new Error("realtime session mint failed (503)"));
+
+    await act(async () => {
+      await voice?.startBridgedSession();
+    });
+
+    expect(mocks.fetchVoiceToken).toHaveBeenNthCalledWith(1, "standard", true);
+    expect(mocks.fetchVoiceToken).toHaveBeenNthCalledWith(2, "standard", false);
+    expect(mocks.startRealtimeLeg).toHaveBeenCalledTimes(1);
+    expect(track.stop).toHaveBeenCalledTimes(1);
+    expect(voice?.desiredActive).toBe(true);
+  });
+
   it("does not connect if the user stops while the token request is pending", async () => {
     const tokenRequest = deferred<typeof token>();
     mocks.fetchVoiceToken.mockReturnValue(tokenRequest.promise);
@@ -212,12 +247,12 @@ describe("useVoiceBar cancellation boundaries", () => {
       await act(async () => {
         await voice?.startSession("guide");
       });
-      expect(mocks.fetchVoiceToken).toHaveBeenNthCalledWith(1, "guide");
+      expect(mocks.fetchVoiceToken).toHaveBeenNthCalledWith(1, "guide", false);
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(2_000);
       });
-      expect(mocks.fetchVoiceToken).toHaveBeenNthCalledWith(2, "guide");
+      expect(mocks.fetchVoiceToken).toHaveBeenNthCalledWith(2, "guide", false);
     } finally {
       vi.useRealTimers();
     }
