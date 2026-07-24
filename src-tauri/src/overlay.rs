@@ -6,21 +6,38 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewWindow};
 use tauri_plugin_store::StoreExt;
 
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::WindowsAndMessaging::{SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE};
+
 use crate::win_focus;
 
 const MAIN_WINDOW: &str = "main";
 const OVERLAY_STORE: &str = "overlay-window.json";
 const CENTER_X_KEY: &str = "overlay_center_x";
 const CENTER_Y_KEY: &str = "overlay_center_y";
+const NOTCH_EDGE_KEY: &str = "notch_edge";
 
 // The signed-in window stays wide enough for the existing cards while the owl
 // itself is centered in the transparent base area. Opening a surface adds
 // height above this base; the persisted center is the owl anchor.
 const COMPANION_WIDTH: f64 = 480.0;
 const COMPANION_HEIGHT: f64 = 400.0;
-const BAR_WIDTH: f64 = 460.0;
-const BAR_HEIGHT: f64 = 72.0;
-const BAR_TOP_OFFSET: f64 = 0.0;
+// The notch is a compact waveform-only pill (subtitle removed). It docks to any
+// of four screen edges; NOTCH_MAIN is its length ALONG that edge and NOTCH_CROSS
+// its thickness perpendicular to it. On Top/Bottom the pill is horizontal
+// (NOTCH_MAIN wide x NOTCH_CROSS tall); on Left/Right it renders rotated, so its
+// on-screen footprint is NOTCH_CROSS wide x NOTCH_MAIN tall. 184x29 is 40% of the
+// old 460x72 bar.
+const NOTCH_MAIN: f64 = 184.0;
+const NOTCH_CROSS: f64 = 29.0;
+// The card that fills the below/beside-notch slot keeps a fixed readable size in
+// its natural orientation regardless of edge: CARD_CROSS wide, and as tall as the
+// slot extent React passes (content-measured for drafts, fixed for other cards,
+// via set_slot_height). On Top/Bottom the card grows the window along its height; on
+// Left/Right it sits beside the notch and grows the window along its width.
+const CARD_CROSS: f64 = 380.0;
+// Gap between the notch and an open card (matches the CSS grid gap).
+const NOTCH_GAP: f64 = 6.0;
 const SETUP_WIDTH: f64 = 600.0;
 // Tall enough for the first-run question steps (heading + up to six choices +
 // optional freetext + button). Sign-in and consent fit comfortably within this
@@ -29,9 +46,10 @@ const SETUP_WIDTH: f64 = 600.0;
 const SETUP_HEIGHT: f64 = 460.0;
 const TOP_MARGIN: f64 = 48.0;
 const COMPANION_SURFACE_RESERVE: f64 = 340.0;
+const POINTING_TOTAL_HOLD_MS: u64 = 3400;
 // The single below-bar slot's extra window height is owned by React, not Rust:
 // whichever surface wins the slot (draft > callback > calendar agenda > kebab
-// menu, resolved in OverlayRoot.tsx) passes its own fixed height via
+// menu, resolved in OverlayRoot.tsx) passes its current height via
 // set_slot_height, and Rust just grows the window by that much below the bar.
 // One `slot_height` replaces the former per-card booleans + their applied
 // caches, so there's no multi-place tiebreak to keep in sync and no way to
@@ -45,6 +63,11 @@ pub enum OverlayPresentation {
     Bar,
     Companion,
     Pointing,
+    // Fullscreen, cursor-live (NOT click-through) takeover of the active display
+    // while the user long-press-drags the notch to a new edge. Handled by
+    // begin/commit/cancel_notch_move with direct window ops, so it never flows
+    // through apply()'s per-presentation geometry.
+    MovingNotch,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -52,6 +75,48 @@ pub enum OverlayPresentation {
 pub enum PanelVariant {
     Setup,
     Companion,
+}
+
+/// Which screen edge the notch is docked to. Persisted as a stable lowercase
+/// string in the overlay store. The default is Top (the historical position);
+/// an unknown/corrupt stored value falls back to it. We persist the EDGE, not an
+/// absolute position, so geometry always recomputes from the live display work
+/// area - robust across monitor changes, resolution changes, and undocking.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum NotchEdge {
+    #[default]
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
+impl NotchEdge {
+    fn from_stored(value: &str) -> Option<Self> {
+        match value {
+            "top" => Some(Self::Top),
+            "bottom" => Some(Self::Bottom),
+            "left" => Some(Self::Left),
+            "right" => Some(Self::Right),
+            _ => None,
+        }
+    }
+
+    fn as_stored(self) -> &'static str {
+        match self {
+            Self::Top => "top",
+            Self::Bottom => "bottom",
+            Self::Left => "left",
+            Self::Right => "right",
+        }
+    }
+
+    /// Left/Right dock the pill rotated to vertical, so its footprint's long axis
+    /// is vertical and a card grows horizontally beside it.
+    fn is_vertical(self) -> bool {
+        matches!(self, Self::Left | Self::Right)
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
@@ -71,6 +136,7 @@ pub enum OnboardingStep {
 pub struct OverlaySnapshot {
     pub presentation: OverlayPresentation,
     pub panel_variant: PanelVariant,
+    pub notch_edge: NotchEdge,
 }
 
 /// All the mutable overlay bookkeeping that used to be split across Flutter's
@@ -91,11 +157,16 @@ pub struct OverlayState {
     // moved entirely into OverlayRoot.tsx.
     slot_height: Option<f64>,
     user_center: Option<(f64, f64)>,
+    notch_edge: NotchEdge,
     applied_presentation: Option<OverlayPresentation>,
     applied_variant: Option<PanelVariant>,
     applied_slot_height: Option<Option<f64>>,
+    // The edge that was last applied to the window, so an edge change forces a
+    // reposition even when presentation/variant/slot are unchanged.
+    applied_notch_edge: Option<NotchEdge>,
     applying_bounds: bool,
     pre_pointing: Option<(OverlayPresentation, PanelVariant)>,
+    pointing_generation: u64,
 }
 
 impl Default for OverlayState {
@@ -107,11 +178,14 @@ impl Default for OverlayState {
             voice_active: false,
             slot_height: None,
             user_center: None,
+            notch_edge: NotchEdge::default(),
             applied_presentation: None,
             applied_variant: None,
             applied_slot_height: None,
+            applied_notch_edge: None,
             applying_bounds: false,
             pre_pointing: None,
+            pointing_generation: 0,
         }
     }
 }
@@ -133,6 +207,20 @@ fn main_window(app: &AppHandle) -> Option<WebviewWindow> {
     app.get_webview_window(MAIN_WINDOW)
 }
 
+#[cfg(target_os = "windows")]
+pub fn exclude_main_window_from_capture(window: &WebviewWindow) -> Result<(), String> {
+    let hwnd = window
+        .hwnd()
+        .map_err(|e| format!("failed to get main window HWND: {e}"))?;
+    unsafe { SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) }
+        .map_err(|e| format!("SetWindowDisplayAffinity failed: {e}"))
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn exclude_main_window_from_capture(_window: &WebviewWindow) -> Result<(), String> {
+    Ok(())
+}
+
 fn state_handle(app: &AppHandle) -> Option<tauri::State<'_, OverlayStateHandle>> {
     app.try_state::<OverlayStateHandle>()
 }
@@ -151,6 +239,21 @@ pub fn load_persisted_center(app: &AppHandle) {
             return;
         }
     };
+
+    // The notch edge is independent of the companion drag-center: restore it
+    // first so a fresh install (no center yet) still honors a saved edge. An
+    // unknown/corrupt value silently keeps the Top default.
+    if let Some(edge) = store
+        .get(NOTCH_EDGE_KEY)
+        .and_then(|v| v.as_str().and_then(NotchEdge::from_stored))
+    {
+        handle
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .notch_edge = edge;
+    }
+
     let (Some(x), Some(y)) = (
         store.get(CENTER_X_KEY).and_then(|v| v.as_f64()),
         store.get(CENTER_Y_KEY).and_then(|v| v.as_f64()),
@@ -198,6 +301,19 @@ fn persist_center(app: &AppHandle, x: f64, y: f64) {
     }
 }
 
+fn persist_edge(app: &AppHandle, edge: NotchEdge) {
+    match app.store(OVERLAY_STORE) {
+        Ok(store) => store.set(NOTCH_EDGE_KEY, serde_json::json!(edge.as_stored())),
+        Err(e) => {
+            error!("persist_edge: failed to open store: {e}");
+            sentry::capture_message(
+                &format!("persist_edge: failed to open store: {e}"),
+                sentry::Level::Error,
+            );
+        }
+    }
+}
+
 /// The display the cursor currently sits on (logical position + size),
 /// falling back to the primary monitor, then to a hardcoded 1920x1080 rect if
 /// neither can be read.
@@ -220,6 +336,109 @@ fn active_display_bounds(window: &WebviewWindow) -> (LogicalPosition<f64>, Logic
             LogicalPosition::new(0.0, 0.0),
             LogicalSize::new(1920.0, 1080.0),
         ),
+    }
+}
+
+/// The active display's WORK AREA (full bounds minus the taskbar and any docked
+/// appbars), in logical pixels. Bottom- and side-docked notches use this so they
+/// never hide under the taskbar. Falls back to full display bounds if the Win32
+/// query fails (and on non-Windows targets).
+#[cfg(target_os = "windows")]
+fn active_display_work_area(
+    window: &WebviewWindow,
+) -> (LogicalPosition<f64>, LogicalSize<f64>) {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTOPRIMARY,
+    };
+
+    let (full_pos, full_size) = active_display_bounds(window);
+    let scale = window
+        .cursor_position()
+        .ok()
+        .and_then(|cursor| window.monitor_from_point(cursor.x, cursor.y).ok().flatten())
+        .or_else(|| window.primary_monitor().ok().flatten())
+        .map(|m| m.scale_factor())
+        .unwrap_or(1.0);
+
+    // Sample a physical point just inside the display's top-left to resolve its
+    // HMONITOR, then read rcMonitor/rcWork (both physical device pixels). The
+    // taskbar/appbar insets are the difference, converted back to logical px.
+    let sample = POINT {
+        x: (full_pos.x * scale).round() as i32 + 2,
+        y: (full_pos.y * scale).round() as i32 + 2,
+    };
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    let ok = unsafe {
+        let monitor = MonitorFromPoint(sample, MONITOR_DEFAULTTOPRIMARY);
+        GetMonitorInfoW(monitor, &mut info).as_bool()
+    };
+    if !ok {
+        return (full_pos, full_size);
+    }
+
+    let mon = info.rcMonitor;
+    let work = info.rcWork;
+    let left_inset = (work.left - mon.left) as f64 / scale;
+    let top_inset = (work.top - mon.top) as f64 / scale;
+    let right_inset = (mon.right - work.right) as f64 / scale;
+    let bottom_inset = (mon.bottom - work.bottom) as f64 / scale;
+    (
+        LogicalPosition::new(full_pos.x + left_inset, full_pos.y + top_inset),
+        LogicalSize::new(
+            (full_size.width - left_inset - right_inset).max(0.0),
+            (full_size.height - top_inset - bottom_inset).max(0.0),
+        ),
+    )
+}
+
+#[cfg(not(target_os = "windows"))]
+fn active_display_work_area(
+    window: &WebviewWindow,
+) -> (LogicalPosition<f64>, LogicalSize<f64>) {
+    active_display_bounds(window)
+}
+
+/// The Bar window's size for the current edge and open card. On Top/Bottom the
+/// pill is horizontal and a card grows the window's height; on Left/Right the
+/// pill is vertical (footprint NOTCH_CROSS wide x NOTCH_MAIN tall) and a card
+/// grows the window's width beside it. `slot` is the card's height extent React
+/// passes via set_slot_height (None when no card is open).
+fn bar_size(edge: NotchEdge, slot: Option<f64>) -> LogicalSize<f64> {
+    if edge.is_vertical() {
+        let width = NOTCH_CROSS + slot.map_or(0.0, |_| NOTCH_GAP + CARD_CROSS);
+        let height = slot.map_or(NOTCH_MAIN, |extent| NOTCH_MAIN.max(extent));
+        LogicalSize::new(width, height)
+    } else {
+        let width = if slot.is_some() { CARD_CROSS } else { NOTCH_MAIN };
+        let height = NOTCH_CROSS + slot.map_or(0.0, |extent| NOTCH_GAP + extent);
+        LogicalSize::new(width, height)
+    }
+}
+
+/// Anchors the Bar window to its edge within the work area. The window contains
+/// the notch (centered on the edge's cross-axis) plus any card growing inward,
+/// so anchoring the whole window flush to the edge keeps the pill centered on it.
+fn bar_position(
+    edge: NotchEdge,
+    work_pos: LogicalPosition<f64>,
+    work_size: LogicalSize<f64>,
+    size: LogicalSize<f64>,
+) -> LogicalPosition<f64> {
+    let centered_x = work_pos.x + (work_size.width - size.width) / 2.0;
+    let centered_y = work_pos.y + (work_size.height - size.height) / 2.0;
+    match edge {
+        NotchEdge::Top => LogicalPosition::new(centered_x, work_pos.y),
+        NotchEdge::Bottom => {
+            LogicalPosition::new(centered_x, work_pos.y + work_size.height - size.height)
+        }
+        NotchEdge::Left => LogicalPosition::new(work_pos.x, centered_y),
+        NotchEdge::Right => {
+            LogicalPosition::new(work_pos.x + work_size.width - size.width, centered_y)
+        }
     }
 }
 
@@ -255,14 +474,12 @@ fn position_for(
     window: &WebviewWindow,
     size: LogicalSize<f64>,
 ) -> LogicalPosition<f64> {
-    // The notch stays fixed at the display's top edge. Adding a draft only grows the
-    // window downward, and v1 deliberately ignores the persisted drag center.
+    // The notch docks to one of four screen edges (persisted as an edge, not a
+    // position). A card grows the window inward from that edge. The notch ignores
+    // the companion's persisted drag center entirely.
     if state.presentation == OverlayPresentation::Bar {
-        let (display_pos, display_size) = active_display_bounds(window);
-        return LogicalPosition::new(
-            display_pos.x + (display_size.width - size.width) / 2.0,
-            display_pos.y + BAR_TOP_OFFSET,
-        );
+        let (work_pos, work_size) = active_display_work_area(window);
+        return bar_position(state.notch_edge, work_pos, work_size, size);
     }
 
     match state.user_center {
@@ -286,9 +503,7 @@ fn position_for(
 
 fn size_for(state: &OverlayState) -> LogicalSize<f64> {
     match (state.presentation, state.panel_variant) {
-        (OverlayPresentation::Bar, _) => {
-            LogicalSize::new(BAR_WIDTH, BAR_HEIGHT + state.slot_height.unwrap_or(0.0))
-        }
+        (OverlayPresentation::Bar, _) => bar_size(state.notch_edge, state.slot_height),
         (OverlayPresentation::Companion, _) => LogicalSize::new(
             COMPANION_WIDTH,
             COMPANION_HEIGHT + state.slot_height.unwrap_or(0.0),
@@ -305,12 +520,14 @@ pub fn snapshot(app: &AppHandle) -> OverlaySnapshot {
         return OverlaySnapshot {
             presentation: OverlayPresentation::Hidden,
             panel_variant: PanelVariant::Setup,
+            notch_edge: NotchEdge::default(),
         };
     };
     let state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
     OverlaySnapshot {
         presentation: state.presentation,
         panel_variant: state.panel_variant,
+        notch_edge: state.notch_edge,
     }
 }
 
@@ -342,7 +559,8 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
 
     let unchanged = state.applied_presentation == Some(state.presentation)
         && state.applied_variant == Some(state.panel_variant)
-        && state.applied_slot_height == Some(state.slot_height);
+        && state.applied_slot_height == Some(state.slot_height)
+        && state.applied_notch_edge == Some(state.notch_edge);
     if unchanged {
         return Ok(());
     }
@@ -354,6 +572,7 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
         let presentation = state.presentation;
         let panel_variant = state.panel_variant;
         let slot_height = state.slot_height;
+        let notch_edge = state.notch_edge;
         drop(state);
         info!("overlay::apply: hiding (from {from:?})");
         window
@@ -364,6 +583,7 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
             state.applied_presentation = Some(presentation);
             state.applied_variant = Some(panel_variant);
             state.applied_slot_height = Some(slot_height);
+            state.applied_notch_edge = Some(notch_edge);
         }
         emit_overlay_changed(app);
         info!(
@@ -376,10 +596,12 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
     let presentation = state.presentation;
     let panel_variant = state.panel_variant;
     let slot_height = state.slot_height;
+    let notch_edge = state.notch_edge;
     // A "fresh show" is a real presentation/variant transition (summon from
     // hidden, setup<->bar). A slot-height-only change (opening/closing the kebab
-    // menu or a card) is NOT one - it must not re-steal OS foreground, which
-    // flickers focus and costs ~100ms per click on every dropdown toggle.
+    // menu or a card) or an edge re-dock is NOT one - it must not re-steal OS
+    // foreground, which flickers focus and costs ~100ms per click on every
+    // dropdown toggle.
     let is_fresh_show = state.applied_presentation != Some(presentation)
         || state.applied_variant != Some(panel_variant);
     let size = size_for(&state);
@@ -421,6 +643,7 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
         state.applied_presentation = Some(presentation);
         state.applied_variant = Some(panel_variant);
         state.applied_slot_height = Some(slot_height);
+        state.applied_notch_edge = Some(notch_edge);
     }
     emit_overlay_changed(app);
     info!(
@@ -453,6 +676,99 @@ pub fn is_voice_active(app: &AppHandle) -> bool {
     state_handle(app)
         .map(|h| h.0.lock().unwrap_or_else(|e| e.into_inner()).voice_active)
         .unwrap_or(false)
+}
+
+/// Docks the notch to `edge`, persists it, and repositions. The applied-edge
+/// cache in apply() makes this reposition even when nothing else changed.
+pub fn set_notch_edge(app: &AppHandle, edge: NotchEdge) {
+    if let Some(handle) = state_handle(app) {
+        handle
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .notch_edge = edge;
+    }
+    persist_edge(app, edge);
+    apply(app);
+}
+
+/// Long-press drag-to-dock, step 1: take the active display fullscreen and
+/// cursor-live (NOT click-through) so the frontend can render a drag surface
+/// with edge drop-zones. Mirrors `point_at`'s direct window ops, bypassing
+/// apply()'s per-presentation geometry. No foreground forcing: the same injected
+/// Alt tap that would trap the Ctrl double-tap must not fire (see apply()).
+pub fn begin_notch_move(app: &AppHandle) -> Result<(), String> {
+    let (Some(handle), Some(window)) = (state_handle(app), main_window(app)) else {
+        return Err("overlay state or main window unavailable".to_string());
+    };
+    {
+        let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        if state.presentation != OverlayPresentation::Bar {
+            return Err("notch move can only start from the bar".to_string());
+        }
+        state.presentation = OverlayPresentation::MovingNotch;
+        state.applying_bounds = true;
+    }
+
+    let (pos, size) = active_display_bounds(&window);
+    let result = window
+        .set_size(size)
+        .and_then(|_| window.set_position(pos))
+        .and_then(|_| window.set_ignore_cursor_events(false))
+        .and_then(|_| window.show());
+
+    handle
+        .0
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .applying_bounds = false;
+
+    if let Err(e) = result {
+        // Roll back to the bar so a failed takeover never strands the window.
+        {
+            let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+            state.presentation = OverlayPresentation::Bar;
+            state.applied_presentation = None;
+        }
+        apply(app);
+        return Err(format!("failed to take over display for notch move: {e}"));
+    }
+
+    handle
+        .0
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .applied_presentation = Some(OverlayPresentation::MovingNotch);
+    emit_overlay_changed(app);
+    Ok(())
+}
+
+/// Step 2 (release on an edge): dock to `edge` and restore the bar there.
+pub fn commit_notch_move(app: &AppHandle, edge: NotchEdge) {
+    if let Some(handle) = state_handle(app) {
+        let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        if state.presentation != OverlayPresentation::MovingNotch {
+            return;
+        }
+        state.presentation = OverlayPresentation::Bar;
+        state.notch_edge = edge;
+    }
+    persist_edge(app, edge);
+    // applied_presentation is still MovingNotch here, so apply() repositions.
+    apply(app);
+}
+
+/// Step 2 (cancel / Escape / release in the dead zone): restore the bar at its
+/// current edge without changing it.
+pub fn cancel_notch_move(app: &AppHandle) {
+    if let Some(handle) = state_handle(app) {
+        let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        if state.presentation != OverlayPresentation::MovingNotch {
+            return;
+        }
+        state.presentation = OverlayPresentation::Bar;
+    }
+    apply(app);
 }
 
 /// Ctrl+Alt+B reveals and focuses the persistent companion/setup window.
@@ -512,8 +828,11 @@ pub fn summon_bar(app: &AppHandle) -> Result<(), String> {
     };
     {
         let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
-        if state.presentation == OverlayPresentation::Pointing {
-            return Err("cannot show voice notch while pointing".to_string());
+        if matches!(
+            state.presentation,
+            OverlayPresentation::Pointing | OverlayPresentation::MovingNotch
+        ) {
+            return Err("cannot show voice notch while pointing or moving".to_string());
         }
         state.presentation = OverlayPresentation::Bar;
     }
@@ -536,8 +855,11 @@ pub fn summon_onboarding_panel(app: &AppHandle) -> Result<(), String> {
     };
     {
         let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
-        if state.presentation == OverlayPresentation::Pointing {
-            return Err("cannot show onboarding panel while pointing".to_string());
+        if matches!(
+            state.presentation,
+            OverlayPresentation::Pointing | OverlayPresentation::MovingNotch
+        ) {
+            return Err("cannot show onboarding panel while pointing or moving".to_string());
         }
         state.presentation = OverlayPresentation::Panel;
     }
@@ -641,7 +963,9 @@ pub fn capture_user_position(app: &AppHandle, x: f64, y: f64) {
         if state.applying_bounds
             || matches!(
                 state.presentation,
-                OverlayPresentation::Hidden | OverlayPresentation::Bar
+                OverlayPresentation::Hidden
+                    | OverlayPresentation::Bar
+                    | OverlayPresentation::MovingNotch
             )
         {
             return;
@@ -683,14 +1007,16 @@ pub fn point_at(
         return;
     };
 
-    {
+    let pointing_generation = {
         let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
         if state.pre_pointing.is_none() {
             state.pre_pointing = Some((state.presentation, state.panel_variant));
         }
         state.presentation = OverlayPresentation::Pointing;
         state.applying_bounds = true;
-    }
+        state.pointing_generation = state.pointing_generation.wrapping_add(1);
+        state.pointing_generation
+    };
 
     let result = window
         .set_size(LogicalSize::new(monitor_w, monitor_h))
@@ -749,11 +1075,25 @@ pub fn point_at(
     ) {
         error!("overlay::point_at: failed to emit pointing-target: {e}");
     }
+
+    let watchdog_app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(POINTING_TOTAL_HOLD_MS)).await;
+        cancel_pointing_if_generation(&watchdog_app, pointing_generation);
+    });
 }
 
 /// Ends the flight and hands the window back to whatever it was showing
 /// before `point_at` took over.
 pub fn cancel_pointing(app: &AppHandle) {
+    cancel_pointing_inner(app, None);
+}
+
+fn cancel_pointing_if_generation(app: &AppHandle, generation: u64) {
+    cancel_pointing_inner(app, Some(generation));
+}
+
+fn cancel_pointing_inner(app: &AppHandle, expected_generation: Option<u64>) {
     let (Some(handle), Some(window)) = (state_handle(app), main_window(app)) else {
         return;
     };
@@ -761,6 +1101,9 @@ pub fn cancel_pointing(app: &AppHandle) {
     {
         let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
         if state.presentation != OverlayPresentation::Pointing {
+            return;
+        }
+        if expected_generation.is_some_and(|generation| generation != state.pointing_generation) {
             return;
         }
         let (presentation, variant) = state.pre_pointing.take().unwrap_or_else(|| {
@@ -779,4 +1122,98 @@ pub fn cancel_pointing(app: &AppHandle) {
         error!("overlay::cancel_pointing: failed to restore cursor events: {e}");
     }
     apply(app);
+}
+
+pub fn is_pointing(app: &AppHandle) -> bool {
+    state_handle(app)
+        .map(|handle| {
+            handle
+                .0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .presentation
+                == OverlayPresentation::Pointing
+        })
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn edge_round_trips_through_stored_string() {
+        for edge in [
+            NotchEdge::Top,
+            NotchEdge::Bottom,
+            NotchEdge::Left,
+            NotchEdge::Right,
+        ] {
+            assert_eq!(NotchEdge::from_stored(edge.as_stored()), Some(edge));
+        }
+        assert_eq!(NotchEdge::from_stored("garbage"), None);
+    }
+
+    #[test]
+    fn bar_size_horizontal_edges_grow_height_for_a_card() {
+        // At rest the window is exactly the pill.
+        assert_eq!(bar_size(NotchEdge::Top, None), LogicalSize::new(184.0, 29.0));
+        assert_eq!(
+            bar_size(NotchEdge::Bottom, None),
+            LogicalSize::new(184.0, 29.0)
+        );
+        // A card widens to CARD_CROSS and grows the height by gap + extent.
+        assert_eq!(
+            bar_size(NotchEdge::Top, Some(270.0)),
+            LogicalSize::new(380.0, 29.0 + 6.0 + 270.0)
+        );
+    }
+
+    #[test]
+    fn bar_size_vertical_edges_grow_width_beside_the_pill() {
+        // At rest the vertical pill's footprint is NOTCH_CROSS x NOTCH_MAIN.
+        assert_eq!(
+            bar_size(NotchEdge::Left, None),
+            LogicalSize::new(29.0, 184.0)
+        );
+        // A card grows the width by gap + CARD_CROSS; the height fits the taller
+        // of the pill and the card.
+        assert_eq!(
+            bar_size(NotchEdge::Right, Some(270.0)),
+            LogicalSize::new(29.0 + 6.0 + 380.0, 270.0)
+        );
+        assert_eq!(
+            bar_size(NotchEdge::Left, Some(100.0)),
+            LogicalSize::new(29.0 + 6.0 + 380.0, 184.0)
+        );
+    }
+
+    #[test]
+    fn bar_position_anchors_flush_to_each_edge() {
+        let work_pos = LogicalPosition::new(0.0, 0.0);
+        let work_size = LogicalSize::new(1000.0, 800.0);
+        let horizontal = LogicalSize::new(184.0, 29.0);
+        let vertical = LogicalSize::new(29.0, 184.0);
+
+        // Top: flush to the top, centered horizontally.
+        assert_eq!(
+            bar_position(NotchEdge::Top, work_pos, work_size, horizontal),
+            LogicalPosition::new(408.0, 0.0)
+        );
+        // Bottom: flush to the bottom (work area, so above the taskbar).
+        assert_eq!(
+            bar_position(NotchEdge::Bottom, work_pos, work_size, horizontal),
+            LogicalPosition::new(408.0, 771.0)
+        );
+        // Left: flush to the left, centered vertically.
+        assert_eq!(
+            bar_position(NotchEdge::Left, work_pos, work_size, vertical),
+            LogicalPosition::new(0.0, 308.0)
+        );
+        // Right: flush to the right.
+        assert_eq!(
+            bar_position(NotchEdge::Right, work_pos, work_size, vertical),
+            LogicalPosition::new(971.0, 308.0)
+        );
+    }
 }

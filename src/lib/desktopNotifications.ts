@@ -7,9 +7,10 @@
 //     permission is denied or the OS toast fails.
 //   - A toast fires at most once per notification, ever - delivered ids are
 //     persisted so an app restart cannot replay a toast.
-//   - Toast copy is generic and privacy-safe by construction: it is derived
-//     from the notification TYPE, never its title/body, so a meeting title or
-//     insight can never reach a lock screen.
+//   - Toast copy is the notification's own title/body, so the lock-screen toast
+//     matches what the inbox shows. An empty title/body falls back so a toast is
+//     never blank. (This deliberately trades the earlier lock-screen privacy
+//     posture for showing real content, per the product decision on 2026-07-21.)
 
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -29,6 +30,7 @@ import {
 } from "./desktopNotificationContract";
 import { logError } from "./log";
 import { notifications as copy } from "./notificationCopy";
+import { loadGeneralSettings } from "./generalSettings";
 
 const STORE_FILE = "desktop-notifications.json";
 const INBOX_KEY = "inbox"; // Record<notificationId, StoredNotification>
@@ -196,16 +198,19 @@ export async function ensurePermission(): Promise<boolean> {
   }
 }
 
-function toastBodyFor(notification: DesktopNotification): string {
-  // Always generic, derived from TYPE - the real title/body stay in the inbox.
-  switch (notification.type) {
-    case "meeting_ready":
-      return copy.toastMeetingReady;
-    case "meeting_needs_attention":
-      return copy.toastMeetingNeedsAttention;
-    default:
-      return copy.toastGeneric;
+function toastCopyFor(
+  notification: DesktopNotification,
+  detailedPreviews: boolean,
+): { title: string; body: string } {
+  if (!detailedPreviews && notification.sensitive) {
+    return { title: "Aura", body: copy.toastGeneric };
   }
+  // The notification's real title/body. Guards keep a toast from rendering
+  // blank if a producer sent an empty string: an empty title becomes "Aura",
+  // and an empty body falls back to the title, then to the generic line.
+  const title = notification.title.trim() || "Aura";
+  const body = notification.body.trim() || notification.title.trim() || copy.toastGeneric;
+  return { title, body };
 }
 
 function shouldToast(
@@ -245,16 +250,21 @@ async function maybeToast(
     // app's identity and clicking it opens the dashboard to the responsible
     // action. Fall back to the plugin's fire-and-forget toast so delivery is
     // never lost if the native path fails.
+    const settings = await loadGeneralSettings();
+    const { title, body } = toastCopyFor(
+      notification,
+      settings.sensitiveNotificationPreviews,
+    );
     try {
       await invoke("show_actionable_toast", {
         notificationId: notification.notificationId,
         action: notification.action,
-        title: "Aura",
-        body: toastBodyFor(notification),
+        title,
+        body,
       });
     } catch (invokeErr) {
       logError("desktopNotifications: actionable toast, using plugin fallback", invokeErr);
-      sendNotification({ title: "Aura", body: toastBodyFor(notification) });
+      sendNotification({ title, body });
     }
     trackEvent("desktop_notification_toast_shown", {
       type: notification.type,

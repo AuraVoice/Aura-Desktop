@@ -23,6 +23,7 @@ export function useNotchGesture(
   signedIn: boolean,
   voice: VoiceBarState,
   pointing: boolean,
+  overlayVisible: boolean,
 ): NotchGestureState {
   const [state, setState] = useState<NotchGestureState>({
     available: false,
@@ -32,12 +33,20 @@ export function useNotchGesture(
   const signedInRef = useRef(signedIn);
   const voiceRef = useRef(voice);
   const pointingRef = useRef(pointing);
+  // Whether ANY on-screen call/notch surface is currently visible (bar, pill, or
+  // moving notch). The dismiss decision keys off this, not the voice session: a
+  // surface deliberately stays visible for the ended/error/voice-capped states
+  // where desiredActive is already false, and without this a double-tap in any of
+  // those states would re-summon (or restart a call) instead of closing the
+  // surface the user is trying to get rid of.
+  const overlayVisibleRef = useRef(overlayVisible);
   const sessionActiveRef = useRef(voice.desiredActive);
   const lastSequenceRef = useRef(0);
   const actionGenerationRef = useRef(0);
   signedInRef.current = signedIn;
   voiceRef.current = voice;
   pointingRef.current = pointing;
+  overlayVisibleRef.current = overlayVisible;
 
   useEffect(() => {
     sessionActiveRef.current = voice.desiredActive;
@@ -79,7 +88,7 @@ export function useNotchGesture(
         return;
       }
 
-      if (sessionActiveRef.current) {
+      if (sessionActiveRef.current || overlayVisibleRef.current) {
         sessionActiveRef.current = false;
         logInfo("useNotchGesture: action", `sequence=${sequence} action=stop`);
         const actionStartedAtMs = Date.now();
@@ -104,6 +113,16 @@ export function useNotchGesture(
         sessionActiveRef.current = true;
         logInfo("useNotchGesture: action", `sequence=${sequence} action=start`);
         const actionStartedAtMs = Date.now();
+        currentVoice.noteTapTimestamp(
+          typeof emittedAtMs === "number" && Number.isFinite(emittedAtMs) ? emittedAtMs : receivedAtMs,
+        );
+        // Pre-dispatch: token fetch, room connect, and agent dispatch all start
+        // now, in parallel with the native summon, so the agent is already
+        // joining while the notch is still appearing. prepareSession never
+        // rejects; its failures surface through the voice error state. The
+        // visible-before-audible ordering below is unchanged - the microphone
+        // only opens via activateSession once summon_bar has resolved.
+        void currentVoice.prepareSession();
         void (async () => {
           try {
             await invoke("summon_bar");
@@ -113,7 +132,8 @@ export function useNotchGesture(
             );
             // A second toggle may have stopped this request while native window
             // operations were still in flight. Never resurrect that cancelled
-            // attempt after the notch becomes visible.
+            // attempt after the notch becomes visible - the stop toggle's
+            // endSession() already tore down the prepared room.
             if (
               actionGenerationRef.current !== actionGeneration ||
               !sessionActiveRef.current
@@ -123,7 +143,7 @@ export function useNotchGesture(
               );
               return;
             }
-            await currentVoice.startSession();
+            await currentVoice.activateSession();
             logInfo(
               "useNotchGesture: start settled",
               `sequence=${sequence} elapsedMs=${Date.now() - actionStartedAtMs} status=${voiceRef.current.status}`,
@@ -131,6 +151,11 @@ export function useNotchGesture(
           } catch (err) {
             sessionActiveRef.current = false;
             logError("useNotchGesture: summon/start", err);
+            // The notch never appeared, but prepareSession may already have a
+            // room connecting - tear it down so an invisible call can't run.
+            void currentVoice.endSession().catch((endErr) =>
+              logError("useNotchGesture: end after failed summon", endErr),
+            );
           }
         })();
       }

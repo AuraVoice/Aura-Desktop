@@ -10,27 +10,19 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { validateAgentDataMessage } from "../lib/agentData";
 import { logError } from "../lib/log";
+import {
+  asArrayBuffer,
+  parseCapturedFrame,
+  screenPointFor,
+  type ScreenFrameGeometry,
+} from "../lib/screenFrame";
 import type { VoiceSessionStatus } from "./useVoiceBar";
-
-interface ScreenFrameGeometry {
-  monitorLeftPx: number;
-  monitorTopPx: number;
-  monitorWidthPx: number;
-  monitorHeightPx: number;
-  scaleFactor: number;
-  jpegWidthPx: number;
-  jpegHeightPx: number;
-}
 
 const RETAINED_FRAME_GEOMETRY_COUNT = 4;
 
 // How long the "Saved to X" confirmation stays in the bar's caption before
 // yielding back to the normal assistant caption.
 const SAVED_CONFIRMATION_DURATION_MS = 3500;
-
-// Must match `GEOMETRY_HEADER_LEN` and `ScreenFrameGeometry::write_le` in
-// screenshot.rs - 7 little-endian 4-byte fields ahead of the raw JPEG bytes.
-const GEOMETRY_HEADER_LEN = 4 * 7;
 
 function isSessionLive(status: VoiceSessionStatus): boolean {
   return status === "ready" || status === "listening" || status === "processing" || status === "speaking";
@@ -40,55 +32,9 @@ function isTerminalStatus(status: VoiceSessionStatus): boolean {
   return status === "disconnected" || status === "ended" || status === "error";
 }
 
-// invoke() only delivers a real ArrayBuffer while Tauri's custom-protocol IPC
-// channel is alive. A single failed fetch on that channel (a CSP connect-src
-// missing "ipc: http://ipc.localhost" did exactly this in the 0.1.4 build)
-// latches the whole session onto Tauri's postMessage fallback, where a raw
-// tauri::ipc::Response gets JSON-serialized into a plain number array instead.
-// Normalize the transport's shapes rather than handing DataView something it
-// throws on - see lessons-learnt.txt, 2026-07-07.
-function asArrayBuffer(raw: unknown): ArrayBuffer {
-  if (raw instanceof ArrayBuffer) return raw;
-  if (ArrayBuffer.isView(raw)) {
-    return raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength) as ArrayBuffer;
-  }
-  if (Array.isArray(raw)) return Uint8Array.from(raw as number[]).buffer;
-  throw new Error(`capture returned ${Object.prototype.toString.call(raw)}, expected binary`);
-}
-
-function parseCapturedFrame(buffer: ArrayBuffer): { geometry: ScreenFrameGeometry; bytes: Uint8Array } {
-  const view = new DataView(buffer);
-  const geometry: ScreenFrameGeometry = {
-    monitorLeftPx: view.getInt32(0, true),
-    monitorTopPx: view.getInt32(4, true),
-    monitorWidthPx: view.getUint32(8, true),
-    monitorHeightPx: view.getUint32(12, true),
-    scaleFactor: view.getFloat32(16, true),
-    jpegWidthPx: view.getUint32(20, true),
-    jpegHeightPx: view.getUint32(24, true),
-  };
-  return { geometry, bytes: new Uint8Array(buffer, GEOMETRY_HEADER_LEN) };
-}
-
-/** Maps a JPEG-space point back onto the real screen - port of `logicalPointFor`. */
-function screenPointFor(geometry: ScreenFrameGeometry, jpegX: number, jpegY: number) {
-  const clampedX = Math.min(Math.max(jpegX, 0), geometry.jpegWidthPx);
-  const clampedY = Math.min(Math.max(jpegY, 0), geometry.jpegHeightPx);
-  const physicalX = geometry.monitorLeftPx + clampedX * (geometry.monitorWidthPx / geometry.jpegWidthPx);
-  const physicalY = geometry.monitorTopPx + clampedY * (geometry.monitorHeightPx / geometry.jpegHeightPx);
-  return {
-    x: physicalX / geometry.scaleFactor,
-    y: physicalY / geometry.scaleFactor,
-    monitorX: geometry.monitorLeftPx / geometry.scaleFactor,
-    monitorY: geometry.monitorTopPx / geometry.scaleFactor,
-    monitorWidth: geometry.monitorWidthPx / geometry.scaleFactor,
-    monitorHeight: geometry.monitorHeightPx / geometry.scaleFactor,
-  };
-}
-
 /**
- * Push-to-look, never ambient: the user arms this per session (hotkey or eye
- * button), one frame goes out on arm and one at the start of each spoken
+ * Legacy explicitly-armed screen-sight transport: one frame goes out on arm
+ * and one at the start of each spoken
  * turn. Direct port of `screen_sight_service.dart`, translated onto the real
  * LiveKit signals it actually listens to (its own already-translated event
  * stream) rather than the raw wire protocol.
@@ -159,9 +105,9 @@ export function useScreenSight(room: Room | null, status: VoiceSessionStatus) {
   }, []);
 
   // Rust owns the armed bit (security.rs) - capture authorization is checked
-  // there, not against this mirror. The eye button asks Rust to toggle; the
-  // new state comes back on the screen-sight-armed event below, same as the
-  // Ctrl+Alt+S hotkey (which never leaves Rust at all).
+  // there, not against this mirror. Any native toggle asks Rust to change it;
+  // the new state comes back on the screen-sight-armed event below, same as
+  // the Ctrl+Alt+S hotkey (which never leaves Rust at all).
   const toggleArmed = useCallback(() => {
     invoke("toggle_screen_sight_armed").catch((err) =>
       logError("useScreenSight: toggle_screen_sight_armed", err),
@@ -171,7 +117,7 @@ export function useScreenSight(room: Room | null, status: VoiceSessionStatus) {
   const statusRef = useRef(status);
   statusRef.current = status;
 
-  // The single armed-state funnel for every trigger (hotkey, eye button,
+  // The single armed-state funnel for every trigger (hotkey, native command,
   // voice end, sign-out): mirror Rust's bit and fire the on-arm capture.
   useEffect(() => {
     let unlisten: (() => void) | undefined;

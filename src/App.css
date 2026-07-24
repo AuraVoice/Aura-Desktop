@@ -24,6 +24,14 @@ body,
   background: transparent;
 }
 
+/* Overlay window only (main.tsx tags <html>): it is sized to its content and
+   must never show a scrollbar. The dashboard window keeps its normal scrolling. */
+html.is-overlay,
+html.is-overlay body,
+html.is-overlay #root {
+  overflow: hidden;
+}
+
 * {
   box-sizing: border-box;
 }

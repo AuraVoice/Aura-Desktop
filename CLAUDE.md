@@ -62,6 +62,13 @@ Conversations, Drafts, and Saved (`src/dashboard/pages/`) read the user's real c
 
 The client is `src/lib/dashboardApi.ts` (typed, snake_case→camelCase, layered on `authFetch`). Fetch state goes through `useDashboardResource.ts` (stale-while-revalidate: in-memory-over-disk cache via `dashboardCache.ts`, freshness gate, single-flight, hard timeout, out-of-order guard). Screen-save `image_url`s are ephemeral signed URLs - the cache strips them (`toCache`) and they render only from a live fetch. UI is a data-driven fixed shell (`components/DashboardCard` fed a `CardModel`, `CardGrid`, `DetailModal`, `RangeChips`); keep the three-layer split (contracts / cache+fetch / presentational) when extending it. Open external links with `openUrl` from `@tauri-apps/plugin-opener`, never a bare `<a target="_blank">` (the webview ignores those).
 
+## Desktop notifications
+
+`src/lib/desktopNotifications.ts` is the ONE broker every producer calls (local Rust/JS events and backend events polled from the outbox). It owns the durable inbox, dedup, permission, and the toast-once guarantee (delivered ids persist across restart, so a relaunch never replays a toast). Two non-obvious rules:
+
+- **Toast copy is the notification's own title + body** (`toastCopyFor`), changed 2026-07-21 from the earlier generic-per-type copy that kept content off the lock screen. Meeting titles now appear on the Windows lock screen and in Action Center - this was a deliberate product call, not an accident. The contract's `sensitive` flag (`desktopNotificationContract.ts`) is parsed and stored but NOT currently enforced; it is the intended escape hatch. If you re-add privacy-generic copy, gate it on `sensitive` inside `toastCopyFor`, do not resurrect the per-type string switch. An empty title/body falls back so a toast never renders blank. Telemetry still never carries title/body - only the user-facing toast and inbox do.
+- **Pre-capture meeting misses are silent by design.** A toast fires ONLY for a meeting that actually started capturing (capture-ended local notify, `meeting_upload_pending`, or the backend's `meeting_ready`). An armed meeting that was never detected (Google Meet in a background tab, started outside its scheduled window), an ad-hoc call with no calendar event, or a claim blocked by the monthly cap produces NO toast - the cap only shows an in-bar caption (`useMeetingCapture.ts` header: "every failure path here is silent to the user except the monthly cap"). To notify on any of these, add a new producer + notification type; the broker will not synthesize one.
+
 ## Workflows
 
 Dev loop - ask first, the user runs these and reports back (see Working style):

@@ -1,7 +1,7 @@
 use tauri::AppHandle;
 use tauri_plugin_global_shortcut::{Code, Modifiers, Shortcut};
 
-use crate::{dashboard, overlay, security};
+use crate::{dashboard, guide, overlay, security};
 
 /// Summon/hide the overlay.
 pub fn summon_shortcut() -> Shortcut {
@@ -25,6 +25,11 @@ pub fn screen_sight_shortcut() -> Shortcut {
     Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyS)
 }
 
+/// Arms or disarms Guide Mode for the pinned cursor monitor.
+pub fn guide_mode_shortcut() -> Shortcut {
+    Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyG)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -42,6 +47,15 @@ mod tests {
         // Ctrl+Alt+D vs Ctrl+Shift+D: same key, different modifiers.
         assert_ne!(open_dashboard_shortcut(), sign_out_shortcut());
     }
+
+    #[test]
+    fn guide_mode_is_ctrl_alt_g_and_distinct() {
+        assert_eq!(
+            guide_mode_shortcut(),
+            Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyG)
+        );
+        assert_ne!(guide_mode_shortcut(), screen_sight_shortcut());
+    }
 }
 
 pub fn handle(app: &AppHandle, shortcut: &Shortcut) {
@@ -58,5 +72,7 @@ pub fn handle(app: &AppHandle, shortcut: &Shortcut) {
         // "screen-sight-armed" with the new state; the frontend mirrors that
         // instead of flipping its own boolean off a bare hotkey event.
         security::toggle_screen_sight(app);
+    } else if shortcut == &guide_mode_shortcut() {
+        guide::toggle(app);
     }
 }

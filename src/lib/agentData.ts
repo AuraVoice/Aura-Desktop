@@ -50,7 +50,13 @@ export type KnownAgentEventType =
   | "draft.created"
   | "draft.updated"
   | "draft.failed"
-  | "session.error";
+  | "session.error"
+  | "guide.step"
+  // Desktop control (desktop client only). The verb lives inside
+  // payload.id and is validated against the client capability registry
+  // (desktopCapabilities.ts), so this stays a single message type no matter
+  // how many verbs exist - the whole point of the capability-as-data design.
+  | "desktop.run";
 
 export interface ValidAgentEvent {
   kind: "valid";
@@ -83,6 +89,7 @@ const MAX_TYPE_LENGTH = 64;
  * React state or the clipboard. */
 const FIELD_CAPS: Record<string, number> = {
   frame_id: 64,
+  id: 64,
   label: 300,
   collection_name: 300,
   title: 300,
@@ -94,6 +101,7 @@ const FIELD_CAPS: Record<string, number> = {
   code: 64,
   context_summary: 4_000,
   text: 32_000,
+  instruction: 2_000,
 };
 
 const KNOWN_TYPES: ReadonlySet<string> = new Set([
@@ -104,6 +112,8 @@ const KNOWN_TYPES: ReadonlySet<string> = new Set([
   "draft.updated",
   "draft.failed",
   "session.error",
+  "guide.step",
+  "desktop.run",
 ] satisfies KnownAgentEventType[]);
 
 // Rejection logging is throttled per reason so a hostile flood can't turn
@@ -134,6 +144,42 @@ function payloadWithinLimits(type: KnownAgentEventType, payload: Record<string, 
     const { x, y } = payload;
     if (typeof x !== "number" || !Number.isFinite(x)) return false;
     if (typeof y !== "number" || !Number.isFinite(y)) return false;
+  }
+  if (type === "guide.step") return validateGuideStep(payload);
+  return true;
+}
+
+function validateGuideStep(payload: Record<string, unknown>): boolean {
+  const frameId = payload.frame_id;
+  const frameSeq = payload.frame_seq;
+  const stepIndex = payload.step_index;
+  const instruction = payload.instruction;
+  if (typeof frameId !== "string" || frameId.length > 64) return false;
+  const frameMatch = /^([0-9a-f]{32}):(\d+)$/.exec(frameId);
+  if (!frameMatch) return false;
+  if (!Number.isInteger(frameSeq) || (frameSeq as number) < 0 || (frameSeq as number) > 0xffff_ffff) {
+    return false;
+  }
+  if (Number(frameMatch[2]) !== frameSeq) return false;
+  if (!Number.isInteger(stepIndex) || (stepIndex as number) < 1) return false;
+  if (
+    typeof instruction !== "string" ||
+    instruction.length > FIELD_CAPS.instruction ||
+    instruction.trim().length === 0
+  ) {
+    return false;
+  }
+  if (payload.done !== undefined && typeof payload.done !== "boolean") return false;
+  if (payload.point === undefined) return true;
+  if (!isPlainObject(payload.point)) return false;
+  if (payload.point.frame_id !== frameId) return false;
+  if (typeof payload.point.x !== "number" || !Number.isFinite(payload.point.x)) return false;
+  if (typeof payload.point.y !== "number" || !Number.isFinite(payload.point.y)) return false;
+  if (
+    payload.point.label !== undefined &&
+    (typeof payload.point.label !== "string" || payload.point.label.trim().length > FIELD_CAPS.label)
+  ) {
+    return false;
   }
   return true;
 }
@@ -187,10 +233,26 @@ export function validateAgentDataMessage(
   if (eventPayload !== undefined && !isPlainObject(eventPayload)) {
     return { kind: "agent-unknown", reason: "bad-payload-shape" };
   }
-  const payloadObject = eventPayload ?? {};
+  let payloadObject = eventPayload ?? {};
   if (!payloadWithinLimits(knownType, payloadObject)) {
     logRejection("schema", `type=${knownType} identity=${participant.identity}`);
     return { kind: "agent-unknown", reason: "schema" };
+  }
+  if (knownType === "guide.step") {
+    const point = isPlainObject(payloadObject.point)
+      ? {
+          ...payloadObject.point,
+          label:
+            typeof payloadObject.point.label === "string"
+              ? payloadObject.point.label.trim()
+              : undefined,
+        }
+      : undefined;
+    payloadObject = {
+      ...payloadObject,
+      instruction: (payloadObject.instruction as string).trim(),
+      point,
+    };
   }
 
   const message = typeof event.message === "string" && event.message.length <= 2_000

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -8,16 +8,21 @@ vi.stubGlobal("window", {
 });
 
 const mocks = vi.hoisted(() => ({
+  user: { uid: "user-1" } as { uid: string } | null,
+  invoke: vi.fn(() => Promise.resolve()),
   useMeetings: vi.fn(),
   useMeetingArm: vi.fn(),
   useMeetingCapture: vi.fn(),
   useOnboardingTail: vi.fn(),
+  useGuideMode: vi.fn(),
+  useDraftCard: vi.fn(),
+  guideStop: vi.fn(),
 }));
 
 vi.mock("../state/AuthProvider", () => ({
-  useAuth: () => ({ user: { uid: "user-1" } }),
+  useAuth: () => ({ user: mocks.user }),
 }));
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve()) }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn(() => Promise.resolve(() => {})),
 }));
@@ -42,8 +47,9 @@ vi.mock("./useTurnScreenCapture", () => ({
   useTurnScreenCapture: () => ({ notice: null }),
 }));
 vi.mock("./useDraftCard", () => ({
-  useDraftCard: () => ({ phase: "idle", reset: vi.fn() }),
+  useDraftCard: mocks.useDraftCard,
 }));
+vi.mock("./useGuideMode", () => ({ useGuideMode: mocks.useGuideMode }));
 vi.mock("./useUpdateReady", () => ({ useUpdateReady: vi.fn() }));
 vi.mock("./useMeetings", () => ({ useMeetings: mocks.useMeetings }));
 vi.mock("./useMeetingArm", () => ({ useMeetingArm: mocks.useMeetingArm }));
@@ -51,11 +57,30 @@ vi.mock("./useMeetingCapture", () => ({ useMeetingCapture: mocks.useMeetingCaptu
 vi.mock("./useOnboardingTail", () => ({ useOnboardingTail: mocks.useOnboardingTail }));
 vi.mock("./OnboardingTail", () => ({ OnboardingTail: () => <div>tail</div> }));
 vi.mock("./NotchBar", () => ({ NotchBar: () => <div>notch</div> }));
-vi.mock("./DraftCard", () => ({ DraftCard: () => <div>draft</div> }));
+vi.mock("./DraftCard", () => ({
+  DraftCard: () => <div>draft</div>,
+  INITIAL_DRAFT_SLOT_HEIGHT: 180,
+}));
+vi.mock("./useCallbackCard", () => ({
+  useCallbackCard: () => ({ visible: false, reset: vi.fn() }),
+}));
 
 import { OverlayRoot } from "./OverlayRoot";
 
 let renderer: ReactTestRenderer | null = null;
+
+beforeEach(() => {
+  mocks.user = { uid: "user-1" };
+  mocks.useGuideMode.mockReturnValue({
+    armed: false,
+    stop: mocks.guideStop,
+  });
+  mocks.useDraftCard.mockReturnValue({ phase: "idle", reset: vi.fn() });
+  mocks.useMeetings.mockReturnValue({ events: [] });
+  mocks.useMeetingArm.mockReturnValue({ isArmed: vi.fn(() => false), revision: 0 });
+  mocks.useMeetingCapture.mockReturnValue({});
+  mocks.useOnboardingTail.mockReturnValue({ status: "done", complete: vi.fn() });
+});
 
 afterEach(() => {
   if (renderer) {
@@ -114,5 +139,38 @@ describe("OverlayRoot meeting background services", () => {
     const text = JSON.stringify(renderer!.toJSON());
     expect(text).toContain("tail");
     expect(text).not.toContain("notch");
+  });
+
+  it("keeps Guide Mode out of the card slot so drafts remain conversationally available", () => {
+    mocks.useGuideMode.mockReturnValue({
+      armed: true,
+      stop: mocks.guideStop,
+    });
+    mocks.useDraftCard.mockReturnValue({ phase: "ready", reset: vi.fn() });
+
+    act(() => {
+      renderer = create(<OverlayRoot />);
+    });
+
+    const text = JSON.stringify(renderer!.toJSON());
+    expect(text).not.toContain("Check now");
+    expect(text).not.toContain("Still checking");
+    expect(text).toContain('"children":["draft"]');
+    expect(mocks.invoke).toHaveBeenCalledWith("set_slot_height", { height: 180 });
+  });
+
+  it("stops Guide mode and clears the slot when sign-out reaches the root", () => {
+    mocks.user = null;
+    mocks.useGuideMode.mockReturnValue({
+      armed: true,
+      stop: mocks.guideStop,
+    });
+
+    act(() => {
+      renderer = create(<OverlayRoot />);
+    });
+
+    expect(mocks.guideStop).toHaveBeenCalled();
+    expect(mocks.invoke).toHaveBeenCalledWith("set_slot_height", { height: null });
   });
 });

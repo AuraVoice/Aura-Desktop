@@ -1,11 +1,21 @@
 import { useEffect, useRef, useState } from "react";
 import { GlassSurface } from "./GlassSurface";
-import { BellIcon, CalendarIcon, DashboardIcon, FeedbackIcon, RecordDotIcon, SignOutIcon, UpdateIcon } from "./icons";
+import {
+  BellIcon,
+  CalendarIcon,
+  DashboardIcon,
+  FeedbackIcon,
+  NotesIcon,
+  RecordDotIcon,
+  SettingsIcon,
+  SignOutIcon,
+  UpdateIcon,
+} from "./icons";
 import { kebabMenu as copy, subscription as subCopy } from "../lib/copy";
 import { meetingNotes as notesCopy } from "../lib/meetingCopy";
 import { notifications as notifCopy } from "../lib/notificationCopy";
 import { sendFeedback } from "../lib/feedback";
-import { openDashboard } from "../lib/dashboardLink";
+import { openDashboardWindow } from "../lib/dashboardWindow";
 import { logError } from "../lib/log";
 import type { CheckoutPhase, EntitlementState } from "../state/useEntitlement";
 import "./KebabMenu.css";
@@ -146,11 +156,33 @@ export function KebabMenu({
             className="kebab-menu-item"
             onClick={() => {
               onClose();
-              void openDashboard();
+              void openDashboardWindow("/home");
             }}
           >
             <DashboardIcon />
             <span>{copy.dashboard}</span>
+          </button>
+          <button
+            type="button"
+            className="kebab-menu-item"
+            onClick={() => {
+              onClose();
+              void openDashboardWindow("/insights");
+            }}
+          >
+            <NotesIcon />
+            <span>Insights</span>
+          </button>
+          <button
+            type="button"
+            className="kebab-menu-item"
+            onClick={() => {
+              onClose();
+              void openDashboardWindow("/general");
+            }}
+          >
+            <SettingsIcon />
+            <span>Settings</span>
           </button>
           <button
             type="button"

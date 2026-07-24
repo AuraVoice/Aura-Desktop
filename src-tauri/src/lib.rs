@@ -2,6 +2,7 @@ mod auth_cache;
 mod autostart;
 mod dashboard;
 mod entitlement;
+mod guide;
 mod hotkeys;
 mod logging;
 mod meeting;
@@ -13,6 +14,7 @@ mod screenshot;
 mod screenshot_store;
 mod security;
 mod sentry_setup;
+mod system_control;
 mod toast;
 mod tray;
 mod updater;
@@ -23,7 +25,7 @@ use log::{error, info};
 use tauri::{AppHandle, Manager, WindowEvent};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
-use overlay::{OnboardingStep, OverlaySnapshot, OverlayStateHandle, PanelVariant};
+use overlay::{NotchEdge, OnboardingStep, OverlaySnapshot, OverlayStateHandle, PanelVariant};
 use win_focus::ForegroundGeneration;
 
 #[tauri::command]
@@ -94,6 +96,11 @@ fn open_dashboard_window(app: AppHandle) -> Result<(), String> {
     dashboard::open_dashboard_window(&app)
 }
 
+#[tauri::command]
+fn open_dashboard_route(app: AppHandle, route: String) -> Result<(), String> {
+    dashboard::open_dashboard_route(&app, Some(&route))
+}
+
 fn should_summon_on_start<I, S>(args: I, just_updated: bool) -> bool
 where
     I: IntoIterator<Item = S>,
@@ -135,6 +142,31 @@ fn point_at(
 #[tauri::command]
 fn cancel_pointing(app: AppHandle) {
     overlay::cancel_pointing(&app);
+}
+
+/// Docks the notch to a screen edge (top/bottom/left/right) and persists it.
+#[tauri::command]
+fn set_notch_edge(app: AppHandle, edge: NotchEdge) {
+    overlay::set_notch_edge(&app, edge);
+}
+
+/// Long-press drag-to-dock, step 1: takes the active display fullscreen and
+/// cursor-live so the frontend can render the edge-picker drag surface.
+#[tauri::command]
+fn begin_notch_move(app: AppHandle) -> Result<(), String> {
+    overlay::begin_notch_move(&app)
+}
+
+/// Step 2: release on `edge` docks the notch there and restores the bar.
+#[tauri::command]
+fn commit_notch_move(app: AppHandle, edge: NotchEdge) {
+    overlay::commit_notch_move(&app, edge);
+}
+
+/// Step 2 (cancel/Escape): restores the bar at its current edge unchanged.
+#[tauri::command]
+fn cancel_notch_move(app: AppHandle) {
+    overlay::cancel_notch_move(&app);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -188,6 +220,8 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(OverlayStateHandle::default())
         .manage(security::SecurityHandle::default())
+        .manage(guide::GuideRuntimeHandle::default())
+        .manage(guide::GuideToggleHandle::default())
         .manage(ForegroundGeneration::default())
         .manage(updater::PendingUpdate::default())
         .manage(updater::UpdatedNotice::default())
@@ -207,12 +241,24 @@ pub fn run() {
             summon_bar,
             summon_onboarding_panel,
             open_dashboard_window,
+            open_dashboard_route,
             dismiss_bar,
             point_at,
             cancel_pointing,
+            set_notch_edge,
+            begin_notch_move,
+            commit_notch_move,
+            cancel_notch_move,
+            system_control::run_desktop_capability,
             security::set_auth_state,
             security::toggle_screen_sight_armed,
             security::screen_sight_armed,
+            guide::arm_guide,
+            guide::disarm_guide,
+            guide::guide_armed_state,
+            guide::capture_guide_frame,
+            guide::commit_guide_frame,
+            guide::ack_guide_response,
             updater::install_update,
             updater::pending_update_version,
             updater::just_updated_version,
@@ -269,6 +315,7 @@ pub fn run() {
                 ("open-dashboard", hotkeys::open_dashboard_shortcut()),
                 ("sign-out", hotkeys::sign_out_shortcut()),
                 ("screen-sight", hotkeys::screen_sight_shortcut()),
+                ("guide-mode", hotkeys::guide_mode_shortcut()),
             ] {
                 if let Err(e) = app.global_shortcut().register(shortcut) {
                     error!("hotkeys: failed to register {name} ({e}) - another process holds it; continuing without it");
@@ -292,6 +339,7 @@ pub fn run() {
             tray::build(app.handle())?;
 
             if let Some(window) = app.get_webview_window("main") {
+                overlay::exclude_main_window_from_capture(&window)?;
                 let moved_handle = handle.clone();
                 window.on_window_event(move |event| {
                     if let WindowEvent::Moved(position) = event {

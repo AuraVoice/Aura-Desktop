@@ -45,15 +45,25 @@ function voiceState(
     isVoiceCapped: false,
     desiredActive: false,
     startSession: vi.fn(async () => {}),
+    prepareSession: vi.fn(() => Promise.resolve()),
+    activateSession: vi.fn(async () => {}),
+    noteTapTimestamp: vi.fn(),
     endSession: vi.fn(async () => {}),
     toggleSession: vi.fn(),
     room: null,
+    sessionMode: "standard",
     ...overrides,
   };
 }
 
-function Harness({ voice }: { voice: ReturnType<typeof useVoiceBar> }) {
-  useNotchGesture(true, voice, false);
+function Harness({
+  voice,
+  overlayVisible = false,
+}: {
+  voice: ReturnType<typeof useVoiceBar>;
+  overlayVisible?: boolean;
+}) {
+  useNotchGesture(true, voice, false, overlayVisible);
   return null;
 }
 
@@ -93,10 +103,13 @@ describe("useNotchGesture visible-before-voice ordering", () => {
     });
 
     act(() => mocks.toggleListener?.({ payload: { sequence: 1 } }));
-    expect(voice.startSession).not.toHaveBeenCalled();
+    // Pre-dispatch fires the transport (token + connect + agent dispatch)
+    // immediately, but the microphone stays closed until the notch is visible.
+    expect(voice.prepareSession).toHaveBeenCalledTimes(1);
+    expect(voice.activateSession).not.toHaveBeenCalled();
 
     await act(async () => summon.resolve());
-    expect(voice.startSession).toHaveBeenCalledTimes(1);
+    expect(voice.activateSession).toHaveBeenCalledTimes(1);
   });
 
   it("does not start voice when native notch presentation fails", async () => {
@@ -113,7 +126,10 @@ describe("useNotchGesture visible-before-voice ordering", () => {
     });
 
     await act(async () => mocks.toggleListener?.({ payload: { sequence: 1 } }));
-    expect(voice.startSession).not.toHaveBeenCalled();
+    // The mic never opens, and any pre-dispatched transport is torn down so an
+    // invisible call cannot keep running.
+    expect(voice.activateSession).not.toHaveBeenCalled();
+    expect(voice.endSession).toHaveBeenCalled();
   });
 
   it("keeps a stop toggle from being resurrected by a late summon", async () => {
@@ -137,7 +153,43 @@ describe("useNotchGesture visible-before-voice ordering", () => {
     expect(voice.endSession).toHaveBeenCalledTimes(1);
 
     await act(async () => summon.resolve());
-    expect(voice.startSession).not.toHaveBeenCalled();
+    expect(voice.activateSession).not.toHaveBeenCalled();
     expect(mocks.invoke).toHaveBeenCalledWith("dismiss_bar");
+  });
+
+  it("dismisses a visible bar even when no voice session is active", async () => {
+    // The bar stays on screen for ended/error/voice-capped states, where
+    // desiredActive is already false. A double-tap there must close the bar,
+    // not re-summon or restart a call.
+    const voice = voiceState({ status: "ended", desiredActive: false });
+    await act(async () => {
+      renderer = create(<Harness voice={voice} overlayVisible />);
+    });
+
+    await act(async () => mocks.toggleListener?.({ payload: { sequence: 1 } }));
+
+    expect(mocks.invoke).toHaveBeenCalledWith("dismiss_bar");
+    expect(mocks.invoke).not.toHaveBeenCalledWith("summon_bar");
+    expect(voice.prepareSession).not.toHaveBeenCalled();
+    expect(voice.activateSession).not.toHaveBeenCalled();
+    expect(voice.endSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("dismisses any visible non-bar surface (pill/moving notch) without restarting a call", async () => {
+    // OverlayRoot maps the minimized-call pill and the drag-mode moving notch
+    // into overlayVisible too, so a double-tap over either must close, never
+    // re-enter the summon branch. Here the session already ended (desiredActive
+    // false) but a surface is still on screen - the pre-fix gap that restarted a
+    // call. It must take the dismiss branch off overlayVisible alone.
+    const voice = voiceState({ status: "ended", desiredActive: false });
+    await act(async () => {
+      renderer = create(<Harness voice={voice} overlayVisible />);
+    });
+
+    await act(async () => mocks.toggleListener?.({ payload: { sequence: 1 } }));
+
+    expect(mocks.invoke).toHaveBeenCalledWith("dismiss_bar");
+    expect(mocks.invoke).not.toHaveBeenCalledWith("summon_bar");
+    expect(voice.prepareSession).not.toHaveBeenCalled();
   });
 });

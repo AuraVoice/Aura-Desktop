@@ -140,13 +140,27 @@ describe("desktop notification broker", () => {
       notificationId: "meeting-1",
       action: "view_meeting",
     });
-    // The privacy rule holds: the toast body is exactly the generic
-    // TYPE-derived copy, never the row's real title/body.
-    expect(fake.invoked[0].args.body).toBe(
-      "Your meeting insights are ready. Open Aura to view.",
-    );
-    expect(fake.invoked[0].args.body).not.toContain("Meeting ready");
+    // The toast carries the notification's own title and body, so the
+    // lock-screen alert matches what the inbox shows.
+    expect(fake.invoked[0].args.title).toBe("Meeting ready");
+    expect(fake.invoked[0].args.body).toBe("Open Aura to view.");
     expect(fake.sent).toHaveLength(0);
+  });
+
+  it("guards against a blank toast when title or body is empty", async () => {
+    fake.permissionGranted = true;
+    await bindOwner("user-1");
+
+    await ingest(
+      { ...notification("meeting-1"), title: "", body: "" },
+      { appHidden: true, ownerUid: "user-1" },
+    );
+
+    expect(fake.invoked).toHaveLength(1);
+    // Empty title falls back to "Aura"; empty body falls back to the generic
+    // line so the toast is never rendered blank.
+    expect(fake.invoked[0].args.title).toBe("Aura");
+    expect(fake.invoked[0].args.body).toBe("Aura has an update for you. Open Aura to view.");
   });
 
   it("falls back to the plugin toast when the native command fails", async () => {

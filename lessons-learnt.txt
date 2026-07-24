@@ -315,4 +315,320 @@ Justification: A perfect prompt cannot call a tool that deterministic orchestrat
 Capability routing, execution safety, transport truthfulness, rendering, and recovery therefore
 need separate contracts and tests. Tool-specific skills improve accuracy without bloating every
 voice turn, while policy code remains the authority for side effects and freshness. 
+
+Date: 2026-07-14
+Problem: Ctrl+Alt+B appeared unable to hide the overlay after a draft or visible artifact arrived.
+Issue: The native hotkey did hide the window successfully, but useDraftCard treated every later
+Hidden presentation as a failed artifact presentation and immediately invoked summon. Logs showed
+the window completing Hidden and returning to Panel 20 to 25 ms later. The recovery effect was
+intended only for an artifact that arrived while the full-screen pointer animation was in flight,
+but it did not remember whether pointer mode was actually the reason visibility had been deferred.
+Solution: Track a pending restore only when a draft event arrives during Pointing. When Pointing
+ends, consume that one-shot marker and restore only if the prior presentation returns Hidden.
+Existing drafts no longer reopen the overlay after a user hotkey or Esc hide. A pure regression
+test pins intentional hide, pointer wait, hidden restore, and visible-panel cleanup behavior.
+Justification: Recovery state must record the specific interrupted transition it is recovering
+from. Deriving recovery from "content exists and the window is hidden" overrides an explicit user
+action and turns a successful native hide into a visible no-op.
 (V0.2.3 makes Buddy’s useful text easier to see and reuse. PowerShell commands, code, configuration, prompts, checklists, and next steps now open in a copyable on-screen card instead of being read aloud, with Markdown formatting and exact whitespace preservation for runnable content. Buddy can also recover when asked to show something again, automatically restores the overlay when needed, and keeps email and message drafts separate from temporary visible artifacts.)
+
+Date: 2026-07-14
+Problem: A real 22-minute meeting capture produced no summary or insights, with no visible error.
+Issue: The meeting-audio bucket gs://juno-2ea45-meeting-audio was never provisioned, so every
+segment upload got GCS 404 "bucket does not exist", which the handler collapsed to HTTP 503. deploy.sh
+only DOCUMENTED the bucket as a manual one-time step in a comment and never verified it, so a revision
+that could not accept any meeting audio shipped and took 100% of traffic silently. The client behaved
+correctly: the desktop's durable encrypted queue retained all five segments and kept retrying.
+Solution: Added scripts/check_meeting_storage.py (backend) as a read-only preflight for bucket
+existence, region, and the 7-day lifecycle rule, and wired it into deploy.sh BEFORE gcloud run deploy
+so a missing or misconfigured bucket aborts the deploy under set -euo pipefail. Runtime uploads stay
+retryable. Recovery of the stuck meeting needs no client change: restart resets the in-memory backoff
+and the queue re-uploads.
+Justification: A provisioning prerequisite that lives only in a comment is not a prerequisite. An
+infrastructure dependency the app hard-requires must fail the deploy that lacks it, not fail silently
+at runtime as a routine-looking 503. Distinguish a config failure (bucket missing) from a transient
+provider error so the first is caught before traffic shifts and the second stays retryable.
+
+Date: 2026-07-15
+Problem: The notification inbox's "Retry upload" button could close the inbox and do nothing, with
+no feedback, so the user believed they had retried when they had not.
+Issue: A retry action and its retryable local activity live in two separate durable stores. After a
+restart that purged the native segment queue, the pump reconcile flips the activity to
+failed/upload_expired (retryable: false) while the notification row, in its own store, still shows
+the Retry button. retryNow() bailed silently when no retryable activity remained, but the caller
+closed the inbox and returned regardless, producing a dead action.
+Solution: retryNow() now returns whether it actually started a retry. The caller closes the inbox
+only on true; otherwise it falls through to the existing openDashboard() default so the click always
+lands the user somewhere the real meeting state is visible.
+Justification: An action button whose backing state can be absent must report success, not fail
+open. When two stores can disagree about whether an action is still possible, the UI must degrade to
+a meaningful fallback instead of a silent no-op that reads as "done."
+
+Date: 2026-07-15
+Problem: A voice session could be toggled off while token fetch or LiveKit connection was still
+pending, then continue forward and enable the microphone after the user had already ended it.
+Issue: Disconnecting the room reference is not cancellation for an async start pipeline. Each
+resolved await resumes its original closure unless the user's latest intent is checked again.
+Solution: Keep synchronous desired-active state plus a monotonically increasing session generation.
+Every token, connect, and microphone await verifies both before advancing. Ending increments the
+generation, closes native voice authorization immediately, disables the microphone, and disconnects
+any partial room. Native Right Ctrl events carry a separate sequence used only for UI deduplication.
+Justification: User intent must be the authority across every asynchronous boundary. Resource cleanup
+alone cannot prevent stale code from creating or re-enabling the resource after cleanup ran.
+
+Date: 2026-07-16
+Problem: A global single Ctrl tap was too easy to trigger accidentally once the resting companion
+was removed and voice became summon-on-demand.
+Issue: The low-level hook correctly identified an isolated Right Ctrl release, but putting timing in
+that Windows callback would add avoidable work to a latency-sensitive system hook.
+Solution: Keep the hook and its chord-cancelling TapState unchanged. Classify tap timing in the async
+receiver instead, emit aura-toggle only for two isolated taps within 250 ms, and drop lone taps.
+Justification: System hooks should do the minimum possible work. A pure timestamp classifier keeps
+the interaction testable without making the keyboard callback allocate, wait, or emit UI events.
+
+Date: 2026-07-16
+Problem: The notch and draft share one native window, but adding draft height could move the notch
+away from the fixed top-center anchor.
+Issue: Companion geometry treats the persisted center as the owl base and grows a surface upward.
+Applying that rule to the notch would shift the bar whenever the draft slot opened.
+Solution: Give Bar its own fixed top-center position that ignores slot height and persisted center.
+Its window height grows downward from 72 px while the Companion path keeps its upward-growth math.
+Justification: Shared state does not imply shared anchoring. Each presentation needs geometry based
+on the visual element that must remain stationary during a slot resize.
+
+Date: 2026-07-16
+Problem: The voice gesture depended on Right Ctrl, which compact keyboards may omit entirely.
+Issue: The Windows virtual-key constant and its label were hardcoded in several native paths, so
+changing the key risked leaving installation logs and status payloads inconsistent with the hook.
+Solution: Select the physical key through one VOICE_TOGGLE_KEY constant with LeftCtrl, RightCtrl,
+and EitherCtrl choices. The hook matcher, native status label, and readiness log derive from it.
+Left Ctrl is selected because it is present on standard and compact Windows keyboards.
+Justification: A global gesture must use hardware the target audience actually has. Centralizing the
+choice also turns future key experiments into one reviewed value change instead of a search-and-edit.
+
+Date: 2026-07-16
+Problem: A second voice session could connect to an already-present agent, look healthy, then report
+agent_silent and retry even though its audio track had already subscribed.
+Issue: LiveKit can emit TrackSubscribed before connect resolves. That event cleared the initial
+silence watchdog, but the later already-present-agent scan armed it again. With no later agent event,
+the re-armed timer produced a false error. Separately, the 250 ms Ctrl pair window was too strict for
+normal human tapping and rejected pairs were invisible in logs.
+Solution: Skip the initial agent silence watchdog when assistant output was already observed, cover
+both LiveKit event orders with a pure regression test, allow 400 ms between Ctrl taps, and trace tap
+intervals plus native-to-webview action timing in development logs.
+Justification: Event handlers must be correct in every valid delivery order. A summon gesture should
+also fit ordinary motor timing and explain rejected attempts without recording unrelated key data.
+
+Date: 2026-07-16
+Problem: Double-tapping Left Ctrl could summon the notch, then fail to dismiss it until the user
+clicked another window and tried again.
+Issue: Summoning forced our overlay to the foreground, and win_focus injects a lone Alt tap to win
+SetForegroundWindow's "last input event" exception. A lone Alt press-release drops the newly
+foreground window into Windows keyboard menu mode, which then swallows the following Left Ctrl
+double-tap entirely (no hook emit at all while our window held focus). Clicking another window exits
+menu mode, which is exactly why the workaround worked. An earlier fix that only filtered
+LLKHF_INJECTED events out of TapState was necessary but not sufficient: it stopped the injected Alt
+being miscounted as a chord, but never addressed that same Alt trapping our own window in menu mode.
+The tell was in the logs: every dismiss that emitted a toggle had happened after focus already left
+our overlay; the failed ones left no trace because the hook produced nothing.
+Solution: Do not force foreground for the passive, hotkey-controlled notch/Bar at all (apply, summon,
+summon_bar). Reserve force_foreground for the Setup panel, whose sign-in fields genuinely need
+keyboard focus. Always-on-top keeps the notch visible without stealing focus, so no Alt is injected on
+the notch path and the global hotkey stays reliable. The LLKHF_INJECTED filter stays for the panel
+path. Tradeoff: the notch no longer holds focus, so Escape-to-dismiss needs a global hotkey if wanted.
+Justification: A passive overlay driven by a global hotkey must not steal foreground focus. The very
+act of injecting synthetic input to win that focus also injects the side effect (menu mode) that
+disables the hotkey, so filtering the symptom could never be enough. Removing the focus grab removes
+both the injection and the focus-dependent failure. When a bug is focus-dependent, suspect what
+grabbing focus injects, not only what the injected event does downstream.
+
+Date: 2026-07-16
+Problem: A visual-root rewrite left meeting recording services unmounted, retained plaintext turn
+screenshots, and allowed late asynchronous voice and pointer work to cross user-visible boundaries.
+Issue: Background services were coupled to removed UI composition. Turn capture mixed an ephemeral
+LiveKit payload with a durable JPEG side effect. Native notch presentation could not return failure,
+and room-independent fallback geometry let an unknown frame id reuse a prior capture.
+Solution: Mount consent and meeting-capture hooks independently of visual controls, keep turn frames
+memory-only and purge the legacy screenshot directory, await successful notch presentation before
+voice startup, invalidate token/connect/microphone work on stop, and scope exact frame ids to one room.
+Justification: Removing a surface must not remove its approved background service. Sensitive capture
+must begin only after visible state is confirmed, and ephemeral/session-scoped data must not outlive
+the storage or session boundary promised to the user.
+
+Date: 2026-07-16
+Problem: A v0.3.0 release displayed v0.2.4 and shipped v0.2.4 assets, while a fresh signed-out
+manual launch left the setup and sign-in UI hidden in the tray.
+Issue: The v0.3.0 Git tag pointed to the v0.2.4 commit, so the release action correctly built the
+old manifests under the new tag. Separately, the notch rewrite removed the startup summon block
+instead of only changing the signed-in presentation, so manual and Windows autostart launches both
+became quiet tray launches.
+Solution: Reject release jobs unless the pushed tag matches package.json, tauri.conf.json, and
+Cargo.toml. Restore startup summon for direct and explicit launches while keeping --autostart quiet;
+an update restart still summons. Pin all three startup cases with pure tests.
+Justification: A release must fail before publishing when its immutable tag disagrees with the
+binary version. A user-started desktop app must expose setup when no session exists, while a boot
+helper should remain unobtrusive. These are different launch intents and need separate behavior.
+
+Date: 2026-07-17
+Problem: Building a first-run onboarding tail (hotkey tour + live agent demo) that runs AFTER
+sign-in, plus a native in-app dashboard window, hit two non-obvious platform constraints.
+Issue: (1) OnboardingFlow only mounts while signed out (OverlayRoot branches on `user`), but the
+live "talk to Buddy" demo needs a signed-in LiveKit token (authFetch throws AuthRequiredError with
+no currentUser), so the demo cannot precede sign-in and cannot live inside OnboardingFlow. Worse,
+AuthProvider's set_panel_variant("companion") hides the window on sign-in (overlay.rs), so a naive
+post-sign-in step renders into a hidden window. (2) A second Tauri window created via
+WebviewWindowBuilder loads the same dist bundle but has NO IPC/store/http access unless its label is
+added to a capability's `windows` list - every invoke/fetch fails silently otherwise.
+Solution: Added an OnboardingTail component rendered by a new OverlayRoot branch (user set, not-seen,
+role answered), shown in a re-revealed Panel presentation via a new summon_onboarding_panel command
+(with an overlay-changed listener to defeat a late hide race), and running the demo inline through the
+hoisted useVoiceBar instance (never a second one - that opens a second room) without summon_bar. The
+double-tap-Ctrl gesture is suppressed while the tail is active so the demo stays in the panel. The
+dashboard is a runtime WebviewWindowBuilder window (label "dashboard", decorated/opaque/taskbar), with
+"dashboard" added to capabilities/default.json windows, routed in main.tsx by getCurrentWebviewWindow
+().label, using its own read-only auth subscription (NOT the overlay AuthProvider, whose side effects
+must not run from that window). onboarding_seen now writes at the end of the tail, not at sign-in, so
+an interrupted first-run resumes. Attribution answers persist pre-sign-in under a per-install
+desktop_anon_id (never the literal "anonymous", which would chain-merge every install into one PostHog
+person) and alias to the uid on sign-in; backend /devices/profile write is fail-soft (endpoint TBD in
+juno-backend).
+Justification: The demo's auth requirement forces sign-in before it, which forces the tour+demo out of
+the signed-out OnboardingFlow and into a presentation that survives the auth transition. A second
+window is inert without an explicit capability grant, and sharing the overlay's AuthProvider would let
+a background window drive the foreground overlay's window state.
+
+---
+Date: 2026-07-17
+Problem: The desktop dashboard's Conversations, Drafts, and Saved pages rendered empty for a
+signed-in user who clearly had that data on auravoiceapp.com/dashboard (the production web dashboard).
+Issue: This was NOT an auth, transport, or UI-consumption bug. The desktop client was pointed at the
+wrong endpoints. dashboardApi.ts called GET /desktop/conversations (juno-backend filters that
+projection to sessions where surface == "desktop", so mobile/web history never matches) and GET
+/desktop/saved (reads the memory_atoms collection, not the user's screen_saves bookmarks); Drafts made
+no call at all (hardcoded []). The /desktop/* endpoints were an aspirational desktop-only contract that
+excludes most real data. Meanwhile the live web dashboard reads the full, cross-surface endpoints:
+GET /history/sessions?since=<ISO> (+ /history/sessions/{id} for the transcript), GET /drafts,
+GET /screen-saves - all authenticated with the same Firebase Bearer token the desktop already sends.
+Solution: Repointed the desktop client at those same production endpoints (reusing the exact wire
+shapes from Aura-Web src/lib/activity.ts, verified against the juno-backend handlers). Zero backend
+changes. Added a two-tier (memory-over-disk) stale-while-revalidate hook (useDashboardResource) with a
+freshness gate, single-flight de-dup, a hard 15s timeout so a request can never hang, an out-of-order
+seq guard, and change-detected disk writes (dashboardCache.ts, plugin-store, versioned+bounded). Saved
+items strip the ephemeral signed image_url before caching and render it only from a live fetch. UI is a
+data-driven fixed card shell (DashboardCard populated by a CardModel prop) + windowed CardGrid +
+skeletons + a portal DetailModal (scrim/Esc/X close) + range chips.
+Justification: When a cross-repo data flow "exists on disk" but shows empty, verify which endpoint the
+WORKING client actually calls before assuming the feature is unbuilt - the desktop-only projection
+looked plausible and returned valid empty 200s, which reads as "no data" rather than "wrong surface."
+The reused endpoints are the same ones production already trusts, so parity is guaranteed and no new
+backend surface (or its filtering pitfalls) was introduced.
+
+---
+Date: 2026-07-17
+Problem: Saved-page screen-save thumbnails rendered blank offline, on stale cache, or once a signed
+URL expired (three empty cards in a real screenshot). The cache had deliberately stripped image_url.
+Issue: image_url is a short-lived signed GCS URL, so caching the URL is useless (dead on read-back).
+Caching the bytes in JS is also a dead end: an <img src=signedUrl> renders cross-origin fine, but
+reading the bytes (fetch().arrayBuffer(), canvas.toBlob()) is blocked because GCS signed URLs send no
+Access-Control-Allow-Origin. So there was no webview-side path to persist the pixels at all.
+Solution: Pull the bytes through Rust (saved_images.rs: reqwest GET, no browser CORS), encrypt them at
+rest with the SAME AES-256-GCM + DPAPI key the capture pipeline already uses (crate::meeting::crypto),
+and hand decrypted bytes back over the binary IPC pattern meeting::read_segment established (Response
+::new -> Uint8Array -> Blob URL). Render prefers the local blob over the signed URL, so a cached item
+never depends on a fresh URL again. Retention self-bounds by mirroring the saved set (prune_saved_images
+evicts any id no longer saved); filenames are hex(item_id) to neutralize path traversal. stripImageUrls
+stays - the ephemeral URL still never touches the JSON cache.
+Justification: "Cache the image" splits into two non-obvious walls: the URL is ephemeral (cache bytes,
+not the URL) and the browser cannot read cross-origin signed-URL bytes (do the download in Rust, not
+the webview). For private captures, reuse the existing at-rest encryption rather than dropping plaintext
+on disk. Reqwest was pinned to 0.13 (not 0.12) to unify with the version sentry already pulls, avoiding
+a duplicate reqwest in the tree; note reqwest 0.13 renamed the rustls-tls feature to rustls.
+
+---
+Date: 2026-07-18
+Problem: Memories and proactive notifications never appeared on desktop even though the callback card
+(useCallbackCard + CallbackCard.tsx) and the whole notification stack (useDesktopNotifications broker,
+NotificationInboxCard, outbox poller, tray badge command) were fully built and unit-tested.
+Issue: None of it was ever mounted. OverlayRoot.tsx only wired the draft card into the below-bar slot;
+nothing called useCallbackCard/useDesktopNotifications, nothing invoked set_tray_unread, and nothing
+listened for the tray's open-notifications-requested event, so the tray menu item summoned the bar and
+then silently did nothing. A second, subtler mismatch: useCallbackCard predates the companion->notch
+rename and keys its trigger off presentation === "companion", while today's signed-in notch reports
+"bar", so even a naive mount would never have fired.
+Solution: Phase A of PROACTIVE_FOLLOWUP_NOTIFICATIONS_PLAN.md. Mounted both surfaces into OverlayRoot's
+slot resolver (priority: draft > inbox > daily catch-up, per the CLAUDE.md slot order with the inbox at
+the kebab-menu tier since kebab/tray open it), mapped "bar" to "companion" at the useCallbackCard call
+site instead of rewriting the tested hook, drove the single set_slot_height with per-surface height
+constants that agree with each card's CSS (270 / 300 / 180), invoked set_tray_unread on unread-count
+changes, listened for open-notifications-requested to fill the slot, and reset callback + inbox state on
+sign-out. Added the two new card classes to the .notch-column grid-row: 2 rule. Zero Rust changes: the
+slot machinery (slot_showing, size_for) already handled Bar.
+Justification: "Built and tested" is not "shipped" - a feature whose render-tree mount is missing fails
+with no error anywhere, and every layer below it (broker, outbox, contract validation) looks healthy in
+tests. When a surface never appears, check whether its hook/component is reachable from the root before
+debugging the data path. And when a hook's input union no longer matches current naming, adapt at the
+call site rather than editing a tested hook in a wiring-only pass.
+
+---
+Date: 2026-07-19
+Problem: A Windows toast click could be routed twice, lost during dashboard startup, or overwrite a
+different unclaimed click, and an inbox refresh started before sign-out could publish stale rows later.
+Issue: The native click handler both parked one `Option` payload and emitted it live, while the dashboard
+listener repeatedly remounted and never atomically claimed the parked copy. Inferring listener readiness
+from window existence also fails while the webview is loading. Separately, dashboard refresh promises had
+no account-generation guard, so completion order could outlive the uid that initiated the read.
+Solution: Keep a bounded native activation queue and make both live delivery and startup draining claim
+entries through the same atomic command, with the listener installed before draining. Stabilize the React
+effect on the `markSeen` callback. Tag inbox refresh/subscription work with a generation and re-check the
+owner before publishing rows, invalidating outstanding generations on uid changes and cleanup.
+Justification: Window existence is not listener readiness, and emitting an event is not acknowledgement.
+Exactly-once handoff needs one durable queue plus an atomic claim shared by every delivery path. Async
+account-scoped reads likewise need a generation or cancellation boundary before they may update UI state.
+
+---
+Date: 2026-07-20
+Problem: With the notch docked left or right, the slot card (draft/inbox/callback) rendered as a ~29px
+sliver stacked against the pill instead of a 380-wide landscape panel beside it. Moving the notch also
+felt broken: the 450ms long press silently aborted whenever the cursor drifted off the 29px pill.
+Issue: CSS grid auto-placement order. Top/bottom pinned .notch-shell with a definite grid-row, which the
+grid placement algorithm resolves early, so the auto-placed card fell into the remaining track. Left and
+right pinned the shell with only grid-column; column-only-locked items in a row-flow grid place in the
+same late, DOM-order-driven step as auto items, and the card renders before NotchBar in OverlayRoot, so
+the card grabbed row 1 / column 1 (the 29px pill track) and pushed the shell to an implicit row 2. The
+Rust geometry (bar_size 415x270) was correct the whole time. The move gesture failed for an unrelated
+reason: onPointerLeave cancelled the long-press timer, and any drift off a 29px-tall target during a
+450ms hold leaves it.
+Solution: Give BOTH the shell and the card explicit grid-area per edge so placement never depends on DOM
+order or the auto-placement algorithm, and add per-edge card enter keyframes (animation-name override
+only, so each card's reduced-motion animation:none still wins). Replaced the long press with an instant
+drag: pointer capture on press, begin_notch_move once movement crosses 6px, plain click is a no-op.
+Dimmed the edge-picker highlight to a 20% glass-accent tint (the old 42%/55% fallback teal was neon
+because --accent-base was never defined anywhere).
+Justification: A grid item pinned only on the axis that matches the grid's flow direction does NOT get
+early placement; pin both axes (grid-area) whenever correctness depends on which cell an item lands in.
+And a hold-still-then-drag gesture on a small target is self-defeating: the hold requirement and the
+target size fight each other, so gate on movement, not time.
+
+Date: 2026-07-21
+Problem: Double-tap Ctrl took 20-30s to first voice response (LiveKit Cloud Agents worker cold start
+on the free plan). Tempting "fix": run local whisper.cpp STT + a direct LLM call to answer before the
+worker wakes, or a router that hands the live turn from a local cascade to LiveKit once it is up.
+Issue: The LLM is not a standalone API call. It runs inside the agent session (backend
+buddy_agent.py llm_node) together with per-turn memory retrieval, tool policy, and Cartesia TTS. A
+cold worker means no brain at all, so client-local STT cannot mask the cold start. Once warm, local
+whisper.cpp is also slower than today's Deepgram path, which streams interims and starts the LLM on
+partial text (preemptive_generation), and it would force VAD/EOU/interruption to be rebuilt on machines
+we do not control. A pipeline-to-pipeline takeover mid-turn is a seam with two brains and no shared
+session state.
+Solution: Fix latency where it lives: keep a warm agent (LiveKit Cloud warm pool) and pre-dispatch the
+transport from the client. Split useVoiceBar startSession into prepareSession (token + room connect +
+agent dispatch, no user-visible effect) and activateSession (mark call live + open mic). The notch
+gesture fires prepareSession in parallel with the native summon, then activateSession only after
+summon_bar resolves, so the agent is already joining while the notch appears yet the mic still never
+opens before the bar is visible. If a text fast-lane is ever wanted, the sanctioned path is the
+backend's existing text_input -> session.generate_reply (screen_context.py), which reuses the same
+brain - but it still needs the room+agent up, so it does not help cold start.
+Justification: Latency belongs to whichever stage is actually slow; a second local pipeline cannot
+substitute for a component that only exists server-side. Also: overlay::set_voice_active (overlay.rs)
+is pure bool bookkeeping (updater gate + screen-sight disarm on true->false), with no presentation
+change and no apply() call, so deferring it into activateSession cannot race summon_bar's window show.

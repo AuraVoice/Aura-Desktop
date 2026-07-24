@@ -201,4 +201,25 @@ describe("useVoiceBar cancellation boundaries", () => {
     expect(room.disconnect).toHaveBeenCalled();
     expect(voice?.desiredActive).toBe(false);
   });
+
+  it("preserves Guide mode across an automatic retry", async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.fetchVoiceToken
+        .mockRejectedValueOnce(new Error("temporary"))
+        .mockResolvedValueOnce(token);
+
+      await act(async () => {
+        await voice?.startSession("guide");
+      });
+      expect(mocks.fetchVoiceToken).toHaveBeenNthCalledWith(1, "guide");
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+      expect(mocks.fetchVoiceToken).toHaveBeenNthCalledWith(2, "guide");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

@@ -50,6 +50,7 @@ interface CallbackCardInputs {
   signedIn: boolean;
   callLive: boolean;
   draftActive: boolean;
+  enabled?: boolean;
 }
 
 /**
@@ -60,7 +61,7 @@ interface CallbackCardInputs {
  * that shows something generic or an error would be worse than no card.
  */
 export function useCallbackCard(inputs: CallbackCardInputs): CallbackCardState {
-  const { presentation, signedIn, callLive, draftActive } = inputs;
+  const { presentation, signedIn, callLive, draftActive, enabled = true } = inputs;
   const [data, setData] = useState<CallbackCardData>(INITIAL);
 
   const dataRef = useRef(data);
@@ -90,12 +91,12 @@ export function useCallbackCard(inputs: CallbackCardInputs): CallbackCardState {
   // A call starting or a draft arriving takes the slot; the catch-up bows out
   // silently (no dismissed analytics - the user didn't act on it).
   useEffect(() => {
-    if (callLive || draftActive) reset();
-  }, [callLive, draftActive, reset]);
+    if (!enabled || callLive || draftActive) reset();
+  }, [enabled, callLive, draftActive, reset]);
 
   // The trigger: entering the signed-in bar, at most once per local day.
   useEffect(() => {
-    if (presentation !== "companion" || !signedIn || callLive || draftActive) return;
+    if (!enabled || presentation !== "companion" || !signedIn || callLive || draftActive) return;
     if (dataRef.current.visible || fetchInFlightRef.current) return;
 
     let cancelled = false;
@@ -133,7 +134,7 @@ export function useCallbackCard(inputs: CallbackCardInputs): CallbackCardState {
     return () => {
       cancelled = true;
     };
-  }, [presentation, signedIn, callLive, draftActive]);
+  }, [enabled, presentation, signedIn, callLive, draftActive]);
 
   const trackEngagedOnce = useCallback(() => {
     if (engagedTrackedRef.current || shownAtRef.current === null) return;

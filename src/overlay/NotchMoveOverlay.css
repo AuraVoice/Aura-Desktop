@@ -1,0 +1,102 @@
+/* Fullscreen edge-picker. The window is a transparent, cursor-live takeover of
+   the display (overlay.rs begin_notch_move), so this fills it and dims it just
+   enough to read the drop-zones without hiding the desktop. */
+.notch-move-overlay {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(8, 10, 14, 0.28);
+  cursor: grabbing;
+  overflow: hidden;
+  user-select: none;
+}
+
+/* One highlight bar per edge; the nearest one to the cursor lights up. */
+.notch-move-zone {
+  position: absolute;
+  background: var(--glass-surface-fill, rgba(255, 255, 255, 0.08));
+  border: 1px solid var(--glass-border-dim, rgba(255, 255, 255, 0.18));
+  opacity: 0.5;
+  transition:
+    opacity 120ms ease,
+    background 120ms ease,
+    box-shadow 120ms ease;
+}
+
+/* Soft glass tint rather than a neon fill: sits just above the resting zones
+   (~8% white) so the nearest edge reads without glowing. */
+.notch-move-zone-active {
+  opacity: 1;
+  background: color-mix(in srgb, var(--glass-accent, #1ec8b0) 20%, transparent);
+  border-color: color-mix(in srgb, var(--glass-accent, #1ec8b0) 45%, transparent);
+  box-shadow: 0 0 18px color-mix(in srgb, var(--glass-accent, #1ec8b0) 26%, transparent);
+}
+
+/* Each zone is a centered pill-sized target hugging its edge. */
+.notch-move-zone-top,
+.notch-move-zone-bottom {
+  left: 50%;
+  width: 184px;
+  height: 29px;
+  transform: translateX(-50%);
+  border-radius: 0 0 14px 14px;
+}
+.notch-move-zone-top {
+  top: 0;
+}
+.notch-move-zone-bottom {
+  bottom: 0;
+  border-radius: 14px 14px 0 0;
+}
+
+.notch-move-zone-left,
+.notch-move-zone-right {
+  top: 50%;
+  width: 29px;
+  height: 184px;
+  transform: translateY(-50%);
+}
+.notch-move-zone-left {
+  left: 0;
+  border-radius: 0 14px 14px 0;
+}
+.notch-move-zone-right {
+  right: 0;
+  border-radius: 14px 0 0 14px;
+}
+
+/* A small pill ghost trailing the cursor, so the drag feels physical. */
+.notch-move-ghost {
+  position: absolute;
+  width: 74px;
+  height: 12px;
+  margin: -6px 0 0 -37px;
+  border-radius: 8px;
+  background: var(--glass-surface-fill, rgba(255, 255, 255, 0.16));
+  border: 1px solid var(--glass-border-top, rgba(255, 255, 255, 0.4));
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+  pointer-events: none;
+}
+
+.notch-move-hint {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  margin: 0;
+  padding: 8px 16px;
+  border-radius: 12px;
+  background: rgba(8, 10, 14, 0.55);
+  color: var(--glass-text-bright, rgba(255, 255, 255, 0.92));
+  font-family: var(--font-body, system-ui);
+  font-size: 13px;
+  font-weight: 520;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notch-move-zone {
+    transition: none;
+  }
+}
