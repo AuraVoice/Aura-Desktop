@@ -139,7 +139,6 @@ function Harness() {
     room: room as never,
     status: hookStatus,
     signedIn: true,
-    startSession: vi.fn(async () => {}),
     onPoint,
   });
   return null;
@@ -174,7 +173,7 @@ beforeEach(() => {
   onPoint = vi.fn(async () => {});
   mocks.invoke.mockImplementation((command: string) => {
     if (command === "guide_armed_state") {
-      return Promise.resolve({ armed: true, epoch: 7, sessionId: SESSION_ID });
+      return Promise.resolve({ armed: true, epoch: 7, session_id: SESSION_ID });
     }
     if (command === "capture_guide_frame") return Promise.resolve(captureResult);
     if (command === "ack_guide_response") return Promise.resolve(ackDirty);
@@ -332,8 +331,9 @@ describe("useGuideMode", () => {
 
   it("forces a fresh capture on the start of a local spoken turn", async () => {
     await mountHook();
-    // The background scheduler only ever captures with force:false.
-    expect(captureCallsWithForce(true)).toHaveLength(0);
+    // The scheduler now force-captures every tick too, so clear its calls and
+    // isolate just the spoken-turn forced captures below.
+    mocks.invoke.mockClear();
 
     const local = { isLocal: true };
     await act(async () => {
@@ -355,6 +355,7 @@ describe("useGuideMode", () => {
 
   it("ignores transcription from remote participants", async () => {
     await mountHook();
+    mocks.invoke.mockClear();
     const agent = room.remoteParticipants.get("agent");
     await act(async () => {
       room.emit(RoomEvent.TranscriptionReceived, [{ final: false, text: "hi" }], agent);
@@ -365,6 +366,7 @@ describe("useGuideMode", () => {
 
   it("retries a forced capture exactly once when it only reseeds the baseline", async () => {
     await mountHook();
+    mocks.invoke.mockClear();
     captureResult = guideVerdictEnvelope(1); // "hold": baseline seeded, no frame
 
     const local = { isLocal: true };
@@ -377,6 +379,18 @@ describe("useGuideMode", () => {
 
     // Initial forced capture (hold) + one retry (hold), then it stops - no loop.
     expect(captureCallsWithForce(true)).toHaveLength(2);
+  });
+
+  it("stamps change:1 on a classified change and change:0 on a forced frame", async () => {
+    // Default captureResult is a "send" (verdict 2) envelope: a real change.
+    await mountHook();
+    expect(room.streamBytes.mock.calls[0][0].attributes.change).toBe("1");
+  });
+
+  it("stamps change:0 for a forced static-screen frame (sendForced)", async () => {
+    captureResult = guideEnvelope(9, 5); // "sendForced": forced, no visible change
+    await mountHook();
+    expect(room.streamBytes.mock.calls[0][0].attributes.change).toBe("0");
   });
 
   it("publishes guide.mode after the agent joins and again after reconnect", async () => {
@@ -392,6 +406,11 @@ describe("useGuideMode", () => {
     });
     expect(room.publishData).toHaveBeenCalledTimes(1);
     expect(room.publishData.mock.calls[0][1]).toEqual({ reliable: true, topic: "client_events" });
+    expect(JSON.parse(new TextDecoder().decode(room.publishData.mock.calls[0][0]))).toMatchObject({
+      type: "guide.mode",
+      active: true,
+      guide_session_id: SESSION_ID,
+    });
 
     await act(async () => {
       room.emit(RoomEvent.Reconnected);

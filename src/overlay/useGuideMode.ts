@@ -18,12 +18,11 @@ import {
   type GuideEnvelope,
   type ScreenFrameGeometry,
 } from "../lib/screenFrame";
-import type { VoiceSessionMode } from "../lib/voice";
 import type { VoiceSessionStatus } from "./useVoiceBar";
 
 const CAPTURE_INTERVAL_MS = 2_000;
 const RESPONSE_TIMEOUT_MS = 15_000;
-const RETAINED_FRAME_GEOMETRY_COUNT = 4;
+const RETAINED_FRAME_GEOMETRY_COUNT = 6;
 
 export interface GuidePoint {
   frameId: string;
@@ -47,8 +46,15 @@ interface GuideArmedPayload {
   sessionId: string | null;
 }
 
+interface GuideArmedWirePayload {
+  armed?: unknown;
+  epoch?: unknown;
+  sessionId?: unknown;
+  session_id?: unknown;
+}
+
 interface AwaitingFrame {
-  envelope: Extract<GuideEnvelope, { verdict: "send" | "pending" }>;
+  envelope: Extract<GuideEnvelope, { verdict: "send" | "pending" | "sendForced" }>;
   streamClosed: boolean;
   committed: boolean;
   responseRetries: number;
@@ -59,16 +65,11 @@ interface UseGuideModeOptions {
   room: Room | null;
   status: VoiceSessionStatus;
   signedIn: boolean;
-  startSession: (mode?: VoiceSessionMode) => Promise<void>;
   onPoint: (geometry: ScreenFrameGeometry, point: GuidePoint) => Promise<void>;
 }
 
 function isLive(status: VoiceSessionStatus) {
   return status === "ready" || status === "listening" || status === "processing" || status === "speaking";
-}
-
-function isTerminal(status: VoiceSessionStatus) {
-  return status === "disconnected" || status === "ended" || status === "error";
 }
 
 function guideStep(payload: Record<string, unknown>): GuideStep {
@@ -90,12 +91,26 @@ function guideStep(payload: Record<string, unknown>): GuideStep {
   };
 }
 
-export function useGuideMode({ room, status, signedIn, startSession, onPoint }: UseGuideModeOptions) {
+function normalizeGuideArmedPayload(payload: GuideArmedWirePayload): GuideArmedPayload {
+  const sessionId =
+    typeof payload.sessionId === "string"
+      ? payload.sessionId
+      : typeof payload.session_id === "string"
+        ? payload.session_id
+        : null;
+  const epoch = typeof payload.epoch === "number" ? payload.epoch : Number(payload.epoch ?? 0);
+  return {
+    armed: payload.armed === true,
+    epoch: Number.isSafeInteger(epoch) && epoch >= 0 ? epoch : 0,
+    sessionId,
+  };
+}
+
+export function useGuideMode({ room, status, signedIn, onPoint }: UseGuideModeOptions) {
   const [armed, setArmed] = useState(false);
   const armedRef = useRef<GuideArmedPayload>({ armed: false, epoch: 0, sessionId: null });
   const roomRef = useRef(room);
   const statusRef = useRef(status);
-  const startSessionRef = useRef(startSession);
   const awaitingRef = useRef<AwaitingFrame | null>(null);
   const invokeInFlightRef = useRef(false);
   const schedulerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -122,7 +137,6 @@ export function useGuideMode({ room, status, signedIn, startSession, onPoint }: 
   const disarmReasonRef = useRef<GuideUsageOutcome | null>(null);
   roomRef.current = room;
   statusRef.current = status;
-  startSessionRef.current = startSession;
 
   const clearResponseTimer = useCallback(() => {
     if (responseTimerRef.current) clearTimeout(responseTimerRef.current);
@@ -159,7 +173,7 @@ export function useGuideMode({ room, status, signedIn, startSession, onPoint }: 
   const streamFrame = useCallback(
     async (
       targetRoom: Room,
-      envelope: Extract<GuideEnvelope, { verdict: "send" | "pending" }>,
+      envelope: Extract<GuideEnvelope, { verdict: "send" | "pending" | "sendForced" }>,
     ) => {
       const writer = await targetRoom.localParticipant.streamBytes({
         topic: "screen_frame",
@@ -170,6 +184,10 @@ export function useGuideMode({ room, status, signedIn, startSession, onPoint }: 
           frame_seq: String(envelope.sequence),
           captured_at_ms: String(Date.now()),
           mode: "guide",
+          // "1" only for a tile-classified change ("send"); a forced static-screen
+          // frame ("sendForced") or a re-streamed pending frame is "0". The backend
+          // refreshes its latest frame on both but nudges only on "1".
+          change: envelope.verdict === "send" ? "1" : "0",
           jpeg_width_px: String(envelope.geometry.jpegWidthPx),
           jpeg_height_px: String(envelope.geometry.jpegHeightPx),
           monitor_left_px: String(envelope.geometry.monitorLeftPx),
@@ -251,7 +269,12 @@ export function useGuideMode({ room, status, signedIn, startSession, onPoint }: 
           void Promise.resolve().then(() => void processCaptureRef.current(true, true));
           return;
         }
-        if (envelope.verdict !== "send" && envelope.verdict !== "pending") return;
+        if (
+          envelope.verdict !== "send" &&
+          envelope.verdict !== "pending" &&
+          envelope.verdict !== "sendForced"
+        )
+          return;
 
         const existing = awaitingRef.current;
         if (existing?.envelope.frameId === envelope.frameId && existing.committed) return;
@@ -297,7 +320,10 @@ export function useGuideMode({ room, status, signedIn, startSession, onPoint }: 
     let nextDue = Date.now();
     const tick = async () => {
       if (generation !== scheduleGenerationRef.current || !armedRef.current.armed) return;
-      await processCapture();
+      // Force every tick so a fresh frame streams ~every 2s even on a static screen
+      // (the change-filter alone sends nothing then). Rust's FORCE_COOLDOWN matches
+      // CAPTURE_INTERVAL_MS, so this self-throttles to one frame per interval.
+      await processCapture(true);
       const now = Date.now();
       nextDue += CAPTURE_INTERVAL_MS;
       if (nextDue <= now) {
@@ -355,7 +381,10 @@ export function useGuideMode({ room, status, signedIn, startSession, onPoint }: 
         framesSentRef.current = 0;
         stepsReceivedRef.current = 0;
         agentTimeoutsRef.current = 0;
-        if (isTerminal(statusRef.current)) void startSessionRef.current("guide");
+        // Arming Guide Mode must not start a voice conversation. That would
+        // make the agent speak an unsolicited activation prompt. The user can
+        // start a normal session separately; Guide Mode attaches to the live
+        // room when one exists.
       }
       const targetRoom = roomRef.current;
       if (targetRoom) {
@@ -369,12 +398,15 @@ export function useGuideMode({ room, status, signedIn, startSession, onPoint }: 
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    listen<GuideArmedPayload>("guide-armed", (event) => applyArmed(event.payload))
+    listen<GuideArmedWirePayload>("guide-armed", (event) =>
+      applyArmed(normalizeGuideArmedPayload(event.payload)),
+    )
       .then((fn) => {
         unlisten = fn;
       })
       .catch((error) => logError("useGuideMode: listen guide-armed", error));
-    invoke<GuideArmedPayload>("guide_armed_state")
+    invoke<GuideArmedWirePayload>("guide_armed_state")
+      .then(normalizeGuideArmedPayload)
       .then(applyArmed)
       .catch((error) => logError("useGuideMode: guide_armed_state", error));
     return () => unlisten?.();
