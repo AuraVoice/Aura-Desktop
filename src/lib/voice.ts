@@ -38,7 +38,10 @@ async function parseCapDenial(response: Response): Promise<VoiceCapError | null>
   }
 }
 
-export async function fetchVoiceToken(mode: VoiceSessionMode = "standard"): Promise<VoiceTokenResponse> {
+export async function fetchVoiceToken(
+  mode: VoiceSessionMode = "standard",
+  bridged = false,
+): Promise<VoiceTokenResponse> {
   // The client advertises which desktop-control verbs this build supports so
   // the agent can scope its single `run_desktop_capability` tool to them (and
   // omit it entirely for clients - like mobile - that advertise nothing).
@@ -47,8 +50,11 @@ export async function fetchVoiceToken(mode: VoiceSessionMode = "standard"): Prom
   // ships (forced release order, same class as the agentData.ts contract).
   const manifestParam = encodeURIComponent(JSON.stringify(advertiseManifest()));
   const modeParam = mode === "guide" ? "&mode=guide" : "";
+  // Bridge mode: the Realtime leg is already talking, so the token stamps
+  // `bridged=1` and the worker HOLDs for a handover instead of greeting.
+  const bridgedParam = bridged ? "&bridged=1" : "";
   const response = await authFetch(
-    `/voice/token?surface=desktop&manifest=${manifestParam}${modeParam}`,
+    `/voice/token?surface=desktop&manifest=${manifestParam}${modeParam}${bridgedParam}`,
   );
   if (response.status === 402) {
     const capError = await parseCapDenial(response);

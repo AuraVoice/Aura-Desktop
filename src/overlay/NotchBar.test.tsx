@@ -24,6 +24,7 @@ function voiceState(
     isVoiceCapped: false,
     desiredActive: true,
     startSession: async () => {},
+    startBridgedSession: async () => {},
     prepareSession: () => Promise.resolve(),
     activateSession: async () => {},
     noteTapTimestamp: () => {},
@@ -75,6 +76,15 @@ describe("NotchBar", () => {
     expect(html).not.toContain("<button");
     expect(html).not.toContain("Check now");
     expect(html).not.toContain(">Stop<");
+  });
+
+  it("renders an accessible menu trigger only when the root wires it", () => {
+    const html = renderToStaticMarkup(
+      <NotchBar voice={voiceState()} edge="top" onMenuToggle={() => {}} menuOpen />,
+    );
+    expect(html).toContain("Close Aura menu");
+    expect(html).toContain('aria-expanded="true"');
+    expect(html).toContain("notch-menu-trigger is-open");
   });
 });
 

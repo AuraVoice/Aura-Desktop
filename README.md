@@ -262,7 +262,7 @@ sequenceDiagram
     participant LK as LiveKit room
     participant Agent as Voice agent
 
-    User->>JS: Ctrl+Alt+S, or the eye icon
+    User->>JS: Speak during a standard desktop voice session
     JS->>Rust: invoke capture_cursor_display_with_geometry
     Note over Rust: spawn_blocking: xcap capture -> JPEG encode
     Rust-->>JS: ArrayBuffer (28-byte header + JPEG bytes)
@@ -277,7 +277,7 @@ sequenceDiagram
     Rust->>Rust: cancel_pointing after ~3.4s, restore prior presentation
 ```
 
-Push-to-look, never ambient: a frame is sent on arm, on `session.ready`, and once per spoken turn while armed - never on a timer or in the background (`useScreenSight.ts`).
+Standard desktop voice sessions capture the cursor display once per spoken turn (`useTurnScreenCapture.ts`). Ctrl+Alt+G starts or stops Guide Mode: while explicitly active, `useGuideMode.ts` samples the pinned cursor display every two seconds, but Rust's fingerprint detector sends only stable, meaningfully changed frames. The voice agent keeps one pending frame and one hot image in conversation context, then responds through the existing spoken conversation. Guide Mode has no checklist card or Check Now/Stop buttons; the notch shows only a passive green status dot.
 
 When the agent saves something it saw (a `screen_save.created` data-channel message), the bar's caption shows a brief "Saved to ..." confirmation before yielding back to the normal caption (`useScreenSight.ts` feeding `VoiceBar.tsx`).
 
