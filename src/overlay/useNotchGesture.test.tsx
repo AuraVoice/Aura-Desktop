@@ -58,12 +58,12 @@ function voiceState(
 
 function Harness({
   voice,
-  barVisible = false,
+  overlayVisible = false,
 }: {
   voice: ReturnType<typeof useVoiceBar>;
-  barVisible?: boolean;
+  overlayVisible?: boolean;
 }) {
-  useNotchGesture(true, voice, false, barVisible);
+  useNotchGesture(true, voice, false, overlayVisible);
   return null;
 }
 
@@ -163,7 +163,7 @@ describe("useNotchGesture visible-before-voice ordering", () => {
     // not re-summon or restart a call.
     const voice = voiceState({ status: "ended", desiredActive: false });
     await act(async () => {
-      renderer = create(<Harness voice={voice} barVisible />);
+      renderer = create(<Harness voice={voice} overlayVisible />);
     });
 
     await act(async () => mocks.toggleListener?.({ payload: { sequence: 1 } }));
@@ -173,5 +173,23 @@ describe("useNotchGesture visible-before-voice ordering", () => {
     expect(voice.prepareSession).not.toHaveBeenCalled();
     expect(voice.activateSession).not.toHaveBeenCalled();
     expect(voice.endSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("dismisses any visible non-bar surface (pill/moving notch) without restarting a call", async () => {
+    // OverlayRoot maps the minimized-call pill and the drag-mode moving notch
+    // into overlayVisible too, so a double-tap over either must close, never
+    // re-enter the summon branch. Here the session already ended (desiredActive
+    // false) but a surface is still on screen - the pre-fix gap that restarted a
+    // call. It must take the dismiss branch off overlayVisible alone.
+    const voice = voiceState({ status: "ended", desiredActive: false });
+    await act(async () => {
+      renderer = create(<Harness voice={voice} overlayVisible />);
+    });
+
+    await act(async () => mocks.toggleListener?.({ payload: { sequence: 1 } }));
+
+    expect(mocks.invoke).toHaveBeenCalledWith("dismiss_bar");
+    expect(mocks.invoke).not.toHaveBeenCalledWith("summon_bar");
+    expect(voice.prepareSession).not.toHaveBeenCalled();
   });
 });

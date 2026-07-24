@@ -96,6 +96,11 @@ fn open_dashboard_window(app: AppHandle) -> Result<(), String> {
     dashboard::open_dashboard_window(&app)
 }
 
+#[tauri::command]
+fn open_dashboard_route(app: AppHandle, route: String) -> Result<(), String> {
+    dashboard::open_dashboard_route(&app, Some(&route))
+}
+
 fn should_summon_on_start<I, S>(args: I, just_updated: bool) -> bool
 where
     I: IntoIterator<Item = S>,
@@ -235,6 +240,7 @@ pub fn run() {
             summon_bar,
             summon_onboarding_panel,
             open_dashboard_window,
+            open_dashboard_route,
             dismiss_bar,
             point_at,
             cancel_pointing,

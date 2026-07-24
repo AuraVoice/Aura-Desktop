@@ -5,9 +5,6 @@ import {
   Bookmark,
   Video,
   LineChart,
-  BookOpen,
-  Code2,
-  Type,
   Settings,
   Link2,
   User,
@@ -47,9 +44,6 @@ export const navSections: NavSection[] = [
     heading: "Tools",
     items: [
       { to: "/insights", label: "Insights", Icon: LineChart },
-      { to: "/dictionary", label: "Dictionary", Icon: BookOpen },
-      { to: "/snippets", label: "Snippets", Icon: Code2 },
-      { to: "/style", label: "Style", Icon: Type },
     ],
   },
   {

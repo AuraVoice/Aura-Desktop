@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactElement } from "react";
+import { listen } from "@tauri-apps/api/event";
 import {
   HashRouter,
   Navigate,
@@ -23,12 +24,15 @@ import { DraftsPage } from "./pages/DraftsPage";
 import { HelpPage } from "./pages/HelpPage";
 import { MobileAppPage } from "./pages/MobileAppPage";
 import { ComingSoonPage } from "./pages/ComingSoonPage";
+import { InsightsPage } from "./pages/InsightsPage";
+import { GeneralPage } from "./pages/GeneralPage";
 import { DashboardOnboarding } from "./DashboardOnboarding";
 import { useDashboardUser } from "./useDashboardUser";
 import { useDashboardNotifications } from "./useDashboardNotifications";
 import { navSections, navTitles } from "./navConfig";
 import { desktopOnboardingSeenKey, overlayStorePath } from "../lib/copy";
 import { logError } from "../lib/log";
+import { useGeneralSettings } from "../state/useGeneralSettings";
 import "./dashboard.css";
 
 // Routes with a real page today. Everything else falls back to the placeholder.
@@ -38,6 +42,8 @@ export const dashboardPages: Record<string, ReactElement> = {
   "/drafts": <DraftsPage />,
   "/saved": <SavedPage />,
   "/meetings": <MeetingsPage />,
+  "/insights": <InsightsPage />,
+  "/general": <GeneralPage />,
   "/usage": <UsagePage />,
   "/account": <AccountPage />,
   "/billing": <BillingPage />,
@@ -48,6 +54,7 @@ export const dashboardPages: Record<string, ReactElement> = {
 
 export function DashboardShell({ user }: { user: User | null }) {
   const [collapsed, setCollapsed] = useState(false);
+  const generalSettings = useGeneralSettings();
   const location = useLocation();
   const title = navTitles[location.pathname] ?? "Home";
   const notifications = useDashboardNotifications(user?.uid ?? null);
@@ -55,7 +62,10 @@ export function DashboardShell({ user }: { user: User | null }) {
   const routes = navSections.flatMap((section) => section.items);
 
   return (
-    <div className={`db-app${collapsed ? " db-app-collapsed" : ""}`}>
+    <div className={`db-app${collapsed ? " db-app-collapsed" : ""}${
+      generalSettings.reduceMotion ? " db-reduce-motion" : ""
+    }`}>
+      <DashboardRouteListener />
       <Sidebar collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} />
       <div className="db-main">
         <TopBar title={title} user={user} notifications={notifications} />
@@ -75,6 +85,22 @@ export function DashboardShell({ user }: { user: User | null }) {
       </div>
     </div>
   );
+}
+
+function DashboardRouteListener() {
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen<string>("dashboard-navigate", (event) => {
+      window.location.hash = event.payload;
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch((err) => logError("DashboardApp: dashboard-navigate", err));
+    return () => unlisten?.();
+  }, []);
+
+  return null;
 }
 
 /** Root of the "dashboard" window. Uses a read-only Firebase subscription

@@ -30,6 +30,7 @@ import { useNotchMove } from "./useNotchMove";
 import type { NotchEdge } from "./notchEdge";
 import { screenPointFor, type ScreenFrameGeometry } from "../lib/screenFrame";
 import { useGuideMode, type GuidePoint } from "./useGuideMode";
+import { useGeneralSettings } from "../state/useGeneralSettings";
 
 // Fixed heights remain for fixed-content surfaces. DraftCard reports its own
 // measured content height so a short reply stays compact and a long one grows.
@@ -51,6 +52,7 @@ interface OverlaySnapshot {
 
 export function OverlayRoot() {
   const { user } = useAuth();
+  const generalSettings = useGeneralSettings();
   const [presentation, setPresentation] = useState<OverlayPresentation>("hidden");
   const [notchEdge, setNotchEdge] = useState<NotchEdge>("top");
   const voice = useVoiceBar();
@@ -83,11 +85,19 @@ export function OverlayRoot() {
   // Suppress the double-tap-Ctrl notch gesture while the first-run tail is up,
   // so the live demo stays inside the onboarding panel (its own Start button
   // drives the call) instead of jumping to the notch mid-tour.
+  // Dismiss keys off actual overlay visibility, not one hardcoded presentation
+  // or the voice-session state: any on-screen call/notch surface (bar, the
+  // minimized-call pill which reports as "companion", or the drag-mode moving
+  // notch) must close on the next double-tap. Keeping this a true boolean is what
+  // stops a second tap from re-entering the summon branch and restarting a call
+  // while a surface is up.
+  const overlayVisible =
+    presentation === "bar" || presentation === "companion" || presentation === "movingnotch";
   const notchGesture = useNotchGesture(
     user !== null,
     voice,
     presentation === "pointing" || tail.status === "active",
-    presentation === "bar",
+    overlayVisible,
   );
   useUpdateReady();
   // Kept for its capture side effects; its transient per-turn notice no longer
@@ -144,6 +154,7 @@ export function OverlayRoot() {
     signedIn: user !== null,
     callLive,
     draftActive: showDraftCard,
+    enabled: generalSettings.dailyCatchUp,
   });
 
   // Slot priority (CLAUDE.md): draft > agenda > kebab menu > meeting note >

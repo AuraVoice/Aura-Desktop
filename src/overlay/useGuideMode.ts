@@ -11,6 +11,7 @@ import {
 import { validateAgentDataMessage } from "../lib/agentData";
 import { publishGuideMode } from "../lib/clientControl";
 import { trackEvent } from "../lib/analytics";
+import { reportGuideUsage, type GuideUsageOutcome } from "../lib/guideUsage";
 import { logError } from "../lib/log";
 import {
   parseGuideEnvelope,
@@ -107,6 +108,18 @@ export function useGuideMode({ room, status, signedIn, startSession, onPoint }: 
   );
   const capturedThisTurnRef = useRef(false);
   const sentGeometryRef = useRef<Map<string, ScreenFrameGeometry>>(new Map());
+  // Per-armed-window usage metrics, reported once on disarm to PostHog + the
+  // backend rollup (see lib/guideUsage.ts). Duration uses a monotonic clock so a
+  // wall-clock jump mid-session can never produce a negative duration.
+  const usageStartMonoRef = useRef(0);
+  const usageStartedAtRef = useRef("");
+  const framesSentRef = useRef(0);
+  const stepsReceivedRef = useRef(0);
+  const agentTimeoutsRef = useRef(0);
+  // Set by the sign-out / session-end effect before it disarms, so applyArmed can
+  // tag the outcome distinctly instead of lumping a forced teardown into
+  // "abandoned". Consumed (cleared) the moment applyArmed reads it.
+  const disarmReasonRef = useRef<GuideUsageOutcome | null>(null);
   roomRef.current = room;
   statusRef.current = status;
   startSessionRef.current = startSession;
@@ -186,6 +199,7 @@ export function useGuideMode({ room, status, signedIn, startSession, onPoint }: 
         const targetRoom = roomRef.current;
         if (!awaiting || awaiting.envelope.frameId !== frameId || !targetRoom) return;
         if (awaiting.responseRetries >= 1) {
+          agentTimeoutsRef.current += 1;
           trackEvent("guide_agent_timeouts");
           const current = armedRef.current;
           void invoke<boolean>("ack_guide_response", {
@@ -263,6 +277,7 @@ export function useGuideMode({ room, status, signedIn, startSession, onPoint }: 
             epoch: current.epoch,
           });
           awaiting.committed = true;
+          framesSentRef.current += 1;
           trackEvent("guide_auto_frames_sent");
         }
         armResponseTimeout(envelope.frameId);
@@ -295,14 +310,34 @@ export function useGuideMode({ room, status, signedIn, startSession, onPoint }: 
 
   const applyArmed = useCallback(
     (payload: GuideArmedPayload) => {
-      const wasArmed = armedRef.current.armed;
+      const previous = armedRef.current;
+      const wasArmed = previous.armed;
       armedRef.current = payload;
       setArmed(payload.armed);
       modeGenerationRef.current += 1;
       if (!payload.armed) {
+        // A forced teardown (sign-out / session end) tags itself via
+        // disarmReasonRef; a plain toggle before completion is "abandoned".
+        const forcedReason = disarmReasonRef.current;
+        disarmReasonRef.current = null;
         if (wasArmed) {
+          const outcome: GuideUsageOutcome = completedRef.current
+            ? "completed"
+            : forcedReason ?? "abandoned";
           if (completedRef.current) completedRef.current = false;
-          else trackEvent("guide_abandoned");
+          else if (!forcedReason) trackEvent("guide_abandoned");
+          if (previous.sessionId) {
+            reportGuideUsage({
+              guideSessionId: previous.sessionId,
+              startedAt: usageStartedAtRef.current,
+              endedAt: new Date().toISOString(),
+              durationMs: Math.max(0, Math.round(performance.now() - usageStartMonoRef.current)),
+              outcome,
+              framesSent: framesSentRef.current,
+              stepsReceived: stepsReceivedRef.current,
+              agentTimeouts: agentTimeoutsRef.current,
+            });
+          }
         }
         clearClientState();
         const targetRoom = roomRef.current;
@@ -315,6 +350,11 @@ export function useGuideMode({ room, status, signedIn, startSession, onPoint }: 
       }
       if (!wasArmed) {
         completedRef.current = false;
+        usageStartMonoRef.current = performance.now();
+        usageStartedAtRef.current = new Date().toISOString();
+        framesSentRef.current = 0;
+        stepsReceivedRef.current = 0;
+        agentTimeoutsRef.current = 0;
         if (isTerminal(statusRef.current)) void startSessionRef.current("guide");
       }
       const targetRoom = roomRef.current;
@@ -379,6 +419,7 @@ export function useGuideMode({ room, status, signedIn, startSession, onPoint }: 
       const awaiting = awaitingRef.current;
       if (!awaiting || nextStep.frameId !== awaiting.envelope.frameId) return;
       clearResponseTimer();
+      stepsReceivedRef.current += 1;
       trackEvent("guide_steps_received", {
         responseLatencyMs: Math.max(0, Date.now() - awaiting.sentAtMs),
       });
@@ -455,7 +496,10 @@ export function useGuideMode({ room, status, signedIn, startSession, onPoint }: 
 
   useEffect(() => {
     if (signedIn && status !== "ended" && status !== "error") return;
-    if (armedRef.current.armed) void invoke("disarm_guide");
+    if (armedRef.current.armed) {
+      disarmReasonRef.current = signedIn ? "session_ended" : "signed_out";
+      void invoke("disarm_guide");
+    }
     clearClientState();
   }, [clearClientState, signedIn, status]);
 

@@ -30,6 +30,7 @@ import {
 } from "./desktopNotificationContract";
 import { logError } from "./log";
 import { notifications as copy } from "./notificationCopy";
+import { loadGeneralSettings } from "./generalSettings";
 
 const STORE_FILE = "desktop-notifications.json";
 const INBOX_KEY = "inbox"; // Record<notificationId, StoredNotification>
@@ -197,7 +198,13 @@ export async function ensurePermission(): Promise<boolean> {
   }
 }
 
-function toastCopyFor(notification: DesktopNotification): { title: string; body: string } {
+function toastCopyFor(
+  notification: DesktopNotification,
+  detailedPreviews: boolean,
+): { title: string; body: string } {
+  if (!detailedPreviews && notification.sensitive) {
+    return { title: "Aura", body: copy.toastGeneric };
+  }
   // The notification's real title/body. Guards keep a toast from rendering
   // blank if a producer sent an empty string: an empty title becomes "Aura",
   // and an empty body falls back to the title, then to the generic line.
@@ -243,7 +250,11 @@ async function maybeToast(
     // app's identity and clicking it opens the dashboard to the responsible
     // action. Fall back to the plugin's fire-and-forget toast so delivery is
     // never lost if the native path fails.
-    const { title, body } = toastCopyFor(notification);
+    const settings = await loadGeneralSettings();
+    const { title, body } = toastCopyFor(
+      notification,
+      settings.sensitiveNotificationPreviews,
+    );
     try {
       await invoke("show_actionable_toast", {
         notificationId: notification.notificationId,
