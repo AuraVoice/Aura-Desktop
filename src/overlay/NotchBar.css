@@ -230,8 +230,50 @@
   justify-content: center;
   width: 100%;
   height: 100%;
-  padding: 4px 16px;
+  /* Reserve a right-hand control gutter so the waveform never renders under the
+     kebab trigger. The controls are absolutely positioned against .notch-bar (the
+     offset parent), so growing this padding only shrinks the flex waveform - it does
+     not move the controls. The gutter rotates with the pill, so it clears the controls
+     on every edge. */
+  padding: 4px 44px 4px 16px;
   box-sizing: border-box;
+}
+/* Guide Mode adds the pulsing red dot to the LEFT of the kebab, so widen the gutter
+   enough that the waveform clears both. */
+.notch-bar-inner.has-guide {
+  padding-right: 62px;
+}
+.notch-menu-trigger {
+  position: absolute;
+  top: 3px;
+  right: 12px;
+  display: grid;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--glass-text-dim);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.notch-menu-trigger:hover,
+.notch-menu-trigger.is-open {
+  background: rgba(255, 255, 255, 0.18);
+  color: var(--glass-text-bright);
+}
+.notch-menu-trigger:focus-visible {
+  outline: 2px solid var(--glass-accent);
+  outline-offset: 1px;
+}
+.notch-menu-trigger svg {
+  width: 13px;
+  height: 13px;
+}
+.notch-menu-trigger + .notch-guide-indicator {
+  right: 43px;
 }
 
 .notch-recorder {

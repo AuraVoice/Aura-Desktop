@@ -4,6 +4,7 @@ import { GlassSurface } from "./GlassSurface";
 import type { VoiceBarState } from "./useVoiceBar";
 import type { NotchEdge } from "./notchEdge";
 import { useAudioLevels } from "./useAudioLevels";
+import { KebabIcon } from "./icons";
 import "./NotchBar.css";
 
 // The compact waveform-only pill (subtitle removed): a "\_/" bucket silhouette
@@ -30,9 +31,18 @@ interface NotchBarProps {
   edge: NotchEdge;
   dragHandlers?: NotchDragHandlers;
   guideArmed?: boolean;
+  menuOpen?: boolean;
+  onMenuToggle?: () => void;
 }
 
-export function NotchBar({ voice, edge, dragHandlers, guideArmed = false }: NotchBarProps) {
+export function NotchBar({
+  voice,
+  edge,
+  dragHandlers,
+  guideArmed = false,
+  menuOpen = false,
+  onMenuToggle,
+}: NotchBarProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   useAudioLevels(voice.room, voice.status, canvasRef);
 
@@ -40,10 +50,25 @@ export function NotchBar({ voice, edge, dragHandlers, guideArmed = false }: Notc
     <div className={`notch-shell notch-shell-${edge}`} {...dragHandlers}>
       <GlassSurface className={`notch-bar notch-bar-${voice.status}`} draggable={false}>
         <div className="notch-shape">
-          <div className="notch-bar-inner">
+          <div className={`notch-bar-inner${guideArmed ? " has-guide" : ""}`}>
             <div className="notch-recorder" aria-hidden="true">
               <canvas ref={canvasRef} className="notch-visualizer" />
             </div>
+            {onMenuToggle && (
+              <button
+                type="button"
+                className={`notch-menu-trigger${menuOpen ? " is-open" : ""}`}
+                aria-label={menuOpen ? "Close Aura menu" : "Open Aura menu"}
+                aria-expanded={menuOpen}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onMenuToggle();
+                }}
+              >
+                <KebabIcon />
+              </button>
+            )}
             {guideArmed && (
               <span
                 className="notch-guide-indicator"
