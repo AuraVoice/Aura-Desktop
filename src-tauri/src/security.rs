@@ -397,7 +397,7 @@ struct ArmedPayload {
 }
 
 /// The single Rust -> React signal for the armed bit, fired on every change
-/// regardless of trigger (hotkey, eye button, voice end, sign-out). JS
+/// regardless of trigger (hotkey, native command, voice end, sign-out). JS
 /// mirrors this instead of owning a competing boolean.
 pub(crate) fn emit_screen_sight_armed(app: &AppHandle, armed: bool) {
     if let Err(e) = app.emit("screen-sight-armed", ArmedPayload { armed }) {
@@ -541,9 +541,9 @@ pub fn set_auth_state(app: AppHandle, signed_in: bool, uid: Option<String>) {
     session_changed(&app, signed_in, uid);
 }
 
-/// The VoiceBar eye button's arming path (the hotkey path never leaves Rust).
-/// Returns the new armed state; the `screen-sight-armed` event fires as well
-/// so every listener converges regardless of trigger.
+/// Frontend-callable arming path retained for non-hotkey callers. Returns the
+/// new armed state; the `screen-sight-armed` event fires as well so every
+/// listener converges regardless of trigger.
 #[tauri::command]
 pub fn toggle_screen_sight_armed(app: AppHandle) -> Result<bool, String> {
     let toggled = {

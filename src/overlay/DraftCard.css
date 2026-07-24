@@ -256,7 +256,10 @@
 }
 
 .draft-card-error {
-  flex: 1;
+  /* Size to the message, not the slot: a flex:1 body reports the current
+     (tall) card height back to measureHeight and locks the cell near its
+     initial 180px instead of shrinking to this one or two lines. */
+  flex: 0 0 auto;
   min-height: 0;
   margin: 0;
   display: flex;
@@ -267,14 +270,14 @@
   color: var(--glass-text-dim);
 }
 
-/* Generating skeleton: three pulsing lines where the text will land. */
+/* Generating skeleton: three pulsing lines where the text will land. Sizes to
+   its own content (see .draft-card-error) so the loading cell is compact. */
 .draft-card-shimmer {
-  flex: 1;
+  flex: 0 0 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  justify-content: center;
 }
 
 .draft-card-shimmer span {

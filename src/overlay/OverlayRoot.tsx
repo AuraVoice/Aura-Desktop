@@ -29,7 +29,6 @@ import { NotchMoveOverlay } from "./NotchMoveOverlay";
 import { useNotchMove } from "./useNotchMove";
 import type { NotchEdge } from "./notchEdge";
 import { screenPointFor, type ScreenFrameGeometry } from "../lib/screenFrame";
-import { GuideCard, GUIDE_CARD_HEIGHT } from "./GuideCard";
 import { useGuideMode, type GuidePoint } from "./useGuideMode";
 
 // Fixed heights remain for fixed-content surfaces. DraftCard reports its own
@@ -88,6 +87,7 @@ export function OverlayRoot() {
     user !== null,
     voice,
     presentation === "pointing" || tail.status === "active",
+    presentation === "bar",
   );
   useUpdateReady();
   // Kept for its capture side effects; its transient per-turn notice no longer
@@ -123,8 +123,7 @@ export function OverlayRoot() {
     automaticCapture: true,
   });
   const resetDraftCard = draftCard.reset;
-  const showGuideCard = user !== null && guide.armed;
-  const showDraftCard = user !== null && !showGuideCard && draftCard.phase !== "idle";
+  const showDraftCard = user !== null && draftCard.phase !== "idle";
   const [draftCardHeight, setDraftCardHeight] = useState(INITIAL_DRAFT_SLOT_HEIGHT);
 
   useEffect(() => {
@@ -150,13 +149,11 @@ export function OverlayRoot() {
   // Slot priority (CLAUDE.md): draft > agenda > kebab menu > meeting note >
   // daily catch-up. Only draft, the inbox (opened via kebab/tray, so it sits
   // at the kebab-menu tier), and the daily catch-up are mounted today.
-  const showInbox = user !== null && inboxOpen && !showGuideCard && !showDraftCard;
+  const showInbox = user !== null && inboxOpen && !showDraftCard;
   const showCallbackCard =
-    user !== null && callbackCard.visible && !showGuideCard && !showDraftCard && !showInbox;
-  const slotHeight = showGuideCard
-    ? GUIDE_CARD_HEIGHT
-    : showDraftCard
-      ? draftCardHeight
+    user !== null && callbackCard.visible && !showDraftCard && !showInbox;
+  const slotHeight = showDraftCard
+    ? draftCardHeight
     : showInbox
       ? NOTIFICATION_INBOX_CARD_HEIGHT
       : showCallbackCard
@@ -340,15 +337,6 @@ export function OverlayRoot() {
         slotHeight !== null ? " notch-column-with-draft" : ""
       }`}
     >
-      {showGuideCard && (
-        <GuideCard
-          step={guide.step}
-          stillChecking={guide.stillChecking}
-          blankWarning={guide.blankWarning}
-          onCheckNow={guide.checkNow}
-          onStop={guide.stop}
-        />
-      )}
       {showDraftCard && <DraftCard card={draftCard} onHeightChange={setDraftCardHeight} />}
       {showInbox && (
         <NotificationInboxCard
@@ -364,10 +352,6 @@ export function OverlayRoot() {
         edge={notchEdge}
         dragHandlers={notchMove.dragHandlers}
         guideArmed={guide.armed}
-        onToggleGuide={() => {
-          if (guide.armed) guide.stop();
-          else invoke("arm_guide").catch((err) => logError("OverlayRoot: arm_guide", err));
-        }}
       />
     </div>
   );

@@ -30,10 +30,9 @@ interface NotchBarProps {
   edge: NotchEdge;
   dragHandlers?: NotchDragHandlers;
   guideArmed?: boolean;
-  onToggleGuide?: () => void;
 }
 
-export function NotchBar({ voice, edge, dragHandlers, guideArmed = false, onToggleGuide }: NotchBarProps) {
+export function NotchBar({ voice, edge, dragHandlers, guideArmed = false }: NotchBarProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   useAudioLevels(voice.room, voice.status, canvasRef);
 
@@ -45,16 +44,12 @@ export function NotchBar({ voice, edge, dragHandlers, guideArmed = false, onTogg
             <div className="notch-recorder" aria-hidden="true">
               <canvas ref={canvasRef} className="notch-visualizer" />
             </div>
-            {onToggleGuide && (
-              <button
-                type="button"
-                className={`notch-guide-button${guideArmed ? " notch-guide-button-active" : ""}`}
-                onClick={onToggleGuide}
-                aria-label={guideArmed ? "Stop Guide Mode" : "Start Guide Mode"}
-                title={guideArmed ? "Stop Guide Mode" : "Start Guide Mode"}
-              >
-                <span className="bar-icon-button-dot" aria-hidden="true" />
-              </button>
+            {guideArmed && (
+              <span
+                className="notch-guide-indicator"
+                aria-label="Guide Mode is watching this screen"
+                title="Guide Mode active"
+              />
             )}
           </div>
         </div>

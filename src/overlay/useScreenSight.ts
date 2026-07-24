@@ -33,8 +33,8 @@ function isTerminalStatus(status: VoiceSessionStatus): boolean {
 }
 
 /**
- * Push-to-look, never ambient: the user arms this per session (hotkey or eye
- * button), one frame goes out on arm and one at the start of each spoken
+ * Legacy explicitly-armed screen-sight transport: one frame goes out on arm
+ * and one at the start of each spoken
  * turn. Direct port of `screen_sight_service.dart`, translated onto the real
  * LiveKit signals it actually listens to (its own already-translated event
  * stream) rather than the raw wire protocol.
@@ -105,9 +105,9 @@ export function useScreenSight(room: Room | null, status: VoiceSessionStatus) {
   }, []);
 
   // Rust owns the armed bit (security.rs) - capture authorization is checked
-  // there, not against this mirror. The eye button asks Rust to toggle; the
-  // new state comes back on the screen-sight-armed event below, same as the
-  // Ctrl+Alt+S hotkey (which never leaves Rust at all).
+  // there, not against this mirror. Any native toggle asks Rust to change it;
+  // the new state comes back on the screen-sight-armed event below, same as
+  // the Ctrl+Alt+S hotkey (which never leaves Rust at all).
   const toggleArmed = useCallback(() => {
     invoke("toggle_screen_sight_armed").catch((err) =>
       logError("useScreenSight: toggle_screen_sight_armed", err),
@@ -117,7 +117,7 @@ export function useScreenSight(room: Room | null, status: VoiceSessionStatus) {
   const statusRef = useRef(status);
   statusRef.current = status;
 
-  // The single armed-state funnel for every trigger (hotkey, eye button,
+  // The single armed-state funnel for every trigger (hotkey, native command,
   // voice end, sign-out): mirror Rust's bit and fire the on-arm capture.
   useEffect(() => {
     let unlisten: (() => void) | undefined;

@@ -23,6 +23,7 @@ export function useNotchGesture(
   signedIn: boolean,
   voice: VoiceBarState,
   pointing: boolean,
+  barVisible: boolean,
 ): NotchGestureState {
   const [state, setState] = useState<NotchGestureState>({
     available: false,
@@ -32,12 +33,19 @@ export function useNotchGesture(
   const signedInRef = useRef(signedIn);
   const voiceRef = useRef(voice);
   const pointingRef = useRef(pointing);
+  // Whether the notch bar is currently on screen. The dismiss decision keys off
+  // this, not the voice session: the bar deliberately stays visible for the
+  // ended/error/voice-capped states where desiredActive is already false, and
+  // without this a double-tap in any of those states would re-summon (or restart
+  // a call) instead of closing the bar the user is trying to get rid of.
+  const barVisibleRef = useRef(barVisible);
   const sessionActiveRef = useRef(voice.desiredActive);
   const lastSequenceRef = useRef(0);
   const actionGenerationRef = useRef(0);
   signedInRef.current = signedIn;
   voiceRef.current = voice;
   pointingRef.current = pointing;
+  barVisibleRef.current = barVisible;
 
   useEffect(() => {
     sessionActiveRef.current = voice.desiredActive;
@@ -79,7 +87,7 @@ export function useNotchGesture(
         return;
       }
 
-      if (sessionActiveRef.current) {
+      if (sessionActiveRef.current || barVisibleRef.current) {
         sessionActiveRef.current = false;
         logInfo("useNotchGesture: action", `sequence=${sequence} action=stop`);
         const actionStartedAtMs = Date.now();

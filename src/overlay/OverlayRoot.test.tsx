@@ -61,12 +61,6 @@ vi.mock("./DraftCard", () => ({
   DraftCard: () => <div>draft</div>,
   INITIAL_DRAFT_SLOT_HEIGHT: 180,
 }));
-vi.mock("./GuideCard", () => ({
-  GUIDE_CARD_HEIGHT: 180,
-  GuideCard: ({ blankWarning }: { blankWarning: boolean }) => (
-    <div>{blankWarning ? "blank warning" : "guide"}</div>
-  ),
-}));
 vi.mock("./useCallbackCard", () => ({
   useCallbackCard: () => ({ visible: false, reset: vi.fn() }),
 }));
@@ -79,10 +73,6 @@ beforeEach(() => {
   mocks.user = { uid: "user-1" };
   mocks.useGuideMode.mockReturnValue({
     armed: false,
-    step: null,
-    stillChecking: false,
-    blankWarning: false,
-    checkNow: vi.fn(),
     stop: mocks.guideStop,
   });
   mocks.useDraftCard.mockReturnValue({ phase: "idle", reset: vi.fn() });
@@ -151,13 +141,9 @@ describe("OverlayRoot meeting background services", () => {
     expect(text).not.toContain("notch");
   });
 
-  it("gives GuideCard the below-bar slot priority and renders the blank warning", () => {
+  it("keeps Guide Mode out of the card slot so drafts remain conversationally available", () => {
     mocks.useGuideMode.mockReturnValue({
       armed: true,
-      step: null,
-      stillChecking: false,
-      blankWarning: true,
-      checkNow: vi.fn(),
       stop: mocks.guideStop,
     });
     mocks.useDraftCard.mockReturnValue({ phase: "ready", reset: vi.fn() });
@@ -167,8 +153,9 @@ describe("OverlayRoot meeting background services", () => {
     });
 
     const text = JSON.stringify(renderer!.toJSON());
-    expect(text).toContain("blank warning");
-    expect(text).not.toContain('"children":["draft"]');
+    expect(text).not.toContain("Check now");
+    expect(text).not.toContain("Still checking");
+    expect(text).toContain('"children":["draft"]');
     expect(mocks.invoke).toHaveBeenCalledWith("set_slot_height", { height: 180 });
   });
 
@@ -176,10 +163,6 @@ describe("OverlayRoot meeting background services", () => {
     mocks.user = null;
     mocks.useGuideMode.mockReturnValue({
       armed: true,
-      step: null,
-      stillChecking: false,
-      blankWarning: false,
-      checkNow: vi.fn(),
       stop: mocks.guideStop,
     });
 

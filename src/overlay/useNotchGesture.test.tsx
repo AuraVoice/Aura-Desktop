@@ -56,8 +56,14 @@ function voiceState(
   };
 }
 
-function Harness({ voice }: { voice: ReturnType<typeof useVoiceBar> }) {
-  useNotchGesture(true, voice, false);
+function Harness({
+  voice,
+  barVisible = false,
+}: {
+  voice: ReturnType<typeof useVoiceBar>;
+  barVisible?: boolean;
+}) {
+  useNotchGesture(true, voice, false, barVisible);
   return null;
 }
 
@@ -149,5 +155,23 @@ describe("useNotchGesture visible-before-voice ordering", () => {
     await act(async () => summon.resolve());
     expect(voice.activateSession).not.toHaveBeenCalled();
     expect(mocks.invoke).toHaveBeenCalledWith("dismiss_bar");
+  });
+
+  it("dismisses a visible bar even when no voice session is active", async () => {
+    // The bar stays on screen for ended/error/voice-capped states, where
+    // desiredActive is already false. A double-tap there must close the bar,
+    // not re-summon or restart a call.
+    const voice = voiceState({ status: "ended", desiredActive: false });
+    await act(async () => {
+      renderer = create(<Harness voice={voice} barVisible />);
+    });
+
+    await act(async () => mocks.toggleListener?.({ payload: { sequence: 1 } }));
+
+    expect(mocks.invoke).toHaveBeenCalledWith("dismiss_bar");
+    expect(mocks.invoke).not.toHaveBeenCalledWith("summon_bar");
+    expect(voice.prepareSession).not.toHaveBeenCalled();
+    expect(voice.activateSession).not.toHaveBeenCalled();
+    expect(voice.endSession).toHaveBeenCalledTimes(1);
   });
 });

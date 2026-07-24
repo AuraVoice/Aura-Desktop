@@ -104,10 +104,15 @@ function asContentFormat(value: unknown, channel: DraftChannel): DraftContentFor
 
 export function parseCreatedDraft(payload: Record<string, unknown>): DraftInfo | null {
   const channel = asChannel(payload.channel);
-  const length = asLength(payload.length);
   const text = typeof payload.text === "string" ? payload.text : "";
   const draftId = typeof payload.draft_id === "string" ? payload.draft_id : "";
-  if (!channel || !length || !text || !draftId) return null;
+  // Only channel/text/id are load-bearing. length just drives the shorter/longer
+  // chip ladder, and adaptive channels (on_screen, snippet) legitimately ship no
+  // ladder length - dropping the whole draft over a missing/unknown length left
+  // the card stuck on its skeleton (see lessons-learnt, forced-release-order enum
+  // drift). Default it instead of rejecting the draft.
+  if (!channel || !text || !draftId) return null;
+  const length = asLength(payload.length) ?? "medium";
   return {
     draftId,
     channel,

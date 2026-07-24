@@ -65,6 +65,17 @@ describe("NotchBar", () => {
     );
     expect(html).toContain("notch-bar-listening");
   });
+
+  it("shows Guide Mode as a passive status indicator, not another control", () => {
+    const html = renderToStaticMarkup(
+      <NotchBar voice={voiceState()} edge="top" guideArmed />,
+    );
+    expect(html).toContain("notch-guide-indicator");
+    expect(html).toContain("Guide Mode is watching this screen");
+    expect(html).not.toContain("<button");
+    expect(html).not.toContain("Check now");
+    expect(html).not.toContain(">Stop<");
+  });
 });
 
 // The gesture handlers are plain callbacks, so render the hook through a probe

@@ -1,7 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { RoomEvent, type RemoteParticipant, type Room } from "livekit-client";
+import {
+  RoomEvent,
+  type Participant,
+  type RemoteParticipant,
+  type Room,
+  type TranscriptionSegment,
+} from "livekit-client";
 import { validateAgentDataMessage } from "../lib/agentData";
 import { publishGuideMode } from "../lib/clientControl";
 import { trackEvent } from "../lib/analytics";
@@ -16,7 +22,7 @@ import type { VoiceSessionStatus } from "./useVoiceBar";
 
 const CAPTURE_INTERVAL_MS = 2_000;
 const RESPONSE_TIMEOUT_MS = 15_000;
-const BLANK_WARNING_AFTER = 3;
+const RETAINED_FRAME_GEOMETRY_COUNT = 4;
 
 export interface GuidePoint {
   frameId: string;
@@ -45,7 +51,6 @@ interface AwaitingFrame {
   streamClosed: boolean;
   committed: boolean;
   responseRetries: number;
-  forced: boolean;
   sentAtMs: number;
 }
 
@@ -86,10 +91,6 @@ function guideStep(payload: Record<string, unknown>): GuideStep {
 
 export function useGuideMode({ room, status, signedIn, startSession, onPoint }: UseGuideModeOptions) {
   const [armed, setArmed] = useState(false);
-  const [step, setStep] = useState<GuideStep | null>(null);
-  const [awaitingFrameId, setAwaitingFrameId] = useState<string | null>(null);
-  const [stillChecking, setStillChecking] = useState(false);
-  const [blankWarning, setBlankWarning] = useState(false);
   const armedRef = useRef<GuideArmedPayload>({ armed: false, epoch: 0, sessionId: null });
   const roomRef = useRef(room);
   const statusRef = useRef(status);
@@ -100,8 +101,12 @@ export function useGuideMode({ room, status, signedIn, startSession, onPoint }: 
   const responseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scheduleGenerationRef = useRef(0);
   const modeGenerationRef = useRef(0);
-  const blankCountRef = useRef(0);
   const completedRef = useRef(false);
+  const processCaptureRef = useRef<(force?: boolean, isRetry?: boolean) => Promise<void>>(
+    async () => {},
+  );
+  const capturedThisTurnRef = useRef(false);
+  const sentGeometryRef = useRef<Map<string, ScreenFrameGeometry>>(new Map());
   roomRef.current = room;
   statusRef.current = status;
   startSessionRef.current = startSession;
@@ -117,12 +122,9 @@ export function useGuideMode({ room, status, signedIn, startSession, onPoint }: 
     schedulerTimerRef.current = null;
     clearResponseTimer();
     awaitingRef.current = null;
-    setAwaitingFrameId(null);
     invokeInFlightRef.current = false;
-    blankCountRef.current = 0;
-    setStep(null);
-    setStillChecking(false);
-    setBlankWarning(false);
+    capturedThisTurnRef.current = false;
+    sentGeometryRef.current.clear();
   }, [clearResponseTimer]);
 
   const publishCurrentMode = useCallback(
@@ -145,7 +147,6 @@ export function useGuideMode({ room, status, signedIn, startSession, onPoint }: 
     async (
       targetRoom: Room,
       envelope: Extract<GuideEnvelope, { verdict: "send" | "pending" }>,
-      forced: boolean,
     ) => {
       const writer = await targetRoom.localParticipant.streamBytes({
         topic: "screen_frame",
@@ -156,7 +157,6 @@ export function useGuideMode({ room, status, signedIn, startSession, onPoint }: 
           frame_seq: String(envelope.sequence),
           captured_at_ms: String(Date.now()),
           mode: "guide",
-          forced: forced ? "manual" : "",
           jpeg_width_px: String(envelope.geometry.jpegWidthPx),
           jpeg_height_px: String(envelope.geometry.jpegHeightPx),
           monitor_left_px: String(envelope.geometry.monitorLeftPx),
@@ -168,6 +168,12 @@ export function useGuideMode({ room, status, signedIn, startSession, onPoint }: 
       });
       await writer.write(envelope.bytes);
       await writer.close();
+      sentGeometryRef.current.set(envelope.frameId, envelope.geometry);
+      while (sentGeometryRef.current.size > RETAINED_FRAME_GEOMETRY_COUNT) {
+        const oldest = sentGeometryRef.current.keys().next().value;
+        if (oldest === undefined) break;
+        sentGeometryRef.current.delete(oldest);
+      }
     },
     [],
   );
@@ -180,12 +186,28 @@ export function useGuideMode({ room, status, signedIn, startSession, onPoint }: 
         const targetRoom = roomRef.current;
         if (!awaiting || awaiting.envelope.frameId !== frameId || !targetRoom) return;
         if (awaiting.responseRetries >= 1) {
-          setStillChecking(true);
           trackEvent("guide_agent_timeouts");
+          const current = armedRef.current;
+          void invoke<boolean>("ack_guide_response", {
+            frameId,
+            epoch: current.epoch,
+          })
+            .then((dirty) => {
+              if (
+                awaitingRef.current !== awaiting ||
+                !armedRef.current.armed ||
+                armedRef.current.epoch !== current.epoch
+              ) {
+                return;
+              }
+              awaitingRef.current = null;
+              if (dirty) void processCaptureRef.current();
+            })
+            .catch((error) => logError("useGuideMode: release timed-out frame", error));
           return;
         }
         awaiting.responseRetries += 1;
-        void streamFrame(targetRoom, awaiting.envelope, false)
+        void streamFrame(targetRoom, awaiting.envelope)
           .catch((error) => logError("useGuideMode: response retry", error))
           .finally(() => armResponseTimeout(frameId));
       }, RESPONSE_TIMEOUT_MS);
@@ -194,7 +216,7 @@ export function useGuideMode({ room, status, signedIn, startSession, onPoint }: 
   );
 
   const processCapture = useCallback(
-    async (force: boolean) => {
+    async (force = false, isRetry = false) => {
       const current = armedRef.current;
       const targetRoom = roomRef.current;
       if (!current.armed || !targetRoom || !isLive(statusRef.current) || invokeInFlightRef.current) return;
@@ -205,13 +227,16 @@ export function useGuideMode({ room, status, signedIn, startSession, onPoint }: 
         );
         if (envelope.guideEpoch !== current.epoch || envelope.sessionId !== current.sessionId) return;
 
-        if (envelope.verdict === "skip") {
-          blankCountRef.current += 1;
-          if (blankCountRef.current >= BLANK_WARNING_AFTER) setBlankWarning(true);
+        if (envelope.verdict === "skip") return;
+        // The first capture after arming (or after a pointing-triggered reseed) only
+        // seeds the change-filter baseline and streams nothing, even when forced. A
+        // forced capture that lands on that reseed tick retries exactly once (isRetry
+        // caps the depth) - now that the baseline exists, the follow-up classifies and
+        // the force override sends it.
+        if (force && !isRetry && envelope.verdict === "hold") {
+          void Promise.resolve().then(() => void processCaptureRef.current(true, true));
           return;
         }
-        blankCountRef.current = 0;
-        setBlankWarning(false);
         if (envelope.verdict !== "send" && envelope.verdict !== "pending") return;
 
         const existing = awaitingRef.current;
@@ -223,15 +248,13 @@ export function useGuideMode({ room, status, signedIn, startSession, onPoint }: 
               streamClosed: false,
               committed: false,
               responseRetries: 0,
-              forced: force,
               sentAtMs: Date.now(),
             };
         if (awaitingRef.current !== awaiting) {
           awaitingRef.current = awaiting;
-          setAwaitingFrameId(envelope.frameId);
         }
         if (!awaiting.streamClosed) {
-          await streamFrame(targetRoom, envelope, force);
+          await streamFrame(targetRoom, envelope);
           awaiting.streamClosed = true;
         }
         if (!awaiting.committed) {
@@ -240,7 +263,7 @@ export function useGuideMode({ room, status, signedIn, startSession, onPoint }: 
             epoch: current.epoch,
           });
           awaiting.committed = true;
-          if (!awaiting.forced) trackEvent("guide_auto_frames_sent");
+          trackEvent("guide_auto_frames_sent");
         }
         armResponseTimeout(envelope.frameId);
       } catch (error) {
@@ -251,6 +274,7 @@ export function useGuideMode({ room, status, signedIn, startSession, onPoint }: 
     },
     [armResponseTimeout, streamFrame],
   );
+  processCaptureRef.current = processCapture;
 
   const startScheduler = useCallback(() => {
     scheduleGenerationRef.current += 1;
@@ -258,7 +282,7 @@ export function useGuideMode({ room, status, signedIn, startSession, onPoint }: 
     let nextDue = Date.now();
     const tick = async () => {
       if (generation !== scheduleGenerationRef.current || !armedRef.current.armed) return;
-      await processCapture(false);
+      await processCapture();
       const now = Date.now();
       nextDue += CAPTURE_INTERVAL_MS;
       if (nextDue <= now) {
@@ -336,13 +360,25 @@ export function useGuideMode({ room, status, signedIn, startSession, onPoint }: 
       topic?: string,
     ) => {
       const verdict = validateAgentDataMessage(payload, participant, topic);
-      if (verdict.kind !== "valid" || verdict.type !== "guide.step") return;
+      if (verdict.kind !== "valid") return;
+      if (verdict.type === "element.point") {
+        const frameId = verdict.payload.frame_id;
+        const x = verdict.payload.x;
+        const y = verdict.payload.y;
+        if (typeof frameId !== "string" || typeof x !== "number" || typeof y !== "number") return;
+        const geometry = sentGeometryRef.current.get(frameId);
+        if (!geometry) return;
+        const label = typeof verdict.payload.label === "string" ? verdict.payload.label.trim() : "";
+        void onPoint(geometry, { frameId, x, y, label }).catch((error) =>
+          logError("useGuideMode: point", error),
+        );
+        return;
+      }
+      if (verdict.type !== "guide.step") return;
       const nextStep = guideStep(verdict.payload);
       const awaiting = awaitingRef.current;
       if (!awaiting || nextStep.frameId !== awaiting.envelope.frameId) return;
       clearResponseTimer();
-      setStillChecking(false);
-      setStep(nextStep);
       trackEvent("guide_steps_received", {
         responseLatencyMs: Math.max(0, Date.now() - awaiting.sentAtMs),
       });
@@ -353,20 +389,45 @@ export function useGuideMode({ room, status, signedIn, startSession, onPoint }: 
           epoch: armedRef.current.epoch,
         });
         awaitingRef.current = null;
-        setAwaitingFrameId(null);
         if (nextStep.done) {
           completedRef.current = true;
           trackEvent("guide_completed");
           await invoke("disarm_guide");
         } else if (dirty) {
-          await processCapture(false);
+          await processCapture();
         }
       })().catch((error) => logError("useGuideMode: accept guide.step", error));
+    };
+
+    // Turn-start forces a fresh frame so a spoken question never reaches a blind
+    // agent, the same signal the per-turn capture hook uses. The change-filter
+    // stream sends nothing on a static screen, so without this the agent has no
+    // frame for whatever the user just said. Rust's FORCE_COOLDOWN throttles it.
+    const onTranscriptionReceived = (
+      segments: TranscriptionSegment[],
+      participant?: Participant,
+    ) => {
+      if (!participant?.isLocal) return;
+      for (const segment of segments) {
+        if (!segment.final) {
+          if (
+            !capturedThisTurnRef.current &&
+            armedRef.current.armed &&
+            isLive(statusRef.current)
+          ) {
+            capturedThisTurnRef.current = true;
+            void processCapture(true);
+          }
+        } else {
+          capturedThisTurnRef.current = false;
+        }
+      }
     };
 
     room.on(RoomEvent.ParticipantConnected, onParticipantConnected);
     room.on(RoomEvent.Reconnected, onReconnected);
     room.on(RoomEvent.DataReceived, onDataReceived);
+    room.on(RoomEvent.TranscriptionReceived, onTranscriptionReceived);
     if (armedRef.current.armed) {
       void publishCurrentMode(room).catch((error) => logError("useGuideMode: publish room", error));
     }
@@ -374,12 +435,18 @@ export function useGuideMode({ room, status, signedIn, startSession, onPoint }: 
       room.off(RoomEvent.ParticipantConnected, onParticipantConnected);
       room.off(RoomEvent.Reconnected, onReconnected);
       room.off(RoomEvent.DataReceived, onDataReceived);
+      room.off(RoomEvent.TranscriptionReceived, onTranscriptionReceived);
     };
   }, [clearResponseTimer, onPoint, processCapture, publishCurrentMode, room]);
 
   useEffect(() => {
     if (!armed || !isLive(status)) return;
     startScheduler();
+    // Deliver one frame the instant Guide arms on a live session so the agent
+    // has the current screen before the user's next utterance, instead of
+    // waiting for the change-filter to notice motion. The reseed-retry inside
+    // processCapture is what makes this land rather than only seed the baseline.
+    void processCaptureRef.current(true);
     return () => {
       scheduleGenerationRef.current += 1;
       if (schedulerTimerRef.current) clearTimeout(schedulerTimerRef.current);
@@ -394,31 +461,12 @@ export function useGuideMode({ room, status, signedIn, startSession, onPoint }: 
 
   useEffect(() => clearClientState, [clearClientState]);
 
-  const checkNow = useCallback(() => {
-    trackEvent("guide_manual_button_checks");
-    const awaiting = awaitingRef.current;
-    const targetRoom = roomRef.current;
-    if (awaiting && targetRoom) {
-      setStillChecking(false);
-      void streamFrame(targetRoom, awaiting.envelope, true)
-        .then(() => armResponseTimeout(awaiting.envelope.frameId))
-        .catch((error) => logError("useGuideMode: manual response retry", error));
-      return;
-    }
-    void processCapture(true);
-  }, [armResponseTimeout, processCapture, streamFrame]);
-
   const stop = useCallback(() => {
     void invoke("disarm_guide").catch((error) => logError("useGuideMode: disarm", error));
   }, []);
 
   return {
     armed,
-    step,
-    awaitingFrameId,
-    stillChecking,
-    blankWarning,
-    checkNow,
     stop,
   };
 }
