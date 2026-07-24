@@ -221,6 +221,7 @@ pub fn run() {
         .manage(OverlayStateHandle::default())
         .manage(security::SecurityHandle::default())
         .manage(guide::GuideRuntimeHandle::default())
+        .manage(guide::GuideToggleHandle::default())
         .manage(ForegroundGeneration::default())
         .manage(updater::PendingUpdate::default())
         .manage(updater::UpdatedNotice::default())

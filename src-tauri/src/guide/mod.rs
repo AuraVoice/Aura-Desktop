@@ -101,7 +101,48 @@ impl Default for GuideRuntimeHandle {
     }
 }
 
+#[derive(Debug, Default)]
+struct GuideToggleState {
+    in_flight: bool,
+    target_armed: bool,
+    generation: u64,
+}
+
+#[derive(Default)]
+pub struct GuideToggleHandle(Mutex<GuideToggleState>);
+
+fn request_toggle(state: &mut GuideToggleState, currently_armed: bool) -> Option<(bool, u64)> {
+    if state.in_flight {
+        // The arm operation resolves a monitor asynchronously. Preserve every
+        // shortcut press while it is pending so an even number of presses ends
+        // off and an odd number ends on.
+        state.target_armed = !state.target_armed;
+        return None;
+    }
+    state.in_flight = true;
+    state.target_armed = !currently_armed;
+    Some((state.target_armed, state.generation))
+}
+
+fn finish_toggle(state: &mut GuideToggleState, generation: u64) -> Option<bool> {
+    if state.generation != generation {
+        return None;
+    }
+    state.in_flight = false;
+    Some(state.target_armed)
+}
+
+fn toggle_allows_arm(app: &AppHandle) -> bool {
+    app.try_state::<GuideToggleHandle>()
+        .map(|toggle| {
+            let state = toggle.0.lock().unwrap_or_else(|e| e.into_inner());
+            !state.in_flight || state.target_armed
+        })
+        .unwrap_or(true)
+}
+
 #[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct GuideArmedPayload {
     armed: bool,
     epoch: u64,
@@ -116,6 +157,11 @@ enum EnvelopeVerdict {
     Send = 2,
     Pending = 3,
     Skip = 4,
+    // A frame the change-filter would NOT have sent (the screen is static), streamed
+    // only because the caller forced it - the continuous ~2s Guide cadence. Carries
+    // geometry + bytes exactly like Send; the client stamps change:"0" so the backend
+    // refreshes its latest frame without firing a proactive nudge.
+    SendForced = 5,
 }
 
 struct CapturedMonitor {
@@ -377,6 +423,14 @@ pub async fn arm_guide(app: AppHandle) -> Result<GuideArmedPayload, String> {
         epoch,
         session_id: Some(format!("{session_id:032x}")),
     };
+    // A second hotkey press may have requested cancellation while monitor
+    // discovery was in flight. Do not publish a transient armed event that
+    // could make the UI light up or make the agent react to a session the user
+    // has already turned off.
+    if !toggle_allows_arm(&app) {
+        clear(&app, false);
+        return Ok(armed_payload(&app));
+    }
     emit_armed(&app, payload.clone());
     Ok(payload)
 }
@@ -393,6 +447,12 @@ pub fn guide_armed_state(app: AppHandle) -> GuideArmedPayload {
 }
 
 pub fn clear(app: &AppHandle, emit: bool) {
+    if let Some(toggle) = app.try_state::<GuideToggleHandle>() {
+        let mut state = toggle.0.lock().unwrap_or_else(|e| e.into_inner());
+        state.generation = state.generation.wrapping_add(1);
+        state.in_flight = false;
+        state.target_armed = false;
+    }
     let changed = {
         let Some(security_handle) = crate::security::handle(app) else {
             return;
@@ -419,15 +479,79 @@ pub fn on_security_disarmed(app: &AppHandle) {
 }
 
 pub fn toggle(app: &AppHandle) {
-    if armed_payload(app).armed {
-        clear(app, true);
-    } else {
-        let app = app.clone();
-        tauri::async_runtime::spawn(async move {
-            if let Err(error) = arm_guide(app).await {
-                warn!("guide: hotkey arm failed: {error}");
-            }
-        });
+    let currently_armed = armed_payload(app).armed;
+    let Some(toggle) = app.try_state::<GuideToggleHandle>() else {
+        warn!("guide: toggle state unavailable");
+        return;
+    };
+    let requested = {
+        let mut state = toggle.0.lock().unwrap_or_else(|e| e.into_inner());
+        request_toggle(&mut state, currently_armed)
+    };
+    match requested {
+        Some((false, _)) => {
+            clear(app, true);
+        }
+        Some((true, generation)) => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(error) = arm_guide(app.clone()).await {
+                    warn!("guide: hotkey arm failed: {error}");
+                    if let Some(toggle) = app.try_state::<GuideToggleHandle>() {
+                        let mut state = toggle.0.lock().unwrap_or_else(|e| e.into_inner());
+                        state.generation = state.generation.wrapping_add(1);
+                        state.in_flight = false;
+                    }
+                    return;
+                }
+                let should_remain_armed = app
+                    .try_state::<GuideToggleHandle>()
+                    .map(|toggle| {
+                        let mut state = toggle.0.lock().unwrap_or_else(|e| e.into_inner());
+                        finish_toggle(&mut state, generation)
+                    })
+                    .flatten()
+                    .unwrap_or(false);
+                if !should_remain_armed {
+                    clear(&app, true);
+                }
+            });
+        }
+        None => {}
+    }
+}
+
+#[cfg(test)]
+mod toggle_tests {
+    use super::{finish_toggle, request_toggle, GuideToggleState};
+
+    #[test]
+    fn rapid_toggles_preserve_the_final_requested_state() {
+        let mut state = GuideToggleState::default();
+        assert_eq!(request_toggle(&mut state, false), Some((true, 0)));
+        assert_eq!(request_toggle(&mut state, false), None);
+        assert_eq!(finish_toggle(&mut state, 0), Some(false));
+    }
+
+    #[test]
+    fn a_third_toggle_during_arm_requests_armed() {
+        let mut state = GuideToggleState::default();
+        assert_eq!(request_toggle(&mut state, false), Some((true, 0)));
+        assert_eq!(request_toggle(&mut state, false), None);
+        assert_eq!(request_toggle(&mut state, false), None);
+        assert_eq!(finish_toggle(&mut state, 0), Some(true));
+    }
+
+    #[test]
+    fn armed_payload_serializes_the_session_id_for_react() {
+        let payload = super::GuideArmedPayload {
+            armed: true,
+            epoch: 7,
+            session_id: Some("100f0e0d0c0b0a090807060504030201".to_string()),
+        };
+        let value = serde_json::to_value(payload).unwrap();
+        assert_eq!(value["sessionId"], "100f0e0d0c0b0a090807060504030201");
+        assert!(value.get("session_id").is_none());
     }
 }
 
@@ -612,6 +736,18 @@ pub async fn capture_guide_frame(
         .map_err(|e| e.to_string())??;
     crate::security::recheck(&app, crate::security::Operation::CaptureGuide, &ticket)?;
 
+    // A real (tile-classified) change sends Send and drives a proactive nudge; a
+    // force-only send on a static screen sends SendForced so the backend refreshes
+    // its latest frame without nudging. Both carry geometry + bytes identically.
+    let changed = matches!(
+        classification.as_ref().map(|value| value.verdict),
+        Some(FingerprintVerdict::ChangedStable)
+    );
+    let send_verdict = if changed {
+        EnvelopeVerdict::Send
+    } else {
+        EnvelopeVerdict::SendForced
+    };
     let response = {
         let handle = runtime_handle(&app).ok_or_else(|| "Guide runtime unavailable".to_string())?;
         let mut runtime = handle.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -632,7 +768,7 @@ pub async fn capture_guide_frame(
             epoch,
         };
         let result = response(
-            EnvelopeVerdict::Send,
+            send_verdict,
             runtime.session_id,
             runtime.epoch,
             frame.sequence,
@@ -642,7 +778,7 @@ pub async fn capture_guide_frame(
         runtime.capture_in_flight = false;
         result
     };
-    log_tick(EnvelopeVerdict::Send, classification.as_ref());
+    log_tick(send_verdict, classification.as_ref());
     Ok(response)
 }
 

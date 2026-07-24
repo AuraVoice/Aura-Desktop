@@ -22,7 +22,7 @@ export const GUIDE_MAGIC = 0x44495547;
 export const GUIDE_PROTOCOL_VERSION = 1;
 export const GUIDE_FIXED_HEADER_LEN = 43;
 
-export type GuideVerdict = "same" | "hold" | "send" | "pending" | "skip";
+export type GuideVerdict = "same" | "hold" | "send" | "pending" | "skip" | "sendForced";
 
 interface GuideEnvelopeBase {
   verdict: GuideVerdict;
@@ -39,7 +39,7 @@ export type GuideEnvelope =
       bytes?: never;
     })
   | (GuideEnvelopeBase & {
-      verdict: "send" | "pending";
+      verdict: "send" | "pending" | "sendForced";
       geometry: ScreenFrameGeometry;
       bytes: Uint8Array;
     });
@@ -114,7 +114,7 @@ export function parseGuideEnvelope(raw: unknown): GuideEnvelope {
     throw new Error("Guide envelope payload length does not match its bytes");
   }
 
-  const hasFrame = verdict === "send" || verdict === "pending";
+  const hasFrame = verdict === "send" || verdict === "pending" || verdict === "sendForced";
   if (!hasFrame && payloadLen !== 0) {
     throw new Error(`Guide ${verdict} envelope must not contain a payload`);
   }
@@ -154,7 +154,7 @@ export function parseGuideEnvelope(raw: unknown): GuideEnvelope {
 }
 
 function verdictFor(value: number): GuideVerdict {
-  const verdicts: GuideVerdict[] = ["same", "hold", "send", "pending", "skip"];
+  const verdicts: GuideVerdict[] = ["same", "hold", "send", "pending", "skip", "sendForced"];
   const verdict = verdicts[value];
   if (!verdict) throw new Error("Guide envelope has an unknown verdict");
   return verdict;
