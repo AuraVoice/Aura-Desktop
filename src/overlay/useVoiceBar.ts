@@ -31,7 +31,10 @@ const SILENCE_WATCHDOG_MS = 15_000;
 // path when its session mint or WebRTC negotiation is unhealthy. LiveKit is warmed
 // in parallel, so this is the maximum extra time we are willing to wait before
 // handing the already-prepared room the microphone.
-const REALTIME_STARTUP_TIMEOUT_MS = 5_000;
+// TEMP (diagnostic): bumped from 5_000 so the Realtime leg has room to actually
+// connect and we can observe true TTFT instead of always tripping the race. Revert
+// to a real budget (and move the mint outside the race) once measured.
+const REALTIME_STARTUP_TIMEOUT_MS = 20_000;
 
 // Auto-retry budget for a failed call. Excludes mic-access codes below, since
 // those need the user to fix something in OS settings - retrying immediately

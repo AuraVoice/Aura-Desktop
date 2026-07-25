@@ -47,13 +47,23 @@ interface RealtimeSessionSecret {
  * peer connection here and re-published onto LiveKit at handover, so it is never
  * stopped by close().
  */
+// TEMP (diagnostic): incrementing id so a single hotkey press that accidentally
+// spawns more than one leg is obvious in the logs. Remove with the timing logs.
+let realtimeLegSeq = 0;
+
 export async function startRealtimeLeg(opts: StartRealtimeLegOptions): Promise<RealtimeLeg> {
   const { micTrack, audioEl, signal } = opts;
+
+  // TEMP (diagnostic): TTFT clock + per-invocation id.
+  const legId = ++realtimeLegSeq;
+  const t0 = performance.now();
+  const since = () => `${Math.round(performance.now() - t0)}ms`;
+  logInfo("realtime: leg start", `legId=${legId}`);
 
   // 1. Mint an ephemeral secret server-side (OPENAI_API_KEY stays on the backend).
   logInfo("realtime: mint requested", "POST /realtime/session");
   const res = await authFetch("/realtime/session", { method: "POST", signal });
-  logInfo("realtime: mint response", `status=${res.status}`);
+  logInfo("realtime: mint response", `legId=${legId} status=${res.status} mintMs=${since()}`);
   if (!res.ok) {
     // 503 = bridge disabled or mint failed; caller falls back to the cold path.
     throw new Error(`realtime session mint failed (${res.status})`);
@@ -88,6 +98,7 @@ export async function startRealtimeLeg(opts: StartRealtimeLegOptions): Promise<R
   let assistantSpoke = false;
   let userSpeaking = false;
   let assistantResponding = false;
+  let firstAudioLogged = false; // TEMP (diagnostic): stamp true TTFT once.
 
   pc.ontrack = (event) => {
     audioEl.srcObject = event.streams[0] ?? new MediaStream([event.track]);
@@ -125,6 +136,14 @@ export async function startRealtimeLeg(opts: StartRealtimeLegOptions): Promise<R
         case "response.created":
           assistantResponding = true;
           break;
+        // TEMP (diagnostic): first audio chunk from the model = true TTFT.
+        case "response.audio.delta":
+        case "response.output_audio.delta":
+          if (!firstAudioLogged) {
+            firstAudioLogged = true;
+            logInfo("realtime: TTFT", `legId=${legId} firstAudioMs=${since()}`);
+          }
+          break;
         case "response.done":
           assistantResponding = false;
           break;
@@ -142,7 +161,7 @@ export async function startRealtimeLeg(opts: StartRealtimeLegOptions): Promise<R
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
 
-  logInfo("realtime: posting SDP offer", OPENAI_REALTIME_CALLS_URL);
+  logInfo("realtime: posting SDP offer", `${OPENAI_REALTIME_CALLS_URL} at=${since()}`);
   const sdpResponse = await tauriFetch(OPENAI_REALTIME_CALLS_URL, {
     method: "POST",
     body: offer.sdp ?? "",
@@ -152,7 +171,7 @@ export async function startRealtimeLeg(opts: StartRealtimeLegOptions): Promise<R
     },
     signal,
   });
-  logInfo("realtime: SDP answer", `status=${sdpResponse.status}`);
+  logInfo("realtime: SDP answer", `legId=${legId} status=${sdpResponse.status} sdpMs=${since()}`);
   if (!sdpResponse.ok) {
     close();
     throw new Error(`realtime SDP exchange failed (${sdpResponse.status})`);
@@ -201,7 +220,10 @@ export async function startRealtimeLeg(opts: StartRealtimeLegOptions): Promise<R
   });
 
   signal.addEventListener("abort", onAbort);
-  logInfo("realtime: leg connected", `model=${session.model} voice=${session.voice ?? ""}`);
+  logInfo(
+    "realtime: leg connected",
+    `legId=${legId} model=${session.model} voice=${session.voice ?? ""} connectMs=${since()}`,
+  );
 
   return {
     transcript: () => turns.slice(),
