@@ -699,18 +699,26 @@ pub async fn capture_guide_frame(
             if result.verdict == FingerprintVerdict::ChangedStable {
                 runtime.dirty = true;
             }
-            runtime.capture_in_flight = false;
-            let FrameLifecycle::AwaitingResponse(frame) = &runtime.lifecycle else {
-                unreachable!();
-            };
-            log_tick(EnvelopeVerdict::Pending, classification.as_ref());
-            return Ok(response(
-                EnvelopeVerdict::Pending,
-                session_id,
-                epoch,
-                frame.sequence,
-                Some((&frame.geometry, &frame.bytes)),
-            ));
+            // A per-frame ack can move the lifecycle out of AwaitingResponse while
+            // this forced capture was still in flight (the fast per-frame ack races
+            // the ~2s force tick). Only re-send the retained pending frame if it is
+            // still awaiting; otherwise it was already acked, so fall through and
+            // treat this tick as a fresh capture instead of hitting an unreachable
+            // panic (see the 2026-07-24 mod.rs:704 crash).
+            if matches!(runtime.lifecycle, FrameLifecycle::AwaitingResponse(_)) {
+                runtime.capture_in_flight = false;
+                let FrameLifecycle::AwaitingResponse(frame) = &runtime.lifecycle else {
+                    unreachable!()
+                };
+                log_tick(EnvelopeVerdict::Pending, classification.as_ref());
+                return Ok(response(
+                    EnvelopeVerdict::Pending,
+                    session_id,
+                    epoch,
+                    frame.sequence,
+                    Some((&frame.geometry, &frame.bytes)),
+                ));
+            }
         }
 
         let force_allowed = force && runtime.force_allowed();
