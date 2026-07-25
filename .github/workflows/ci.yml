@@ -20,7 +20,7 @@ jobs:
 
       - run: npx tsc --noEmit
 
-      - run: npm audit --audit-level=high
+      - run: npx audit-ci --config ./audit-ci.jsonc
 
   rust:
     runs-on: windows-latest

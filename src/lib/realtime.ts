@@ -51,7 +51,9 @@ export async function startRealtimeLeg(opts: StartRealtimeLegOptions): Promise<R
   const { micTrack, audioEl, signal } = opts;
 
   // 1. Mint an ephemeral secret server-side (OPENAI_API_KEY stays on the backend).
+  logInfo("realtime: mint requested", "POST /realtime/session");
   const res = await authFetch("/realtime/session", { method: "POST", signal });
+  logInfo("realtime: mint response", `status=${res.status}`);
   if (!res.ok) {
     // 503 = bridge disabled or mint failed; caller falls back to the cold path.
     throw new Error(`realtime session mint failed (${res.status})`);
@@ -94,6 +96,11 @@ export async function startRealtimeLeg(opts: StartRealtimeLegOptions): Promise<R
 
   pc.addTrack(micTrack);
 
+  // Surface the WebRTC handshake so a stalled connect (ICE/DTLS never completing,
+  // the classic silent hang) is visible instead of just timing out upstream.
+  pc.onconnectionstatechange = () => logInfo("realtime: pc state", pc.connectionState);
+  pc.oniceconnectionstatechange = () => logInfo("realtime: ice state", pc.iceConnectionState);
+
   const dc = pc.createDataChannel("oai-events");
   dc.onmessage = (event) => {
     try {
@@ -103,6 +110,7 @@ export async function startRealtimeLeg(opts: StartRealtimeLegOptions): Promise<R
           if (msg.transcript?.trim()) turns.push({ role: "user", text: msg.transcript.trim() });
           break;
         case "response.audio_transcript.done":
+        case "response.output_audio_transcript.done":
           if (msg.transcript?.trim()) {
             turns.push({ role: "assistant", text: msg.transcript.trim() });
             assistantSpoke = true;
@@ -128,28 +136,30 @@ export async function startRealtimeLeg(opts: StartRealtimeLegOptions): Promise<R
     }
   };
 
-  // 2. SDP offer -> OpenAI -> answer. tauriFetch (native HTTP) avoids webview CORS.
+  // 2. SDP offer -> OpenAI -> answer. Per the official WebRTC guide the model is
+  // baked into the ephemeral token (server-side), so it is NOT a query param here.
+  // tauriFetch (native HTTP) avoids webview CORS on the cross-origin OpenAI call.
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
 
-  const sdpResponse = await tauriFetch(
-    `${OPENAI_REALTIME_CALLS_URL}?model=${encodeURIComponent(session.model)}`,
-    {
-      method: "POST",
-      body: offer.sdp ?? "",
-      headers: {
-        Authorization: `Bearer ${session.client_secret}`,
-        "Content-Type": "application/sdp",
-      },
-      signal,
+  logInfo("realtime: posting SDP offer", OPENAI_REALTIME_CALLS_URL);
+  const sdpResponse = await tauriFetch(OPENAI_REALTIME_CALLS_URL, {
+    method: "POST",
+    body: offer.sdp ?? "",
+    headers: {
+      Authorization: `Bearer ${session.client_secret}`,
+      "Content-Type": "application/sdp",
     },
-  );
+    signal,
+  });
+  logInfo("realtime: SDP answer", `status=${sdpResponse.status}`);
   if (!sdpResponse.ok) {
     close();
     throw new Error(`realtime SDP exchange failed (${sdpResponse.status})`);
   }
   const answerSdp = await sdpResponse.text();
   await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
+  logInfo("realtime: remote description set", "waiting for data channel open");
 
   // 3. Ready once the data channel opens.
   await new Promise<void>((resolve, reject) => {
@@ -160,6 +170,7 @@ export async function startRealtimeLeg(opts: StartRealtimeLegOptions): Promise<R
     const cleanup = () => {
       dc.removeEventListener("open", onOpen);
       dc.removeEventListener("error", onError);
+      pc.removeEventListener("connectionstatechange", onConnFail);
       signal.removeEventListener("abort", onStartAbort);
     };
     const onOpen = () => {
@@ -171,6 +182,13 @@ export async function startRealtimeLeg(opts: StartRealtimeLegOptions): Promise<R
       close();
       reject(new Error("realtime data channel error"));
     };
+    const onConnFail = () => {
+      if (pc.connectionState === "failed" || pc.connectionState === "closed") {
+        cleanup();
+        close();
+        reject(new Error(`realtime peer connection ${pc.connectionState}`));
+      }
+    };
     const onStartAbort = () => {
       cleanup();
       close();
@@ -178,6 +196,7 @@ export async function startRealtimeLeg(opts: StartRealtimeLegOptions): Promise<R
     };
     dc.addEventListener("open", onOpen);
     dc.addEventListener("error", onError);
+    pc.addEventListener("connectionstatechange", onConnFail);
     signal.addEventListener("abort", onStartAbort);
   });
 

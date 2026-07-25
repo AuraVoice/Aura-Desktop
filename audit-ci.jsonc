@@ -1,0 +1,15 @@
+{
+  // Fail CI on any high or critical advisory (same bar as the old
+  // `npm audit --audit-level=high`), so every NEW high vulnerability still
+  // blocks a push.
+  "high": true,
+  "allowlist": [
+    // React Router: RSC Mode CSRF Bypass (GHSA-qwww-vcr4-c8h2). Exempt because it
+    // only affects React Router's RSC (React Server Components) mode, which this
+    // client-side Tauri SPA does not use. There is no clean version to move to:
+    // 7.12.0-8.2.0 carry this advisory, <=7.11.0 carry 14 OLDER high advisories,
+    // and nothing above 8.2.0 exists. 7.18.1 (pinned) is the most secure option.
+    // Remove this entry once react-router ships a patched version above 8.2.0.
+    "GHSA-qwww-vcr4-c8h2"
+  ]
+}

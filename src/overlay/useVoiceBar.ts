@@ -31,7 +31,7 @@ const SILENCE_WATCHDOG_MS = 15_000;
 // path when its session mint or WebRTC negotiation is unhealthy. LiveKit is warmed
 // in parallel, so this is the maximum extra time we are willing to wait before
 // handing the already-prepared room the microphone.
-const REALTIME_STARTUP_TIMEOUT_MS = 2_500;
+const REALTIME_STARTUP_TIMEOUT_MS = 5_000;
 
 // Auto-retry budget for a failed call. Excludes mic-access codes below, since
 // those need the user to fix something in OS settings - retrying immediately
@@ -112,6 +112,13 @@ export function useVoiceBar() {
   const tapAtMsRef = useRef<number | null>(null);
   const connectResolvedAtRef = useRef<number | null>(null);
   const agentJoinMsRef = useRef<number | null>(null);
+  // Content-free funnel fields folded into the voice_first_response event: the
+  // token/connect timings and which transport actually served the first response
+  // (cold LiveKit vs the Realtime bridge, or why the bridge fell back). No
+  // transcript, screen, or room/identity content ever rides this event.
+  const lastTokenMsRef = useRef<number | null>(null);
+  const lastConnectMsRef = useRef<number | null>(null);
+  const bridgeOutcomeRef = useRef<string>("cold");
   // Realtime bridge overlay (see bridgeCoordinator.ts). bridgedRef marks the current
   // session as bridged so the room event handlers route agent audio/data to the
   // coordinator instead of the normal cold path; bridgeRef holds the live coordinator.
@@ -199,6 +206,9 @@ export function useVoiceBar() {
   // retry budget.
   const markAssistantResponded = useCallback(() => {
     didReceiveAssistantOutputRef.current = true;
+    // Captured before the reset below so the funnel event records which retry
+    // attempt actually produced the first response (0 = first try).
+    const retryAttemptAtResponse = retryAttemptRef.current;
     retryAttemptRef.current = 0;
     clearWatchdogs();
     if (!didTrackFirstResponseRef.current) {
@@ -214,10 +224,16 @@ export function useVoiceBar() {
         "useVoiceBar: first response",
         `tapToFirstResponseMs=${tapToFirstResponseMs ?? "unknown"} agentJoinMs=${agentJoinMsRef.current ?? "unknown"}`,
       );
-      const timing: Record<string, number> = {};
+      const timing: Record<string, unknown> = { path: bridgeOutcomeRef.current };
       if (tapToFirstResponseMs !== null) timing.tapToFirstResponseMs = tapToFirstResponseMs;
       if (agentJoinMsRef.current !== null) timing.agentJoinMs = agentJoinMsRef.current;
+      if (lastTokenMsRef.current !== null) timing.tokenMs = lastTokenMsRef.current;
+      if (lastConnectMsRef.current !== null) timing.connectMs = lastConnectMsRef.current;
+      timing.retryAttempt = retryAttemptAtResponse;
       trackEvent("voice_first_response", timing);
+      // Default the next session to cold; a bridge attempt re-labels it in
+      // startBridgedSession before its first response is tracked.
+      bridgeOutcomeRef.current = "cold";
     }
   }, [clearWatchdogs]);
 
@@ -549,6 +565,7 @@ export function useVoiceBar() {
         const tokenRequestedAt = Date.now();
         const { token, url, room: roomName } = await fetchVoiceToken(sessionModeRef.current, bridgedRef.current);
         const tokenMs = Date.now() - tokenRequestedAt;
+        lastTokenMsRef.current = tokenMs;
         if (!sessionStillWanted()) {
           await newRoom.disconnect().catch((disconnectErr) =>
             logError("useVoiceBar: cancelled after token fetch", disconnectErr),
@@ -563,6 +580,7 @@ export function useVoiceBar() {
         const connectStartedAt = Date.now();
         await newRoom.connect(url, token);
         const connectMs = Date.now() - connectStartedAt;
+        lastConnectMsRef.current = connectMs;
         if (!sessionStillWanted()) {
           await newRoom.disconnect().catch((disconnectErr) =>
             logError("useVoiceBar: cancelled after connect", disconnectErr),
@@ -689,6 +707,10 @@ export function useVoiceBar() {
   const startBridgedSession = useCallback(
     async (mode: VoiceSessionMode = "standard") => {
       setVoiceActive(true);
+      // Reset for this attempt; re-labeled below to "bridged" on success or the
+      // fall-back reason in the catch. The cold-fallback session that follows a
+      // failure keeps that reason, so the funnel shows the tap tried the bridge.
+      bridgeOutcomeRef.current = "cold";
       const controller = new AbortController();
       let sharedTrack: MediaStreamTrack | null = null;
       let realtimeTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -738,12 +760,19 @@ export function useVoiceBar() {
             logInfo("useVoiceBar: bridge active", "LiveKit owns the conversation");
           },
         });
+        bridgeOutcomeRef.current = "bridged";
       } catch (err) {
         if (realtimeTimeout) clearTimeout(realtimeTimeout);
         controller.abort();
         sharedTrack?.stop();
         bridgeRef.current = null;
-        logInfo("useVoiceBar: bridge unavailable, falling back to cold path", String(err));
+        const reason = String(err);
+        bridgeOutcomeRef.current = reason.includes("timed out")
+          ? "bridge_timeout"
+          : reason.includes("mint failed") || reason.includes("(503)")
+            ? "bridge_unavailable"
+            : "bridge_error";
+        logInfo("useVoiceBar: bridge unavailable, falling back to cold path", reason);
         // A bridge-mode room cannot be activated as a normal session because its
         // worker is waiting in HOLD. Drop that short-lived room, clear the bridge
         // flag, and immediately start the ordinary LiveKit path. This is still fast

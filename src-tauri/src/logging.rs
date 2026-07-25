@@ -14,6 +14,11 @@ pub fn plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
             Target::new(TargetKind::LogDir { file_name: None }),
         ])
         .level(log::LevelFilter::Info)
+        // Bound the on-disk log: previously it grew unbounded across sessions.
+        // Rotate at ~5 MB and keep only the one prior file, so the durable log is
+        // capped at ~10 MB while still holding plenty of recent sessions.
+        .max_file_size(5_000_000)
+        .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepOne)
         .build()
 }
 
