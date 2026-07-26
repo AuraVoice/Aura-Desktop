@@ -1,302 +1,328 @@
+import { RefreshCw } from "lucide-react";
+import type { ComponentType } from "react";
+import { useState } from "react";
+import type {
+  GmailConnectorStatus,
+  GoogleCalendarConnectorStatus,
+} from "../../lib/connectors";
 import {
-  CalendarDays,
-  Check,
-  Mail,
-  MessagesSquare,
-  Notebook,
-  RefreshCw,
-  type LucideIcon,
-} from "lucide-react";
-import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+  GmailBrandIcon,
+  GoogleCalendarBrandIcon,
+  NotionBrandIcon,
+  SlackBrandIcon,
+} from "../components/connectorBrandIcons";
 import {
-  loadConnectorInterest,
-  saveConnectorInterest,
-  type ConnectorInterest,
-  type FutureConnectorId,
-} from "../../lib/connectorPreferences";
-import {
-  loadGeneralSettings,
-  saveGeneralSettings,
-  type GeneralSettings,
-} from "../../lib/generalSettings";
-import { fetchUpcomingMeetings, type UpcomingMeetings } from "../../lib/calendar";
-import { logError } from "../../lib/log";
-import { useAsyncData } from "../useAsyncData";
+  useConnectors,
+  type ConnectorBanner,
+} from "../useConnectors";
 
-const FUTURE_CONNECTORS: Array<{
-  id: FutureConnectorId;
-  Icon: LucideIcon;
+const COMING_SOON_CONNECTORS: Array<{
+  id: "gmail" | "slack" | "notion";
+  Icon: ComponentType<{ size?: number; className?: string }>;
   name: string;
   copy: string;
-  featured?: boolean;
 }> = [
   {
-    id: "gmail",
-    Icon: Mail,
-    name: "Gmail",
-    copy: "Draft, review, and follow up on email with Aura.",
-    featured: true,
-  },
-  {
     id: "slack",
-    Icon: MessagesSquare,
+    Icon: SlackBrandIcon,
     name: "Slack",
-    copy: "Turn conversations into clear updates and replies.",
+    copy: "Keep Buddy in the loop with your team conversations.",
   },
   {
     id: "notion",
-    Icon: Notebook,
+    Icon: NotionBrandIcon,
     name: "Notion",
-    copy: "Save useful Aura output directly into your workspace.",
+    copy: "Bring your notes and pages into what Buddy knows.",
   },
 ];
 
 export function ConnectorsPage() {
-  const navigate = useNavigate();
-  const calendar = useAsyncData<UpcomingMeetings | null>(
-    () => fetchUpcomingMeetings(10_000),
-    "calendar connection",
-  );
-  const [settings, setSettings] = useState<GeneralSettings | null>(null);
-  const [interest, setInterest] = useState<ConnectorInterest>({});
-  const [saveError, setSaveError] = useState(false);
-
-  useEffect(() => {
-    Promise.all([loadGeneralSettings(), loadConnectorInterest()])
-      .then(([savedSettings, savedInterest]) => {
-        setSettings(savedSettings);
-        setInterest(savedInterest);
-      })
-      .catch((err) => logError("ConnectorsPage: load preferences", err));
-  }, []);
-
-  async function updateCalendarSetting(
-    key: "calendarInBriefing" | "calendarOverlay",
-    checked: boolean,
-  ) {
-    if (!settings) return;
-    const previous = settings;
-    const next = { ...settings, [key]: checked };
-    setSettings(next);
-    setSaveError(false);
-    try {
-      await saveGeneralSettings(next);
-    } catch (err) {
-      setSettings(previous);
-      setSaveError(true);
-      logError("ConnectorsPage: save calendar setting", err);
-    }
-  }
-
-  async function toggleInterest(id: FutureConnectorId) {
-    const previous = interest;
-    const next = { ...interest, [id]: !interest[id] };
-    setInterest(next);
-    setSaveError(false);
-    try {
-      await saveConnectorInterest(next);
-    } catch (err) {
-      setInterest(previous);
-      setSaveError(true);
-      logError("ConnectorsPage: save connector interest", err);
-    }
-  }
-
-  const calendarData = calendar.data;
-  const connected = calendarData?.connected === true;
-  const eventCount = calendarData?.events.length ?? 0;
-  const unavailable = !calendar.loading && calendarData === null;
+  const connectors = useConnectors();
+  const [confirmDisconnect, setConfirmDisconnect] = useState<"calendar" | "gmail" | null>(null);
+  const calendar = connectors.catalog?.googleCalendar ?? null;
+  const gmail = connectors.catalog?.gmail ?? null;
+  const calendarConnected = calendar?.enabled === true;
+  const gmailConnected = gmail?.enabled === true;
+  const busy = connectors.loading || connectors.action !== null;
 
   return (
-    <div className="db-page db-page-wide db-connectors-page">
+    <div className="db-page db-connectors-page">
       <header className="db-connectors-intro">
         <div>
-          <h2>Bring your work into Aura</h2>
-          <p>Choose what Aura can use to prepare your day and help in the moment.</p>
+          <h2>Your connections</h2>
+          <p>Bring the apps you already use into Buddy's world.</p>
         </div>
-        <span className="db-connectors-count">
-          {connected ? "1 connected" : "No apps connected"}
-        </span>
       </header>
 
-      <section className="db-connectors-section">
-        <div className="db-connectors-section-heading">
-          <h3>Available now</h3>
-          <p>Connection status comes from your Aura account.</p>
+      {connectors.loadError && !connectors.catalog ? (
+        <div className="db-panel db-connectors-load-error" role="alert">
+          <p>Connections could not load just now.</p>
+          <button
+            type="button"
+            className="db-secondary-btn"
+            onClick={() => void connectors.reload()}
+          >
+            Try again
+          </button>
         </div>
+      ) : (
+        <section
+          className={`db-connectors-stack${connectors.loading ? " is-loading" : ""}`}
+          aria-busy={connectors.loading || busy}
+        >
+          <CalendarConnectorRow
+            calendar={calendar}
+            connected={calendarConnected}
+            busy={busy}
+            refreshing={connectors.action === "refreshing"}
+            onToggle={(checked) => {
+              if (checked) {
+                setConfirmDisconnect(null);
+                void connectors.enableCalendar();
+              } else {
+                connectors.clearBanner();
+                setConfirmDisconnect("calendar");
+              }
+            }}
+            onRefresh={() => void connectors.refreshCalendar()}
+          />
 
-        <article className={`db-panel db-connector-card db-connector-card-live${
-          connected ? " is-connected" : ""
-        }`}>
-          <div className="db-connector-head">
-            <span className="db-connector-icon db-connector-icon-google">
-              <CalendarDays size={23} aria-hidden />
-            </span>
-            <span className={`db-connector-status${
-              connected ? " is-connected" : unavailable ? " is-unavailable" : ""
-            }`}>
-              {calendar.loading
-                ? "Checking"
-                : connected
-                  ? "Connected"
-                  : unavailable
-                    ? "Unavailable"
-                    : "Not connected"}
-            </span>
-          </div>
+          <GmailConnectorRow
+            gmail={gmail}
+            connected={gmailConnected}
+            busy={busy}
+            onToggle={(checked) => {
+              if (checked) {
+                setConfirmDisconnect(null);
+                void connectors.enableGmail();
+              } else {
+                connectors.clearBanner();
+                setConfirmDisconnect("gmail");
+              }
+            }}
+          />
 
-          <div className="db-connector-live-copy">
-            <div>
-              <h2>Google Calendar</h2>
-              <p className="db-muted">
-                {calendar.loading
-                  ? "Checking your Aura account for Calendar access."
-                  : connected
-                    ? eventCount > 0
-                      ? `${eventCount} upcoming event${
-                        eventCount === 1 ? "" : "s"
-                      } found today.`
-                      : "Connected, with no more events today."
-                    : unavailable
-                      ? "Aura could not verify Calendar right now. Your saved connection was not changed."
-                      : "Connect from Aura mobile, then refresh this page."}
-              </p>
-            </div>
-
-            <div className="db-connector-actions">
-              {connected ? (
-                <button type="button" className="db-primary-btn" onClick={() => navigate("/home")}>
-                  View today
+          {confirmDisconnect && (
+            <div
+              className="db-connector-banner is-confirm"
+              role="alertdialog"
+              aria-labelledby="connector-disconnect-title"
+            >
+              <div>
+                <strong id="connector-disconnect-title">Leave Buddy hanging?</strong>
+                <p>
+                  Are you sure you want to disconnect{" "}
+                  {confirmDisconnect === "calendar" ? "Google Calendar" : "Gmail"}?
+                  Buddy will stop using it, but you can reconnect anytime.
+                </p>
+              </div>
+              <div className="db-connector-banner-actions">
+                <button
+                  type="button"
+                  className="db-secondary-btn"
+                  onClick={() => setConfirmDisconnect(null)}
+                >
+                  Keep connected
                 </button>
-              ) : (
-                <button type="button" className="db-primary-btn" onClick={() => navigate("/mobile")}>
-                  Set up on mobile
+                <button
+                  type="button"
+                  className="db-primary-btn"
+                  onClick={() => {
+                    const target = confirmDisconnect;
+                    setConfirmDisconnect(null);
+                    if (target === "calendar") {
+                      void connectors.disableCalendar();
+                    } else {
+                      void connectors.disableGmail();
+                    }
+                  }}
+                >
+                  Disconnect
                 </button>
-              )}
-              <button
-                type="button"
-                className="db-secondary-btn"
-                onClick={calendar.reload}
-                disabled={calendar.loading}
-              >
-                <RefreshCw size={15} aria-hidden />
-                Refresh status
-              </button>
+              </div>
             </div>
-          </div>
+          )}
 
-          <div className="db-connector-options" aria-label="Google Calendar display options">
-            <ConnectorToggle
-              label="Show in daily briefing"
-              description="Include upcoming events in Today."
-              checked={settings?.calendarInBriefing ?? true}
-              disabled={!connected || settings === null}
-              onChange={(checked) => void updateCalendarSetting("calendarInBriefing", checked)}
-            />
-            <ConnectorToggle
-              label="Show in desktop overlay"
-              description="Let Aura surface relevant calendar context."
-              checked={settings?.calendarOverlay ?? true}
-              disabled={!connected || settings === null}
-              onChange={(checked) => void updateCalendarSetting("calendarOverlay", checked)}
-            />
-          </div>
-        </article>
-      </section>
+          {confirmDisconnect === null && connectors.banner && (
+            <ActionBanner banner={connectors.banner} />
+          )}
 
-      <section className="db-connectors-section">
-        <div className="db-connectors-section-heading">
-          <h3>Coming next</h3>
-          <p>Mark the integrations you would use. Your choices stay on this device.</p>
-        </div>
-        <div className="db-connector-grid">
-          {FUTURE_CONNECTORS.map((connector) => (
-            <FutureConnector
-              key={connector.id}
-              {...connector}
-              interested={interest[connector.id] === true}
-              onToggle={() => void toggleInterest(connector.id)}
-            />
+          {COMING_SOON_CONNECTORS.map((connector) => (
+            <ComingSoonConnector key={connector.id} {...connector} />
           ))}
-        </div>
-      </section>
-
-      {saveError && (
-        <p className="db-connectors-error">
-          That preference could not be saved. Your previous choice was restored.
-        </p>
+        </section>
       )}
     </div>
   );
 }
 
-function ConnectorToggle({
-  label,
-  description,
-  checked,
-  disabled,
-  onChange,
+function CalendarConnectorRow({
+  calendar,
+  connected,
+  busy,
+  refreshing,
+  onToggle,
+  onRefresh,
 }: {
-  label: string;
-  description: string;
-  checked: boolean;
-  disabled: boolean;
-  onChange: (checked: boolean) => void;
+  calendar: GoogleCalendarConnectorStatus | null;
+  connected: boolean;
+  busy: boolean;
+  refreshing: boolean;
+  onToggle: (checked: boolean) => void;
+  onRefresh: () => void;
+}) {
+  const lastSync = formatLastSync(calendar?.lastSyncedAt ?? null);
+  return (
+    <article className={`db-panel db-connector-row${connected ? " is-connected" : ""}`}>
+      <span className="db-connector-icon db-connector-icon-google">
+        <GoogleCalendarBrandIcon size={28} />
+      </span>
+      <div className="db-connector-row-copy">
+        <div className="db-connector-title-line">
+          <h2>Google Calendar</h2>
+          {connected && <span className="db-connector-connected-dot">Connected</span>}
+        </div>
+        <p>
+          {connected
+            ? `${calendar?.calendarName ?? "Primary"} calendar${lastSync ? ` - ${lastSync}` : ""}`
+            : "Let Buddy check your schedule and keep your day in sync."}
+        </p>
+      </div>
+      <div className="db-connector-row-controls">
+        {connected && (
+          <button
+            type="button"
+            className={`db-connector-refresh${refreshing ? " is-refreshing" : ""}`}
+            onClick={onRefresh}
+            disabled={busy}
+            aria-label="Refresh Google Calendar"
+            title="Refresh Google Calendar"
+          >
+            <RefreshCw size={17} aria-hidden />
+          </button>
+        )}
+        <ConnectorSwitch
+          connected={connected}
+          busy={busy}
+          name="Google Calendar"
+          onToggle={onToggle}
+        />
+      </div>
+    </article>
+  );
+}
+
+function ConnectorSwitch({
+  connected,
+  busy,
+  name,
+  onToggle,
+}: {
+  connected: boolean;
+  busy: boolean;
+  name: string;
+  onToggle: (checked: boolean) => void;
 }) {
   return (
-    <label className={`db-connector-toggle${disabled ? " is-disabled" : ""}`}>
-      <span>
-        <strong>{label}</strong>
-        <small>{description}</small>
+    <label className="db-connector-switch">
+      <span className="db-sr-only">
+        {connected ? `Disconnect ${name}` : `Connect ${name}`}
       </span>
       <input
-        className="db-setting-toggle"
         type="checkbox"
-        checked={checked}
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.checked)}
+        role="switch"
+        checked={connected}
+        disabled={busy}
+        onChange={(event) => onToggle(event.target.checked)}
       />
+      <span className="db-connector-switch-track" aria-hidden>
+        <span />
+      </span>
     </label>
   );
 }
 
-function FutureConnector({
+function GmailConnectorRow({
+  gmail,
+  connected,
+  busy,
+  onToggle,
+}: {
+  gmail: GmailConnectorStatus | null;
+  connected: boolean;
+  busy: boolean;
+  onToggle: (checked: boolean) => void;
+}) {
+  return (
+    <article className={`db-panel db-connector-row${connected ? " is-connected" : ""}`}>
+      <span className="db-connector-icon">
+        <GmailBrandIcon size={28} />
+      </span>
+      <div className="db-connector-row-copy">
+        <div className="db-connector-title-line">
+          <h2>Gmail</h2>
+          {connected && <span className="db-connector-connected-dot">Connected</span>}
+        </div>
+        <p>
+          {connected
+            ? gmail?.emailAddress ?? "Connected mailbox"
+            : "Let Buddy send email for you when you ask."}
+        </p>
+      </div>
+      <div className="db-connector-row-controls">
+        <ConnectorSwitch
+          connected={connected}
+          busy={busy}
+          name="Gmail"
+          onToggle={onToggle}
+        />
+      </div>
+    </article>
+  );
+}
+
+function ComingSoonConnector({
   Icon,
   name,
   copy,
-  featured,
-  interested,
-  onToggle,
 }: {
-  Icon: LucideIcon;
+  Icon: ComponentType<{ size?: number; className?: string }>;
   name: string;
   copy: string;
-  featured?: boolean;
-  interested: boolean;
-  onToggle: () => void;
 }) {
   return (
-    <article className={`db-panel db-connector-card db-connector-card-future${
-      featured ? " is-featured" : ""
-    }`}>
-      <div className="db-connector-head">
-        <span className="db-connector-icon"><Icon size={21} aria-hidden /></span>
-        <span className="db-connector-status db-connector-status-future">
-          {featured ? "Featured" : "Coming soon"}
-        </span>
+    <article className="db-panel db-connector-row">
+      <span className="db-connector-icon">
+        <Icon size={21} aria-hidden />
+      </span>
+      <div className="db-connector-row-copy">
+        <h2>{name}</h2>
+        <p>{copy}</p>
       </div>
-      <h2>{name}</h2>
-      <p className="db-muted">{copy}</p>
-      <button
-        type="button"
-        className={`db-connector-interest${interested ? " is-active" : ""}`}
-        aria-pressed={interested}
-        onClick={onToggle}
-      >
-        {interested && <Check size={14} aria-hidden />}
-        {interested ? "Interested" : "I'm interested"}
-      </button>
+      <span className="db-connector-coming-soon">Coming soon</span>
     </article>
   );
+}
+
+function ActionBanner({ banner }: { banner: ConnectorBanner }) {
+  return (
+    <div
+      className={`db-connector-banner is-${banner.tone}`}
+      role={banner.tone === "error" ? "alert" : "status"}
+    >
+      <p>{banner.message}</p>
+    </div>
+  );
+}
+
+function formatLastSync(value: string | null): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return `Updated ${new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(date)}`;
 }

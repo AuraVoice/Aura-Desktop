@@ -23,7 +23,8 @@ tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri-plugin-global-shortcut = "2.3.2"
-tauri-plugin-single-instance = "2.4.2"
+tauri-plugin-single-instance = { version = "2.4.2", features = ["deep-link"] }
+tauri-plugin-deep-link = "2"
 tauri-plugin-store = "2.4.3"
 tauri-plugin-os = "2.3.2"
 xcap = "0.9.6"
@@ -42,6 +43,7 @@ tokio = { version = "1", features = ["time"] }
 # Log redaction rules (redact.rs) - already in the dependency tree
 # transitively, this just makes it a direct dependency.
 regex = "1"
+url = "2"
 getrandom = "0.3"
 sentry = { version = "0.48", default-features = false, features = ["backtrace", "contexts", "debug-images", "panic", "reqwest", "rustls"] }
 

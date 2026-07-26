@@ -1,5 +1,6 @@
 mod auth_cache;
 mod autostart;
+mod connector_oauth;
 mod dashboard;
 mod entitlement;
 mod guide;
@@ -23,6 +24,7 @@ mod win_focus;
 
 use log::{error, info};
 use tauri::{AppHandle, Manager, WindowEvent};
+use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 use overlay::{NotchEdge, OnboardingStep, OverlaySnapshot, OverlayStateHandle, PanelVariant};
@@ -175,7 +177,7 @@ pub fn run() {
     // exits) - dropping it early would flush and disable the client.
     let _sentry_guard = sentry_setup::init();
 
-    let mut builder = tauri::Builder::default().plugin(logging::plugin());
+    let mut builder = tauri::Builder::default();
 
     // Release-only: dev and installed builds share the same com.aura.desktop
     // single-instance key, and autostart keeps the installed app alive in the
@@ -184,7 +186,10 @@ pub fn run() {
     // up is the installed binary, not the code being worked on (cost a full
     // debugging cycle to spot; see lessons-learnt.txt 2026-07-08).
     if !cfg!(debug_assertions) {
-        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if args.iter().any(|arg| arg.starts_with("aura://")) {
+                return;
+            }
             // Relaunching the installed app brings the full app window forward,
             // not the overlay notch; fall back to the overlay if it can't build.
             if let Err(e) = dashboard::open_dashboard_window(app) {
@@ -193,6 +198,10 @@ pub fn run() {
             }
         }));
     }
+
+    builder = builder
+        .plugin(logging::plugin())
+        .plugin(tauri_plugin_deep_link::init());
 
     builder
         .plugin(
@@ -242,6 +251,7 @@ pub fn run() {
             summon_onboarding_panel,
             open_dashboard_window,
             open_dashboard_route,
+            connector_oauth::take_connector_oauth_completion,
             dismiss_bar,
             point_at,
             cancel_pointing,
@@ -287,6 +297,15 @@ pub fn run() {
         ])
         .setup(|app| {
             logging::install_panic_hook();
+            app.manage(connector_oauth::ConnectorOAuthState::default());
+
+            if let Ok(Some(urls)) = app.deep_link().get_current() {
+                connector_oauth::ingest_urls(app.handle(), &urls);
+            }
+            let deep_link_handle = app.handle().clone();
+            app.deep_link().on_open_url(move |event| {
+                connector_oauth::ingest_urls(&deep_link_handle, &event.urls());
+            });
 
             // The low-level keyboard callback only forwards an isolated
             // configured-key tap into a channel. Event emission happens outside
