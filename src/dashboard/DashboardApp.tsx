@@ -68,7 +68,11 @@ export function DashboardShell({ user }: { user: User | null }) {
       <DashboardRouteListener />
       <Sidebar collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} />
       <div className="db-main">
-        <TopBar title={title} user={user} notifications={notifications} />
+        <TopBar
+          title={location.pathname === "/insights" ? "" : title}
+          user={user}
+          notifications={notifications}
+        />
         <div className="db-content">
           <Routes>
             <Route path="/" element={<Navigate to="/home" replace />} />

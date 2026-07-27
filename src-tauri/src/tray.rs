@@ -5,7 +5,7 @@ use tauri::{
     AppHandle, Emitter, Manager, Wry,
 };
 
-use crate::{autostart, overlay, updater};
+use crate::{autostart, dashboard, overlay, updater};
 
 const OPEN_BUDDY: &str = "open_buddy";
 const OPEN_DASHBOARD: &str = "open_dashboard";
@@ -117,12 +117,9 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         })
         .on_menu_event(|app, event| match event.id().as_ref() {
             OPEN_BUDDY => overlay::summon(app),
-            // Opens a browser tab, not an overlay state change, so this just
-            // emits an event for the frontend to handle - no window
-            // resize/focus needed, unlike every other tray action here.
             OPEN_DASHBOARD => {
-                if let Err(e) = app.emit("open-dashboard-requested", ()) {
-                    error!("tray: failed to emit open-dashboard-requested: {e}");
+                if let Err(e) = dashboard::open_dashboard_window(app) {
+                    error!("tray: failed to open dashboard: {e}");
                 }
             }
             // Summon the overlay AND ask the frontend to open the inbox slot,

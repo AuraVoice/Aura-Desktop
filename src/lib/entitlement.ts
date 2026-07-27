@@ -109,3 +109,25 @@ export async function postCheckout(tier: CheckoutTier, period: CheckoutPeriod): 
     clearTimeout(timeoutId);
   }
 }
+
+export async function fetchBillingPortal(): Promise<string> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), CHECKOUT_TIMEOUT_MS);
+  try {
+    const response = await authFetch("/billing/portal", { signal: controller.signal });
+    if (!response.ok) {
+      throw new Error(`fetchBillingPortal failed: ${response.status}`);
+    }
+    const data = (await response.json()) as { portal_url?: unknown };
+    if (typeof data.portal_url !== "string" || !data.portal_url) {
+      throw new Error("fetchBillingPortal: response missing portal_url");
+    }
+    const url = new URL(data.portal_url);
+    if (url.protocol !== "https:") {
+      throw new Error("fetchBillingPortal: portal URL is not HTTPS");
+    }
+    return data.portal_url;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
