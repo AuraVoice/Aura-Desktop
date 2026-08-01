@@ -7,6 +7,10 @@ import {
   type GeneralSettings,
 } from "../../lib/generalSettings";
 import { logError } from "../../lib/log";
+import {
+  SettingsPageLayout,
+  SettingsSection,
+} from "../components/SettingsPageLayout";
 
 function ToggleRow({
   label,
@@ -72,15 +76,20 @@ export function GeneralPage() {
     }
   }
 
-  if (!loaded) return <div className="db-page"><div className="db-state db-muted">Loading settings...</div></div>;
+  if (!loaded) {
+    return (
+      <SettingsPageLayout title="Your preferences" description="Choose how Aura works on this PC.">
+        <div className="db-panel db-state db-muted">Loading settings...</div>
+      </SettingsPageLayout>
+    );
+  }
 
   return (
-    <div className="db-page db-page-wide">
-      <section className="db-settings-section">
-        <div className="db-settings-heading">
-          <h2>Briefing and calendar</h2>
-          <p>Choose which ambient information Aura shows on this PC.</p>
-        </div>
+    <SettingsPageLayout title="Your preferences" description="Choose how Aura works on this PC.">
+      <SettingsSection
+        title="Briefing and calendar"
+        description="Control the information Aura brings into your day."
+      >
         <div className="db-panel db-settings-panel">
           <ToggleRow
             label="Daily catch-up"
@@ -107,13 +116,12 @@ export function GeneralPage() {
             onChange={(value) => void update("calendarOverlay", value)}
           />
         </div>
-      </section>
+      </SettingsSection>
 
-      <section className="db-settings-section">
-        <div className="db-settings-heading">
-          <h2>Privacy and motion</h2>
-          <p>These preferences apply to this Windows device.</p>
-        </div>
+      <SettingsSection
+        title="Privacy and motion"
+        description="These preferences apply only to this Windows device."
+      >
         <div className="db-panel db-settings-panel">
           <ToggleRow
             label="Detailed notification previews"
@@ -128,13 +136,12 @@ export function GeneralPage() {
             onChange={(value) => void update("reduceMotion", value)}
           />
         </div>
-      </section>
+      </SettingsSection>
 
-      <section className="db-settings-section">
-        <div className="db-settings-heading">
-          <h2>Keyboard shortcuts</h2>
-          <p>These shortcuts work globally while Aura is running.</p>
-        </div>
+      <SettingsSection
+        title="Keyboard shortcuts"
+        description="Use Aura from anywhere while it is running."
+      >
         <div className="db-panel db-shortcut-list">
           {Object.values(hotkeyHints).map((hint) => (
             <div className="db-shortcut-row" key={hint.action}>
@@ -149,9 +156,9 @@ export function GeneralPage() {
             <span className="db-shortcut-keys"><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>G</kbd></span>
           </div>
         </div>
-      </section>
+      </SettingsSection>
 
       {saveError && <p className="db-settings-error">That preference could not be saved. Your previous setting was restored.</p>}
-    </div>
+    </SettingsPageLayout>
   );
 }

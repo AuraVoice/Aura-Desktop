@@ -16,7 +16,6 @@ import { HomePage } from "./pages/HomePage";
 import { ConversationsPage } from "./pages/ConversationsPage";
 import { SavedPage } from "./pages/SavedPage";
 import { MeetingsPage } from "./pages/MeetingsPage";
-import { UsagePage } from "./pages/UsagePage";
 import { AccountPage } from "./pages/AccountPage";
 import { BillingPage } from "./pages/BillingPage";
 import { ConnectorsPage } from "./pages/ConnectorsPage";
@@ -44,7 +43,6 @@ export const dashboardPages: Record<string, ReactElement> = {
   "/meetings": <MeetingsPage />,
   "/insights": <InsightsPage />,
   "/general": <GeneralPage />,
-  "/usage": <UsagePage />,
   "/account": <AccountPage />,
   "/billing": <BillingPage />,
   "/connectors": <ConnectorsPage />,

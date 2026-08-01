@@ -48,6 +48,11 @@
     ]
   },
   "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["aura"]
+      }
+    },
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFGQ0QzMThFNjYzRkVDRUQKUldUdDdEOW1qakhOSDcwS0hKRXFoTSt5Ymt0WTZyaGNVdjRSVG15OUNEMmMvWnE3eWo0QzdEQW8K",
       "endpoints": [

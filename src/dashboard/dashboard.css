@@ -2828,6 +2828,288 @@
 .db-page-full {
   max-width: none;
 }
+
+/* Centered settings pages, aligned with the Connectors document layout */
+.db-settings-page {
+  width: min(100%, 780px);
+  max-width: 780px;
+  margin-inline: auto;
+  padding: 20px 24px 48px;
+}
+.db-settings-page-intro {
+  margin-bottom: 24px;
+}
+.db-settings-page-intro h2 {
+  margin: 0 0 8px;
+  font-family: var(--font-title, system-ui, sans-serif);
+  font-size: 30px;
+  line-height: 1.15;
+}
+.db-settings-page-intro p {
+  margin: 0;
+  color: var(--db-text-dim);
+  font-size: 13px;
+  line-height: 1.55;
+}
+.db-settings-page-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+.db-settings-card-heading {
+  margin-bottom: 12px;
+}
+.db-settings-card-heading h3 {
+  margin: 0 0 5px;
+  font-family: var(--font-title, system-ui, sans-serif);
+  font-size: 17px;
+  line-height: 1.25;
+}
+.db-settings-card-heading p {
+  margin: 0;
+  color: var(--db-text-dim);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.db-settings-page .db-panel {
+  max-width: none;
+  border-radius: 20px;
+}
+.db-settings-page .db-settings-panel,
+.db-settings-page .db-shortcut-list {
+  padding: 0;
+}
+.db-settings-page .db-setting-row,
+.db-settings-page .db-shortcut-row {
+  min-height: 76px;
+  padding: 16px 20px;
+}
+.db-settings-page .db-setting-label {
+  font-size: 14px;
+}
+.db-settings-page .db-setting-description {
+  font-size: 12px;
+}
+.db-settings-page .db-settings-error,
+.db-settings-inline-error {
+  margin: 0;
+  color: #b5473f;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.db-account-summary,
+.db-billing-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  min-height: 96px;
+  padding: 18px 20px;
+  border-color: rgba(30, 200, 176, 0.28);
+  box-shadow: 0 10px 30px rgba(39, 38, 34, 0.05);
+}
+.db-account-avatar {
+  display: grid;
+  width: 50px;
+  height: 50px;
+  place-items: center;
+  border-radius: 50%;
+  background: #7c2ab8;
+  color: #fff;
+  font-family: var(--font-title, system-ui, sans-serif);
+  font-size: 17px;
+  font-weight: 700;
+}
+.db-account-summary h3,
+.db-billing-summary h3,
+.db-mobile-content h3,
+.db-help h3 {
+  margin: 0;
+  font-family: var(--font-title, system-ui, sans-serif);
+  font-size: 18px;
+  line-height: 1.25;
+}
+.db-account-summary p,
+.db-billing-summary p,
+.db-mobile-content > p,
+.db-help p {
+  margin: 5px 0 0;
+  color: var(--db-text-dim);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.db-status-pill {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 10px;
+  border: 1px solid var(--db-border);
+  border-radius: 999px;
+  background: #f3f1eb;
+  color: var(--db-text-dim);
+  font-size: 10.5px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+.db-status-pill.is-positive {
+  border-color: rgba(30, 200, 176, 0.28);
+  background: rgba(30, 200, 176, 0.1);
+  color: #167766;
+}
+.db-status-pill.is-warning {
+  border-color: rgba(232, 155, 90, 0.32);
+  background: rgba(232, 155, 90, 0.1);
+  color: #8a5b24;
+}
+.db-settings-page .db-account,
+.db-settings-page .db-details {
+  padding: 6px 20px;
+}
+.db-settings-page .db-account-row,
+.db-settings-page .db-details-row {
+  min-height: 58px;
+  align-items: center;
+  padding: 14px 0;
+}
+.db-settings-page .db-account-row:last-child,
+.db-settings-page .db-details-row:last-of-type {
+  border-bottom: 0;
+}
+.db-settings-page .db-account-value {
+  max-width: 62%;
+}
+.db-billing-summary {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+.db-billing-summary h3 {
+  margin-top: 3px;
+  font-size: 24px;
+  text-transform: capitalize;
+}
+.db-eyebrow {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--db-text-dim);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.db-settings-page .db-details-note {
+  margin: 14px 0 0;
+}
+.db-settings-page .db-details .db-primary-btn {
+  margin: 18px 0 14px;
+}
+.db-settings-page .db-details .db-settings-inline-error {
+  margin-bottom: 14px;
+}
+.db-settings-page .db-mobile {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 28px;
+  padding: 24px;
+}
+.db-settings-page .db-qr {
+  width: 188px;
+  height: 188px;
+  border-radius: 14px;
+}
+.db-mobile-content h3 {
+  font-size: 21px;
+}
+.db-mobile-steps {
+  display: grid;
+  gap: 7px;
+  margin: 16px 0 0;
+  padding-left: 21px;
+  color: var(--db-text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.db-settings-info-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  padding: 0;
+  overflow: hidden;
+}
+.db-settings-info-row > div {
+  padding: 18px 20px;
+}
+.db-settings-info-row > div + div {
+  border-left: 1px solid var(--db-border);
+}
+.db-settings-info-row strong,
+.db-settings-info-list strong {
+  font-size: 13px;
+}
+.db-settings-info-row p,
+.db-settings-info-list p {
+  margin: 5px 0 0;
+  color: var(--db-text-dim);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.db-settings-page .db-help {
+  display: flex;
+  min-height: 118px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 28px;
+  padding: 22px;
+  border-color: rgba(30, 200, 176, 0.28);
+}
+.db-settings-page .db-help .db-primary-btn {
+  flex: 0 0 auto;
+  margin: 0;
+}
+.db-settings-info-list {
+  padding: 0;
+  overflow: hidden;
+}
+.db-settings-info-list > div {
+  padding: 16px 20px;
+}
+.db-settings-info-list > div + div {
+  border-top: 1px solid var(--db-border);
+}
+@media (max-width: 720px) {
+  .db-settings-page {
+    padding-inline: 8px;
+  }
+  .db-account-summary,
+  .db-billing-summary {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .db-account-summary .db-status-pill,
+  .db-billing-summary .db-status-pill {
+    grid-column: 2;
+    justify-self: start;
+  }
+  .db-settings-page .db-mobile {
+    grid-template-columns: 1fr;
+  }
+  .db-settings-page .db-qr {
+    width: 100%;
+  }
+  .db-settings-info-row {
+    grid-template-columns: 1fr;
+  }
+  .db-settings-info-row > div + div {
+    border-top: 1px solid var(--db-border);
+    border-left: 0;
+  }
+  .db-settings-page .db-help {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .db-settings-page .db-account-value {
+    max-width: 56%;
+  }
+}
 .db-page-toolbar {
   position: relative;
   display: flex;
@@ -3356,6 +3638,131 @@
 .db-tag-failed {
   background: rgba(205, 63, 63, 0.12);
   color: #a33232;
+}
+
+.db-local-recordings {
+  margin-bottom: 28px;
+  padding: 20px;
+  border: 1px solid var(--db-border);
+  border-radius: var(--db-radius);
+  background: var(--db-surface);
+  box-shadow: var(--db-shadow-sm);
+}
+.db-local-recordings-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+.db-local-recordings-heading h2 {
+  margin: 7px 0 5px;
+  color: var(--db-text);
+  font-family: var(--font-display, Georgia, serif);
+  font-size: 21px;
+  font-weight: 500;
+}
+.db-local-recordings-heading p {
+  max-width: 680px;
+  margin: 0;
+  color: var(--db-text-dim);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.db-local-recordings-heading .db-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.db-local-recordings-heading > .db-secondary-btn {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 7px 12px;
+  border-radius: 999px;
+}
+.db-local-recording-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 18px;
+}
+.db-local-recording {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 13px 14px;
+  border: 1px solid var(--db-border);
+  border-radius: 12px;
+  background: var(--db-content-bg);
+}
+.db-local-recording-copy {
+  display: flex;
+  min-width: 190px;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--db-text-dim);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.db-local-recording-copy strong {
+  color: var(--db-text);
+  font-size: 13px;
+}
+.db-local-warning {
+  color: #9a6200;
+  font-weight: 650;
+}
+.db-local-recording-actions {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+}
+.db-local-recording-actions .db-primary-btn,
+.db-local-recording-actions .db-secondary-btn,
+.db-local-delete {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 0;
+  padding: 7px 11px;
+  border-radius: 8px;
+  font-size: 12px;
+}
+.db-local-delete {
+  border: 1px solid rgba(181, 61, 61, 0.28);
+  background: rgba(205, 63, 63, 0.06);
+  color: #a33232;
+  font-family: var(--font-body, system-ui, sans-serif);
+  font-weight: 650;
+  cursor: pointer;
+}
+.db-local-delete:hover:not(:disabled) {
+  background: rgba(205, 63, 63, 0.12);
+}
+.db-local-delete:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+.db-local-recordings-message {
+  margin: 14px 0 0;
+  color: var(--db-text-dim);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+@media (max-width: 920px) {
+  .db-local-recording {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .db-local-recording-actions {
+    justify-content: flex-start;
+  }
 }
 
 /* Meetings list detail swaps into the page instead of opening a modal. */

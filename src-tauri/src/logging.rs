@@ -68,30 +68,36 @@ pub async fn read_recent_log_lines(
 ) -> Result<Vec<String>, String> {
     let ticket = crate::security::authorize(&app, crate::security::Operation::ReadLogs)?;
     let blocking_app = app.clone();
-    let result = tauri::async_runtime::spawn_blocking(move || {
-        let app = blocking_app;
-        // Matches tauri-plugin-log's own LogDir{file_name: None} naming:
-        // <app_log_dir>/<product name>.log ("Aura Desktop.log" - see
-        // plugin() above). Derived from package_info() rather than hardcoded
-        // so a productName change can't silently break this again.
-        let file_name = format!("{}.log", app.package_info().name);
-        let path = app
-            .path()
-            .app_log_dir()
-            .map_err(|e| e.to_string())?
-            .join(file_name);
-        let bytes = read_tail_bytes(&path, MAX_LOG_BYTES)?;
-        Ok(tail_lines(&bytes, count.min(MAX_LOG_LINES))
-            .into_iter()
-            .map(|line| crate::redact::redact_line(&line))
-            .collect::<Vec<String>>())
-    })
-    .await
-    .map_err(|e| e.to_string())?;
+    let result =
+        tauri::async_runtime::spawn_blocking(move || read_redacted_log_tail(&blocking_app, count))
+            .await
+            .map_err(|e| e.to_string())?;
     // Same rule as read_segment: the tail is the sensitive return value, so
     // a sign-out that landed during the file read drops it.
     crate::security::recheck(&app, crate::security::Operation::ReadLogs, &ticket)?;
     result
+}
+
+/// Shared by the signed-in feedback command and the explicit meeting incident
+/// bundle export. Callers must perform their own authorization before invoking
+/// this blocking helper.
+pub(crate) fn read_redacted_log_tail(
+    app: &tauri::AppHandle,
+    count: usize,
+) -> Result<Vec<String>, String> {
+    // Matches tauri-plugin-log's own LogDir{file_name: None} naming:
+    // <app_log_dir>/<product name>.log.
+    let file_name = format!("{}.log", app.package_info().name);
+    let path = app
+        .path()
+        .app_log_dir()
+        .map_err(|e| e.to_string())?
+        .join(file_name);
+    let bytes = read_tail_bytes(&path, MAX_LOG_BYTES)?;
+    Ok(tail_lines(&bytes, count.min(MAX_LOG_LINES))
+        .into_iter()
+        .map(|line| crate::redact::redact_line(&line))
+        .collect())
 }
 
 /// At most `budget` bytes from the end of the file. When the read starts
@@ -101,7 +107,8 @@ fn read_tail_bytes(path: &Path, budget: u64) -> Result<Vec<u8>, String> {
     let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let len = file.metadata().map_err(|e| e.to_string())?.len();
     let start = len.saturating_sub(budget);
-    file.seek(SeekFrom::Start(start)).map_err(|e| e.to_string())?;
+    file.seek(SeekFrom::Start(start))
+        .map_err(|e| e.to_string())?;
     let mut buf = Vec::with_capacity((len - start) as usize);
     file.read_to_end(&mut buf).map_err(|e| e.to_string())?;
     if start > 0 {

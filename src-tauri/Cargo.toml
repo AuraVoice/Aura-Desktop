@@ -45,7 +45,9 @@ tokio = { version = "1", features = ["time"] }
 regex = "1"
 url = "2"
 getrandom = "0.3"
+sha2 = "0.10"
 sentry = { version = "0.48", default-features = false, features = ["backtrace", "contexts", "debug-images", "panic", "reqwest", "rustls"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
 
 # Win32 bindings - win_focus.rs and the meeting/ module use this, Windows
 # only. Scoping it to a target-specific dependency table (rather than
@@ -66,6 +68,20 @@ windows = { version = "0.61", features = [
     "Win32_System_LibraryLoader",
     "Win32_Security_Cryptography",
     "Win32_System_RemoteDesktop",
+    "Win32_Storage_FileSystem",
+    # Structured screen context (uia/): IUIAutomation lives in Accessibility,
+    # its property values come back as VARIANTs, and it is a COM API so the
+    # dedicated worker thread needs CoInitializeEx/CoCreateInstance.
+    "Win32_UI_Accessibility",
+    "Win32_System_Com",
+    "Win32_System_Variant",
+    # Persistent Guide Mode capture (guide/capture/dda.rs): DXGI Desktop
+    # Duplication needs a D3D11 device, the DXGI factory/adapter/output chain,
+    # and DXGI_FORMAT from the Common module.
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
 ] }
 # Meeting capture: WASAPI loopback+mic (wasapi), FLAC container encode
 # (flacenc, pure Rust, no C deps - the deliberate codec choice over Opus,

@@ -6,6 +6,10 @@ import {
   type Entitlement,
 } from "../../lib/entitlement";
 import { DataView } from "../DataView";
+import {
+  SettingsPageLayout,
+  SettingsSection,
+} from "../components/SettingsPageLayout";
 import { useAsyncData } from "../useAsyncData";
 
 function statusLabel(entitlement: Entitlement): string {
@@ -34,45 +38,76 @@ export function BillingPage() {
   };
 
   return (
-    <div className="db-page">
+    <SettingsPageLayout
+      title="Your plan"
+      description="View the plan connected to your Aura account."
+    >
       <DataView state={state} isEmpty={() => false} emptyLabel="">
         {(entitlement) => (
-          <div className="db-panel db-details">
-            <div className="db-details-row">
-              <span className="db-details-label">Plan</span>
-              <span className="db-details-value">{entitlement.effectiveTier}</span>
-            </div>
-            <div className="db-details-row">
-              <span className="db-details-label">Status</span>
-              <span className="db-details-value">{statusLabel(entitlement)}</span>
-            </div>
-            {entitlement.trialEndDate && (
-              <div className="db-details-row">
-                <span className="db-details-label">Trial ends</span>
-                <span className="db-details-value">{new Date(entitlement.trialEndDate).toLocaleDateString()}</span>
+          <>
+            <div className="db-panel db-billing-summary">
+              <div>
+                <span className="db-eyebrow">Current plan</span>
+                <h3>{entitlement.effectiveTier}</h3>
+                <p>One subscription covers Aura on desktop and mobile.</p>
               </div>
-            )}
-            {entitlement.cancelAtPeriodEnd && (
-              <p className="db-muted db-details-note">Your plan will end at the close of the current billing period.</p>
-            )}
-            {entitlement.tier !== "free" && (
-              <button
-                type="button"
-                className="db-primary-btn"
-                disabled={portalBusy}
-                onClick={() => void openBillingPortal()}
-              >
-                {portalBusy ? "Opening billing..." : "Manage billing"}
-              </button>
-            )}
-            {portalError && (
-              <p className="db-muted db-details-note" role="alert">
-                Billing could not open just now. Try again.
-              </p>
-            )}
-          </div>
+              <span className={`db-status-pill${
+                entitlement.status === "active" || entitlement.status === "trialing"
+                  ? " is-positive"
+                  : entitlement.status === "gracePeriod"
+                    ? " is-warning"
+                    : ""
+              }`}>
+                {statusLabel(entitlement)}
+              </span>
+            </div>
+
+            <SettingsSection
+              title="Plan details"
+              description="Your live subscription status from Aura."
+            >
+              <div className="db-panel db-details">
+                <div className="db-details-row">
+                  <span className="db-details-label">Plan</span>
+                  <span className="db-details-value">{entitlement.effectiveTier}</span>
+                </div>
+                <div className="db-details-row">
+                  <span className="db-details-label">Status</span>
+                  <span className="db-details-value">{statusLabel(entitlement)}</span>
+                </div>
+                {entitlement.trialEndDate && (
+                  <div className="db-details-row">
+                    <span className="db-details-label">Trial ends</span>
+                    <span className="db-details-value">
+                      {new Date(entitlement.trialEndDate).toLocaleDateString()}
+                    </span>
+                  </div>
+                )}
+                {entitlement.cancelAtPeriodEnd && (
+                  <p className="db-muted db-details-note">
+                    Your plan will end at the close of the current billing period.
+                  </p>
+                )}
+                {entitlement.tier !== "free" && (
+                  <button
+                    type="button"
+                    className="db-primary-btn"
+                    disabled={portalBusy}
+                    onClick={() => void openBillingPortal()}
+                  >
+                    {portalBusy ? "Opening billing..." : "Manage billing"}
+                  </button>
+                )}
+                {portalError && (
+                  <p className="db-settings-inline-error" role="alert">
+                    Billing could not open just now. Try again.
+                  </p>
+                )}
+              </div>
+            </SettingsSection>
+          </>
         )}
       </DataView>
-    </div>
+    </SettingsPageLayout>
   );
 }

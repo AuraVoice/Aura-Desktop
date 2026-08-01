@@ -9,7 +9,6 @@ import {
   Link2,
   User,
   CreditCard,
-  Activity,
   Smartphone,
   HelpCircle,
   type LucideIcon,
@@ -53,7 +52,6 @@ export const navSections: NavSection[] = [
       { to: "/connectors", label: "Connectors", Icon: Link2 },
       { to: "/account", label: "Account", Icon: User },
       { to: "/billing", label: "Billing", Icon: CreditCard },
-      { to: "/usage", label: "Usage", Icon: Activity },
     ],
   },
   {
