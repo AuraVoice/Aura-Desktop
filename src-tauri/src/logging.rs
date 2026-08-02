@@ -37,9 +37,30 @@ pub fn plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
 pub fn install_panic_hook() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        log::error!("panic: {info}");
+        if panicking_thread_handles_speech() {
+            // PanicHookInfo's Display embeds the panic payload, and on these
+            // threads that payload can carry transcript text. This log file is
+            // plaintext (redact.rs runs on the READ path only, and its
+            // key=value/JWT rules would never match prose), so the panic is
+            // recorded without it. Sentry still receives the full event through
+            // the chained hook below, where sentry_setup's before_send drops
+            // anything originating in the dictation module.
+            log::error!("panic: on a dictation thread, details withheld");
+        } else {
+            log::error!("panic: {info}");
+        }
         previous(info);
     }));
+}
+
+/// True when the currently panicking thread is one that holds decoded speech in
+/// memory. Matched by thread name because a panic hook has no other handle on
+/// where it came from.
+fn panicking_thread_handles_speech() -> bool {
+    matches!(
+        std::thread::current().name(),
+        Some("aura-dictation") | Some("aura-dictation-model")
+    )
 }
 
 /// Hard ceiling on how many lines a single read may return, regardless of

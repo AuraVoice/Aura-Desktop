@@ -22,8 +22,18 @@
 // chaining it into `npm run build` costs nothing after the first run.
 
 import { execFileSync } from "node:child_process";
-import { createWriteStream } from "node:fs";
-import { mkdir, readdir, copyFile, rm, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { createReadStream, createWriteStream } from "node:fs";
+import {
+  mkdir,
+  readdir,
+  copyFile,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
 import path from "node:path";
@@ -36,17 +46,36 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 const targetDir = path.join(repoRoot, "src-tauri", "resources", "dictation");
 const cacheDir = path.join(repoRoot, "node_modules", ".cache", "dictation");
+const manifestPath = path.join(targetDir, "installed.json");
 
 const LIBS_ARCHIVE = `sherpa-onnx-${SHERPA_VERSION}-win-x64-shared.tar.bz2`;
-const LIBS_URL = `https://github.com/k2-fsa/sherpa-onnx/releases/download/${SHERPA_VERSION}/${LIBS_ARCHIVE}`;
 const MODEL_ARCHIVE = `${MODEL_NAME}.tar.bz2`;
-const MODEL_URL = `https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/${MODEL_ARCHIVE}`;
 
-const REQUIRED = [
-  "sherpa-onnx-c-api.dll",
-  "onnxruntime.dll",
-  "tokens.txt",
-];
+// Pinned size and SHA-256 for every archive. These are NATIVE CODE that Aura
+// loads into its own process, so presence on disk is not evidence of anything:
+// a corrupted cache, an interrupted build, or a replaced upstream asset would
+// otherwise be extracted and loaded without a word. Verified before extraction,
+// on a fresh download and on a cache hit alike.
+//
+// To bump a version: change the tag or model name, download the new asset, and
+// replace both the size and the digest here. A stale digest fails the build
+// loudly rather than silently installing something unexpected.
+const ARCHIVES = {
+  libs: {
+    name: LIBS_ARCHIVE,
+    url: `https://github.com/k2-fsa/sherpa-onnx/releases/download/${SHERPA_VERSION}/${LIBS_ARCHIVE}`,
+    bytes: 21109135,
+    sha256:
+      "52bc6d41b0050a4ad160a767319fd4dad0f87806bb6d4c2a4721c168abe65be6",
+  },
+  model: {
+    name: MODEL_ARCHIVE,
+    url: `https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/${MODEL_ARCHIVE}`,
+    bytes: 127887156,
+    sha256:
+      "9c559283e8498d3fe95913c79ca1cb454bb26281ac2b102b41306c7d752765d9",
+  },
+};
 
 async function exists(candidate) {
   try {
@@ -57,33 +86,87 @@ async function exists(candidate) {
   }
 }
 
+async function sha256(file) {
+  const hash = createHash("sha256");
+  await pipeline(createReadStream(file), hash);
+  return hash.digest("hex");
+}
+
+/// The installed resources are trusted only when the manifest says they came
+/// from exactly these pinned archives AND every file it lists is still present
+/// at its recorded, non-zero size. Anything else means a version bump, a
+/// partial install, or tampering, and triggers a full reinstall.
 async function alreadyInstalled() {
-  for (const name of REQUIRED) {
-    if (!(await exists(path.join(targetDir, name)))) {
+  let manifest;
+  try {
+    manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  } catch {
+    return false;
+  }
+  if (
+    manifest.sherpaVersion !== SHERPA_VERSION ||
+    manifest.modelName !== MODEL_NAME ||
+    manifest.archives?.libs !== ARCHIVES.libs.sha256 ||
+    manifest.archives?.model !== ARCHIVES.model.sha256
+  ) {
+    console.log("dictation: pinned version or digest changed, reinstalling");
+    return false;
+  }
+  for (const [name, recorded] of Object.entries(manifest.files ?? {})) {
+    let info;
+    try {
+      info = await stat(path.join(targetDir, name));
+    } catch {
+      console.log(`dictation: ${name} is missing, reinstalling`);
+      return false;
+    }
+    if (info.size === 0 || info.size !== recorded) {
+      console.log(`dictation: ${name} has an unexpected size, reinstalling`);
       return false;
     }
   }
-  const entries = await readdir(targetDir);
-  const hasEncoder = entries.some((name) => name.startsWith("encoder") && name.endsWith(".onnx"));
-  const hasDecoder = entries.some((name) => name.startsWith("decoder") && name.endsWith(".onnx"));
-  const hasJoiner = entries.some((name) => name.startsWith("joiner") && name.endsWith(".onnx"));
-  return hasEncoder && hasDecoder && hasJoiner;
+  return true;
 }
 
-async function download(url, destination) {
-  if (await exists(destination)) {
-    console.log(`dictation: reusing cached ${path.basename(destination)}`);
-    return;
+/// Verifies size first (cheap, catches a truncated download immediately) and
+/// then the digest. A failure deletes the file so the next run refetches rather
+/// than failing forever on a poisoned cache.
+async function verify(file, expected) {
+  const info = await stat(file);
+  if (info.size !== expected.bytes) {
+    await rm(file, { force: true });
+    throw new Error(
+      `${expected.name} is ${info.size} bytes, expected ${expected.bytes}. The cached copy was discarded, run this again.`,
+    );
   }
-  console.log(`dictation: downloading ${url}`);
-  const response = await fetch(url);
+  const digest = await sha256(file);
+  if (digest !== expected.sha256) {
+    await rm(file, { force: true });
+    throw new Error(
+      `${expected.name} failed its SHA-256 check (got ${digest}, expected ${expected.sha256}). The cached copy was discarded. If the upstream asset really did change, update the pin in this script deliberately.`,
+    );
+  }
+}
+
+async function fetchArchive(expected) {
+  const destination = path.join(cacheDir, expected.name);
+  if (await exists(destination)) {
+    console.log(`dictation: verifying cached ${expected.name}`);
+    await verify(destination, expected);
+    return destination;
+  }
+  console.log(`dictation: downloading ${expected.url}`);
+  const response = await fetch(expected.url);
   if (!response.ok || !response.body) {
-    throw new Error(`download failed (${response.status}) for ${url}`);
+    throw new Error(`download failed (${response.status}) for ${expected.url}`);
   }
   const partial = `${destination}.partial`;
   await pipeline(Readable.fromWeb(response.body), createWriteStream(partial));
-  const { rename } = await import("node:fs/promises");
+  // Verified under the .partial name, so a failed check can never leave a file
+  // at the real path for a later run to treat as a valid cache hit.
+  await verify(partial, expected);
   await rename(partial, destination);
+  return destination;
 }
 
 function extract(archive, into) {
@@ -119,10 +202,8 @@ async function main() {
   }
   await mkdir(cacheDir, { recursive: true });
 
-  const libsArchive = path.join(cacheDir, LIBS_ARCHIVE);
-  const modelArchive = path.join(cacheDir, MODEL_ARCHIVE);
-  await download(LIBS_URL, libsArchive);
-  await download(MODEL_URL, modelArchive);
+  const libsArchive = await fetchArchive(ARCHIVES.libs);
+  const modelArchive = await fetchArchive(ARCHIVES.model);
 
   const extractDir = path.join(cacheDir, "extract");
   await rm(extractDir, { recursive: true, force: true });
@@ -130,13 +211,24 @@ async function main() {
   extract(libsArchive, extractDir);
   extract(modelArchive, extractDir);
 
+  const installed = [];
+  async function install(from, name) {
+    const to = path.join(targetDir, name);
+    await copyFile(from, to);
+    const info = await stat(to);
+    if (info.size === 0) {
+      throw new Error(`${name} was installed empty`);
+    }
+    installed.push([name, info.size]);
+  }
+
   const libsDir = path.join(
     extractDir,
     `sherpa-onnx-${SHERPA_VERSION}-win-x64-shared`,
     "lib",
   );
   for (const name of ["sherpa-onnx-c-api.dll", "onnxruntime.dll"]) {
-    await copyFile(path.join(libsDir, name), path.join(targetDir, name));
+    await install(path.join(libsDir, name), name);
   }
 
   const modelDir = path.join(extractDir, MODEL_NAME);
@@ -144,20 +236,39 @@ async function main() {
   const decoder = await pickModelFile(modelDir, "decoder", false);
   const joiner = await pickModelFile(modelDir, "joiner", true);
   for (const name of [encoder, decoder, joiner, "tokens.txt"]) {
-    await copyFile(path.join(modelDir, name), path.join(targetDir, name));
+    await install(path.join(modelDir, name), name);
   }
 
   // bpe.vocab is what sherpa-onnx needs to tokenize hotwords for a BPE English
-  // model. Without it dictation still works, but tier 0 contextual biasing
-  // turns itself off (dictation/stt.rs logs that once at startup).
+  // model. The pinned archive does NOT ship one, so tier 0 contextual biasing
+  // turns itself off and only tier 1 corrections apply. Plain dictation is
+  // unaffected. dictation/stt.rs logs this once at startup and reports it
+  // through dictation_status.biasingAvailable.
   const bpeVocab = path.join(modelDir, "bpe.vocab");
   if (await exists(bpeVocab)) {
-    await copyFile(bpeVocab, path.join(targetDir, "bpe.vocab"));
+    await install(bpeVocab, "bpe.vocab");
   } else {
     console.warn(
       "dictation: bpe.vocab is not in the model archive, contextual biasing will be off",
     );
   }
+
+  await writeFile(
+    manifestPath,
+    `${JSON.stringify(
+      {
+        sherpaVersion: SHERPA_VERSION,
+        modelName: MODEL_NAME,
+        archives: {
+          libs: ARCHIVES.libs.sha256,
+          model: ARCHIVES.model.sha256,
+        },
+        files: Object.fromEntries(installed),
+      },
+      null,
+      2,
+    )}\n`,
+  );
 
   await rm(extractDir, { recursive: true, force: true });
   console.log(`dictation: installed the runtime and model into ${targetDir}`);

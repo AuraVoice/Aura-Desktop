@@ -294,6 +294,7 @@ pub fn run() {
             meeting::debug_force_join,
             voice_toggle_key::voice_toggle_key_status,
             dictation::dictation_status,
+            dictation::dictation_hud_state,
             dictation::dictation_vocabulary,
             dictation::dictation_add_vocabulary,
             dictation::dictation_record_correction,

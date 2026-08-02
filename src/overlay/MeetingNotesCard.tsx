@@ -2,7 +2,7 @@ import { GlassSurface } from "./GlassSurface";
 import { BarIconButton } from "./BarIconButton";
 import { CloseIcon } from "./icons";
 import { meetingFailureCopy, meetingNotes as copy } from "../lib/meetingCopy";
-import { openDashboard } from "../lib/dashboardLink";
+import { openDashboardWindow } from "../lib/dashboardWindow";
 import type { MeetingNotesState } from "./useMeetingNotes";
 import "./MeetingNotesCard.css";
 
@@ -86,7 +86,7 @@ export function MeetingNotesCard({ card }: { card: MeetingNotesState }) {
           <button
             type="button"
             className="meeting-notes-card-view-all"
-            onClick={() => void openDashboard()}
+            onClick={() => void openDashboardWindow("/meetings")}
           >
             {copy.viewAll}
           </button>

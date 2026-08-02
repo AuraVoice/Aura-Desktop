@@ -112,11 +112,12 @@ impl DictationChord {
 /// What the keyboard hook asks the dictation worker to do next.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ChordSignal {
-    /// First key of the chord went down. Open the capture client now so its
-    /// 50-300ms cold start hides behind the 200-400ms a human takes before
-    /// their first phoneme.
+    /// First key of the chord went down. Warms the MODEL only, never the
+    /// microphone: this is an ordinary Ctrl or Win press until proven
+    /// otherwise, and the hook cannot see mouse input, so a Ctrl-click is
+    /// indistinguishable from a long deliberate hold.
     Prewarm,
-    /// Every key of the chord is down. Start decoding.
+    /// Every key of the chord is down. Open the microphone and start decoding.
     Arm,
     /// A chord key came up. Flush the decoder and insert.
     Release,
@@ -149,6 +150,19 @@ impl ChordState {
     pub fn observe(&mut self, vk: u32, is_down: bool, is_up: bool) -> ChordOutcome {
         let chord = DICTATION_CHORD;
         if !chord.is_chord_key(vk) {
+            // A non-chord key while one chord key is down but the chord is not
+            // complete means this was an ordinary shortcut, not a dictation:
+            // Ctrl+C, Ctrl+V, Ctrl-click, Win+E. Abandon the prewarm on the
+            // spot so the microphone is never opened for it. Deliberately NOT
+            // done once armed, where a stray keypress must not kill a hold the
+            // user is actively speaking into.
+            if is_down && self.prewarmed && !self.armed {
+                self.prewarmed = false;
+                return ChordOutcome {
+                    signal: Some(ChordSignal::Cancel),
+                    engaged: false,
+                };
+            }
             return ChordOutcome {
                 signal: None,
                 engaged: self.engaged(),

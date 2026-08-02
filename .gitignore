@@ -42,3 +42,4 @@ graphify-out/
 # resource glob always matches.
 /src-tauri/resources/dictation/*
 !/src-tauri/resources/dictation/README.md
+/src-tauri/resources/dictation/installed.json

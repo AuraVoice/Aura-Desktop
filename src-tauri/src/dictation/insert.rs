@@ -32,9 +32,14 @@ use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThre
 /// land everywhere.
 const CHUNK_UNITS: usize = 20;
 const CHUNK_GAP: Duration = Duration::from_millis(2);
-/// How long insertion waits for the modifier keys to actually come up before
-/// giving up. Past this the text is held rather than typed, because typing it
-/// while Win is logically down turns every character into a Win chord.
+/// How long insertion waits for EVERY chord key to come up before giving up.
+/// The chord reports its release as soon as the first key rises, so this covers
+/// a deliberate stagger between the two: 900ms is comfortably past the 100 to
+/// 300ms a human takes to let go of the second one. Past it the text is held
+/// rather than typed.
+const CHORD_RELEASE_TIMEOUT: Duration = Duration::from_millis(900);
+/// Tighter budget for the logical-state wait that follows, once the keys are
+/// already known to be physically up.
 const KEY_RELEASE_TIMEOUT: Duration = Duration::from_millis(50);
 const KEY_RELEASE_POLL: Duration = Duration::from_millis(2);
 
@@ -76,14 +81,32 @@ pub fn insert_text(text: &str, target: isize) -> InsertOutcome {
     send_unicode(text)
 }
 
-/// The Win guard (and, for an Alt chord, the menu guard). Both are driven off
-/// DICTATION_CHORD, so a chord without those keys skips them entirely.
+/// Waits for the chord to be fully off the keyboard, then runs the Win guard
+/// (and, for an Alt chord, the menu guard). All of it is driven off
+/// DICTATION_CHORD, so a chord without those keys skips the guards entirely.
 fn release_modifiers() -> bool {
     let chord = super::chord::DICTATION_CHORD;
-    if chord.needs_win_guard() && !wait_for_keys_up(&[VK_LWIN, VK_RWIN]) {
+
+    // EVERY key of the chord, not just the ones with a guard. The chord signals
+    // its release when the FIRST key rises, so the other one is routinely still
+    // down here, and Microsoft's SendInput documentation is explicit that keys
+    // already held interfere with injected input: a held Ctrl turns the whole
+    // insert into control chords. Waiting on the full set is also what makes
+    // both release orders behave identically.
+    let (anchor, partner) = chord.vk_sets();
+    let chord_keys: Vec<VIRTUAL_KEY> = anchor
+        .iter()
+        .chain(partner.iter())
+        .map(|vk| VIRTUAL_KEY(*vk as u16))
+        .collect();
+    if !wait_for_keys_up(&chord_keys, CHORD_RELEASE_TIMEOUT) {
         return false;
     }
-    if chord.needs_menu_guard() && !wait_for_keys_up(&[VK_LMENU, VK_RMENU]) {
+
+    if chord.needs_win_guard() && !wait_for_keys_up(&[VK_LWIN, VK_RWIN], KEY_RELEASE_TIMEOUT) {
+        return false;
+    }
+    if chord.needs_menu_guard() && !wait_for_keys_up(&[VK_LMENU, VK_RMENU], KEY_RELEASE_TIMEOUT) {
         return false;
     }
     if chord.needs_win_guard() {
@@ -102,8 +125,8 @@ fn release_modifiers() -> bool {
     true
 }
 
-fn wait_for_keys_up(keys: &[VIRTUAL_KEY]) -> bool {
-    let deadline = Instant::now() + KEY_RELEASE_TIMEOUT;
+fn wait_for_keys_up(keys: &[VIRTUAL_KEY], timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
     loop {
         let any_down = keys
             .iter()

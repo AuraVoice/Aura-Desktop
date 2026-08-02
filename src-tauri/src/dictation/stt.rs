@@ -216,14 +216,36 @@ impl ModelPaths {
     }
 }
 
-/// A warm recognizer. Created once on the dictation worker thread and parked:
-/// with no stream open and no audio client running, it costs memory and no CPU.
+/// Cheap presence probe for the bundled runtime and model, used at startup so
+/// the status can say whether dictation is installed WITHOUT paying for a load.
+/// The model itself is only loaded the first time the user reaches for the
+/// chord, so a user who never dictates never carries its working set.
+pub fn resources_present(dir: &Path) -> Result<(), String> {
+    if !dir.join("sherpa-onnx-c-api.dll").is_file() {
+        return Err(format!(
+            "the dictation runtime is not installed in {} (run npm run predownload:dictation)",
+            dir.display()
+        ));
+    }
+    ModelPaths::resolve(dir).map(|_| ())
+}
+
+/// A warm recognizer. Loaded on its own one-shot thread, handed to the
+/// dictation worker exactly once, and parked there: with no stream open and no
+/// audio client running, it costs memory and no CPU.
 pub struct Recognizer {
     api: Api,
     handle: *const c_void,
     /// Whether contextual biasing can be honored at all in this install.
     biasing_available: bool,
 }
+
+/// Safe because of how this value is used, not because the type is inherently
+/// thread-safe: `handle` is an opaque sherpa-onnx object, constructed on the
+/// loader thread, moved exactly once across a channel, and touched only from
+/// the dictation worker thread afterwards. `Sync` is deliberately NOT
+/// implemented, so it can never be shared between threads.
+unsafe impl Send for Recognizer {}
 
 impl Recognizer {
     /// Loads the shared library and builds the recognizer. `resource_dir` is

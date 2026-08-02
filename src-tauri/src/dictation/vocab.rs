@@ -374,38 +374,52 @@ fn single_word_terms(vocab: &VocabStore, app_key: Option<&str>) -> Vec<String> {
     terms
 }
 
+/// Case-insensitive comparison of two characters. Compares the full lowercase
+/// EXPANSIONS rather than a single mapped char, because some characters lower
+/// to more than one (Turkish dotted capital I is the classic case).
+fn chars_eq_ignore_case(left: char, right: char) -> bool {
+    left == right || left.to_lowercase().eq(right.to_lowercase())
+}
+
 /// Case-insensitive whole-phrase replacement. Anchored on both ends so
 /// "count" never rewrites the inside of "accountant".
+///
+/// Every byte offset used here comes from the ORIGINAL string. An earlier
+/// version searched a `to_lowercase()` copy and applied those offsets back to
+/// the original, which panics the moment a case conversion changes byte length:
+/// Turkish dotted capital I is two bytes and lowers to three. That panic would
+/// have killed the worker mid-transcript and handed the payload to the panic
+/// hook, so this comparison is a correctness AND a privacy fix.
 fn replace_phrase(haystack: &str, needle: &str, replacement: &str) -> String {
-    if needle.is_empty() {
+    let needle_chars: Vec<char> = needle.chars().collect();
+    if needle_chars.is_empty() {
         return haystack.to_string();
     }
-    let lowered_haystack = haystack.to_lowercase();
-    let lowered_needle = needle.to_lowercase();
+    let hay: Vec<(usize, char)> = haystack.char_indices().collect();
     let mut out = String::with_capacity(haystack.len());
-    let mut cursor = 0usize;
-    while let Some(found) = lowered_haystack[cursor..].find(&lowered_needle) {
-        let start = cursor + found;
-        let end = start + lowered_needle.len();
-        let before_ok = start == 0
-            || !haystack[..start]
-                .chars()
-                .next_back()
-                .is_some_and(char::is_alphanumeric);
-        let after_ok = end >= haystack.len()
-            || !haystack[end..]
-                .chars()
-                .next()
-                .is_some_and(char::is_alphanumeric);
-        out.push_str(&haystack[cursor..start]);
-        if before_ok && after_ok {
-            out.push_str(replacement);
-        } else {
-            out.push_str(&haystack[start..end]);
+    let mut index = 0usize;
+    let mut copied = 0usize;
+    while index < hay.len() {
+        let matches = hay.len() - index >= needle_chars.len()
+            && (0..needle_chars.len())
+                .all(|offset| chars_eq_ignore_case(hay[index + offset].1, needle_chars[offset]));
+        if matches {
+            let after = index + needle_chars.len();
+            let before_ok = index == 0 || !hay[index - 1].1.is_alphanumeric();
+            let after_ok = after >= hay.len() || !hay[after].1.is_alphanumeric();
+            if before_ok && after_ok {
+                let start = hay[index].0;
+                let end = hay.get(after).map_or(haystack.len(), |(byte, _)| *byte);
+                out.push_str(&haystack[copied..start]);
+                out.push_str(replacement);
+                copied = end;
+                index = after;
+                continue;
+            }
         }
-        cursor = end;
+        index += 1;
     }
-    out.push_str(&haystack[cursor..]);
+    out.push_str(&haystack[copied..]);
     out
 }
 

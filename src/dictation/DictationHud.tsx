@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import "./DictationHud.css";
 
 /// Mirrors HudPhase in src-tauri/src/dictation/hud.rs.
@@ -46,10 +47,27 @@ export function DictationHud() {
   const [update, setUpdate] = useState<DictationUpdate>(IDLE);
 
   useEffect(() => {
+    let live = true;
     const pending = listen<DictationUpdate>("dictation-update", (event) => {
       setUpdate(event.payload);
     });
+    // This window is created on arm, so the caption that triggered it may have
+    // been emitted before the listener above existed. Pull the current state
+    // once rather than rendering blank until the next partial arrives. A later
+    // event always wins: the listener overwrites whatever this resolves to.
+    void invoke<DictationUpdate>("dictation_hud_state")
+      .then((current) => {
+        if (live) {
+          setUpdate((previous) =>
+            previous.phase === "idle" && !previous.text ? current : previous,
+          );
+        }
+      })
+      .catch(() => {
+        // A HUD that cannot read its own state still renders from events.
+      });
     return () => {
+      live = false;
       void pending.then((unlisten) => unlisten());
     };
   }, []);

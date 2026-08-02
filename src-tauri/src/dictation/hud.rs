@@ -14,6 +14,8 @@
 //! gets ZERO permissions, including core:default, so it could not even listen
 //! for its own events.
 
+use std::sync::Mutex;
+
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
@@ -48,6 +50,21 @@ pub struct HudUpdate {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     pub chord_label: &'static str,
+}
+
+/// The last update published, so a webview that was created moments ago can ask
+/// for the current state instead of racing the first event. Without this the
+/// HUD renders blank on the very first dictation, because the window is built
+/// on arm and its listener is not registered yet when the first caption fires.
+static LAST_UPDATE: Mutex<Option<HudUpdate>> = Mutex::new(None);
+
+/// Backs the `dictation_hud_state` command.
+pub fn last_update() -> HudUpdate {
+    LAST_UPDATE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .unwrap_or_else(|| HudUpdate::new(HudPhase::Idle))
 }
 
 impl HudUpdate {
@@ -103,7 +120,6 @@ fn build_window(app: &AppHandle) -> Result<(), String> {
     // should not land in a screen share or a screenshot.
     let _ = crate::overlay::exclude_main_window_from_capture(&window);
     apply_no_activate(&window);
-    position_window(&window);
     Ok(())
 }
 
@@ -133,8 +149,38 @@ fn apply_no_activate(window: &tauri::WebviewWindow) {
 #[cfg(not(windows))]
 fn apply_no_activate(_window: &tauri::WebviewWindow) {}
 
-fn position_window(window: &tauri::WebviewWindow) {
-    let Ok(Some(monitor)) = window.primary_monitor() else {
+/// Centre of a window in PHYSICAL screen pixels, which is what
+/// `monitor_from_point` expects. Used to put the HUD on the display the user is
+/// actually typing into rather than always on the primary one.
+#[cfg(windows)]
+fn target_center(target: isize) -> Option<(f64, f64)> {
+    use windows::Win32::Foundation::{HWND, RECT};
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
+
+    if target == 0 {
+        return None;
+    }
+    let mut rect = RECT::default();
+    unsafe {
+        let hwnd = HWND(target as *mut core::ffi::c_void);
+        GetWindowRect(hwnd, &mut rect).ok()?;
+    }
+    Some((
+        (rect.left + rect.right) as f64 / 2.0,
+        (rect.top + rect.bottom) as f64 / 2.0,
+    ))
+}
+
+#[cfg(not(windows))]
+fn target_center(_target: isize) -> Option<(f64, f64)> {
+    None
+}
+
+fn position_window(window: &tauri::WebviewWindow, target: isize) {
+    let monitor = target_center(target)
+        .and_then(|(x, y)| window.monitor_from_point(x, y).ok().flatten())
+        .or_else(|| window.primary_monitor().ok().flatten());
+    let Some(monitor) = monitor else {
         return;
     };
     let scale = monitor.scale_factor();
@@ -145,26 +191,19 @@ fn position_window(window: &tauri::WebviewWindow) {
     let _ = window.set_position(tauri::LogicalPosition::new(x, y));
 }
 
-/// Builds the window on first use. Called on prewarm so the first dictation
-/// does not pay for a cold webview, and skipped entirely for users who never
-/// dictate.
-pub fn ensure(app: &AppHandle) {
+/// Builds the window if needed, positions it on the monitor that owns `target`,
+/// and shows it. Called on arm, never on prewarm: a user who never dictates
+/// never pays for a second webview, and ordinary Ctrl or Win presses do not
+/// silently create one.
+pub fn show(app: &AppHandle, target: isize) {
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
         if let Err(e) = build_window(&handle) {
             log::error!("dictation.hud: failed to create the HUD window: {e}");
-        }
-    });
-}
-
-pub fn show(app: &AppHandle) {
-    let handle = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        if build_window(&handle).is_err() {
             return;
         }
         if let Some(window) = handle.get_webview_window(DICTATION_WINDOW) {
-            position_window(&window);
+            position_window(&window, target);
             let _ = window.show();
         }
     });
@@ -180,7 +219,10 @@ pub fn hide(app: &AppHandle) {
 }
 
 /// Pushes one state update at the HUD. Safe to call from the worker thread.
+/// The update is recorded before it is emitted, so a webview that has not
+/// finished registering its listener can still pull the current state.
 pub fn publish(app: &AppHandle, update: HudUpdate) {
+    *LAST_UPDATE.lock().unwrap_or_else(|e| e.into_inner()) = Some(update.clone());
     if let Some(window) = app.get_webview_window(DICTATION_WINDOW) {
         let _ = window.emit("dictation-update", update);
     }

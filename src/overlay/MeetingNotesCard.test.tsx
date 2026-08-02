@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("../lib/dashboardLink", () => ({ openDashboard: vi.fn() }));
+vi.mock("../lib/dashboardWindow", () => ({ openDashboardWindow: vi.fn() }));
 
 import type { MeetingActivity } from "../lib/meetingActivity";
 import { MeetingNotesCard } from "./MeetingNotesCard";

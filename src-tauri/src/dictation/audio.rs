@@ -9,9 +9,14 @@
 //! only one channel, and its only consumer is a streaming recognizer that does
 //! its own timing, so raw packets are handed straight through.
 //!
-//! The client opens on the FIRST key of the chord, not on chord-complete, so
-//! the 50-300ms WASAPI cold open hides behind the 200-400ms a human takes
-//! before their first phoneme.
+//! The client opens only once the FULL chord is down, never on the first key.
+//! An earlier revision opened it on the first key to hide the 50-300ms WASAPI
+//! cold start, but the keyboard hook cannot see mouse input, so Ctrl-click and
+//! Ctrl-drag were indistinguishable from a deliberate hold and quietly put
+//! Windows' microphone indicator up during ordinary work. The cold start is
+//! covered well enough by the 200-400ms a human takes before their first
+//! phoneme after completing the chord; only the model warm-up, which touches no
+//! device, starts earlier.
 //!
 //! Overlap with meeting capture is expected and accepted: meeting/audio.rs
 //! opens the same default capture device, and shared mode lets both clients
