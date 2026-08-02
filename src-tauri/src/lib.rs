@@ -2,6 +2,7 @@ mod auth_cache;
 mod autostart;
 mod connector_oauth;
 mod dashboard;
+mod dictation;
 mod entitlement;
 mod guide;
 mod hotkeys;
@@ -292,6 +293,10 @@ pub fn run() {
             meeting::stop_join_watch,
             meeting::debug_force_join,
             voice_toggle_key::voice_toggle_key_status,
+            dictation::dictation_status,
+            dictation::dictation_vocabulary,
+            dictation::dictation_add_vocabulary,
+            dictation::dictation_record_correction,
             toast::show_actionable_toast,
             toast::take_pending_toast_activation
         ])
@@ -311,6 +316,12 @@ pub fn run() {
             // configured-key tap into a channel. Event emission happens outside
             // the hook on Tauri's async runtime, and the managed handle asks
             // the hook thread to unhook when the process exits.
+            // Started BEFORE the keyboard listener so the hook's first chord
+            // edge already has a worker to signal. Owns the "aura-dictation"
+            // thread: the on-device recognizer, WASAPI capture, and the
+            // SendInput burst all live there, never on the message pump.
+            app.manage(dictation::start(app.handle().clone()));
+
             app.manage(voice_toggle_key::start(app.handle().clone()));
 
             // tauri.conf.json's `skipTaskbar: true` keeps this off the Windows

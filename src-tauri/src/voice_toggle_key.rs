@@ -22,6 +22,23 @@ pub fn configured_key_label() -> &'static str {
     }
 }
 
+// Win32 virtual key codes for the Ctrl keys, spelled out so this predicate
+// stays usable from targets that do not link the windows crate.
+const VK_LCONTROL_CODE: u32 = 0xA2;
+const VK_RCONTROL_CODE: u32 = 0xA3;
+
+/// True when `vk` is the key this listener treats as the voice toggle. The
+/// dictation chord derives its own voice-toggle suppression from this rather
+/// than hardcoding "Left Ctrl", so changing either constant keeps the two in
+/// agreement.
+pub fn is_voice_toggle_vk(vk: u32) -> bool {
+    match VOICE_TOGGLE_KEY {
+        VoiceToggleKey::LeftCtrl => vk == VK_LCONTROL_CODE,
+        VoiceToggleKey::RightCtrl => vk == VK_RCONTROL_CODE,
+        VoiceToggleKey::EitherCtrl => vk == VK_LCONTROL_CODE || vk == VK_RCONTROL_CODE,
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Tap {
     Single,
@@ -130,6 +147,8 @@ mod platform {
         PM_NOREMOVE, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
     };
 
+    use crate::dictation::chord::{ChordState, DICTATION_CHORD};
+
     use super::{
         configured_key_label, Tap, TapClassifier, VoiceToggleKey, VoiceToggleKeyHandle,
         VoiceToggleKeyStatus, DOUBLE_TAP_MS, VOICE_TOGGLE_KEY,
@@ -138,31 +157,52 @@ mod platform {
     thread_local! {
         static EVENT_SENDER: RefCell<Option<tokio_mpsc::UnboundedSender<()>>> = const { RefCell::new(None) };
         static TAP_STATE: RefCell<TapState> = RefCell::new(TapState::default());
+        static CHORD_STATE: RefCell<ChordState> = RefCell::new(ChordState::default());
     }
 
     #[derive(Default)]
     struct TapState {
         toggle_key_held: bool,
         candidate: bool,
+        /// Set for the rest of the current hold once the dictation chord was
+        /// engaged during it. Needed because the plain chord-cancel branch
+        /// below only sees a partner key going down DURING the hold: with
+        /// Ctrl+Win, pressing Win first and Ctrl second leaves the cancel
+        /// branch untouched, so the Ctrl keyup would emit a toggle and two
+        /// dictations inside DOUBLE_TAP_MS would open a cloud voice call.
+        suppressed: bool,
     }
 
     impl TapState {
-        fn observe(&mut self, is_toggle_key: bool, is_down: bool, is_up: bool) -> bool {
+        fn observe(
+            &mut self,
+            is_toggle_key: bool,
+            is_down: bool,
+            is_up: bool,
+            dictation_engaged: bool,
+        ) -> bool {
             if is_toggle_key && is_down {
                 if !self.toggle_key_held {
                     self.toggle_key_held = true;
                     self.candidate = true;
+                    // A fresh hold starts clean, so a suppression flag left
+                    // behind by a keyup this hook never saw (lock screen, fast
+                    // user switch) cannot swallow the next legitimate tap.
+                    self.suppressed = false;
                 }
+                self.suppressed |= dictation_engaged;
                 return false;
             }
+            self.suppressed |= dictation_engaged;
             if is_down && self.toggle_key_held {
                 self.candidate = false;
                 return false;
             }
             if is_toggle_key && is_up {
-                let should_emit = self.toggle_key_held && self.candidate;
+                let should_emit = self.toggle_key_held && self.candidate && !self.suppressed;
                 self.toggle_key_held = false;
                 self.candidate = false;
+                self.suppressed = false;
                 return should_emit;
             }
             false
@@ -175,11 +215,12 @@ mod platform {
         is_down: bool,
         is_up: bool,
         is_injected: bool,
+        dictation_engaged: bool,
     ) -> bool {
         if is_injected {
             return false;
         }
-        state.observe(is_toggle_key, is_down, is_up)
+        state.observe(is_toggle_key, is_down, is_up, dictation_engaged)
     }
 
     unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -193,6 +234,29 @@ mod platform {
             let is_down = message == WM_KEYDOWN || message == WM_SYSKEYDOWN;
             let is_up = message == WM_KEYUP || message == WM_SYSKEYUP;
             let is_injected = event.flags.contains(LLKHF_INJECTED);
+            // Dictation shares this one hook on purpose: ordering between two
+            // WH_KEYBOARD_LL hooks in a single process is installation-order
+            // dependent, so a second hook could see these events either before
+            // or after this one. Injected events are excluded here as well, or
+            // the Win guard's own synthetic VK_LWIN keyup would read as the
+            // user releasing the chord mid-insert.
+            let chord_outcome = if is_injected {
+                None
+            } else {
+                Some(CHORD_STATE.with(|state| {
+                    state
+                        .borrow_mut()
+                        .observe(event.vkCode, is_down, is_up)
+                }))
+            };
+            if let Some(signal) = chord_outcome.as_ref().and_then(|outcome| outcome.signal) {
+                crate::dictation::signal(signal);
+            }
+            // Only a chord that actually contains the voice toggle key needs
+            // the classifier suppressed; DICTATION_CHORD::RightCtrlOnly (with
+            // VOICE_TOGGLE_KEY on Left Ctrl) turns this off by itself.
+            let dictation_engaged = DICTATION_CHORD.suppresses_voice_toggle()
+                && chord_outcome.is_some_and(|outcome| outcome.engaged);
             let is_toggle_key = match VOICE_TOGGLE_KEY {
                 VoiceToggleKey::LeftCtrl => event.vkCode == VK_LCONTROL.0 as u32,
                 VoiceToggleKey::RightCtrl => event.vkCode == VK_RCONTROL.0 as u32,
@@ -208,6 +272,7 @@ mod platform {
                     is_down,
                     is_up,
                     is_injected,
+                    dictation_engaged,
                 )
             });
             if should_emit {
@@ -405,32 +470,32 @@ mod platform {
         #[test]
         fn isolated_tap_emits_once_and_repeat_does_not_rearm() {
             let mut state = TapState::default();
-            assert!(!state.observe(true, true, false));
-            assert!(!state.observe(true, true, false));
-            assert!(state.observe(true, false, true));
-            assert!(!state.observe(true, false, true));
+            assert!(!state.observe(true, true, false, false));
+            assert!(!state.observe(true, true, false, false));
+            assert!(state.observe(true, false, true, false));
+            assert!(!state.observe(true, false, true, false));
         }
 
         #[test]
         fn chord_cancels_until_toggle_key_is_released() {
             let mut state = TapState::default();
-            assert!(!state.observe(true, true, false));
-            assert!(!state.observe(false, true, false));
-            assert!(!state.observe(true, true, false));
-            assert!(!state.observe(true, false, true));
+            assert!(!state.observe(true, true, false, false));
+            assert!(!state.observe(false, true, false, false));
+            assert!(!state.observe(true, true, false, false));
+            assert!(!state.observe(true, false, true, false));
         }
 
         #[test]
         fn injected_focus_key_does_not_cancel_physical_ctrl_tap() {
             let mut state = TapState::default();
             assert!(!observe_physical_key_event(
-                &mut state, true, true, false, false,
+                &mut state, true, true, false, false, false,
             ));
             assert!(!observe_physical_key_event(
-                &mut state, false, true, false, true,
+                &mut state, false, true, false, true, false,
             ));
             assert!(observe_physical_key_event(
-                &mut state, true, false, true, false,
+                &mut state, true, false, true, false, false,
             ));
         }
     }

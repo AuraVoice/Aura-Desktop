@@ -632,3 +632,23 @@ Justification: Latency belongs to whichever stage is actually slow; a second loc
 substitute for a component that only exists server-side. Also: overlay::set_voice_active (overlay.rs)
 is pure bool bookkeeping (updater gate + screen-sight disarm on true->false), with no presentation
 change and no apply() call, so deferring it into activateSession cannot race summon_bar's window show.
+
+Date: 2026-08-01
+Problem: A modifier chord containing Left Ctrl could open a cloud LiveKit voice call.
+Issue: voice_toggle_key.rs treats an isolated Left Ctrl press-and-release as a voice toggle, and
+TapState::observe only cancels the candidate when a partner key goes down DURING the hold. Press the
+partner FIRST (Win then Ctrl for the new Ctrl+Win dictation chord) and the cancel branch never runs,
+so the Ctrl keyup emits a toggle. Two of those inside DOUBLE_TAP_MS (400ms) classify as a double tap
+and start a real cloud voice session. The defect is press-order dependent, which is exactly why
+casual testing misses it.
+Solution: Track the chord's own key states in the same low-level hook and carry a sticky "suppressed"
+flag for the rest of the hold once the chord is engaged, rather than relying on the during-hold
+cancel branch. Gate it on DICTATION_CHORD.suppresses_voice_toggle(), which is derived from both
+constants (chord key set vs VOICE_TOGGLE_KEY) instead of hardcoding "Left Ctrl", so changing either
+one keeps the two in agreement. Reset the flag when a fresh hold starts, so a keyup the hook never
+saw (lock screen, fast user switch) cannot swallow the next legitimate tap.
+Justification: Two features sharing one physical key is a state-machine overlap, not a key-choice
+problem, and picking an exotic key would only hide it. Any cancel rule written as "a partner key goes
+down while ours is held" is order dependent by construction and will keep producing this class of
+bug; the durable rule is to make the suppression sticky for the whole hold and derive it from both
+key constants rather than from one of them.

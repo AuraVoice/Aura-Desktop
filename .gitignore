@@ -35,3 +35,10 @@ graphify-out/
 
 # Internal business strategy - this repo is public, keep it local only.
 /GROWTH_PLAN.md
+
+# On-device dictation runtime + model, fetched at build time by
+# scripts/predownload-dictation-model.mjs. Roughly 40 MB of binaries that have
+# no business in git; the directory's README.md is committed so the Tauri
+# resource glob always matches.
+/src-tauri/resources/dictation/*
+!/src-tauri/resources/dictation/README.md

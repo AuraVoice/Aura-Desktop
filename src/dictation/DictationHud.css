@@ -1,0 +1,93 @@
+/* The dictation HUD window. Transparent, click-through, never focused, so
+   nothing here is interactive and nothing scrolls: a long partial is clamped
+   to two lines instead, which keeps a native OS scrollbar off the surface. */
+
+.dictation-hud {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  padding: 14px 18px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(16, 17, 22, 0.86);
+  backdrop-filter: blur(18px);
+  color: rgba(255, 255, 255, 0.94);
+  font-family:
+    "Segoe UI Variable Text",
+    "Segoe UI",
+    system-ui,
+    sans-serif;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow: hidden;
+  user-select: none;
+}
+
+.dictation-hud__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.dictation-hud__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.35);
+  flex: 0 0 auto;
+}
+
+.dictation-hud--listening .dictation-hud__dot {
+  background: #ff5f57;
+  animation: dictation-pulse 1.4s ease-in-out infinite;
+}
+
+.dictation-hud--transcribing .dictation-hud__dot {
+  background: #f5c451;
+}
+
+.dictation-hud--inserted .dictation-hud__dot {
+  background: #4cd07d;
+}
+
+.dictation-hud--error .dictation-hud__dot {
+  background: #ff8f6b;
+}
+
+.dictation-hud__hint {
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.dictation-hud__text {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.35;
+  /* Two lines, then an ellipsis. Never a scroll container. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.dictation-hud--error .dictation-hud__text {
+  color: rgba(255, 255, 255, 0.68);
+}
+
+@keyframes dictation-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dictation-hud--listening .dictation-hud__dot {
+    animation: none;
+  }
+}
