@@ -278,10 +278,30 @@ fn place_window(app: &AppHandle, window: &tauri::WebviewWindow, target: isize, p
     let _ = window.set_position(position);
 }
 
-/// Builds the window if needed, positions it on the monitor that owns `target`,
-/// and shows it. Called on arm, never on prewarm: a user who never dictates
-/// never pays for a second webview, and ordinary Ctrl or Win presses do not
-/// silently create one.
+/// Creates the HUD webview WITHOUT showing it, so the first hold does not pay
+/// for building one.
+///
+/// Called on the first `Prewarm` of a session, meaning one chord key is down.
+/// That touches no microphone and no model, so this does not reintroduce the
+/// privacy problem that moved device and model warm-up off prewarm: no capture
+/// device is opened and Windows shows no "in use" indicator. The cost is one
+/// hidden webview for a user who presses Ctrl and never dictates, paid once per
+/// session, and it is what removed the multi-second wait before anything
+/// appeared on a session's first dictation.
+pub fn prebuild(app: &AppHandle) {
+    if app.get_webview_window(DICTATION_WINDOW).is_some() {
+        return;
+    }
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Err(e) = build_window(&handle) {
+            log::error!("dictation.hud: failed to pre-create the HUD window: {e}");
+        }
+    });
+}
+
+/// Builds the window if it is somehow not there yet, positions it on the monitor
+/// that owns `target`, and shows it.
 pub fn show(app: &AppHandle, target: isize) {
     LAST_TARGET.store(target, Ordering::Relaxed);
     let handle = app.clone();

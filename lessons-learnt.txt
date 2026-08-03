@@ -652,3 +652,50 @@ problem, and picking an exotic key would only hide it. Any cancel rule written a
 down while ours is held" is order dependent by construction and will keep producing this class of
 bug; the durable rule is to make the suppression sticky for the whole hold and derive it from both
 key constants rather than from one of them.
+
+Date: 2026-08-02
+Problem: Dictation output ran seconds behind the speaker, and the lag grew with hold length.
+Issue: stt.rs Stream::accept calls decode_ready() inline, which spins "while is_ready { decode }".
+That ran on the capture loop, so every 30ms drain had to finish decoding before the loop could poll a
+chord signal, publish a waveform level, or publish a partial. The durable log proved where the fault
+was NOT: captured frames were 93-95% of hold duration on all five holds, so audio capture was keeping
+up and only the visible output was behind. Compounding it, modified_beam_search was fixed on because
+hotwords are honoured by no other method, while the same log said "bpe.vocab is missing ... contextual
+biasing is off" - the build was paying beam-search cost for a disabled feature.
+Solution: Give the recognizer its own thread (dictation/decode.rs) that owns Recognizer and Stream for
+their whole life; the worker sends Samples/Finish and reads Partial/Final without ever blocking. Derive
+the decoding method from whether biasing can work at all, so greedy_search is used when it cannot.
+Justification: Sole ownership by one thread is not just faster, it is what keeps the FFI sound:
+Stream<'_> borrows Recognizer and both hold raw pointers that are Send but deliberately not Sync. The
+split also removed LOAD_GRACE entirely, because the command channel became the warm-up buffer: audio
+spoken before the model is ready now queues and is decoded in order instead of racing a 4000ms timer
+against a load that measured ~4s, which is why the first hold of a session decoded 4 characters out of
+3.9 seconds of speech.
+
+Date: 2026-08-02
+Problem: Every dictated word was inserted in CAPITALS.
+Issue: Nothing to do with SendInput, KEYEVENTF_UNICODE, Shift state or Caps Lock, which is where a
+keyboard-injection bug would normally be hunted. The bundled sherpa-onnx-streaming-zipformer-en-20M
+model is LibriSpeech-trained: resources/dictation/tokens.txt holds 157 uppercase tokens and ZERO
+lowercase ones, so the decoder is incapable of emitting anything else. No amount of fixing the insert
+path could have changed the output.
+Solution: Bundle sherpa-onnx-online-punct-en-2024-08-06 (7.5MB int8) and run it once per hold on the
+finished text. The v1.10.46 DLL already exported the four OnlinePunctuation entry points, so no version
+bump was needed. Keep a dumb lowercase+capitalise fallback for when the model is absent.
+Justification: Check what the model CAN emit before debugging how the text is delivered. A one-line
+inspection of tokens.txt answered in seconds what the entire insert path could not.
+
+Date: 2026-08-02
+Problem: The punctuation model silently did nothing, returning its input unchanged.
+Issue: sherpa-onnx-online-punct-en is trained on lowercase text and its BPE vocabulary has no uppercase
+entries. Handed "HOW ARE YOU I AM FINE" it returns exactly that, with no error, no warning and no null.
+Handed "how are you i am fine" it returns "How are you? I am fine." Since the ASR model emits uppercase,
+the obvious wiring (decode -> punctuate) is a guaranteed no-op, and it would have shipped looking like
+"the punctuation model does not work".
+Solution: Lowercase before calling AddPunct. Nothing is lost, because the recognizer carries no case
+information to preserve. Caught by calling the shipped DLL directly through Python ctypes before
+trusting the Rust wiring.
+Justification: An FFI call that returns success and plausible output is not evidence it did anything.
+Exercising a new native model against real input, outside the app, costs minutes and is the only thing
+that distinguishes "wired up" from "working" - the same lesson as verifying a live endpoint rather than
+the source on disk.

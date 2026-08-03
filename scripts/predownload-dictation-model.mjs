@@ -51,6 +51,11 @@ const targetDir = path.join(resourcesDir, "dictation");
 const stagingDir = path.join(resourcesDir, ".dictation-staging");
 const cacheDir = path.join(repoRoot, "node_modules", ".cache", "dictation");
 const MANIFEST_NAME = "installed.json";
+// Committed, and the only reason the Tauri resource glob matches in a fresh
+// clone that has not run this script yet. It is neither downloaded nor recorded
+// in the manifest, so it has to be excused from the unknown-file check below AND
+// carried across the staging swap, which replaces this directory wholesale.
+const README_NAME = "README.md";
 const manifestPath = path.join(targetDir, MANIFEST_NAME);
 
 // The DLLs are copied out under fixed names, so they can be required by name.
@@ -62,10 +67,27 @@ const REQUIRED_ROLES = ["encoder", "decoder", "joiner", "tokens"];
 // Bumped whenever the manifest's shape changes, so an install written by an
 // older version of this script is reinstalled instead of half-understood.
 // Version 2 added per-file digests and the resolved model role names.
-const MANIFEST_VERSION = 2;
+// Version 3 added the punctuation model.
+const MANIFEST_VERSION = 3;
+
+// Punctuation and true casing. The ASR model is LibriSpeech-trained, so its
+// token table is ENTIRELY uppercase with no punctuation and the decoder cannot
+// emit anything else; the first hardware run inserted "HOW ARE YOU I AM FINE"
+// and that is the model working correctly. This second model is what turns that
+// into "How are you? I am fine."
+//
+// Installed under distinct names on purpose. The archive's own files are
+// `model.int8.onnx` and `bpe.vocab`, and everything lands in ONE flat resource
+// directory: `bpe.vocab` would collide with the ASR model's hotword vocabulary
+// the moment an ASR archive ships one, and silently feeding the punctuator's
+// vocabulary to the recognizer would corrupt biasing rather than fail.
+const PUNCT_NAME = "sherpa-onnx-online-punct-en-2024-08-06";
+const PUNCT_MODEL_FILE = "punct.int8.onnx";
+const PUNCT_VOCAB_FILE = "punct-bpe.vocab";
 
 const LIBS_ARCHIVE = `sherpa-onnx-${SHERPA_VERSION}-win-x64-shared.tar.bz2`;
 const MODEL_ARCHIVE = `${MODEL_NAME}.tar.bz2`;
+const PUNCT_ARCHIVE = `${PUNCT_NAME}.tar.bz2`;
 
 // Pinned size and SHA-256 for every archive. These are NATIVE CODE that Aura
 // loads into its own process, so presence on disk is not evidence of anything:
@@ -90,6 +112,13 @@ const ARCHIVES = {
     bytes: 127887156,
     sha256:
       "9c559283e8498d3fe95913c79ca1cb454bb26281ac2b102b41306c7d752765d9",
+  },
+  punct: {
+    name: PUNCT_ARCHIVE,
+    url: `https://github.com/k2-fsa/sherpa-onnx/releases/download/punctuation-models/${PUNCT_ARCHIVE}`,
+    bytes: 30667839,
+    sha256:
+      "9f5e5a72c7d2829635bd074fce92b6bbd5b78da8a52e7ad8ed1be933f366b99d",
   },
 };
 
@@ -134,7 +163,8 @@ async function alreadyInstalled() {
     manifest.sherpaVersion !== SHERPA_VERSION ||
     manifest.modelName !== MODEL_NAME ||
     manifest.archives?.libs !== ARCHIVES.libs.sha256 ||
-    manifest.archives?.model !== ARCHIVES.model.sha256
+    manifest.archives?.model !== ARCHIVES.model.sha256 ||
+    manifest.archives?.punct !== ARCHIVES.punct.sha256
   ) {
     console.log("dictation: pinned version or digest changed, reinstalling");
     return false;
@@ -155,6 +185,12 @@ async function alreadyInstalled() {
   if (roles.bpeVocab) {
     required.push(roles.bpeVocab);
   }
+  const punctuation = manifest.punctuation ?? {};
+  if (!punctuation.model || !punctuation.bpeVocab) {
+    console.log("dictation: the manifest declares no punctuation model, reinstalling");
+    return false;
+  }
+  required.push(punctuation.model, punctuation.bpeVocab);
   for (const name of required) {
     if (!declared.has(name)) {
       console.log(`dictation: ${name} is not in the manifest, reinstalling`);
@@ -191,7 +227,7 @@ async function alreadyInstalled() {
     return false;
   }
   for (const name of present) {
-    if (name === MANIFEST_NAME || declared.has(name)) {
+    if (name === MANIFEST_NAME || name === README_NAME || declared.has(name)) {
       continue;
     }
     console.log(`dictation: ${name} is not from this install, reinstalling`);
@@ -276,12 +312,14 @@ async function main() {
 
   const libsArchive = await fetchArchive(ARCHIVES.libs);
   const modelArchive = await fetchArchive(ARCHIVES.model);
+  const punctArchive = await fetchArchive(ARCHIVES.punct);
 
   const extractDir = path.join(cacheDir, "extract");
   await rm(extractDir, { recursive: true, force: true });
   await mkdir(extractDir, { recursive: true });
   extract(libsArchive, extractDir);
   extract(modelArchive, extractDir);
+  extract(punctArchive, extractDir);
 
   // Everything is built in a staging directory that starts empty, and the
   // target is only replaced once the whole set is in place and verified. A
@@ -336,6 +374,17 @@ async function main() {
     );
   }
 
+  // Only the INT8 punctuation model is installed. The archive also carries a
+  // 28MB fp32 `model.onnx`, which would nearly quadruple what this feature adds
+  // to the installer for output the user cannot tell apart.
+  const punctDir = path.join(extractDir, PUNCT_NAME);
+  await install(path.join(punctDir, "model.int8.onnx"), PUNCT_MODEL_FILE);
+  await install(path.join(punctDir, "bpe.vocab"), PUNCT_VOCAB_FILE);
+  const punctuation = {
+    model: PUNCT_MODEL_FILE,
+    bpeVocab: PUNCT_VOCAB_FILE,
+  };
+
   await writeFile(
     path.join(stagingDir, MANIFEST_NAME),
     `${JSON.stringify(
@@ -343,10 +392,13 @@ async function main() {
         manifestVersion: MANIFEST_VERSION,
         sherpaVersion: SHERPA_VERSION,
         modelName: MODEL_NAME,
+        punctName: PUNCT_NAME,
         archives: {
           libs: ARCHIVES.libs.sha256,
           model: ARCHIVES.model.sha256,
+          punct: ARCHIVES.punct.sha256,
         },
+        punctuation,
         // The runtime reads these exact names rather than scanning the
         // directory for a prefix match, so which encoder/joiner precision was
         // installed is decided here, once, and never re-guessed on the user's
@@ -363,6 +415,14 @@ async function main() {
   // old one is removed first; the window between the two is the only moment
   // the target is incomplete, and a crash inside it leaves the staging copy on
   // disk for the next run to rebuild from scratch.
+  // Carry the committed README across. Without this the swap deletes the one
+  // file in here that is tracked by git, which is exactly the file that keeps
+  // `bundle.resources` matching in a fresh clone.
+  const readme = path.join(targetDir, README_NAME);
+  if (await exists(readme)) {
+    await copyFile(readme, path.join(stagingDir, README_NAME));
+  }
+
   await rm(targetDir, { recursive: true, force: true });
   await rename(stagingDir, targetDir);
   await rm(extractDir, { recursive: true, force: true });
