@@ -1,8 +1,7 @@
 //! Personalization storage and the post-decode correction pass.
 //!
-//! Tier 0 (contextual biasing): per-app hotword lists handed to the recognizer
-//! at stream creation. Cost is roughly zero and it fixes proper nouns and
-//! jargon, which are the errors users actually notice.
+//! Contextual biasing is unavailable for the selected Nemotron greedy decoder.
+//! Vocabulary terms remain local and feed the post-decode correction pass.
 //!
 //! Tier 1 (post-decode corrections): phrase-anchored replacements that only
 //! apply once the same correction has been confirmed at least
@@ -44,10 +43,6 @@ const NONCE_LEN: usize = 12;
 /// A correction has to be confirmed this many times before it is ever applied.
 /// One mis-heard word is noise; three identical fixes is a pattern.
 const MIN_CORRECTION_COUNT: u32 = 3;
-/// Boost handed to the recognizer for hotword tokens. High enough to pull a
-/// proper noun out of a phonetically close common word, low enough that the
-/// decoder does not hallucinate the hotword out of unrelated audio.
-pub const HOTWORD_SCORE: f32 = 1.5;
 /// Ceiling on stored phrases per bucket, so a runaway writer cannot grow the
 /// biasing list until stream creation gets slow.
 const MAX_PHRASES_PER_BUCKET: usize = 256;
@@ -272,28 +267,6 @@ pub fn record_correction(
     });
     write_store(app, CORRECTIONS_FILE, &store)?;
     Ok(1)
-}
-
-/// The hotword list handed to the recognizer for one utterance: the global
-/// phrases plus whatever the foreground app's exe stem contributes. One phrase
-/// per line is the format sherpa-onnx expects for its contextual biasing.
-pub fn hotwords_for(vocab: &VocabStore, app_key: Option<&str>) -> String {
-    let mut lines: Vec<&str> = vocab.global.iter().map(String::as_str).collect();
-    if let Some(key) = app_key {
-        if let Some(app_phrases) = vocab.apps.get(&key.to_ascii_lowercase()) {
-            lines.extend(app_phrases.iter().map(String::as_str));
-        }
-    }
-    let mut out = String::new();
-    for line in lines {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        out.push_str(trimmed);
-        out.push('\n');
-    }
-    out
 }
 
 /// The tier 1 pass, run on the final text only. Deliberately cheap (well under

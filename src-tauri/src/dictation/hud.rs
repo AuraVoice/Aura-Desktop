@@ -31,6 +31,11 @@ use crate::overlay::{self, NotchEdge, OverlayPresentation};
 
 pub const DICTATION_WINDOW: &str = "dictation";
 
+/// The resting pill stays visible between holds and expands to the full notch
+/// only while dictation is active.
+const RESTING_MAIN: f64 = 44.0;
+const RESTING_CROSS: f64 = 28.0;
+
 /// The message pill. The notch itself is wordless by design, but a blocked or
 /// misdirected insert has to say so somewhere, and this window is the only
 /// surface dictation owns. Used ONLY for `Error` and `Pending`, so the normal
@@ -128,9 +133,7 @@ fn build_window(app: &AppHandle) -> Result<(), String> {
         WebviewUrl::App("index.html".into()),
     )
     .title("Aura Dictation")
-    // Provisional: `place_window` sets the real size for the current edge and
-    // phase before the window is ever shown.
-    .inner_size(MESSAGE_WIDTH, MESSAGE_HEIGHT)
+    .inner_size(RESTING_MAIN, RESTING_CROSS)
     .decorations(false)
     .transparent(true)
     .shadow(false)
@@ -142,9 +145,10 @@ fn build_window(app: &AppHandle) -> Result<(), String> {
     .build()
     .map_err(|e| e.to_string())?;
 
-    // Click-through: the HUD is a caption, never a target. It must not take a
-    // click away from the app the user is dictating into.
-    let _ = window.set_ignore_cursor_events(true);
+    // The resting surface receives hover so Windows can show its native hint.
+    // WS_EX_NOACTIVATE below keeps it from taking focus, and the surface has no
+    // click action. Active dictation switches back to click-through.
+    let _ = window.set_ignore_cursor_events(false);
     // Same display-affinity treatment the overlay gets: partial transcript text
     // should not land in a screen share or a screenshot.
     let _ = crate::overlay::exclude_main_window_from_capture(&window);
@@ -205,10 +209,19 @@ fn target_center(_target: isize) -> Option<(f64, f64)> {
     None
 }
 
-/// The HUD's footprint for one phase. Everything except a failure is the notch,
-/// at exactly the voice bar's metrics for the current edge.
+fn resting_size(edge: NotchEdge) -> LogicalSize<f64> {
+    if edge.is_vertical() {
+        LogicalSize::new(RESTING_CROSS, RESTING_MAIN)
+    } else {
+        LogicalSize::new(RESTING_MAIN, RESTING_CROSS)
+    }
+}
+
+/// The HUD's footprint for one phase. Idle is the compact persistent pill;
+/// active phases use the voice bar's full metrics for the current edge.
 fn surface_size(edge: NotchEdge, phase: HudPhase) -> LogicalSize<f64> {
     match phase {
+        HudPhase::Idle => resting_size(edge),
         HudPhase::Error => LogicalSize::new(MESSAGE_WIDTH, MESSAGE_HEIGHT),
         HudPhase::Pending => LogicalSize::new(MESSAGE_WIDTH, PENDING_HEIGHT),
         _ => overlay::bar_size(edge, None),
@@ -278,30 +291,10 @@ fn place_window(app: &AppHandle, window: &tauri::WebviewWindow, target: isize, p
     let _ = window.set_position(position);
 }
 
-/// Creates the HUD webview WITHOUT showing it, so the first hold does not pay
-/// for building one.
-///
-/// Called on the first `Prewarm` of a session, meaning one chord key is down.
-/// That touches no microphone and no model, so this does not reintroduce the
-/// privacy problem that moved device and model warm-up off prewarm: no capture
-/// device is opened and Windows shows no "in use" indicator. The cost is one
-/// hidden webview for a user who presses Ctrl and never dictates, paid once per
-/// session, and it is what removed the multi-second wait before anything
-/// appeared on a session's first dictation.
-pub fn prebuild(app: &AppHandle) {
-    if app.get_webview_window(DICTATION_WINDOW).is_some() {
-        return;
-    }
-    let handle = app.clone();
-    let _ = app.run_on_main_thread(move || {
-        if let Err(e) = build_window(&handle) {
-            log::error!("dictation.hud: failed to pre-create the HUD window: {e}");
-        }
-    });
-}
-
-/// Builds the window if it is somehow not there yet, positions it on the monitor
-/// that owns `target`, and shows it.
+/// Builds the window if needed, positions it on the monitor that owns `target`,
+/// and shows it. Called on arm, never on prewarm: a user who never dictates
+/// never pays for a second webview, and ordinary Ctrl or Win presses do not
+/// silently create one.
 pub fn show(app: &AppHandle, target: isize) {
     LAST_TARGET.store(target, Ordering::Relaxed);
     let handle = app.clone();
@@ -312,7 +305,46 @@ pub fn show(app: &AppHandle, target: isize) {
         }
         if let Some(window) = handle.get_webview_window(DICTATION_WINDOW) {
             place_window(&handle, &window, target, HudPhase::Listening);
+            let _ = window.set_ignore_cursor_events(true);
             let _ = window.show();
+        }
+    });
+}
+
+/// Creates and shows the passive resting pill without starting capture or
+/// loading the recognizer. The keyboard hook remains the only source of Arm.
+pub fn show_idle(app: &AppHandle) {
+    let mut update = HudUpdate::new(HudPhase::Idle);
+    update.edge = overlay::snapshot(app).notch_edge.as_stored();
+    *LAST_UPDATE.lock().unwrap_or_else(|e| e.into_inner()) = Some(update.clone());
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Err(e) = build_window(&handle) {
+            log::error!("dictation.hud: failed to create the HUD window: {e}");
+            return;
+        }
+        if let Some(window) = handle.get_webview_window(DICTATION_WINDOW) {
+            place_window(&handle, &window, LAST_TARGET.load(Ordering::Relaxed), HudPhase::Idle);
+            let _ = window.set_ignore_cursor_events(false);
+            let _ = window.show();
+            let _ = window.emit("dictation-update", update);
+        }
+    });
+}
+
+/// Re-applies the current geometry after the main notch changes edge or state.
+pub fn refresh_placement(app: &AppHandle) {
+    let handle = app.clone();
+    let mut update = last_update();
+    update.edge = overlay::snapshot(app).notch_edge.as_stored();
+    let phase = update.phase;
+    *LAST_UPDATE.lock().unwrap_or_else(|e| e.into_inner()) = Some(update.clone());
+    let target = LAST_TARGET.load(Ordering::Relaxed);
+    let _ = app.run_on_main_thread(move || {
+        if let Some(window) = handle.get_webview_window(DICTATION_WINDOW) {
+            place_window(&handle, &window, target, phase);
+            let _ = window.set_ignore_cursor_events(phase != HudPhase::Idle);
+            let _ = window.emit("dictation-update", update);
         }
     });
 }
@@ -336,17 +368,15 @@ pub fn publish(app: &AppHandle, mut update: HudUpdate) {
     if let Some(window) = app.get_webview_window(DICTATION_WINDOW) {
         let _ = window.emit("dictation-update", update);
     }
-    // The two phases that need words grow the surface from the notch to the
-    // message pill. Once per hold at most, never on the normal path.
-    if matches!(phase, HudPhase::Error | HudPhase::Pending) {
-        let handle = app.clone();
-        let target = LAST_TARGET.load(Ordering::Relaxed);
-        let _ = app.run_on_main_thread(move || {
-            if let Some(window) = handle.get_webview_window(DICTATION_WINDOW) {
-                place_window(&handle, &window, target, phase);
-            }
-        });
-    }
+    let handle = app.clone();
+    let target = LAST_TARGET.load(Ordering::Relaxed);
+    let _ = app.run_on_main_thread(move || {
+        if let Some(window) = handle.get_webview_window(DICTATION_WINDOW) {
+            place_window(&handle, &window, target, phase);
+            let _ = window.set_ignore_cursor_events(phase != HudPhase::Idle);
+            let _ = window.show();
+        }
+    });
 }
 
 /// Pushes one microphone level (0..1) at the HUD's waveform, roughly 20 times a

@@ -6,13 +6,13 @@
 // is built.
 //
 // Two archives are pulled, both pinned:
-//   1. sherpa-onnx's prebuilt Windows x64 SHARED release. Only
-//      sherpa-onnx-c-api.dll and onnxruntime.dll are copied out. The DirectML
+//   1. sherpa-onnx's prebuilt Windows x64 CPU shared release. Only the C API
+//      and ONNX Runtime CPU DLLs are copied out. The DirectML
 //      and CUDA provider DLLs are deliberately not shipped: ONNX Runtime probes
 //      the adapter at session creation and can reserve VRAM without a line of
 //      our code asking it to.
-//   2. the streaming Zipformer 20M English model. The INT8 encoder and joiner
-//      are preferred where both precisions are published.
+//   2. the cache-aware 560 ms streaming Nemotron English model. All three
+//      transducer graphs are the archive's pinned INT8 files.
 //
 // SHERPA_VERSION is also the version the FFI struct layout in
 // src-tauri/src/dictation/stt.rs was transcribed from. Bumping it means
@@ -40,8 +40,9 @@ import { Readable } from "node:stream";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const SHERPA_VERSION = "v1.10.46";
-const MODEL_NAME = "sherpa-onnx-streaming-zipformer-en-20M-2023-02-17";
+const SHERPA_VERSION = "v1.13.4";
+const MODEL_NAME =
+  "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
@@ -51,43 +52,25 @@ const targetDir = path.join(resourcesDir, "dictation");
 const stagingDir = path.join(resourcesDir, ".dictation-staging");
 const cacheDir = path.join(repoRoot, "node_modules", ".cache", "dictation");
 const MANIFEST_NAME = "installed.json";
-// Committed, and the only reason the Tauri resource glob matches in a fresh
-// clone that has not run this script yet. It is neither downloaded nor recorded
-// in the manifest, so it has to be excused from the unknown-file check below AND
-// carried across the staging swap, which replaces this directory wholesale.
 const README_NAME = "README.md";
 const manifestPath = path.join(targetDir, MANIFEST_NAME);
 
 // The DLLs are copied out under fixed names, so they can be required by name.
-// The four model roles are resolved from the archive (the epoch/avg numbers in
-// those file names move between releases) and then recorded in the manifest,
-// which is what the runtime reads. bpe.vocab is the only optional file.
-const REQUIRED_LIBS = ["sherpa-onnx-c-api.dll", "onnxruntime.dll"];
+// The model archive has one exact INT8 file for each transducer role. Those
+// names are recorded in the manifest, which is what the runtime reads.
+const REQUIRED_LIBS = [
+  "sherpa-onnx-c-api.dll",
+  "onnxruntime.dll",
+  "onnxruntime_providers_shared.dll",
+];
 const REQUIRED_ROLES = ["encoder", "decoder", "joiner", "tokens"];
 // Bumped whenever the manifest's shape changes, so an install written by an
 // older version of this script is reinstalled instead of half-understood.
 // Version 2 added per-file digests and the resolved model role names.
-// Version 3 added the punctuation model.
 const MANIFEST_VERSION = 3;
 
-// Punctuation and true casing. The ASR model is LibriSpeech-trained, so its
-// token table is ENTIRELY uppercase with no punctuation and the decoder cannot
-// emit anything else; the first hardware run inserted "HOW ARE YOU I AM FINE"
-// and that is the model working correctly. This second model is what turns that
-// into "How are you? I am fine."
-//
-// Installed under distinct names on purpose. The archive's own files are
-// `model.int8.onnx` and `bpe.vocab`, and everything lands in ONE flat resource
-// directory: `bpe.vocab` would collide with the ASR model's hotword vocabulary
-// the moment an ASR archive ships one, and silently feeding the punctuator's
-// vocabulary to the recognizer would corrupt biasing rather than fail.
-const PUNCT_NAME = "sherpa-onnx-online-punct-en-2024-08-06";
-const PUNCT_MODEL_FILE = "punct.int8.onnx";
-const PUNCT_VOCAB_FILE = "punct-bpe.vocab";
-
-const LIBS_ARCHIVE = `sherpa-onnx-${SHERPA_VERSION}-win-x64-shared.tar.bz2`;
+const LIBS_ARCHIVE = `sherpa-onnx-${SHERPA_VERSION}-win-x64-shared-MD-Release-no-tts-lib.tar.bz2`;
 const MODEL_ARCHIVE = `${MODEL_NAME}.tar.bz2`;
-const PUNCT_ARCHIVE = `${PUNCT_NAME}.tar.bz2`;
 
 // Pinned size and SHA-256 for every archive. These are NATIVE CODE that Aura
 // loads into its own process, so presence on disk is not evidence of anything:
@@ -102,23 +85,16 @@ const ARCHIVES = {
   libs: {
     name: LIBS_ARCHIVE,
     url: `https://github.com/k2-fsa/sherpa-onnx/releases/download/${SHERPA_VERSION}/${LIBS_ARCHIVE}`,
-    bytes: 21109135,
+    bytes: 6725033,
     sha256:
-      "52bc6d41b0050a4ad160a767319fd4dad0f87806bb6d4c2a4721c168abe65be6",
+      "dec41ab3944985cce39e596cb757732f1b275720d62f117fc5afe10f51c4bf7d",
   },
   model: {
     name: MODEL_ARCHIVE,
     url: `https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/${MODEL_ARCHIVE}`,
-    bytes: 127887156,
+    bytes: 463945051,
     sha256:
-      "9c559283e8498d3fe95913c79ca1cb454bb26281ac2b102b41306c7d752765d9",
-  },
-  punct: {
-    name: PUNCT_ARCHIVE,
-    url: `https://github.com/k2-fsa/sherpa-onnx/releases/download/punctuation-models/${PUNCT_ARCHIVE}`,
-    bytes: 30667839,
-    sha256:
-      "9f5e5a72c7d2829635bd074fce92b6bbd5b78da8a52e7ad8ed1be933f366b99d",
+      "78e2b79fcf7271553a74402a76b771b09ea40117a39566a79f52235b23db6358",
   },
 };
 
@@ -163,8 +139,7 @@ async function alreadyInstalled() {
     manifest.sherpaVersion !== SHERPA_VERSION ||
     manifest.modelName !== MODEL_NAME ||
     manifest.archives?.libs !== ARCHIVES.libs.sha256 ||
-    manifest.archives?.model !== ARCHIVES.model.sha256 ||
-    manifest.archives?.punct !== ARCHIVES.punct.sha256
+    manifest.archives?.model !== ARCHIVES.model.sha256
   ) {
     console.log("dictation: pinned version or digest changed, reinstalling");
     return false;
@@ -182,15 +157,6 @@ async function alreadyInstalled() {
     }
     required.push(name);
   }
-  if (roles.bpeVocab) {
-    required.push(roles.bpeVocab);
-  }
-  const punctuation = manifest.punctuation ?? {};
-  if (!punctuation.model || !punctuation.bpeVocab) {
-    console.log("dictation: the manifest declares no punctuation model, reinstalling");
-    return false;
-  }
-  required.push(punctuation.model, punctuation.bpeVocab);
   for (const name of required) {
     if (!declared.has(name)) {
       console.log(`dictation: ${name} is not in the manifest, reinstalling`);
@@ -282,26 +248,6 @@ function extract(archive, into) {
   execFileSync("tar", ["-xjf", archive, "-C", into], { stdio: "inherit" });
 }
 
-/// Picks one file out of an extracted directory by name prefix, preferring the
-/// INT8 build when both precisions were published.
-async function pickModelFile(dir, prefix, preferInt8) {
-  const entries = await readdir(dir);
-  const matches = entries.filter(
-    (name) => name.startsWith(prefix) && name.endsWith(".onnx"),
-  );
-  if (matches.length === 0) {
-    throw new Error(`the model archive has no ${prefix} file`);
-  }
-  if (preferInt8) {
-    const int8 = matches.find((name) => name.includes(".int8."));
-    if (int8) {
-      return int8;
-    }
-  }
-  const plain = matches.find((name) => !name.includes(".int8."));
-  return plain ?? matches[0];
-}
-
 async function main() {
   await mkdir(targetDir, { recursive: true });
   if (await alreadyInstalled()) {
@@ -312,14 +258,12 @@ async function main() {
 
   const libsArchive = await fetchArchive(ARCHIVES.libs);
   const modelArchive = await fetchArchive(ARCHIVES.model);
-  const punctArchive = await fetchArchive(ARCHIVES.punct);
 
   const extractDir = path.join(cacheDir, "extract");
   await rm(extractDir, { recursive: true, force: true });
   await mkdir(extractDir, { recursive: true });
   extract(libsArchive, extractDir);
   extract(modelArchive, extractDir);
-  extract(punctArchive, extractDir);
 
   // Everything is built in a staging directory that starts empty, and the
   // target is only replaced once the whole set is in place and verified. A
@@ -327,6 +271,10 @@ async function main() {
   // to resolve, and an interrupted run leaves the previous good install alone.
   await rm(stagingDir, { recursive: true, force: true });
   await mkdir(stagingDir, { recursive: true });
+  const readmePath = path.join(targetDir, README_NAME);
+  if (await exists(readmePath)) {
+    await copyFile(readmePath, path.join(stagingDir, README_NAME));
+  }
 
   const installed = [];
   async function install(from, name) {
@@ -341,7 +289,7 @@ async function main() {
 
   const libsDir = path.join(
     extractDir,
-    `sherpa-onnx-${SHERPA_VERSION}-win-x64-shared`,
+    `sherpa-onnx-${SHERPA_VERSION}-win-x64-shared-MD-Release-no-tts-lib`,
     "lib",
   );
   for (const name of REQUIRED_LIBS) {
@@ -350,40 +298,14 @@ async function main() {
 
   const modelDir = path.join(extractDir, MODEL_NAME);
   const roles = {
-    encoder: await pickModelFile(modelDir, "encoder", true),
-    decoder: await pickModelFile(modelDir, "decoder", false),
-    joiner: await pickModelFile(modelDir, "joiner", true),
+    encoder: "encoder.int8.onnx",
+    decoder: "decoder.int8.onnx",
+    joiner: "joiner.int8.onnx",
     tokens: "tokens.txt",
   };
   for (const role of REQUIRED_ROLES) {
     await install(path.join(modelDir, roles[role]), roles[role]);
   }
-
-  // bpe.vocab is what sherpa-onnx needs to tokenize hotwords for a BPE English
-  // model. The pinned archive does NOT ship one, so tier 0 contextual biasing
-  // turns itself off and only tier 1 corrections apply. Plain dictation is
-  // unaffected. dictation/stt.rs logs this once at startup and reports it
-  // through dictation_status.biasingAvailable.
-  const bpeVocab = path.join(modelDir, "bpe.vocab");
-  if (await exists(bpeVocab)) {
-    await install(bpeVocab, "bpe.vocab");
-    roles.bpeVocab = "bpe.vocab";
-  } else {
-    console.warn(
-      "dictation: bpe.vocab is not in the model archive, contextual biasing will be off",
-    );
-  }
-
-  // Only the INT8 punctuation model is installed. The archive also carries a
-  // 28MB fp32 `model.onnx`, which would nearly quadruple what this feature adds
-  // to the installer for output the user cannot tell apart.
-  const punctDir = path.join(extractDir, PUNCT_NAME);
-  await install(path.join(punctDir, "model.int8.onnx"), PUNCT_MODEL_FILE);
-  await install(path.join(punctDir, "bpe.vocab"), PUNCT_VOCAB_FILE);
-  const punctuation = {
-    model: PUNCT_MODEL_FILE,
-    bpeVocab: PUNCT_VOCAB_FILE,
-  };
 
   await writeFile(
     path.join(stagingDir, MANIFEST_NAME),
@@ -392,18 +314,20 @@ async function main() {
         manifestVersion: MANIFEST_VERSION,
         sherpaVersion: SHERPA_VERSION,
         modelName: MODEL_NAME,
-        punctName: PUNCT_NAME,
         archives: {
           libs: ARCHIVES.libs.sha256,
           model: ARCHIVES.model.sha256,
-          punct: ARCHIVES.punct.sha256,
         },
-        punctuation,
         // The runtime reads these exact names rather than scanning the
         // directory for a prefix match, so which encoder/joiner precision was
         // installed is decided here, once, and never re-guessed on the user's
         // machine.
         model: roles,
+        streaming: {
+          chunkMs: 560,
+          cacheAware: true,
+          contextualBiasing: false,
+        },
         files: Object.fromEntries(installed),
       },
       null,
@@ -415,14 +339,6 @@ async function main() {
   // old one is removed first; the window between the two is the only moment
   // the target is incomplete, and a crash inside it leaves the staging copy on
   // disk for the next run to rebuild from scratch.
-  // Carry the committed README across. Without this the swap deletes the one
-  // file in here that is tracked by git, which is exactly the file that keeps
-  // `bundle.resources` matching in a fresh clone.
-  const readme = path.join(targetDir, README_NAME);
-  if (await exists(readme)) {
-    await copyFile(readme, path.join(stagingDir, README_NAME));
-  }
-
   await rm(targetDir, { recursive: true, force: true });
   await rename(stagingDir, targetDir);
   await rm(extractDir, { recursive: true, force: true });

@@ -1,9 +1,6 @@
-/* The dictation HUD window. The notch itself comes from NotchBar.css so both
-   surfaces stay one shape; only the two things unique to this window live here.
-
-   Transparent and click-through, so nothing is interactive and nothing scrolls:
-   the failure message is clamped to two lines instead, which keeps a native OS
-   scrollbar off the surface. */
+/* The dictation HUD window. The resting pill is passive but cursor-aware so its
+   native hover hint can teach the hotkey. Active and message phases are
+   click-through. Nothing scrolls. */
 
 /* The same reset App.css gives the overlay window. It has to be repeated here,
    not imported: App.css is pulled in by App.tsx, and this window renders
@@ -24,6 +21,67 @@ body,
 
 * {
   box-sizing: border-box;
+}
+
+.dictation-launcher {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  cursor: default;
+}
+
+.dictation-launcher__surface {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  place-items: center;
+  border-radius: 999px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.34);
+}
+
+.dictation-launcher__power {
+  width: 17px;
+  height: 17px;
+  color: rgba(151, 240, 225, 0.92);
+  filter: drop-shadow(0 0 5px rgba(86, 214, 196, 0.42));
+}
+
+.dictation-launcher__power path {
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+}
+
+.notch-shell.dictation-active {
+  animation: dictation-expand-horizontal 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.notch-shell-left.dictation-active,
+.notch-shell-right.dictation-active {
+  animation-name: dictation-expand-vertical;
+}
+
+@keyframes dictation-expand-horizontal {
+  from {
+    opacity: 0.72;
+    transform: scaleX(0.24);
+  }
+  to {
+    opacity: 1;
+    transform: scaleX(1);
+  }
+}
+
+@keyframes dictation-expand-vertical {
+  from {
+    opacity: 0.72;
+    transform: scaleY(0.24);
+  }
+  to {
+    opacity: 1;
+    transform: scaleY(1);
+  }
 }
 
 /* No kebab and no guide dot in this window, so the control gutter NotchBar.css
@@ -96,6 +154,7 @@ body,
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .notch-shell.dictation-active,
   .dictation-message.is-pending .dictation-message__dot {
     animation: none;
   }

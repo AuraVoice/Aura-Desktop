@@ -15,8 +15,8 @@
 //! Ctrl-drag were indistinguishable from a deliberate hold and quietly put
 //! Windows' microphone indicator up during ordinary work. The cold start is
 //! covered well enough by the 200-400ms a human takes before their first
-//! phoneme after completing the chord; only the model warm-up, which touches no
-//! device, starts earlier.
+//! phoneme after completing the chord. Model loading then proceeds in parallel
+//! with capture on a separate thread.
 //!
 //! Overlap with meeting capture is expected and accepted: meeting/audio.rs
 //! opens the same default capture device, and shared mode lets both clients
@@ -42,12 +42,13 @@ const BUFFER_DURATION_HNS: i64 = 300_000;
 /// the device delivers nothing (muted mic, no input).
 const EVENT_WAIT_MS: u32 = 20;
 
-/// One warm capture client. Held by the worker between prewarm and release.
+/// One capture client. Owned by the worker for a single hold.
 pub struct Capture {
     client: wasapi::AudioClient,
     capture: wasapi::AudioCaptureClient,
     event: wasapi::Handle,
     raw: VecDeque<u8>,
+    stopped: bool,
 }
 
 impl Capture {
@@ -75,33 +76,37 @@ impl Capture {
             capture,
             event,
             raw: VecDeque::new(),
+            stopped: false,
         })
+    }
+
+    pub fn stop(&mut self) {
+        if !self.stopped {
+            let _ = self.client.stop_stream();
+            self.stopped = true;
+        }
     }
 
     /// Throws away everything captured so far. Called when the chord completes,
     /// so the prewarm window's audio (the user reaching for the second key) is
     /// not prefixed onto the utterance.
-    pub fn discard_pending(&mut self) {
+    pub fn discard_pending(&mut self) -> Result<(), String> {
         self.raw.clear();
         let mut scratch = VecDeque::new();
-        let _ = self.capture.read_from_device_to_deque(&mut scratch);
+        self.capture
+            .read_from_device_to_deque(&mut scratch)
+            .map_err(|e| format!("microphone read failed: {e}"))?;
+        Ok(())
     }
 
     /// Waits briefly for the device, then returns whatever whole f32 frames are
     /// available. An empty result is normal and simply means the worker should
     /// loop again and re-check its signal channel.
-    pub fn drain(&mut self) -> Vec<f32> {
+    pub fn drain(&mut self) -> Result<Vec<f32>, String> {
         let _ = self.event.wait_for_event(EVENT_WAIT_MS);
-        if self
-            .capture
+        self.capture
             .read_from_device_to_deque(&mut self.raw)
-            .is_err()
-        {
-            // A read failure here ends the utterance rather than silently
-            // truncating it; the worker sees the empty drain and the hold's
-            // hard cap or the user's release finishes the insert.
-            return Vec::new();
-        }
+            .map_err(|e| format!("microphone read failed: {e}"))?;
         let full = self.raw.len() / 4;
         let mut samples = Vec::with_capacity(full);
         for _ in 0..full {
@@ -113,13 +118,13 @@ impl Capture {
             ];
             samples.push(f32::from_le_bytes(bytes));
         }
-        samples
+        Ok(samples)
     }
 }
 
 impl Drop for Capture {
     fn drop(&mut self) {
-        let _ = self.client.stop_stream();
+        self.stop();
     }
 }
 

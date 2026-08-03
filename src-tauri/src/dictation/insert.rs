@@ -61,13 +61,8 @@ pub enum InsertOutcome {
     KeysHeld,
     /// The target window belongs to a higher integrity level process, so
     /// Windows drops our input with no error at all (UIPI). Task Manager,
-    /// regedit, an elevated terminal, most installers. Means NOTHING was
-    /// typed: the very first chunk was refused.
+    /// regedit, an elevated terminal, most installers.
     Blocked,
-    /// Some chunks landed and a later one was refused. Distinct from `Blocked`
-    /// because part of the sentence is already in the user's document, and
-    /// telling them nothing was typed is a lie they would act on.
-    PartiallyInserted,
     /// No text field has focus, so the keystrokes would have landed on
     /// whatever else was there. The caller holds the text instead of typing it.
     NoTextField,
@@ -259,10 +254,6 @@ fn send_unicode(text: &str) -> InsertOutcome {
     let mut chunk: Vec<INPUT> = Vec::with_capacity(CHUNK_UNITS * 2);
     let mut pending_units = 0usize;
     let mut first = true;
-    // Tracked separately from `first`, which is only about the inter-chunk gap
-    // and goes false on a REFUSED flush too. This one answers the question the
-    // caller's message depends on: is any of this already in the document?
-    let mut landed_any = false;
     for character in text.chars() {
         let mut buffer = [0u16; 2];
         let units = character.encode_utf16(&mut buffer);
@@ -275,28 +266,16 @@ fn send_unicode(text: &str) -> InsertOutcome {
         pending_units += units.len();
         if pending_units >= CHUNK_UNITS {
             if !flush(&chunk, &mut first) {
-                return refusal(landed_any);
+                return InsertOutcome::Blocked;
             }
-            landed_any = true;
             chunk.clear();
             pending_units = 0;
         }
     }
     if !chunk.is_empty() && !flush(&chunk, &mut first) {
-        return refusal(landed_any);
+        return InsertOutcome::Blocked;
     }
     InsertOutcome::Inserted
-}
-
-/// Which failure a refused chunk actually is. A first-chunk refusal is UIPI and
-/// nothing was typed; a later one means the user is looking at a half-written
-/// sentence, which needs different copy.
-fn refusal(landed_any: bool) -> InsertOutcome {
-    if landed_any {
-        InsertOutcome::PartiallyInserted
-    } else {
-        InsertOutcome::Blocked
-    }
 }
 
 /// Returns false when Windows accepted none of the events. That is what UIPI

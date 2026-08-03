@@ -56,10 +56,9 @@ function statusFor(phase: DictationPhase): string {
   }
 }
 
-/// The dictation HUD window: the same notch the voice bar uses, docked to the
-/// same edge, with a waveform driven by the real microphone. Click-through and
-/// never focused, so nothing here is interactive and nothing may look like it
-/// is: no buttons, no drag region, no scroll container.
+/// The dictation HUD window: a persistent passive pill between holds, then the
+/// same notch the voice bar uses while the hotkey is held. The pill has no click
+/// action; only the keyboard hook can start capture and recognition.
 ///
 /// It is deliberately wordless. The partial transcript is not shown, because
 /// the words are already landing in the app being typed into, and a second copy
@@ -77,10 +76,9 @@ export function DictationHud() {
     const pending = listen<DictationUpdate>("dictation-update", (event) => {
       setUpdate(event.payload);
     });
-    // This window is created on arm, so the caption that triggered it may have
-    // been emitted before the listener above existed. Pull the current state
-    // once rather than rendering blank until the next partial arrives. A later
-    // event always wins: the listener overwrites whatever this resolves to.
+    // Pull the current state once so startup does not depend on winning a race
+    // with the first event. A later event always wins: the listener overwrites
+    // whatever this resolves to.
     void invoke<DictationUpdate>("dictation_hud_state")
       .then((current) => {
         if (live) {
@@ -97,6 +95,32 @@ export function DictationHud() {
       void pending.then((unlisten) => unlisten());
     };
   }, []);
+
+  if (update.phase === "idle") {
+    const hint = update.chordLabel
+      ? `Dictate\nHold ${update.chordLabel}`
+      : "Dictate";
+    return (
+      <div
+        className={`dictation-launcher dictation-launcher-${update.edge}`}
+        title={hint}
+        role="status"
+        aria-label={hint.replace("\n", ". ")}
+      >
+        <GlassSurface className="dictation-launcher__surface" draggable={false}>
+          <svg
+            className="dictation-launcher__power"
+            viewBox="0 0 24 24"
+            fill="none"
+            aria-hidden="true"
+          >
+            <path d="M12 3v8" />
+            <path d="M7.4 5.8a8 8 0 1 0 9.2 0" />
+          </svg>
+        </GlassSurface>
+      </div>
+    );
+  }
 
   // Held text: the only place the transcript is shown, because the user has to
   // know both that something is waiting and what it says. Rust has already
@@ -128,7 +152,7 @@ export function DictationHud() {
   }
 
   return (
-    <div className={`notch-shell notch-shell-${update.edge}`}>
+    <div className={`notch-shell notch-shell-${update.edge} dictation-active`}>
       <GlassSurface
         className={`notch-bar notch-bar-${statusFor(update.phase)}`}
         draggable={false}

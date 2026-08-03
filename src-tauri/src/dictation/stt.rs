@@ -1,5 +1,5 @@
-//! On-device streaming speech recognition: sherpa-onnx's streaming Zipformer
-//! transducer (20M parameters, INT8) driven through its C API.
+//! On-device streaming speech recognition: sherpa-onnx's cache-aware 560 ms
+//! streaming Nemotron transducer (0.6B, INT8) driven through its C API.
 //!
 //! Why the C API and not the `sherpa-rs` crate: `sherpa-rs` only wraps the
 //! OFFLINE transducer, which has no streaming partials, and it builds
@@ -28,44 +28,25 @@
 
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use log::{info, warn};
 
-/// Every model provided by sherpa-onnx expects 16 kHz.
+pub const MODEL_ID: &str =
+    "sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25";
+pub const SHERPA_VERSION: &str = "v1.13.4";
+/// The requested Nemotron archive is the cache-aware 560 ms variant.
+pub const STREAMING_CHUNK_SAMPLES: usize = (SAMPLE_RATE as usize * 560) / 1000;
+/// Nemotron's official C example supplies 0.3 seconds of trailing silence.
+const FLUSH_PADDING_FRAMES: usize = (SAMPLE_RATE as usize * 300) / 1000;
+/// Finalization is bounded so a damaged runtime cannot wedge the worker.
+const FINALIZATION_TIMEOUT: Duration = Duration::from_secs(3);
+/// Every bundled ASR model expects 16 kHz input.
 pub const SAMPLE_RATE: i32 = 16_000;
-/// Feature dimension of the shipped Zipformer.
-const FEATURE_DIM: i32 = 80;
-/// Two threads: enough to keep a 20M model ahead of real time on a laptop core
-/// without the library's default thread pool eating the machine while the user
-/// is mid-sentence in another app.
+/// Nemotron overrides the feature dimension from encoder metadata during load.
+const FEATURE_DIM: i32 = 128;
+/// Start with two CPU inference threads as the quality upgrade requires.
 const NUM_THREADS: i32 = 2;
-/// Contextual biasing (hotwords) is only honored by modified_beam_search, and
-/// the decoding method is fixed when the recognizer is built rather than per
-/// stream. It is therefore chosen from whether biasing can work AT ALL in this
-/// install (see `decoding_method_for`), not hardcoded: beam search costs real
-/// per-chunk time, and paying it for a feature that is switched off is how the
-/// first hardware run ended up seconds behind the speaker.
-/// `max_active_paths = 4` is sherpa-onnx's own documented default and is well
-/// inside budget for a 20M model. Only read under modified_beam_search.
-const MAX_ACTIVE_PATHS: i32 = 4;
-
-/// Which decoder to build, derived from whether hotwords can be tokenized.
-///
-/// greedy_search is materially faster per chunk. modified_beam_search is worth
-/// its cost ONLY when biasing is live, because that is the single feature it
-/// buys. Deriving it from one condition means a build that later bundles the
-/// ASR `bpe.vocab` flips back with no other edit, the same way `chord.rs`
-/// derives every guard from `DICTATION_CHORD`.
-fn decoding_method_for(biasing_available: bool) -> &'static str {
-    if biasing_available {
-        "modified_beam_search"
-    } else {
-        "greedy_search"
-    }
-}
-/// Tail padding fed after the user releases the chord so the transducer emits
-/// the final word instead of stranding it in the encoder's right context.
-const FLUSH_PADDING_FRAMES: usize = (SAMPLE_RATE as usize) / 2;
 
 #[repr(C)]
 struct OnlineTransducerModelConfig {
@@ -86,6 +67,16 @@ struct OnlineZipformer2CtcModelConfig {
 }
 
 #[repr(C)]
+struct OnlineNemoCtcModelConfig {
+    model: *const c_char,
+}
+
+#[repr(C)]
+struct OnlineToneCtcModelConfig {
+    model: *const c_char,
+}
+
+#[repr(C)]
 struct OnlineModelConfig {
     transducer: OnlineTransducerModelConfig,
     paraformer: OnlineParaformerModelConfig,
@@ -99,6 +90,8 @@ struct OnlineModelConfig {
     bpe_vocab: *const c_char,
     tokens_buf: *const c_char,
     tokens_buf_size: i32,
+    nemo_ctc: OnlineNemoCtcModelConfig,
+    t_one_ctc: OnlineToneCtcModelConfig,
 }
 
 #[repr(C)]
@@ -111,6 +104,13 @@ struct FeatureConfig {
 struct OnlineCtcFstDecoderConfig {
     graph: *const c_char,
     max_active: i32,
+}
+
+#[repr(C)]
+struct HomophoneReplacerConfig {
+    dict_dir: *const c_char,
+    lexicon: *const c_char,
+    rule_fsts: *const c_char,
 }
 
 #[repr(C)]
@@ -131,6 +131,7 @@ struct OnlineRecognizerConfig {
     blank_penalty: f32,
     hotwords_buf: *const c_char,
     hotwords_buf_size: i32,
+    hr: HomophoneReplacerConfig,
 }
 
 #[repr(C)]
@@ -146,8 +147,6 @@ struct OnlineRecognizerResult {
 type CreateRecognizerFn = unsafe extern "C" fn(*const OnlineRecognizerConfig) -> *const c_void;
 type DestroyRecognizerFn = unsafe extern "C" fn(*const c_void);
 type CreateStreamFn = unsafe extern "C" fn(*const c_void) -> *const c_void;
-type CreateStreamWithHotwordsFn =
-    unsafe extern "C" fn(*const c_void, *const c_char) -> *const c_void;
 type DestroyStreamFn = unsafe extern "C" fn(*const c_void);
 type AcceptWaveformFn = unsafe extern "C" fn(*const c_void, i32, *const f32, i32);
 type IsReadyFn = unsafe extern "C" fn(*const c_void, *const c_void) -> i32;
@@ -156,49 +155,10 @@ type GetResultFn = unsafe extern "C" fn(*const c_void, *const c_void) -> *const 
 type DestroyResultFn = unsafe extern "C" fn(*const OnlineRecognizerResult);
 type InputFinishedFn = unsafe extern "C" fn(*const c_void);
 
-// Punctuation and true casing. The shipped Zipformer is LibriSpeech-trained, so
-// its token table is entirely uppercase with no punctuation and the decoder
-// CANNOT emit anything else. This model is what turns "HOW ARE YOU I AM FINE"
-// into "How are you? I am fine." Transcribed from c-api.h lines 1423-1433 at the
-// pinned version, same versioning caveat as everything else in this file.
-#[repr(C)]
-struct OnlinePunctuationModelConfig {
-    cnn_bilstm: *const c_char,
-    bpe_vocab: *const c_char,
-    num_threads: i32,
-    debug: i32,
-    provider: *const c_char,
-}
-
-#[repr(C)]
-struct OnlinePunctuationConfig {
-    model: OnlinePunctuationModelConfig,
-}
-
-type CreatePunctuationFn =
-    unsafe extern "C" fn(*const OnlinePunctuationConfig) -> *const c_void;
-type DestroyPunctuationFn = unsafe extern "C" fn(*const c_void);
-type AddPunctFn = unsafe extern "C" fn(*const c_void, *const c_char) -> *const c_char;
-type FreePunctTextFn = unsafe extern "C" fn(*const c_char);
-
-/// The four punctuation entry points, bound together or not at all.
-///
-/// Optional on purpose: an older `sherpa-onnx-c-api.dll` that predates this API
-/// must still give working dictation rather than failing the whole load. The
-/// pinned v1.10.46 DLL does export all four.
-#[derive(Clone, Copy)]
-struct PunctApi {
-    create: CreatePunctuationFn,
-    destroy: DestroyPunctuationFn,
-    add_punct: AddPunctFn,
-    free_text: FreePunctTextFn,
-}
-
 struct Api {
     create_recognizer: CreateRecognizerFn,
     destroy_recognizer: DestroyRecognizerFn,
     create_stream: CreateStreamFn,
-    create_stream_with_hotwords: CreateStreamWithHotwordsFn,
     destroy_stream: DestroyStreamFn,
     accept_waveform: AcceptWaveformFn,
     is_ready: IsReadyFn,
@@ -206,19 +166,18 @@ struct Api {
     get_result: GetResultFn,
     destroy_result: DestroyResultFn,
     input_finished: InputFinishedFn,
-    punct: Option<PunctApi>,
+    _c_api: libloading::Library,
+    _providers_shared: Option<libloading::Library>,
+    _onnxruntime: Option<libloading::Library>,
 }
 
 /// Which model files the recognizer needs, resolved from the bundled resource
-/// directory. `bpe_vocab` is optional: without it sherpa-onnx cannot tokenize
-/// hotwords for a BPE English model, so tier 0 biasing degrades to off while
-/// plain dictation keeps working.
+/// directory.
 struct ModelPaths {
     encoder: PathBuf,
     decoder: PathBuf,
     joiner: PathBuf,
     tokens: PathBuf,
-    bpe_vocab: Option<PathBuf>,
 }
 
 fn pick(dir: &Path, candidates: &[&str], preferred_marker: &str) -> Option<PathBuf> {
@@ -255,115 +214,11 @@ struct InstalledModel {
     decoder: String,
     joiner: String,
     tokens: String,
-    #[serde(default)]
-    bpe_vocab: Option<String>,
-}
-
-/// The optional `punctuation` block of `installed.json`. Absent in a bundle
-/// built before punctuation was added, which is a supported state: dictation
-/// still works, it just inserts what the recognizer emitted.
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct InstalledPunctuation {
-    model: String,
-    bpe_vocab: String,
 }
 
 #[derive(serde::Deserialize)]
 struct InstalledManifest {
     model: InstalledModel,
-    #[serde(default)]
-    punctuation: Option<InstalledPunctuation>,
-}
-
-/// Where the punctuation model lives, if it was installed. Resolved from the
-/// manifest only: unlike the ASR model there is no prefix-scan fallback,
-/// because `model.int8.onnx` is too generic a name to guess at safely.
-fn punct_paths(dir: &Path) -> Option<(PathBuf, PathBuf)> {
-    let raw = std::fs::read_to_string(dir.join("installed.json")).ok()?;
-    let manifest: InstalledManifest = serde_json::from_str(&raw).ok()?;
-    let punctuation = manifest.punctuation?;
-    let model = dir.join(&punctuation.model);
-    let vocab = dir.join(&punctuation.bpe_vocab);
-    (model.is_file() && vocab.is_file()).then_some((model, vocab))
-}
-
-/// Punctuation and true casing for one finished utterance.
-///
-/// Runs ONCE per hold on the final text, never on a partial: `AddPunct` takes
-/// the whole string and returns a new one, so calling it every 320ms would pay
-/// the full cost repeatedly and make the caption flicker between casings.
-pub struct Punctuator {
-    api: PunctApi,
-    handle: *const c_void,
-}
-
-/// Same reasoning as `Recognizer`: an opaque handle built on the loader thread,
-/// moved once, and touched only from the thread that owns it afterwards.
-unsafe impl Send for Punctuator {}
-
-impl Punctuator {
-    fn load(dir: &Path, api: PunctApi) -> Option<Self> {
-        let (model, vocab) = punct_paths(dir)?;
-        let cnn_bilstm = cstring(&model.to_string_lossy()).ok()?;
-        let bpe_vocab = cstring(&vocab.to_string_lossy()).ok()?;
-        let provider = cstring("cpu").ok()?;
-        let config = OnlinePunctuationConfig {
-            model: OnlinePunctuationModelConfig {
-                cnn_bilstm: cnn_bilstm.as_ptr(),
-                bpe_vocab: bpe_vocab.as_ptr(),
-                num_threads: NUM_THREADS,
-                debug: 0,
-                provider: provider.as_ptr(),
-            },
-        };
-        let handle = unsafe { (api.create)(&config) };
-        if handle.is_null() {
-            warn!("dictation.stt: the punctuation model could not be built");
-            return None;
-        }
-        Some(Self { api, handle })
-    }
-
-    /// Returns the punctuated, true-cased text. Falls back to the input
-    /// unchanged on any failure: losing capitals is far better than losing the
-    /// sentence. The text itself is never logged here or anywhere else.
-    ///
-    /// THE INPUT MUST BE LOWERCASE. This model was trained on lowercase text and
-    /// its BPE vocabulary has no uppercase entries, so handed "HOW ARE YOU" it
-    /// returns "HOW ARE YOU" unchanged, with no error and no clue why. Handed
-    /// "how are you" it returns "How are you?". The recognizer emits uppercase
-    /// (LibriSpeech tokens), so lowercasing here is not a tidy-up, it is what
-    /// makes this model work at all. Verified directly against the shipped DLL.
-    ///
-    /// Nothing is lost by folding case: the recognizer carries no case
-    /// information to preserve, every token it can emit is uppercase.
-    fn apply(&self, text: &str) -> String {
-        let Ok(encoded) = cstring(&text.to_lowercase()) else {
-            return text.to_string();
-        };
-        unsafe {
-            let produced = (self.api.add_punct)(self.handle, encoded.as_ptr());
-            if produced.is_null() {
-                return text.to_string();
-            }
-            let owned = CStr::from_ptr(produced).to_string_lossy().into_owned();
-            (self.api.free_text)(produced);
-            if owned.trim().is_empty() {
-                text.to_string()
-            } else {
-                owned
-            }
-        }
-    }
-}
-
-impl Drop for Punctuator {
-    fn drop(&mut self) {
-        if !self.handle.is_null() {
-            unsafe { (self.api.destroy)(self.handle) };
-        }
-    }
 }
 
 impl ModelPaths {
@@ -410,12 +265,6 @@ impl ModelPaths {
             decoder: named(&manifest.model.decoder)?,
             joiner: named(&manifest.model.joiner)?,
             tokens: named(&manifest.model.tokens)?,
-            bpe_vocab: manifest
-                .model
-                .bpe_vocab
-                .as_deref()
-                .map(|name| dir.join(name))
-                .filter(|path| path.is_file()),
         }))
     }
 
@@ -425,9 +274,7 @@ impl ModelPaths {
     fn from_scan(dir: &Path) -> Result<Self, String> {
         let encoder = pick(dir, &["encoder"], ".int8.")
             .ok_or_else(|| format!("no encoder model in {}", dir.display()))?;
-        // The decoder is tiny and its INT8 build is not always shipped; either
-        // is fine, so no preference is expressed.
-        let decoder = pick(dir, &["decoder"], "")
+        let decoder = pick(dir, &["decoder"], ".int8.")
             .ok_or_else(|| format!("no decoder model in {}", dir.display()))?;
         let joiner = pick(dir, &["joiner"], ".int8.")
             .ok_or_else(|| format!("no joiner model in {}", dir.display()))?;
@@ -435,13 +282,11 @@ impl ModelPaths {
         if !tokens.is_file() {
             return Err(format!("no tokens.txt in {}", dir.display()));
         }
-        let bpe_vocab = Some(dir.join("bpe.vocab")).filter(|path| path.is_file());
         Ok(Self {
             encoder,
             decoder,
             joiner,
             tokens,
-            bpe_vocab,
         })
     }
 }
@@ -457,20 +302,24 @@ pub fn resources_present(dir: &Path) -> Result<(), String> {
             dir.display()
         ));
     }
+    if !dir.join("onnxruntime.dll").is_file()
+        || !dir.join("onnxruntime_providers_shared.dll").is_file()
+    {
+        return Err(format!(
+            "the dictation CPU runtime is incomplete in {} (run npm run predownload:dictation)",
+            dir.display()
+        ));
+    }
     ModelPaths::resolve(dir).map(|_| ())
 }
 
 /// A warm recognizer. Loaded on its own one-shot thread, handed to the
-/// dictation worker exactly once, and parked there: with no stream open and no
-/// audio client running, it costs memory and no CPU.
+/// dictation worker, and destroyed there after the 60-second idle window.
 pub struct Recognizer {
     api: Api,
     handle: *const c_void,
     /// Whether contextual biasing can be honored at all in this install.
     biasing_available: bool,
-    /// Owned here so a single thread owns every sherpa-onnx handle in the
-    /// process and no punctuation state has to cross a thread boundary.
-    punctuator: Option<Punctuator>,
 }
 
 /// Safe because of how this value is used, not because the type is inherently
@@ -495,24 +344,12 @@ impl Recognizer {
         // CPU only, always. Shipping no GPU provider DLL is the primary
         // guarantee; naming the provider explicitly is the second one.
         let provider = cstring("cpu")?;
+        let decoding_method = cstring("greedy_search")?;
         let empty = cstring("")?;
-        let biasing_available = models.bpe_vocab.is_some();
-        let method = decoding_method_for(biasing_available);
-        let decoding_method = cstring(method)?;
-        let modeling_unit = cstring(if biasing_available { "bpe" } else { "" })?;
-        let bpe_vocab = cstring(
-            &models
-                .bpe_vocab
-                .as_ref()
-                .map(|path| path.to_string_lossy().to_string())
-                .unwrap_or_default(),
-        )?;
-        if !biasing_available {
-            warn!(
-                "dictation.stt: bpe.vocab is missing from the bundled model, contextual biasing \
-                 is off and decoding falls back to greedy_search"
-            );
-        }
+        let biasing_available = false;
+        warn!(
+            "dictation.stt: model={MODEL_ID} contextual biasing is unavailable; local corrections remain enabled"
+        );
 
         let config = OnlineRecognizerConfig {
             feat_config: FeatureConfig {
@@ -541,13 +378,19 @@ impl Recognizer {
                 provider: provider.as_ptr(),
                 debug: 0,
                 model_type: empty.as_ptr(),
-                modeling_unit: modeling_unit.as_ptr(),
-                bpe_vocab: bpe_vocab.as_ptr(),
+                modeling_unit: empty.as_ptr(),
+                bpe_vocab: empty.as_ptr(),
                 tokens_buf: std::ptr::null(),
                 tokens_buf_size: 0,
+                nemo_ctc: OnlineNemoCtcModelConfig {
+                    model: std::ptr::null(),
+                },
+                t_one_ctc: OnlineToneCtcModelConfig {
+                    model: std::ptr::null(),
+                },
             },
             decoding_method: decoding_method.as_ptr(),
-            max_active_paths: MAX_ACTIVE_PATHS,
+            max_active_paths: 0,
             // Endpointing is deliberately off: the chord IS the endpoint. An
             // automatic endpoint mid-hold would split one utterance into two
             // and insert half a sentence.
@@ -556,7 +399,7 @@ impl Recognizer {
             rule2_min_trailing_silence: 0.0,
             rule3_min_utterance_length: 0.0,
             hotwords_file: empty.as_ptr(),
-            hotwords_score: super::vocab::HOTWORD_SCORE,
+            hotwords_score: 0.0,
             ctc_fst_decoder_config: OnlineCtcFstDecoderConfig {
                 graph: std::ptr::null(),
                 max_active: 3000,
@@ -566,31 +409,24 @@ impl Recognizer {
             blank_penalty: 0.0,
             hotwords_buf: std::ptr::null(),
             hotwords_buf_size: 0,
+            hr: HomophoneReplacerConfig {
+                dict_dir: std::ptr::null(),
+                lexicon: std::ptr::null(),
+                rule_fsts: std::ptr::null(),
+            },
         };
 
         let handle = unsafe { (api.create_recognizer)(&config) };
         if handle.is_null() {
             return Err("sherpa-onnx refused to build the recognizer".to_string());
         }
-        let punctuator = api
-            .punct
-            .and_then(|punct_api| Punctuator::load(resource_dir, punct_api));
-        if punctuator.is_none() {
-            warn!(
-                "dictation.stt: no punctuation model installed, text will be inserted in the \
-                 recognizer's own casing (the bundled model is uppercase-only)"
-            );
-        }
         info!(
-            "dictation.stt: recognizer warm (threads={NUM_THREADS}, provider=cpu, \
-             decoding={method}, punctuation={})",
-            punctuator.is_some()
+            "dictation.stt: model={MODEL_ID} sherpa={SHERPA_VERSION} recognizer warm threads={NUM_THREADS} provider=cpu chunk_ms=560"
         );
         Ok(Self {
             api,
             handle,
             biasing_available,
-            punctuator,
         })
     }
 
@@ -598,40 +434,10 @@ impl Recognizer {
         self.biasing_available
     }
 
-    pub fn punctuation_available(&self) -> bool {
-        self.punctuator.is_some()
-    }
-
-    /// Punctuates and true-cases one finished utterance.
-    ///
-    /// With no punctuation model installed this still does NOT return the raw
-    /// text: the recognizer's output is entirely uppercase, and inserting
-    /// "SEND IT TODAY" into someone's email is a worse failure than having no
-    /// commas. The fallback is the minimum that makes the text usable, and it
-    /// is deliberately dumb rather than a second casing implementation
-    /// competing with the model.
-    pub fn punctuate(&self, text: &str) -> String {
-        match self.punctuator.as_ref() {
-            Some(punctuator) => punctuator.apply(text),
-            None => sentence_case(text),
-        }
-    }
-
-    /// Which decoder was actually built. Recorded in the per-hold trace so a
-    /// latency reading can be attributed to the method that produced it.
-    pub fn decoding_method(&self) -> &'static str {
-        decoding_method_for(self.biasing_available)
-    }
-
-    /// Opens one utterance's stream. `hotwords` is one phrase per line and may
-    /// be empty, in which case a plain stream is created.
-    pub fn start_stream(&self, hotwords: &str) -> Result<Stream<'_>, String> {
-        let handle = if hotwords.trim().is_empty() || !self.biasing_available {
-            unsafe { (self.api.create_stream)(self.handle) }
-        } else {
-            let encoded = cstring(hotwords)?;
-            unsafe { (self.api.create_stream_with_hotwords)(self.handle, encoded.as_ptr()) }
-        };
+    /// Opens one utterance's stream. Nemotron supports only its greedy decoder,
+    /// so the current sherpa API cannot apply contextual hotwords to this model.
+    pub fn start_stream(&self) -> Result<Stream<'_>, String> {
+        let handle = unsafe { (self.api.create_stream)(self.handle) };
         if handle.is_null() {
             return Err("sherpa-onnx refused to open a stream".to_string());
         }
@@ -646,6 +452,8 @@ impl Drop for Recognizer {
     fn drop(&mut self) {
         if !self.handle.is_null() {
             unsafe { (self.api.destroy_recognizer)(self.handle) };
+            self.handle = std::ptr::null();
+            info!("dictation.stt: model={MODEL_ID} recognizer destroyed phase=model_unload");
         }
     }
 }
@@ -659,9 +467,9 @@ pub struct Stream<'a> {
 
 impl Stream<'_> {
     /// Feeds mono 16 kHz f32 samples and runs whatever decoding they enable.
-    pub fn accept(&self, samples: &[f32]) {
+    pub fn accept(&self, samples: &[f32]) -> Duration {
         if samples.is_empty() {
-            return;
+            return Duration::ZERO;
         }
         let api = &self.recognizer.api;
         unsafe {
@@ -672,16 +480,21 @@ impl Stream<'_> {
                 samples.len() as i32,
             );
         }
-        self.decode_ready();
+        self.decode_ready(None).unwrap_or(Duration::ZERO)
     }
 
-    fn decode_ready(&self) {
+    fn decode_ready(&self, deadline: Option<Instant>) -> Result<Duration, String> {
         let api = &self.recognizer.api;
+        let started_at = Instant::now();
         unsafe {
             while (api.is_ready)(self.recognizer.handle, self.handle) != 0 {
+                if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                    return Err("finalization timed out before the recognizer drained".to_string());
+                }
                 (api.decode)(self.recognizer.handle, self.handle);
             }
         }
+        Ok(started_at.elapsed())
     }
 
     /// The text decoded so far. Safe to call between chunks for partials.
@@ -702,12 +515,22 @@ impl Stream<'_> {
         }
     }
 
-    /// Marks the end of the utterance and drains the decoder. The tail padding
-    /// is what lets the transducer emit its final word.
-    pub fn finish(&self) {
+    /// Accepts the partial final chunk, supplies the documented tail padding,
+    /// marks input finished, and drains every ready frame within a fixed bound.
+    pub fn finish(&self, remaining: &[f32]) -> Result<Duration, String> {
         let api = &self.recognizer.api;
         let padding = vec![0.0f32; FLUSH_PADDING_FRAMES];
+        let started_at = Instant::now();
+        let deadline = started_at + FINALIZATION_TIMEOUT;
         unsafe {
+            if !remaining.is_empty() {
+                (api.accept_waveform)(
+                    self.handle,
+                    SAMPLE_RATE,
+                    remaining.as_ptr(),
+                    remaining.len() as i32,
+                );
+            }
             (api.accept_waveform)(
                 self.handle,
                 SAMPLE_RATE,
@@ -716,7 +539,8 @@ impl Stream<'_> {
             );
             (api.input_finished)(self.handle);
         }
-        self.decode_ready();
+        self.decode_ready(Some(deadline))?;
+        Ok(started_at.elapsed())
     }
 }
 
@@ -728,30 +552,16 @@ impl Drop for Stream<'_> {
     }
 }
 
-/// Lowercase, with the first letter capitalised. Used ONLY when no punctuation
-/// model is installed, purely so the inserted text is not shouting. It makes no
-/// attempt at proper nouns or sentence boundaries; that is exactly the job the
-/// punctuation model does properly.
-pub fn sentence_case(text: &str) -> String {
-    let lowered = text.to_lowercase();
-    let mut chars = lowered.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-        None => lowered,
-    }
-}
-
 fn cstring(value: &str) -> Result<CString, String> {
     CString::new(value).map_err(|e| format!("path contains an interior NUL: {e}"))
 }
 
-/// Loads onnxruntime.dll first so the loader resolves it by name when
-/// sherpa-onnx-c-api.dll imports it, then binds the entry points. Both
-/// libraries are intentionally leaked: the recognizer lives for the process
-/// lifetime and unloading an ORT DLL under a live session is not worth the
-/// teardown ordering risk.
+/// Loads ONNX Runtime before sherpa's C API, then owns every library handle in
+/// dependency-safe drop order. Recognizer::drop destroys the model session
+/// first, after which these handles can be released during the idle unload.
 fn load_api(dir: &Path) -> Result<Api, String> {
     let onnxruntime = dir.join("onnxruntime.dll");
+    let providers_shared = dir.join("onnxruntime_providers_shared.dll");
     let c_api = dir.join("sherpa-onnx-c-api.dll");
     if !c_api.is_file() {
         return Err(format!(
@@ -760,61 +570,39 @@ fn load_api(dir: &Path) -> Result<Api, String> {
         ));
     }
     unsafe {
-        if onnxruntime.is_file() {
-            match libloading::Library::new(&onnxruntime) {
-                Ok(library) => {
-                    let _ = Box::leak(Box::new(library));
-                }
-                Err(e) => return Err(format!("failed to load onnxruntime.dll: {e}")),
-            }
-        }
+        let onnxruntime_library = if onnxruntime.is_file() {
+            Some(
+                libloading::Library::new(&onnxruntime)
+                    .map_err(|e| format!("failed to load onnxruntime.dll: {e}"))?,
+            )
+        } else {
+            None
+        };
+        let providers_shared_library = if providers_shared.is_file() {
+            Some(
+                libloading::Library::new(&providers_shared).map_err(|e| {
+                    format!("failed to load onnxruntime_providers_shared.dll: {e}")
+                })?,
+            )
+        } else {
+            None
+        };
         let library = libloading::Library::new(&c_api)
             .map_err(|e| format!("failed to load sherpa-onnx-c-api.dll: {e}"))?;
-        let library: &'static libloading::Library = Box::leak(Box::new(library));
 
         macro_rules! bind {
             ($name:literal, $ty:ty) => {{
-                let symbol: libloading::Symbol<'static, $ty> = library
+                let symbol: libloading::Symbol<'_, $ty> = library
                     .get(concat!($name, "\0").as_bytes())
                     .map_err(|e| format!("sherpa-onnx is missing {}: {e}", $name))?;
                 *symbol
             }};
         }
 
-        // Bound with `try_bind` rather than `bind`: all four or none, and a DLL
-        // without them still yields working dictation with punctuation off.
-        macro_rules! try_bind {
-            ($name:literal, $ty:ty) => {{
-                let symbol: Result<libloading::Symbol<'static, $ty>, _> =
-                    library.get(concat!($name, "\0").as_bytes());
-                symbol.ok().map(|found| *found)
-            }};
-        }
-
-        let punct = (|| {
-            Some(PunctApi {
-                create: try_bind!("SherpaOnnxCreateOnlinePunctuation", CreatePunctuationFn)?,
-                destroy: try_bind!("SherpaOnnxDestroyOnlinePunctuation", DestroyPunctuationFn)?,
-                add_punct: try_bind!("SherpaOnnxOnlinePunctuationAddPunct", AddPunctFn)?,
-                free_text: try_bind!("SherpaOnnxOnlinePunctuationFreeText", FreePunctTextFn)?,
-            })
-        })();
-        if punct.is_none() {
-            warn!(
-                "dictation.stt: this sherpa-onnx build has no online punctuation API, \
-                 text will be inserted as the recognizer emits it"
-            );
-        }
-
         Ok(Api {
-            punct,
             create_recognizer: bind!("SherpaOnnxCreateOnlineRecognizer", CreateRecognizerFn),
             destroy_recognizer: bind!("SherpaOnnxDestroyOnlineRecognizer", DestroyRecognizerFn),
             create_stream: bind!("SherpaOnnxCreateOnlineStream", CreateStreamFn),
-            create_stream_with_hotwords: bind!(
-                "SherpaOnnxCreateOnlineStreamWithHotwords",
-                CreateStreamWithHotwordsFn
-            ),
             destroy_stream: bind!("SherpaOnnxDestroyOnlineStream", DestroyStreamFn),
             accept_waveform: bind!("SherpaOnnxOnlineStreamAcceptWaveform", AcceptWaveformFn),
             is_ready: bind!("SherpaOnnxIsOnlineStreamReady", IsReadyFn),
@@ -822,6 +610,9 @@ fn load_api(dir: &Path) -> Result<Api, String> {
             get_result: bind!("SherpaOnnxGetOnlineStreamResult", GetResultFn),
             destroy_result: bind!("SherpaOnnxDestroyOnlineRecognizerResult", DestroyResultFn),
             input_finished: bind!("SherpaOnnxOnlineStreamInputFinished", InputFinishedFn),
+            _c_api: library,
+            _providers_shared: providers_shared_library,
+            _onnxruntime: onnxruntime_library,
         })
     }
 }

@@ -7,7 +7,7 @@ import { DictationHud } from "./dictation/DictationHud";
 
 // Every window loads the same bundle; route on the window label. "main" is the
 // transparent always-on-top overlay; "dashboard" is the decorated in-app window;
-// "dictation" is the click-through hold-to-talk caption strip.
+// "dictation" is the persistent passive pill and hold-to-talk caption strip.
 const label = getCurrentWebviewWindow().label;
 const Root =
   label === "dashboard" ? DashboardApp : label === "dictation" ? DictationHud : App;

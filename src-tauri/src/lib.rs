@@ -403,6 +403,7 @@ pub fn run() {
             };
             overlay::load_persisted_center(app.handle());
             overlay::set_panel_variant(app.handle(), initial_variant);
+            dictation::show_hud(app.handle());
 
             // Present right after a user-initiated update restart. The update
             // relaunch reuses the original args, so a boot-launched instance

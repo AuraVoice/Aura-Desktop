@@ -669,6 +669,7 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
         state.applied_notch_edge = Some(notch_edge);
     }
     emit_overlay_changed(app);
+    crate::dictation::refresh_hud_placement(app);
     info!(
         "overlay::apply: presentation={presentation:?} variant={panel_variant:?} applied in {:?}",
         started_at.elapsed()
