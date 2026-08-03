@@ -52,6 +52,15 @@ export type KnownAgentEventType =
   | "draft.failed"
   | "session.error"
   | "guide.step"
+  | "guide.mode_ack"
+  | "guide.frame_ack"
+  | "guide.task"
+  | "guide.instruction"
+  | "guide.failure"
+  // Agent-requested Guide Mode arm/disarm. The desktop stays the arming
+  // authority: this only asks, and useGuideMode routes it to the native
+  // arm_guide/disarm_guide command (payload.enable decides which).
+  | "guide.request"
   // Desktop control (desktop client only). The verb lives inside
   // payload.id and is validated against the client capability registry
   // (desktopCapabilities.ts), so this stays a single message type no matter
@@ -102,6 +111,20 @@ const FIELD_CAPS: Record<string, number> = {
   context_summary: 4_000,
   text: 32_000,
   instruction: 2_000,
+  instruction_id: 128,
+  guide_session_id: 64,
+  task_id: 64,
+  current_step_id: 80,
+  current_step_title: 100,
+  status: 64,
+  delivery_status: 64,
+  rejection_reason: 64,
+  newest_frame_id: 64,
+  trace_id: 64,
+  event_id: 64,
+  parent_event_id: 64,
+  stage: 32,
+  error_type: 120,
 };
 
 const KNOWN_TYPES: ReadonlySet<string> = new Set([
@@ -113,6 +136,12 @@ const KNOWN_TYPES: ReadonlySet<string> = new Set([
   "draft.failed",
   "session.error",
   "guide.step",
+  "guide.mode_ack",
+  "guide.frame_ack",
+  "guide.task",
+  "guide.instruction",
+  "guide.failure",
+  "guide.request",
   "desktop.run",
 ] satisfies KnownAgentEventType[]);
 
@@ -146,6 +175,61 @@ function payloadWithinLimits(type: KnownAgentEventType, payload: Record<string, 
     if (typeof y !== "number" || !Number.isFinite(y)) return false;
   }
   if (type === "guide.step") return validateGuideStep(payload);
+  if (type === "guide.mode_ack") {
+    return (
+      typeof payload.active === "boolean" &&
+      Number.isSafeInteger(payload.generation) &&
+      (payload.generation as number) >= 0 &&
+      typeof payload.guide_session_id === "string" &&
+      /^[0-9a-f]{32}$/.test(payload.guide_session_id) &&
+      payload.protocol_version === 2 &&
+      (payload.reason == null || typeof payload.reason === "string")
+    );
+  }
+  if (type === "guide.frame_ack") {
+    return (
+      typeof payload.frame_id === "string" &&
+      /^([0-9a-f]{32}):(\d+)$/.test(payload.frame_id) &&
+      typeof payload.accepted === "boolean"
+    );
+  }
+  if (type === "guide.task") {
+    return (
+      typeof payload.guide_session_id === "string" &&
+      /^[0-9a-f]{32}$/.test(payload.guide_session_id) &&
+      typeof payload.task_id === "string" &&
+      /^[0-9a-f]{32}$/.test(payload.task_id) &&
+      Number.isSafeInteger(payload.revision)
+    );
+  }
+  if (type === "guide.instruction") {
+    return (
+      typeof payload.guide_session_id === "string" &&
+      /^[0-9a-f]{32}$/.test(payload.guide_session_id) &&
+      typeof payload.task_id === "string" &&
+      /^[0-9a-f]{32}$/.test(payload.task_id) &&
+      typeof payload.instruction_id === "string" &&
+      payload.instruction_id.length <= FIELD_CAPS.instruction_id &&
+      Number.isSafeInteger(payload.revision)
+    );
+  }
+  if (type === "guide.request") {
+    return typeof payload.enable === "boolean";
+  }
+  if (type === "guide.failure") {
+    return (
+      typeof payload.guide_session_id === "string" &&
+      /^[0-9a-f]{32}$/.test(payload.guide_session_id) &&
+      typeof payload.trace_id === "string" &&
+      /^[0-9a-f]{32}$/.test(payload.trace_id) &&
+      typeof payload.event_id === "string" &&
+      /^[0-9a-f]{32}$/.test(payload.event_id) &&
+      ["capture", "planning", "execution", "verification", "speech"].includes(
+        String(payload.stage),
+      ) &&
+      typeof payload.reason === "string"
+    );
+  }
   return true;
 }
 

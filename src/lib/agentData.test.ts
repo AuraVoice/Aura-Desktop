@@ -145,6 +145,26 @@ describe("per-type schema", () => {
     }
   });
 
+  it("accepts guide.request only with a boolean enable", () => {
+    for (const enable of [true, false]) {
+      const verdict = validateAgentDataMessage(
+        encode({ type: "guide.request", payload: { enable } }),
+        agent,
+        undefined,
+      );
+      expect(verdict.kind, String(enable)).toBe("valid");
+      expect(verdict.kind === "valid" && verdict.payload.enable).toBe(enable);
+    }
+    for (const bad of [{ enable: "yes" }, { enable: 1 }, {}]) {
+      const verdict = validateAgentDataMessage(
+        encode({ type: "guide.request", payload: bad }),
+        agent,
+        undefined,
+      );
+      expect(verdict.kind, JSON.stringify(bad)).toBe("agent-unknown");
+    }
+  });
+
   it("keeps session.error's top-level message but caps it", () => {
     const ok = validateAgentDataMessage(
       encode({ type: "session.error", message: "short" }),
@@ -215,6 +235,37 @@ describe("per-type schema", () => {
       "agent_events",
     );
     expect(verdict.kind).toBe("valid");
+  });
+
+  it("accepts only generation-bound Guide mode acknowledgements", () => {
+    const payload = {
+      active: true,
+      generation: 4,
+      guide_session_id: "0123456789abcdef0123456789abcdef",
+      protocol_version: 2,
+      reason: null,
+    };
+    expect(
+      validateAgentDataMessage(
+        encode({ type: "guide.mode_ack", payload }),
+        agent,
+        "agent_events",
+      ).kind,
+    ).toBe("valid");
+    for (const invalid of [
+      { ...payload, generation: -1 },
+      { ...payload, guide_session_id: "wrong" },
+      { ...payload, protocol_version: 1 },
+      { ...payload, active: "yes" },
+    ]) {
+      expect(
+        validateAgentDataMessage(
+          encode({ type: "guide.mode_ack", payload: invalid }),
+          agent,
+          "agent_events",
+        ).kind,
+      ).toBe("agent-unknown");
+    }
   });
 
   it("tolerates unknown extra fields (forward compatibility)", () => {

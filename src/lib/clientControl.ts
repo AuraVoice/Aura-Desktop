@@ -4,6 +4,8 @@ export interface GuideModeControl {
   active: boolean;
   guideSessionId: string | null;
   generation: number;
+  protocolVersion?: 1 | 2;
+  resumeTaskId?: string | null;
 }
 
 export function encodeGuideMode(control: GuideModeControl): Uint8Array {
@@ -17,12 +19,20 @@ export function encodeGuideMode(control: GuideModeControl): Uint8Array {
   ) {
     throw new Error("active guide.mode requires a 128-bit Guide session id");
   }
+  if (
+    control.resumeTaskId != null &&
+    !/^[0-9a-f]{32}$/.test(control.resumeTaskId)
+  ) {
+    throw new Error("guide.mode resume task id must be a 128-bit hex id");
+  }
   return new TextEncoder().encode(
     JSON.stringify({
       type: "guide.mode",
       active: control.active,
       guide_session_id: control.guideSessionId,
       generation: control.generation,
+      protocol_version: control.protocolVersion ?? 1,
+      resume_task_id: control.resumeTaskId ?? null,
     }),
   );
 }

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { hostname } from "@tauri-apps/plugin-os";
 import type { UpcomingMeeting } from "../lib/calendar";
 import { isEligibleForNotes } from "./useMeetingArm";
 import {
@@ -9,7 +8,10 @@ import {
   completeMeeting,
   MeetingCapError,
   MeetingClaimConflictError,
-  MeetingGoneError,
+  MeetingTransportError,
+  type CompletionReceipt,
+  type MeetingCompletionSegment,
+  type UploadReceipt,
   uploadSegment,
 } from "../lib/meetings";
 import { AuthRequiredError } from "../lib/api";
@@ -36,9 +38,6 @@ const MANUAL_WINDOW_MS = 2 * 60 * 60_000;
 const REJOIN_HOLD_MS = 10 * 60_000;
 /** Background upload pump cadence (also triggered by segment-ready events). */
 const PUMP_INTERVAL_MS = 60_000;
-/** Per-meeting retry backoff after an upload/complete failure. */
-const BACKOFF_BASE_MS = 30_000;
-const BACKOFF_MAX_MS = 10 * 60_000;
 const CLAIM_RETRIES = 2;
 
 interface QueueSegment {
@@ -47,26 +46,81 @@ interface QueueSegment {
   durationMs: number;
   uploaded: boolean;
   incomplete: boolean;
+  contentSha256: string;
+  encryptedSha256: string;
+  byteLength: number;
+  encryptedByteLength: number;
+  channelCount: number;
+  sampleRateHz: number;
+  localPresent: boolean;
 }
 
-interface QueueMeeting {
+interface QueueCapture {
   ownerUid: string;
+  meetingId: string;
+  captureRunId: string;
+  captureFence: number;
+  protocolVersion: 1 | 2;
   eventId: string;
   startedAtMs: number;
   completed: boolean;
   completeReason: string;
   totalDurationMs: number;
+  finishedAtMs: number | null;
+  retainLocalUntilMs: number | null;
+  completionAcked: boolean;
+  ackedAtMs: number | null;
+  localAudioDeletedAtMs: number | null;
+  state: string;
+  manifestSha256: string | null;
+  nextRetryAtMs: number | null;
+  lastErrorCode: string | null;
+  retryable: boolean;
   segments: QueueSegment[];
 }
 
 interface QueueSnapshot {
-  meetings: Record<string, QueueMeeting>;
+  captures: QueueCapture[];
+}
+
+interface QueueJobLease {
+  jobId: string;
+  leaseToken: string;
+  kind: "upload" | "completion";
+  meetingId: string;
+  captureRunId: string;
+  captureFence: number;
+  protocolVersion: 1 | 2;
+  eventId: string;
+  seq: number | null;
+  startMs: number | null;
+  durationMs: number | null;
+  incomplete: boolean | null;
+  contentSha256: string | null;
+  byteLength: number | null;
+  channelCount: number | null;
+  sampleRateHz: number | null;
+  manifestSha256: string | null;
+  segmentCount: number | null;
+  totalDurationMs: number | null;
+  reason: string | null;
+  segmentDigests: string[];
+  manifestSegments: MeetingCompletionSegment[];
+  attemptCount: number;
+}
+
+interface MeetingRuntimeStatus {
+  ownsRuntime: boolean;
+  processId: number;
+  runtimeInstanceId: string;
+  installationId: string;
 }
 
 interface CaptureStatePayload {
   ownerUid: string;
   active: boolean;
   meetingId: string | null;
+  captureRunId: string | null;
   eventId: string | null;
   paused: boolean;
   reason: string;
@@ -133,6 +187,8 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
   const [paused, setPaused] = useState(false);
   const [capBlocked, setCapBlocked] = useState(false);
   const [activities, setActivities] = useState<MeetingActivity[]>([]);
+  const [ownsRuntime, setOwnsRuntime] = useState(false);
+  const runtimeStatusRef = useRef<MeetingRuntimeStatus | null>(null);
   const activitiesRef = useRef(activities);
   activitiesRef.current = activities;
 
@@ -148,13 +204,10 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
 
   const recordingRef = useRef(false);
   /** event_id -> claimed meeting for this session (rejoins reuse it). */
-  const claimsRef = useRef<Map<string, string>>(new Map());
+  const claimsRef = useRef<Map<string, Awaited<ReturnType<typeof claimMeeting>>>>(new Map());
+  const captureRunByMeetingRef = useRef<Map<string, string>>(new Map());
   const activeEventRef = useRef<string | null>(null);
   const watchedRef = useRef<Set<string>>(new Set());
-  /** meeting_id -> earliest time the pump may send /complete (rejoin hold). */
-  const holdUntilRef = useRef<Map<string, number>>(new Map());
-  /** meeting_id -> { failures, nextAttemptAt } upload backoff. */
-  const backoffRef = useRef<Map<string, { failures: number; nextAt: number }>>(new Map());
   const pumpRunningRef = useRef<{ uid: string; epoch: number } | null>(null);
   const claimInFlightRef = useRef<{ uid: string; epoch: number } | null>(null);
   /** A join re-detected while the previous engine was still flushing; replayed
@@ -170,8 +223,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
   useEffect(() => {
     identityEpochRef.current += 1;
     claimsRef.current.clear();
-    holdUntilRef.current.clear();
-    backoffRef.current.clear();
+    captureRunByMeetingRef.current.clear();
     pumpRunningRef.current = null;
     claimInFlightRef.current = null;
     activeEventRef.current = null;
@@ -200,6 +252,30 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
     void ensureMeetingNotificationPermission();
   }, [uid]);
 
+  useEffect(() => {
+    let disposed = false;
+    void invoke<MeetingRuntimeStatus>("meeting_runtime_status")
+      .then((status) => {
+        if (disposed) return;
+        runtimeStatusRef.current = status;
+        setOwnsRuntime(status.ownsRuntime);
+        logInfo(
+          "useMeetingCapture",
+          `runtime ${status.ownsRuntime ? "owner" : "passive"} pid=${status.processId}`,
+        );
+      })
+      .catch((err) => {
+        if (!disposed) {
+          runtimeStatusRef.current = null;
+          setOwnsRuntime(false);
+          logError("useMeetingCapture: meeting_runtime_status", err);
+        }
+      });
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
   const recordActivity = useCallback(
     (activity: MeetingActivity) => {
       if (!uid || uidRef.current !== uid) return;
@@ -219,7 +295,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
   // watch window is still ahead. Diffed against what's currently watched so
   // toggling one meeting doesn't churn the others.
   useEffect(() => {
-    if (!signedIn) {
+    if (!signedIn || !ownsRuntime) {
       for (const eventId of watchedRef.current) {
         void invoke("stop_join_watch", { eventId }).catch(() => undefined);
       }
@@ -263,35 +339,46 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
         windowEndMs: window.endMs,
       }).catch((err) => logError("useMeetingCapture: start_join_watch", err));
     }
-  }, [uid, signedIn, events, isArmed, armRevision, automaticCapture]);
+  }, [uid, signedIn, ownsRuntime, events, isArmed, armRevision, automaticCapture]);
 
   // ── Claim + capture ─────────────────────────────────────────────────────
   const startCaptureFor = useCallback(
     async (eventId: string, title: string, startTime: string, endTime: string) => {
-      if (!uid || recordingRef.current || claimInFlightRef.current) return;
+      if (!uid || !ownsRuntime || recordingRef.current || claimInFlightRef.current) return;
+      const runtimeStatus = runtimeStatusRef.current;
+      if (!runtimeStatus?.ownsRuntime) return;
       const run = { uid, epoch: identityEpochRef.current };
       const isCurrent = () =>
         uidRef.current === run.uid && identityEpochRef.current === run.epoch;
       claimInFlightRef.current = run;
       try {
-        const deviceId = (await hostname().catch(() => null)) ?? "desktop";
-        if (!isCurrent()) return;
         let lastError: unknown = null;
         for (let attempt = 0; attempt <= CLAIM_RETRIES; attempt++) {
           try {
-            const claim = await claimMeeting({ eventId, title, startTime, endTime, deviceId });
+            const claim = await claimMeeting({
+              eventId,
+              title,
+              startTime,
+              endTime,
+              deviceId: runtimeStatus.installationId,
+              runtimeInstanceId: runtimeStatus.runtimeInstanceId,
+            });
             if (!isCurrent()) return;
-            claimsRef.current.set(eventId, claim.meetingId);
-            holdUntilRef.current.delete(claim.meetingId);
+            claimsRef.current.set(eventId, claim);
+            captureRunByMeetingRef.current.set(claim.meetingId, claim.captureRunId);
             activeEventRef.current = eventId;
             endNotificationPendingRef.current.add(claim.meetingId);
             await invoke("start_meeting_capture", {
               meetingId: claim.meetingId,
+              captureRunId: claim.captureRunId,
+              captureFence: claim.captureFence,
+              protocolVersion: claim.protocolVersion,
               eventId,
             });
             if (!isCurrent()) return;
             recordActivity({
               meetingId: claim.meetingId,
+              captureRunId: claim.captureRunId,
               eventId,
               phase: "recording",
               segmentCount: 0,
@@ -305,9 +392,9 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
             trackEvent("meeting_capture_started", { rejoined: claim.rejoined });
             return;
           } catch (err) {
-            const claimedMeetingId = claimsRef.current.get(eventId);
-            if (claimedMeetingId && !recordingRef.current) {
-              endNotificationPendingRef.current.delete(claimedMeetingId);
+            const claimedMeeting = claimsRef.current.get(eventId);
+            if (claimedMeeting && !recordingRef.current) {
+              endNotificationPendingRef.current.delete(claimedMeeting.meetingId);
             }
             if (!isCurrent()) return;
             if (err instanceof MeetingCapError) {
@@ -334,7 +421,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
         }
       }
     },
-    [uid, recordActivity],
+    [uid, ownsRuntime, recordActivity],
   );
 
   const handleJoinDetected = useCallback(
@@ -372,7 +459,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
   );
 
   const captureNow = useCallback(() => {
-    if (recordingRef.current || !uidRef.current) return;
+    if (!ownsRuntime || recordingRef.current || !uidRef.current) return;
     const eventId = `manual:${crypto.randomUUID()}`;
     const now = new Date();
     trackEvent("meeting_capture_manual", {});
@@ -382,7 +469,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
       now.toISOString(),
       new Date(now.getTime() + MANUAL_WINDOW_MS).toISOString(),
     );
-  }, [startCaptureFor]);
+  }, [ownsRuntime, startCaptureFor]);
 
   const stopCapture = useCallback(() => {
     void invoke("stop_meeting_capture", { reason: "stopped_by_user" }).catch((err) =>
@@ -395,10 +482,10 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
   // ── Upload pump ─────────────────────────────────────────────────────────
   // Drains the durable Rust queue: upload every unsent segment, then send
   // /complete for finished captures (unless a rejoin hold is active), then
-  // ack so Rust deletes the local files. Runs on segment-ready, capture end,
-  // mount (restart recovery), and a slow interval.
+  // ack while Rust retains the encrypted recovery copy. Runs on segment-ready,
+  // capture end, mount (restart recovery), and a slow interval.
   const pump = useCallback(async () => {
-    if (!uid || uidRef.current !== uid || pumpRunningRef.current) return;
+    if (!uid || !ownsRuntime || uidRef.current !== uid || pumpRunningRef.current) return;
     const run = { uid, epoch: identityEpochRef.current };
     const isCurrent = () =>
       uidRef.current === run.uid && identityEpochRef.current === run.epoch;
@@ -408,7 +495,9 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
       if (!isCurrent()) return;
       const now = Date.now();
       for (const activity of activitiesRef.current) {
-        if (snapshot.meetings?.[activity.meetingId]) continue;
+        if (snapshot.captures.some((capture) => capture.meetingId === activity.meetingId)) {
+          continue;
+        }
         if (!["saved_local", "uploading", "needs_attention"].includes(activity.phase)) {
           continue;
         }
@@ -421,169 +510,194 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
           updatedAt: now,
         });
       }
-      for (const [meetingId, meeting] of Object.entries(snapshot.meetings ?? {})) {
+      for (const capture of snapshot.captures) {
         if (!isCurrent()) return;
-        // Native filtering is authoritative. Keep this check as defense in
-        // depth against a future serialization or command regression.
-        if (meeting.ownerUid !== run.uid) continue;
-        const backoff = backoffRef.current.get(meetingId);
-        let uploadedCount = meeting.segments.filter((segment) => segment.uploaded).length;
+        if (capture.ownerUid !== run.uid) continue;
+        captureRunByMeetingRef.current.set(capture.meetingId, capture.captureRunId);
+        const uploadedCount = capture.segments.filter((segment) => segment.uploaded).length;
+        const attention = [
+          "needs_attention",
+          "split_brain",
+          "local_missing",
+          "integrity_failed",
+          "capture_failed_integrity",
+        ].includes(capture.state);
         recordActivity({
-          meetingId,
-          eventId: meeting.eventId,
-          phase: meeting.completed
-            ? uploadedCount < meeting.segments.length
+          meetingId: capture.meetingId,
+          captureRunId: capture.captureRunId,
+          eventId: capture.eventId,
+          phase: attention
+            ? "needs_attention"
+            : capture.completionAcked
+            ? capture.segments.length > 0
+              ? "processing"
+              : "failed"
+            : capture.completed
+            ? uploadedCount < capture.segments.length
               ? "uploading"
               : "saved_local"
             : "recording",
-          segmentCount: meeting.segments.length,
+          segmentCount: capture.segments.length,
           uploadedCount,
           lastAttemptAt: null,
-          nextRetryAt: backoff?.nextAt ?? null,
-          failureCode: backoff ? "upload_storage_unavailable" : null,
-          retryable: backoff !== undefined,
+          nextRetryAt: capture.nextRetryAtMs,
+          failureCode: capture.lastErrorCode,
+          retryable: capture.retryable,
           updatedAt: now,
         });
-        if (backoff && backoff.nextAt > now) continue;
+      }
+
+      const failLease = async (lease: QueueJobLease, err: unknown) => {
+        const failure = err instanceof MeetingTransportError
+          ? { classification: err.classification, errorCode: err.code }
+          : err instanceof AuthRequiredError
+          ? { classification: "auth" as const, errorCode: "auth_required" }
+          : { classification: "transient" as const, errorCode: "network_or_client_error" };
         try {
-          for (const segment of meeting.segments) {
-            if (segment.uploaded) continue;
-            recordActivity({
-              meetingId,
-              eventId: meeting.eventId,
-              phase: "uploading",
-              segmentCount: meeting.segments.length,
-              uploadedCount,
-              lastAttemptAt: Date.now(),
-              nextRetryAt: null,
-              failureCode: null,
-              retryable: false,
-              updatedAt: Date.now(),
-            });
-            const raw = await invoke("read_segment", { meetingId, seq: segment.seq });
-            if (!isCurrent()) return;
-            await uploadSegment(
-              meetingId,
-              segment.seq,
-              asBytes(raw),
-              segment.startMs,
-              segment.durationMs,
-              segment.incomplete,
-            );
-            if (!isCurrent()) return;
-            await invoke("mark_segment_uploaded", { meetingId, seq: segment.seq });
-            if (!isCurrent()) return;
-            uploadedCount += 1;
-            recordActivity({
-              meetingId,
-              eventId: meeting.eventId,
-              phase: "uploading",
-              segmentCount: meeting.segments.length,
-              uploadedCount,
-              lastAttemptAt: Date.now(),
-              nextRetryAt: null,
-              failureCode: null,
-              retryable: false,
-              updatedAt: Date.now(),
-            });
-          }
-          const allUploaded = meeting.segments.every((segment) => segment.uploaded)
-            || meeting.segments.length === 0;
-          const hold = holdUntilRef.current.get(meetingId) ?? 0;
-          // Never complete a meeting that is actively capturing again (a
-          // rejoin raced this pass); Rust's ack guard is the authoritative
-          // backstop, this check just avoids the wasted round trip.
-          const activelyCapturing =
-            recordingRef.current &&
-            (await invoke<{ meetingId: string | null }>("capture_status")).meetingId ===
-              meetingId;
-          if (!isCurrent()) return;
-          if (
-            meeting.completed
-            && hold <= now
-            && !activelyCapturing
-            && !endNotificationPendingRef.current.has(meetingId)
-          ) {
-            // Segments may have just been marked uploaded above; re-check via
-            // a fresh snapshot only when the stale view said no.
-            if (allUploaded || (await allSegmentsUploaded(meetingId, run.uid, run.epoch))) {
-              if (!isCurrent()) return;
-              // Zero-segment captures still report completion (the backend
-              // resolves the claimed meeting to "failed"), they just never
-              // become a note to poll.
-              await completeMeeting(meetingId, {
-                segmentCount: meeting.segments.length,
-                totalDurationMs: meeting.totalDurationMs,
-                reason: meeting.completeReason || "ended",
-              });
-              if (!isCurrent()) return;
-              recordActivity({
-                meetingId,
-                eventId: meeting.eventId,
-                phase: meeting.segments.length > 0 ? "processing" : "failed",
-                segmentCount: meeting.segments.length,
-                uploadedCount: meeting.segments.length,
-                lastAttemptAt: Date.now(),
-                nextRetryAt: null,
-                failureCode: meeting.segments.length > 0 ? null : "no_audio",
-                retryable: false,
-                updatedAt: Date.now(),
-              });
-              trackEvent("meeting_capture_completed", {
-                segments: meeting.segments.length,
-                reason: meeting.completeReason || "ended",
-              });
-              await invoke("mark_meeting_acked", { meetingId });
-              if (!isCurrent()) return;
-              holdUntilRef.current.delete(meetingId);
-            }
-          }
-          backoffRef.current.delete(meetingId);
-        } catch (err) {
-          if (!isCurrent()) return;
-          if (err instanceof AuthRequiredError) throw err;
-          if (err instanceof MeetingGoneError) {
-            // A generic 404 is not proof that deleting the only recoverable
-            // recording is safe. It can also mean a route rollout mismatch or
-            // a temporarily inconsistent backend. Keep the encrypted queue
-            // entry and retry with the normal bounded backoff. Only an
-            // explicit terminal backend contract may authorize deletion.
-            logError(`useMeetingCapture: pump ${meetingId} missing on backend, retaining`, err);
-          }
-          const failures = (backoff?.failures ?? 0) + 1;
-          const nextAt = now
-            + Math.min(BACKOFF_BASE_MS * 2 ** (failures - 1), BACKOFF_MAX_MS);
-          backoffRef.current.set(meetingId, {
-            failures,
-            nextAt,
+          await invoke("fail_queue_job", {
+            jobId: lease.jobId,
+            leaseToken: lease.leaseToken,
+            classification: failure.classification,
+            errorCode: failure.errorCode,
           });
-          recordActivity({
-            meetingId,
-            eventId: meeting.eventId,
-            phase: "needs_attention",
-            segmentCount: meeting.segments.length,
-            uploadedCount,
-            lastAttemptAt: Date.now(),
-            nextRetryAt: nextAt,
-            failureCode: "upload_storage_unavailable",
-            retryable: true,
-            updatedAt: Date.now(),
-          });
+        } catch (commitError) {
+          logError(`useMeetingCapture: persist job failure ${lease.jobId}`, commitError);
+        }
+        if (failure.classification !== "terminal") {
           void notifyLocal(
             {
               type: "meeting_upload_pending",
               severity: "warning",
               title: "A meeting is saved securely",
               body: "Aura could not upload it yet. It will retry automatically.",
-              dedupKey: `meeting:${meetingId}:upload_pending`,
+              dedupKey: `meeting:${lease.captureRunId}:upload_pending`,
               action: "retry_meeting_upload",
-              resourceId: meetingId,
+              resourceId: lease.meetingId,
               toastPolicy: "when_hidden",
               sensitive: true,
             },
             { appHidden: appHiddenRef.current, ownerUid: run.uid },
           );
-          logError(`useMeetingCapture: pump ${meetingId} (attempt ${failures})`, err);
+        }
+        logError(`useMeetingCapture: ${lease.kind} ${lease.jobId}`, err);
+      };
+
+      let handled = 0;
+      while (isCurrent() && handled < 64) {
+        const lease = await invoke<QueueJobLease | null>("claim_next_upload_job");
+        if (!lease || !isCurrent()) break;
+        handled += 1;
+        try {
+          if (
+            lease.seq === null
+            || lease.startMs === null
+            || lease.durationMs === null
+            || lease.incomplete === null
+            || lease.contentSha256 === null
+            || lease.byteLength === null
+            || lease.channelCount === null
+            || lease.sampleRateHz === null
+          ) {
+            throw new MeetingTransportError(
+              "Upload lease is incomplete",
+              0,
+              "invalid_upload_lease",
+              "terminal",
+            );
+          }
+          const raw = await invoke("read_segment", {
+            meetingId: lease.meetingId,
+            captureRunId: lease.captureRunId,
+            seq: lease.seq,
+          });
+          if (!isCurrent()) return;
+          const receipt: UploadReceipt = await uploadSegment({
+            jobId: lease.jobId,
+            meetingId: lease.meetingId,
+            captureRunId: lease.captureRunId,
+            captureFence: lease.captureFence,
+            protocolVersion: lease.protocolVersion,
+            seq: lease.seq,
+            bytes: asBytes(raw),
+            startMs: lease.startMs,
+            durationMs: lease.durationMs,
+            incomplete: lease.incomplete,
+            contentSha256: lease.contentSha256,
+            byteLength: lease.byteLength,
+            channelCount: lease.channelCount,
+            sampleRateHz: lease.sampleRateHz,
+          });
+          if (!isCurrent()) return;
+          await invoke("resolve_upload_job", {
+            jobId: lease.jobId,
+            leaseToken: lease.leaseToken,
+            receipt,
+          });
+        } catch (err) {
+          if (!isCurrent()) return;
+          await failLease(lease, err);
+          break;
+        }
+      }
+
+      handled = 0;
+      while (isCurrent() && handled < 16) {
+        const lease = await invoke<QueueJobLease | null>("claim_next_completion_job");
+        if (!lease || !isCurrent()) break;
+        handled += 1;
+        try {
+          if (
+            lease.manifestSha256 === null
+            || lease.segmentCount === null
+            || lease.totalDurationMs === null
+          ) {
+            throw new MeetingTransportError(
+              "Completion lease is incomplete",
+              0,
+              "invalid_completion_lease",
+              "terminal",
+            );
+          }
+          const receipt: CompletionReceipt = await completeMeeting({
+            jobId: lease.jobId,
+            meetingId: lease.meetingId,
+            captureRunId: lease.captureRunId,
+            captureFence: lease.captureFence,
+            protocolVersion: lease.protocolVersion,
+            segmentCount: lease.segmentCount,
+            totalDurationMs: lease.totalDurationMs,
+            reason: lease.reason || "ended",
+            segmentDigests: lease.segmentDigests,
+            manifestSegments: lease.manifestSegments,
+            manifestSha256: lease.manifestSha256,
+          });
+          if (!isCurrent()) return;
+          await invoke("resolve_completion_job", {
+            jobId: lease.jobId,
+            leaseToken: lease.leaseToken,
+            receipt,
+          });
+          recordActivity({
+            meetingId: lease.meetingId,
+            captureRunId: lease.captureRunId,
+            eventId: lease.eventId,
+            phase: lease.segmentCount > 0 ? "processing" : "failed",
+            segmentCount: lease.segmentCount,
+            uploadedCount: lease.segmentCount,
+            lastAttemptAt: Date.now(),
+            nextRetryAt: null,
+            failureCode: lease.segmentCount > 0 ? null : "no_audio",
+            retryable: false,
+            updatedAt: Date.now(),
+          });
+          trackEvent("meeting_capture_completed", {
+            segments: lease.segmentCount,
+            reason: lease.reason || "ended",
+          });
+        } catch (err) {
+          if (!isCurrent()) return;
+          await failLease(lease, err);
+          break;
         }
       }
     } catch (err) {
@@ -596,20 +710,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
         pumpRunningRef.current = null;
       }
     }
-  }, [uid, recordActivity]);
-
-  const allSegmentsUploaded = async (
-    meetingId: string,
-    expectedUid: string,
-    expectedEpoch: number,
-  ): Promise<boolean> => {
-    if (uidRef.current !== expectedUid || identityEpochRef.current !== expectedEpoch) return false;
-    const snapshot = await invoke<QueueSnapshot>("queue_snapshot");
-    if (uidRef.current !== expectedUid || identityEpochRef.current !== expectedEpoch) return false;
-    const meeting = snapshot.meetings?.[meetingId];
-    return meeting?.ownerUid === expectedUid
-      && meeting.segments.every((segment) => segment.uploaded);
-  };
+  }, [uid, ownsRuntime, recordActivity]);
 
   // ── Event wiring ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -654,9 +755,8 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
           activeEventRef.current = null;
           if (payload.meetingId) {
             if (payload.reason === "meeting_left" && !automaticCapture) {
-              // Hold /complete for a rejoin; the watch window is still open,
-              // and a re-detected join reclaims the same meeting id.
-              holdUntilRef.current.set(payload.meetingId, Date.now() + REJOIN_HOLD_MS);
+              // Rust persisted the completion job's rejoin hold. This timer
+              // merely wakes the pump near that durable deadline.
               setTimeout(() => void pump(), REJOIN_HOLD_MS + 1000);
             }
             const completedMeetingId = payload.meetingId;
@@ -710,7 +810,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
   // the listener mounted (post-crash relaunch cannot have a live capture,
   // but a webview reload during dev can).
   useEffect(() => {
-    if (!uid) return;
+    if (!uid || !ownsRuntime) return;
     void invoke<{
       active: boolean;
       paused: boolean;
@@ -731,19 +831,21 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
     void pump();
     const id = setInterval(() => void pump(), PUMP_INTERVAL_MS);
     return () => clearInterval(id);
-  }, [uid, pump]);
+  }, [uid, ownsRuntime, pump]);
 
   // Dev harness (see meetingDebug.ts).
   useEffect(() => {
-    if (!import.meta.env.DEV) return;
+    if (!import.meta.env.DEV || !ownsRuntime) return;
     return installMeetingDebug({ captureNow, stopCapture, pump: () => void pump() });
-  }, [captureNow, stopCapture, pump]);
+  }, [ownsRuntime, captureNow, stopCapture, pump]);
 
   const retryNow = useCallback(
     (meetingId: string): boolean => {
       const activity = activities.find((row) => row.meetingId === meetingId);
       if (!activity?.retryable || !uid) return false;
-      backoffRef.current.delete(meetingId);
+      const captureRunId =
+        activity.captureRunId ?? captureRunByMeetingRef.current.get(meetingId);
+      if (!captureRunId) return false;
       recordActivity({
         ...activity,
         phase: activity.uploadedCount > 0 ? "uploading" : "saved_local",
@@ -753,7 +855,11 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
         updatedAt: Date.now(),
       });
       trackEvent("meeting_upload_attempt", { retry_now: true });
-      void pump();
+      void invoke<boolean>("retry_capture_jobs", { captureRunId })
+        .then((changed) => {
+          if (changed) void pump();
+        })
+        .catch((err) => logError("useMeetingCapture: retry_capture_jobs", err));
       return true;
     },
     [activities, uid, recordActivity, pump],

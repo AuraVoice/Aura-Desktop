@@ -1,464 +1,333 @@
-//! Durable upload queue - a manifest JSON plus encrypted segment files under
-//! `app_local_data_dir/meeting-captures/`.
-//!
-//! The manifest is the source of truth the JS upload pump reads after any
-//! restart, so every mutation goes through load -> modify -> atomic save
-//! (temp file + rename, so a crash mid-write can never half-corrupt it).
-//! Serialization is plain std::fs like updater.rs's marker, not the store
-//! plugin - segment metadata and multi-megabyte blobs don't belong in a
-//! store file that plugins re-read wholesale.
-//!
-//! Layout:
-//!   meeting-captures/manifest.json
-//!   meeting-captures/key.bin                    (DPAPI-wrapped, crypto.rs)
-//!   meeting-captures/{meeting_id}/{seq:04}.flac.enc
+//! Tauri-facing facade over the SQLite meeting evidence store.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
 
-use log::{error, warn};
-use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 
-pub const CAPTURES_DIR: &str = "meeting-captures";
-const MANIFEST_FILE: &str = "manifest.json";
-
-/// Serializes every load-modify-save on the manifest. The engine thread, the
-/// upload pump's ack path, completion, and pruning all mutate the same file;
-/// without this, two concurrent read-modify-writes silently drop whichever
-/// mutation saves first (orphaned segment files, "never uploaded" rows).
-static MANIFEST_LOCK: Mutex<()> = Mutex::new(());
-
-/// Unsent captures older than this are dropped, not retried forever
-/// (MEETING_NOTES_PLAN.md section 6).
-const EXPIRY_MS: i64 = 7 * 24 * 60 * 60 * 1000;
-
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SegmentEntry {
-    pub seq: u32,
-    pub start_ms: i64,
-    pub duration_ms: i64,
-    #[serde(default)]
-    pub uploaded: bool,
-    /// A device re-bind failed inside this segment's window: its audio may
-    /// have a silent hole. Recorded rather than hidden - the transcript is
-    /// then honest about being partial instead of pretending to be clean.
-    #[serde(default)]
-    pub incomplete: bool,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MeetingEntry {
-    /// Firebase UID that owned the native authorization when this capture
-    /// was created. `None` represents a pre-ownership legacy row and is
-    /// deliberately inaccessible to every account.
-    #[serde(default)]
-    pub owner_uid: Option<String>,
-    pub event_id: String,
-    pub started_at_ms: i64,
-    #[serde(default)]
-    pub completed: bool,
-    #[serde(default)]
-    pub complete_reason: String,
-    #[serde(default)]
-    pub total_duration_ms: i64,
-    #[serde(default)]
-    pub segments: Vec<SegmentEntry>,
-}
-
-#[derive(Clone, Default, Serialize, Deserialize)]
-pub struct Manifest {
-    #[serde(default)]
-    pub meetings: HashMap<String, MeetingEntry>,
-}
+pub use super::evidence_store::{
+    BeginCapture, CompletionReceipt, ExportResult, JobFailureResult, LocalRecording, QueueJobLease,
+    QueueSnapshot, ReconciliationReport, SegmentAudioMetrics, SegmentRecoveryMetadata,
+    UploadReceipt, CAPTURES_DIR,
+};
+use super::evidence_store::{Store, StoredSegment};
 
 fn base_dir(app: &AppHandle) -> Result<PathBuf, String> {
-    let dir = app
+    let directory = app
         .path()
         .app_local_data_dir()
-        .map_err(|e| e.to_string())?
+        .map_err(|error| error.to_string())?
         .join(CAPTURES_DIR);
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    Ok(dir)
+    std::fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+    Ok(directory)
 }
 
-/// meeting_id is a backend-minted uuid hex, but never trust a path component
-/// that crossed the IPC boundary: charset allowlist + length bound, strictly
-/// tighter than the old `/ \ .` deny-list.
+fn store(app: &AppHandle) -> Result<Store, String> {
+    let store = Store::new(base_dir(app)?);
+    store.initialize()?;
+    Ok(store)
+}
+
 pub fn validate_meeting_id(meeting_id: &str) -> Result<(), String> {
-    let valid = !meeting_id.is_empty()
-        && meeting_id.len() <= 128
-        && meeting_id
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
-    if valid {
-        Ok(())
-    } else {
-        Err("invalid meeting id".to_string())
-    }
+    super::evidence_store::validate_identity(meeting_id, "meeting id")
 }
 
-pub fn segment_path(app: &AppHandle, meeting_id: &str, seq: u32) -> Result<PathBuf, String> {
-    validate_meeting_id(meeting_id)?;
-    Ok(base_dir(app)?.join(meeting_id).join(format!("{seq:04}.flac.enc")))
+pub fn validate_capture_run_id(capture_run_id: &str) -> Result<(), String> {
+    super::evidence_store::validate_identity(capture_run_id, "capture run id")
 }
 
-pub fn load(app: &AppHandle) -> Manifest {
-    let _guard = MANIFEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    load_unlocked(app)
+pub fn initialize(app: &AppHandle) -> Result<(), String> {
+    store(app).map(|_| ())
 }
 
-fn load_unlocked(app: &AppHandle) -> Manifest {
-    let Ok(dir) = base_dir(app) else {
-        return Manifest::default();
-    };
-    match std::fs::read_to_string(dir.join(MANIFEST_FILE)) {
-        Ok(raw) => serde_json::from_str(&raw).unwrap_or_else(|e| {
-            error!("meeting.queue: manifest unparseable, starting fresh: {e}");
-            Manifest::default()
-        }),
-        Err(_) => Manifest::default(),
-    }
-}
-
-fn is_owned_by(entry: &MeetingEntry, owner_uid: &str) -> bool {
-    entry.owner_uid.as_deref() == Some(owner_uid)
-}
-
-fn require_owned<'a>(
-    manifest: &'a Manifest,
-    meeting_id: &str,
-    owner_uid: &str,
-) -> Result<&'a MeetingEntry, String> {
-    manifest
-        .meetings
-        .get(meeting_id)
-        .filter(|entry| is_owned_by(entry, owner_uid))
-        // Do not reveal whether the id belongs to another account or is a
-        // legacy unowned row.
-        .ok_or_else(|| "unknown meeting id".to_string())
-}
-
-fn require_owned_mut<'a>(
-    manifest: &'a mut Manifest,
-    meeting_id: &str,
-    owner_uid: &str,
-) -> Result<&'a mut MeetingEntry, String> {
-    manifest
-        .meetings
-        .get_mut(meeting_id)
-        .filter(|entry| is_owned_by(entry, owner_uid))
-        .ok_or_else(|| "unknown meeting id".to_string())
-}
-
-fn retain_owned(manifest: &mut Manifest, owner_uid: &str) {
-    manifest
-        .meetings
-        .retain(|_, entry| is_owned_by(entry, owner_uid));
-}
-
-/// The upload pump may see only rows owned by the UID in its native
-/// authorization ticket. Legacy rows without an owner fail closed here.
-pub fn load_for_owner(app: &AppHandle, owner_uid: &str) -> Manifest {
-    let mut manifest = load(app);
-    retain_owned(&mut manifest, owner_uid);
-    manifest
-}
-
-fn save(app: &AppHandle, manifest: &Manifest) -> Result<(), String> {
-    let dir = base_dir(app)?;
-    let raw = serde_json::to_string_pretty(manifest).map_err(|e| e.to_string())?;
-    let tmp = dir.join(format!("{MANIFEST_FILE}.tmp"));
-    let path = dir.join(MANIFEST_FILE);
-    std::fs::write(&tmp, raw).map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-/// Persist one encrypted segment and its manifest row. Creates the meeting
-/// entry on first segment (which also makes a rejoin continue seq numbering:
-/// the entry survives between the engine's runs).
-#[allow(clippy::too_many_arguments)]
-pub fn write_segment(
+pub fn record_runtime_lease(
     app: &AppHandle,
-    meeting_id: &str,
-    owner_uid: &str,
-    event_id: &str,
-    started_at_ms: i64,
-    seq: u32,
-    start_ms: i64,
-    duration_ms: i64,
+    runtime_instance_id: &str,
+    owns_runtime: bool,
+) -> Result<(), String> {
+    store(app)?.record_runtime_lease(runtime_instance_id, owns_runtime)
+}
+
+pub fn begin_capture(app: &AppHandle, request: &BeginCapture) -> Result<(u32, i64), String> {
+    store(app)?.begin_capture(request)
+}
+
+pub fn publish_segment(
+    app: &AppHandle,
+    metadata: &SegmentRecoveryMetadata,
     encrypted: &[u8],
-    incomplete: bool,
 ) -> Result<(), String> {
-    let _guard = MANIFEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let mut manifest = load_unlocked(app);
-    if let Some(entry) = manifest.meetings.get(meeting_id) {
-        if !is_owned_by(entry, owner_uid) {
-            return Err("unknown meeting id".to_string());
-        }
-    }
-
-    let path = segment_path(app, meeting_id, seq)?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    std::fs::write(&path, encrypted).map_err(|e| e.to_string())?;
-
-    let entry = manifest
-        .meetings
-        .entry(meeting_id.to_string())
-        .or_insert_with(|| MeetingEntry {
-            owner_uid: Some(owner_uid.to_string()),
-            event_id: event_id.to_string(),
-            started_at_ms,
-            completed: false,
-            complete_reason: String::new(),
-            total_duration_ms: 0,
-            segments: Vec::new(),
-        });
-    // A rejoin reopens a completed entry: new audio means the capture is
-    // live again and /complete must be re-sent afterwards.
-    entry.completed = false;
-    entry.segments.retain(|segment| segment.seq != seq);
-    entry.segments.push(SegmentEntry {
-        seq,
-        start_ms,
-        duration_ms,
-        uploaded: false,
-        incomplete,
-    });
-    entry.segments.sort_by_key(|segment| segment.seq);
-    save(app, &manifest)
+    store(app)?.publish_segment(metadata, encrypted)
 }
 
-/// Starting offsets for a new engine run. A missing row is a fresh capture;
-/// an existing row must belong to the authorizing UID before rejoin state is
-/// reused.
-pub fn capture_offsets(
+pub fn finalize_capture(
     app: &AppHandle,
-    meeting_id: &str,
     owner_uid: &str,
-) -> Result<(u32, i64), String> {
-    let manifest = load(app);
-    let Some(entry) = manifest.meetings.get(meeting_id) else {
-        return Ok((0, 0));
-    };
-    if !is_owned_by(entry, owner_uid) {
-        return Err("unknown meeting id".to_string());
-    }
-    let next_seq = entry
-        .segments
-        .iter()
-        .map(|segment| segment.seq)
-        .max()
-        .map(|max| max + 1)
-        .unwrap_or(0);
-    let recorded_span_ms = entry
-        .segments
-        .iter()
-        .map(|segment| segment.start_ms + segment.duration_ms)
-        .max()
-        .unwrap_or(0);
-    Ok((next_seq, recorded_span_ms))
-}
-
-pub fn mark_uploaded(
-    app: &AppHandle,
     meeting_id: &str,
-    owner_uid: &str,
-    seq: u32,
-) -> Result<(), String> {
-    let _guard = MANIFEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let mut manifest = load_unlocked(app);
-    let entry = require_owned_mut(&mut manifest, meeting_id, owner_uid)?;
-    let segment = entry
-        .segments
-        .iter_mut()
-        .find(|segment| segment.seq == seq)
-        .ok_or_else(|| "unknown segment".to_string())?;
-    segment.uploaded = true;
-    save(app, &manifest)
-}
-
-pub fn mark_completed(
-    app: &AppHandle,
-    meeting_id: &str,
-    owner_uid: &str,
-    event_id: &str,
-    started_at_ms: i64,
+    capture_run_id: &str,
+    capture_fence: i64,
+    runtime_instance_id: &str,
     total_duration_ms: i64,
     reason: &str,
-) -> Result<(), String> {
-    let _guard = MANIFEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let mut manifest = load_unlocked(app);
-    if let Some(entry) = manifest.meetings.get(meeting_id) {
-        if !is_owned_by(entry, owner_uid) {
-            return Err("unknown meeting id".to_string());
-        }
-    }
-    // Zero-segment captures (mic init failure, sub-2s call) still get an
-    // entry, so the upload pump can tell the backend to settle the claimed
-    // meeting as failed instead of leaving it "capturing" forever.
-    let entry = manifest
-        .meetings
-        .entry(meeting_id.to_string())
-        .or_insert_with(|| MeetingEntry {
-            owner_uid: Some(owner_uid.to_string()),
-            event_id: event_id.to_string(),
-            started_at_ms,
-            completed: false,
-            complete_reason: String::new(),
-            total_duration_ms: 0,
-            segments: Vec::new(),
-        });
-    entry.completed = true;
-    entry.complete_reason = reason.to_string();
-    entry.total_duration_ms = entry.total_duration_ms.max(total_duration_ms);
-    save(app, &manifest)
+) -> Result<String, String> {
+    store(app)?.finalize_capture(
+        owner_uid,
+        meeting_id,
+        capture_run_id,
+        capture_fence,
+        runtime_instance_id,
+        total_duration_ms,
+        reason,
+    )
 }
 
-/// Deletes a meeting's segment files and manifest entry (after the backend
-/// acked /complete, or at expiry).
-pub fn remove_meeting(app: &AppHandle, meeting_id: &str, owner_uid: &str) -> Result<(), String> {
-    remove_meeting_inner(app, meeting_id, Some(owner_uid))
+pub fn snapshot_for_owner(app: &AppHandle, owner_uid: &str) -> Result<QueueSnapshot, String> {
+    store(app)?.snapshot_for_owner(owner_uid)
 }
 
-fn remove_meeting_inner(
+pub fn claim_next_upload_job(
     app: &AppHandle,
-    meeting_id: &str,
-    owner_uid: Option<&str>,
+    owner_uid: &str,
+    runtime_instance_id: &str,
+) -> Result<Option<QueueJobLease>, String> {
+    store(app)?.claim_next_upload_job(owner_uid, runtime_instance_id)
+}
+
+pub fn claim_next_completion_job(
+    app: &AppHandle,
+    owner_uid: &str,
+    runtime_instance_id: &str,
+) -> Result<Option<QueueJobLease>, String> {
+    store(app)?.claim_next_completion_job(owner_uid, runtime_instance_id)
+}
+
+pub fn resolve_upload_success(
+    app: &AppHandle,
+    owner_uid: &str,
+    runtime_instance_id: &str,
+    job_id: &str,
+    lease_token: &str,
+    receipt: &UploadReceipt,
 ) -> Result<(), String> {
+    store(app)?.resolve_upload_success(owner_uid, runtime_instance_id, job_id, lease_token, receipt)
+}
+
+pub fn resolve_completion_success(
+    app: &AppHandle,
+    owner_uid: &str,
+    runtime_instance_id: &str,
+    job_id: &str,
+    lease_token: &str,
+    receipt: &CompletionReceipt,
+) -> Result<(), String> {
+    store(app)?.resolve_completion_success(
+        owner_uid,
+        runtime_instance_id,
+        job_id,
+        lease_token,
+        receipt,
+    )
+}
+
+pub fn fail_job(
+    app: &AppHandle,
+    owner_uid: &str,
+    runtime_instance_id: &str,
+    job_id: &str,
+    lease_token: &str,
+    classification: &str,
+    error_code: &str,
+) -> Result<JobFailureResult, String> {
+    store(app)?.fail_job(
+        owner_uid,
+        runtime_instance_id,
+        job_id,
+        lease_token,
+        classification,
+        error_code,
+    )
+}
+
+pub fn retry_capture_jobs(
+    app: &AppHandle,
+    owner_uid: &str,
+    capture_run_id: &str,
+    runtime_instance_id: &str,
+) -> Result<bool, String> {
+    store(app)?.retry_capture_jobs(owner_uid, capture_run_id, runtime_instance_id)
+}
+
+pub fn read_segment(
+    app: &AppHandle,
+    owner_uid: &str,
+    meeting_id: &str,
+    capture_run_id: &str,
+    seq: u32,
+) -> Result<Vec<u8>, String> {
+    let stored = store(app)?.stored_segment(owner_uid, meeting_id, capture_run_id, seq)?;
+    read_and_verify(app, &stored)
+}
+
+fn read_and_verify(app: &AppHandle, stored: &StoredSegment) -> Result<Vec<u8>, String> {
+    if !stored.local_present {
+        return Err("segment retention window has expired".to_string());
+    }
+    let path = store(app)?.root().join(&stored.local_path);
+    let encrypted = std::fs::read(&path).map_err(|error| error.to_string())?;
+    if encrypted.len() as u64 != stored.metadata.encrypted_byte_length {
+        return Err("encrypted segment length check failed".to_string());
+    }
+    if format!("{:x}", Sha256::digest(&encrypted)) != stored.metadata.encrypted_sha256 {
+        return Err("encrypted segment integrity check failed".to_string());
+    }
+    #[cfg(windows)]
+    let plain = {
+        let key = super::crypto::load_or_create_key(app)?;
+        if stored.metadata.encryption_version >= 2 {
+            super::crypto::decrypt_with_aad(&key, &encrypted, &stored.metadata.aad())?
+        } else {
+            super::crypto::decrypt(&key, &encrypted)?
+        }
+    };
+    #[cfg(not(windows))]
+    let plain: Vec<u8> = {
+        let _ = app;
+        return Err("meeting capture is Windows-only".to_string());
+    };
+    if plain.len() as u64 != stored.metadata.byte_length {
+        return Err("plaintext segment length check failed".to_string());
+    }
+    if format!("{:x}", Sha256::digest(&plain)) != stored.metadata.content_sha256 {
+        return Err("plaintext segment integrity check failed".to_string());
+    }
+    Ok(plain)
+}
+
+pub fn reconcile(app: &AppHandle) -> Result<ReconciliationReport, String> {
+    let store = store(app)?;
+    #[cfg(windows)]
     {
-        let _guard = MANIFEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let mut manifest = load_unlocked(app);
-        if let Some(owner_uid) = owner_uid {
-            require_owned(&manifest, meeting_id, owner_uid)?;
-        }
-        if manifest.meetings.remove(meeting_id).is_some() {
-            save(app, &manifest)?;
-        }
-    }
-    if let Ok(path) = segment_path(app, meeting_id, 0) {
-        if let Some(dir) = path.parent() {
-            if dir.exists() {
-                if let Err(e) = std::fs::remove_dir_all(dir) {
-                    warn!("meeting.queue: failed to remove segment dir: {e}");
-                }
+        let key = super::crypto::load_or_create_key(app)?;
+        return store.reconcile(|metadata, encrypted| {
+            if metadata.encryption_version >= 2 {
+                super::crypto::decrypt_with_aad(&key, encrypted, &metadata.aad())
+            } else {
+                super::crypto::decrypt(&key, encrypted)
             }
-        }
+        });
     }
+    #[cfg(not(windows))]
+    {
+        let _ = store;
+        Ok(ReconciliationReport::default())
+    }
+}
+
+pub fn prune_expired(app: &AppHandle, runtime_instance_id: &str) -> Result<usize, String> {
+    store(app)?.run_retention_jobs(runtime_instance_id)
+}
+
+pub fn local_recordings(app: &AppHandle, owner_uid: &str) -> Result<Vec<LocalRecording>, String> {
+    store(app)?.local_recordings(owner_uid)
+}
+
+pub fn request_local_deletion(
+    app: &AppHandle,
+    owner_uid: &str,
+    meeting_id: &str,
+    capture_run_id: &str,
+    runtime_instance_id: &str,
+) -> Result<(), String> {
+    store(app)?.request_local_deletion(
+        owner_uid,
+        meeting_id,
+        capture_run_id,
+        runtime_instance_id,
+    )?;
+    let _ = store(app)?.run_retention_jobs(runtime_instance_id)?;
     Ok(())
 }
 
-/// Startup sweep: drop entries older than the retention window. Returns how
-/// many were dropped (logged by the caller).
-pub fn prune_expired(app: &AppHandle) -> usize {
-    let manifest = load(app);
-    let cutoff = super::now_ms() - EXPIRY_MS;
-    let expired: Vec<String> = manifest
-        .meetings
-        .iter()
-        .filter(|(_, entry)| entry.started_at_ms < cutoff)
-        .map(|(id, _)| id.clone())
-        .collect();
-    for meeting_id in &expired {
-        // Retention is installation maintenance, not an account operation;
-        // it must also be able to delete inaccessible legacy rows.
-        if let Err(e) = remove_meeting_inner(app, meeting_id, None) {
-            error!("meeting.queue: failed to prune {meeting_id}: {e}");
-        }
+pub fn export_bundle(
+    app: &AppHandle,
+    owner_uid: &str,
+    meeting_id: &str,
+    capture_run_id: &str,
+    include_audio: bool,
+    sanitized_log_lines: &[String],
+) -> Result<ExportResult, String> {
+    let destination_root = app
+        .path()
+        .download_dir()
+        .map_err(|error| error.to_string())?
+        .join("Aura Recordings");
+    let store = store(app)?;
+    #[cfg(windows)]
+    {
+        let key = super::crypto::load_or_create_key(app)?;
+        return store.export_bundle(
+            owner_uid,
+            meeting_id,
+            capture_run_id,
+            &destination_root,
+            include_audio,
+            sanitized_log_lines,
+            |metadata, encrypted| {
+                if metadata.encryption_version >= 2 {
+                    super::crypto::decrypt_with_aad(&key, encrypted, &metadata.aad())
+                } else {
+                    super::crypto::decrypt(&key, encrypted)
+                }
+            },
+        );
     }
-    expired.len()
+    #[cfg(not(windows))]
+    {
+        let _ = (
+            owner_uid,
+            meeting_id,
+            capture_run_id,
+            include_audio,
+            sanitized_log_lines,
+            destination_root,
+            store,
+        );
+        Err("meeting export is Windows-only".to_string())
+    }
+}
+
+pub fn installation_id(app: &AppHandle) -> Result<String, String> {
+    #[cfg(windows)]
+    {
+        let key = super::crypto::load_or_create_key(app)?;
+        let digest = format!("{:x}", Sha256::digest(key));
+        return Ok(format!("install_{}", &digest[..32]));
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+        Ok(format!(
+            "install_{}",
+            super::evidence_store::random_hex(16)?
+        ))
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
-    use super::{
-        is_owned_by, require_owned, retain_owned, validate_meeting_id, Manifest, MeetingEntry,
-    };
-
-    fn entry(owner_uid: Option<&str>) -> MeetingEntry {
-        MeetingEntry {
-            owner_uid: owner_uid.map(str::to_string),
-            event_id: "event-1".to_string(),
-            started_at_ms: 0,
-            completed: false,
-            complete_reason: String::new(),
-            total_duration_ms: 0,
-            segments: Vec::new(),
-        }
-    }
+    use super::{validate_capture_run_id, validate_meeting_id};
 
     #[test]
-    fn ownership_matches_only_the_exact_uid() {
-        assert!(is_owned_by(&entry(Some("uid-a")), "uid-a"));
-        assert!(!is_owned_by(&entry(Some("uid-a")), "uid-b"));
-    }
-
-    #[test]
-    fn legacy_entries_without_an_owner_fail_closed() {
-        assert!(!is_owned_by(&entry(None), "uid-a"));
-    }
-
-    #[test]
-    fn snapshot_filter_exposes_only_the_ticket_owner() {
-        let mut manifest = Manifest {
-            meetings: HashMap::from([
-                ("owned".to_string(), entry(Some("uid-a"))),
-                ("other".to_string(), entry(Some("uid-b"))),
-                ("legacy".to_string(), entry(None)),
-            ]),
-        };
-
-        retain_owned(&mut manifest, "uid-a");
-        assert_eq!(manifest.meetings.len(), 1);
-        assert!(manifest.meetings.contains_key("owned"));
-    }
-
-    #[test]
-    fn read_and_mutation_gate_rejects_other_and_legacy_owners() {
-        let manifest = Manifest {
-            meetings: HashMap::from([
-                ("owned".to_string(), entry(Some("uid-a"))),
-                ("other".to_string(), entry(Some("uid-b"))),
-                ("legacy".to_string(), entry(None)),
-            ]),
-        };
-
-        assert!(require_owned(&manifest, "owned", "uid-a").is_ok());
-        assert!(require_owned(&manifest, "other", "uid-a").is_err());
-        assert!(require_owned(&manifest, "legacy", "uid-a").is_err());
-    }
-
-    #[test]
-    fn accepts_backend_shaped_ids() {
+    fn accepts_backend_shaped_identities() {
         assert!(validate_meeting_id("3f2a9c1b7d4e4f209a1b2c3d4e5f6a7b").is_ok());
-        assert!(validate_meeting_id("mtg_2026-07-11").is_ok());
-        assert!(validate_meeting_id("a").is_ok());
+        assert!(validate_capture_run_id("run_2026-07-29_abcd").is_ok());
     }
 
     #[test]
-    fn rejects_everything_path_shaped_or_odd() {
-        for bad in [
-            "",
-            "../x",
-            "a/b",
-            r"a\b",
-            "a.b",
-            "id with space",
-            "id\nnewline",
-            "sémantic",
-            "..",
-        ] {
+    fn rejects_path_shaped_identities() {
+        for bad in ["", "../x", "a/b", r"a\b", "a.b", "id with space", ".."] {
             assert!(validate_meeting_id(bad).is_err(), "{bad:?}");
+            assert!(validate_capture_run_id(bad).is_err(), "{bad:?}");
         }
-        assert!(validate_meeting_id(&"x".repeat(129)).is_err());
-        assert!(validate_meeting_id(&"x".repeat(128)).is_ok());
     }
 }

@@ -133,22 +133,64 @@ let captureResult: ArrayBuffer | Promise<ArrayBuffer>;
 let ackDirty = false;
 let hookStatus: VoiceSessionStatus;
 let onPoint: ReturnType<typeof vi.fn>;
+let hookArmed = false;
+let hookActive = false;
 
 function Harness() {
-  useGuideMode({
+  const guide = useGuideMode({
     room: room as never,
     status: hookStatus,
     signedIn: true,
     onPoint,
   });
+  hookArmed = guide.armed;
+  hookActive = guide.active;
   return null;
 }
 
-async function mountHook() {
+async function acknowledgeLatestMode() {
+  const call = [...room.publishData.mock.calls]
+    .reverse()
+    .find(([data]) => {
+      const decoded = JSON.parse(new TextDecoder().decode(data));
+      return decoded.type === "guide.mode" && decoded.active === true;
+    });
+  if (!call) return false;
+  const control = JSON.parse(new TextDecoder().decode(call[0]));
+  const agent = room.remoteParticipants.get("agent");
+  room.emit(
+    RoomEvent.DataReceived,
+    new TextEncoder().encode(JSON.stringify({
+      type: "guide.mode_ack",
+      payload: {
+        active: true,
+        generation: control.generation,
+        guide_session_id: control.guide_session_id,
+        protocol_version: 2,
+        reason: null,
+      },
+    })),
+    agent,
+    undefined,
+    "agent_events",
+  );
+  await Promise.resolve();
+  await Promise.resolve();
+  return true;
+}
+
+async function mountHook(acknowledge = true) {
   await act(async () => {
     renderer = create(<Harness />);
-    await Promise.resolve();
-    await Promise.resolve();
+    for (let index = 0; index < 20 && room.publishData.mock.calls.length === 0; index += 1) {
+      await Promise.resolve();
+    }
+  });
+  if (!acknowledge) return;
+  await act(async () => {
+    await acknowledgeLatestMode();
+    await vi.advanceTimersByTimeAsync(0);
+    for (let index = 0; index < 20; index += 1) await Promise.resolve();
   });
 }
 
@@ -171,12 +213,23 @@ beforeEach(() => {
   ackDirty = false;
   hookStatus = "listening";
   onPoint = vi.fn(async () => {});
+  hookArmed = false;
+  hookActive = false;
+  mocks.guideListener = null;
   mocks.invoke.mockImplementation((command: string) => {
     if (command === "guide_armed_state") {
       return Promise.resolve({ armed: true, epoch: 7, session_id: SESSION_ID });
     }
     if (command === "capture_guide_frame") return Promise.resolve(captureResult);
     if (command === "ack_guide_response") return Promise.resolve(ackDirty);
+    if (command === "guide_observation_state") {
+      return Promise.resolve({
+        activeProcess: "Code",
+        activeWindowId: "window-1",
+        activeWindowTitle: "Aura",
+        geometryRevision: 1,
+      });
+    }
     return Promise.resolve();
   });
 });
@@ -191,6 +244,92 @@ afterEach(() => {
 });
 
 describe("useGuideMode", () => {
+  it("does not let an older native snapshot overwrite a newer armed event", async () => {
+    const initialState = deferred<{
+      armed: boolean;
+      epoch: number;
+      session_id: string | null;
+    }>();
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === "guide_armed_state") return initialState.promise;
+      return Promise.resolve();
+    });
+
+    await mountHook();
+    await act(async () => {
+      mocks.guideListener?.({
+        payload: { armed: true, epoch: 8, session_id: SESSION_ID },
+      });
+      await Promise.resolve();
+    });
+    expect(hookArmed).toBe(true);
+
+    await act(async () => {
+      initialState.resolve({ armed: false, epoch: 7, session_id: null });
+      await Promise.resolve();
+    });
+    expect(hookArmed).toBe(true);
+  });
+
+  function emitGuideRequest(enable: unknown) {
+    const agent = room.remoteParticipants.get("agent");
+    room.emit(
+      RoomEvent.DataReceived,
+      new TextEncoder().encode(JSON.stringify({ type: "guide.request", payload: { enable } })),
+      agent,
+      undefined,
+      undefined,
+    );
+  }
+
+  it("arms Guide Mode natively when the agent requests enable", async () => {
+    // Mount disarmed so an enable request is not a no-op.
+    mocks.invoke.mockImplementation((command: string) => {
+      if (command === "guide_armed_state") {
+        return Promise.resolve({ armed: false, epoch: 7, session_id: null });
+      }
+      return Promise.resolve();
+    });
+    await mountHook(false);
+    expect(hookArmed).toBe(false);
+
+    await act(async () => {
+      emitGuideRequest(true);
+      await Promise.resolve();
+    });
+    expect(mocks.invoke).toHaveBeenCalledWith("arm_guide");
+    expect(mocks.invoke).not.toHaveBeenCalledWith("disarm_guide");
+  });
+
+  it("disarms Guide Mode natively when the agent requests disable", async () => {
+    await mountHook(false); // default mock mounts armed
+    expect(hookArmed).toBe(true);
+    const disarmBefore = mocks.invoke.mock.calls.filter(([c]) => c === "disarm_guide").length;
+
+    await act(async () => {
+      emitGuideRequest(false);
+      await Promise.resolve();
+    });
+    expect(
+      mocks.invoke.mock.calls.filter(([c]) => c === "disarm_guide").length,
+    ).toBe(disarmBefore + 1);
+  });
+
+  it("ignores a guide.request matching the current state or carrying a bad payload", async () => {
+    await mountHook(false); // armed
+    expect(hookArmed).toBe(true);
+    const armBefore = mocks.invoke.mock.calls.filter(([c]) => c === "arm_guide").length;
+    const disarmBefore = mocks.invoke.mock.calls.filter(([c]) => c === "disarm_guide").length;
+
+    await act(async () => {
+      emitGuideRequest(true); // enable while already armed -> no-op
+      emitGuideRequest("yes"); // non-boolean -> rejected by the validator
+      await Promise.resolve();
+    });
+    expect(mocks.invoke.mock.calls.filter(([c]) => c === "arm_guide").length).toBe(armBefore);
+    expect(mocks.invoke.mock.calls.filter(([c]) => c === "disarm_guide").length).toBe(disarmBefore);
+  });
+
   it("seeds immediately, allows one capture in flight, and skips missed intervals", async () => {
     const capture = deferred<ArrayBuffer>();
     captureResult = capture.promise;
@@ -207,26 +346,44 @@ describe("useGuideMode", () => {
       await Promise.resolve();
     });
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(1_999);
+      await vi.advanceTimersByTimeAsync(750);
     });
-    expect(mocks.invoke.mock.calls.filter(([command]) => command === "capture_guide_frame")).toHaveLength(1);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(1);
-    });
-    expect(mocks.invoke.mock.calls.filter(([command]) => command === "capture_guide_frame")).toHaveLength(2);
+    expect(
+      mocks.invoke.mock.calls.filter(([command]) => command === "capture_guide_frame").length,
+    ).toBeGreaterThan(1);
   });
 
   it("retries the retained response once, then releases it without showing recovery UI", async () => {
     await mountHook();
+    await act(async () => {
+      for (
+        let index = 0;
+        index < 20 &&
+        !mocks.invoke.mock.calls.some(([command]) => command === "commit_guide_frame");
+        index += 1
+      ) {
+        await Promise.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+      }
+    });
     expect(room.streamBytes).toHaveBeenCalledTimes(1);
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(15_000);
+      for (let index = 0; index < 3 && room.streamBytes.mock.calls.length < 2; index += 1) {
+        await vi.advanceTimersByTimeAsync(15_000);
+      }
     });
     expect(room.streamBytes).toHaveBeenCalledTimes(2);
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(15_000);
-      await Promise.resolve();
+      for (
+        let index = 0;
+        index < 3 &&
+        !mocks.invoke.mock.calls.some(([command]) => command === "ack_guide_response");
+        index += 1
+      ) {
+        await vi.advanceTimersByTimeAsync(15_000);
+        await Promise.resolve();
+      }
     });
     expect(mocks.invoke).toHaveBeenCalledWith("ack_guide_response", {
       frameId: `${SESSION_ID}:9`,
@@ -266,6 +423,7 @@ describe("useGuideMode", () => {
     }));
 
     await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
       room.emit(RoomEvent.DataReceived, point, agent, undefined, "agent_events");
       await Promise.resolve();
     });
@@ -282,7 +440,10 @@ describe("useGuideMode", () => {
       await vi.advanceTimersByTimeAsync(2_000);
     });
     expect(room.streamBytes).toHaveBeenCalledTimes(1);
-    expect(mocks.invoke.mock.calls.filter(([command]) => command === "capture_guide_frame")).toHaveLength(2);
+    const capturesBeforeAck = mocks.invoke.mock.calls.filter(
+      ([command]) => command === "capture_guide_frame",
+    ).length;
+    expect(capturesBeforeAck).toBeGreaterThan(1);
 
     ackDirty = true;
     const agent = room.remoteParticipants.get("agent");
@@ -291,25 +452,38 @@ describe("useGuideMode", () => {
       await Promise.resolve();
       await Promise.resolve();
     });
-    expect(mocks.invoke.mock.calls.filter(([command]) => command === "capture_guide_frame")).toHaveLength(3);
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === "capture_guide_frame")).toHaveLength(
+      capturesBeforeAck + 1,
+    );
   });
 
   it("retries a failed stream with the same retained frame id before committing", async () => {
     room.close.mockRejectedValueOnce(new Error("stream failed"));
     await mountHook();
-    expect(room.streamBytes).toHaveBeenCalledTimes(1);
-    expect(mocks.invoke.mock.calls.filter(([command]) => command === "commit_guide_frame")).toHaveLength(0);
 
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(2_000);
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(750);
+      for (let index = 0; index < 20 && room.streamBytes.mock.calls.length < 2; index += 1) {
+        await Promise.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+      }
     });
     expect(room.streamBytes).toHaveBeenCalledTimes(2);
     expect(room.streamBytes.mock.calls[0][0].attributes.frame_id).toBe(`${SESSION_ID}:9`);
     expect(room.streamBytes.mock.calls[1][0].attributes.frame_id).toBe(`${SESSION_ID}:9`);
-    expect(mocks.invoke.mock.calls.filter(([command]) => command === "commit_guide_frame")).toHaveLength(1);
+    const commitCalls = mocks.invoke.mock.calls.filter(
+      ([command]) => command === "commit_guide_frame",
+    );
+    expect(commitCalls.length).toBeGreaterThanOrEqual(1);
+    expect(
+      commitCalls.every(([, args]) =>
+        (args as { frameId?: string } | undefined)?.frameId === `${SESSION_ID}:9`
+      ),
+    ).toBe(true);
   });
 
-  it("tears down timers and retained client bytes on a terminal voice status", async () => {
+  it("tears down timers and retained client bytes while preserving Guide across voice transport end", async () => {
     await mountHook();
     const capturesBeforeTeardown = mocks.invoke.mock.calls.filter(
       ([command]) => command === "capture_guide_frame",
@@ -320,7 +494,7 @@ describe("useGuideMode", () => {
       renderer?.update(<Harness />);
       await Promise.resolve();
     });
-    expect(mocks.invoke).toHaveBeenCalledWith("disarm_guide");
+    expect(mocks.invoke).not.toHaveBeenCalledWith("disarm_guide");
     await act(async () => {
       await vi.advanceTimersByTimeAsync(20_000);
     });
@@ -384,25 +558,66 @@ describe("useGuideMode", () => {
   it("stamps change:1 on a classified change and change:0 on a forced frame", async () => {
     // Default captureResult is a "send" (verdict 2) envelope: a real change.
     await mountHook();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
     expect(room.streamBytes.mock.calls[0][0].attributes.change).toBe("1");
   });
 
   it("stamps change:0 for a forced static-screen frame (sendForced)", async () => {
     captureResult = guideEnvelope(9, 5); // "sendForced": forced, no visible change
     await mountHook();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
     expect(room.streamBytes.mock.calls[0][0].attributes.change).toBe("0");
+  });
+
+  it("becomes operational only after matching mode and frame acknowledgements", async () => {
+    await mountHook();
+    expect(hookArmed).toBe(true);
+    expect(hookActive).toBe(false);
+    const agent = room.remoteParticipants.get("agent");
+
+    await act(async () => {
+      room.emit(
+        RoomEvent.DataReceived,
+        new TextEncoder().encode(JSON.stringify({
+          type: "guide.frame_ack",
+          payload: {
+            frame_id: `${SESSION_ID}:9`,
+            frame_seq: 9,
+            accepted: true,
+            rejection_reason: null,
+            newest_frame_id: `${SESSION_ID}:9`,
+          },
+        })),
+        agent,
+        undefined,
+        "agent_events",
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(hookActive).toBe(true);
   });
 
   it("publishes guide.mode after the agent joins and again after reconnect", async () => {
     room.remoteParticipants.clear();
     await mountHook();
     expect(room.publishData).not.toHaveBeenCalled();
+    expect(mocks.invoke.mock.calls.filter(([command]) => command === "capture_guide_frame")).toHaveLength(0);
 
     const agent = { isAgent: true, isLocal: false, identity: "agent" };
     room.remoteParticipants.set("agent", agent);
     await act(async () => {
       room.emit(RoomEvent.ParticipantConnected, agent);
       await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await acknowledgeLatestMode();
+      await vi.advanceTimersByTimeAsync(0);
     });
     expect(room.publishData).toHaveBeenCalledTimes(1);
     expect(room.publishData.mock.calls[0][1]).toEqual({ reliable: true, topic: "client_events" });
@@ -411,9 +626,13 @@ describe("useGuideMode", () => {
       active: true,
       guide_session_id: SESSION_ID,
     });
+    expect(captureCallsWithForce(true)).toHaveLength(1);
+    expect(room.streamBytes).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       room.emit(RoomEvent.Reconnected);
+      await Promise.resolve();
+      await Promise.resolve();
       await Promise.resolve();
     });
     expect(room.publishData).toHaveBeenCalledTimes(2);

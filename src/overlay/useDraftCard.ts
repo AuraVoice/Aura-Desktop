@@ -72,6 +72,12 @@ interface DraftEvent {
   payload?: Record<string, unknown>;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
 function asChannel(value: unknown): DraftChannel | null {
   return value === "on_screen" ||
     value === "email_reply" ||
@@ -102,7 +108,78 @@ function asContentFormat(value: unknown, channel: DraftChannel): DraftContentFor
   return channel === "snippet" ? "code" : "plain_text";
 }
 
+const STRUCTURED_ARTIFACT_KEYS = new Set([
+  "id",
+  "revision",
+  "kind",
+  "channel",
+  "title",
+  "body",
+  "format",
+  "language",
+  "copy_mode",
+  "body_sha256",
+]);
+
+function parseStructuredArtifact(
+  artifact: Record<string, unknown>,
+  payload: Record<string, unknown>,
+): DraftInfo | null {
+  if (
+    Object.keys(artifact).some((key) => !STRUCTURED_ARTIFACT_KEYS.has(key)) ||
+    typeof artifact.id !== "string" ||
+    !/^[0-9a-f]{32}$/.test(artifact.id) ||
+    !Number.isSafeInteger(artifact.revision) ||
+    (artifact.revision as number) < 1 ||
+    ![
+      "outbound_message",
+      "command",
+      "code",
+      "config",
+      "prompt",
+      "steps",
+      "checklist",
+      "note",
+    ].includes(String(artifact.kind)) ||
+    typeof artifact.title !== "string" ||
+    artifact.title.length < 1 ||
+    artifact.title.length > 80 ||
+    typeof artifact.body !== "string" ||
+    artifact.body.length < 1 ||
+    artifact.body.length > 32_000 ||
+    artifact.copy_mode !== "exact" ||
+    typeof artifact.body_sha256 !== "string" ||
+    !/^[0-9a-f]{64}$/.test(artifact.body_sha256) ||
+    (artifact.language !== null &&
+      artifact.language !== undefined &&
+      (typeof artifact.language !== "string" || artifact.language.length > 32))
+  ) {
+    return null;
+  }
+  const channel = asChannel(artifact.channel);
+  if (!channel || !["plain_text", "code", "markdown"].includes(String(artifact.format))) {
+    return null;
+  }
+  const length = asLength(payload.length) ?? "medium";
+  return {
+    draftId: artifact.id,
+    channel,
+    length,
+    text: artifact.body,
+    contextSummary: typeof payload.context_summary === "string" ? payload.context_summary : "",
+    revision: artifact.revision as number,
+    artifactKind: asArtifactKind(artifact.kind),
+    contentFormat: artifact.format as DraftContentFormat,
+    title: artifact.title,
+    language: typeof artifact.language === "string" ? artifact.language : "",
+    persisted: typeof payload.persisted === "boolean" ? payload.persisted : true,
+  };
+}
+
 export function parseCreatedDraft(payload: Record<string, unknown>): DraftInfo | null {
+  const artifact = asRecord(payload.artifact);
+  if (artifact !== null && "body" in artifact) return parseStructuredArtifact(artifact, payload);
+
   const channel = asChannel(payload.channel);
   const text = typeof payload.text === "string" ? payload.text : "";
   const draftId = typeof payload.draft_id === "string" ? payload.draft_id : "";
@@ -222,20 +299,27 @@ export function useDraftCard(
           break;
         }
         case "draft.updated": {
+          const updatedDraft = parseCreatedDraft(payload);
+          if (!updatedDraft) {
+            logError("useDraftCard: malformed draft.updated", JSON.stringify(Object.keys(payload)));
+            return;
+          }
           setData((prev) => {
-            if (!prev.draft || prev.draft.draftId !== payload.draft_id) return prev;
+            if (
+              !prev.draft ||
+              prev.draft.draftId !== updatedDraft.draftId ||
+              updatedDraft.revision <= prev.draft.revision
+            ) {
+              return prev;
+            }
             return {
               ...prev,
               phase: "shown",
               refineFailed: false,
               draft: {
                 ...prev.draft,
-                text: typeof payload.text === "string" ? payload.text : prev.draft.text,
-                length: asLength(payload.length) ?? prev.draft.length,
-                revision:
-                  typeof payload.revision === "number"
-                    ? payload.revision
-                    : prev.draft.revision + 1,
+                ...updatedDraft,
+                contextSummary: updatedDraft.contextSummary || prev.draft.contextSummary,
               },
             };
           });

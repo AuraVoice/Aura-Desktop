@@ -45,9 +45,9 @@ const SAMPLE_RATE: usize = 16_000;
 /// 5-minute segments: ~10 MB of 2ch FLAC, comfortably under the backend's
 /// 30 MB body cap, and small enough that losing one to a crash loses minutes.
 const SEGMENT_FRAMES: usize = SAMPLE_RATE * 300;
-/// Tails shorter than this at stop are dropped - two seconds of trailing
-/// audio isn't worth a segment upload.
-const MIN_SEGMENT_FRAMES: usize = SAMPLE_RATE * 2;
+/// Flush every valid captured frame. A short tail may contain the final words
+/// of a meeting and must not disappear merely because it is under two seconds.
+const MIN_SEGMENT_FRAMES: usize = 1;
 /// Hard capture ceiling, every tier. TEMPORARILY CLAMPED to 60 minutes
 /// (product decision 2026-07-11): meetings longer than an hour are out of
 /// scope until long-meeting support lands, and capturing audio the backend
@@ -81,6 +81,7 @@ struct StreamShared {
     /// A device re-bind happened (or was attempted); the engine marks the
     /// current segment incomplete when it sees this set, then clears it.
     rebound: AtomicBool,
+    device_id_hash: Mutex<String>,
 }
 
 impl StreamShared {
@@ -90,6 +91,7 @@ impl StreamShared {
             stop: AtomicBool::new(false),
             failed: AtomicBool::new(false),
             rebound: AtomicBool::new(false),
+            device_id_hash: Mutex::new(String::new()),
         })
     }
 }
@@ -102,10 +104,16 @@ impl StreamShared {
 pub fn spawn_engine(
     app: AppHandle,
     meeting_id: String,
+    capture_run_id: String,
+    capture_fence: i64,
+    protocol_version: u8,
     owner_uid: String,
     event_id: String,
+    runtime_instance_id: String,
+    installation_id: String,
     next_seq: u32,
     timeline_base_ms: i64,
+    finalization: super::FinalizationSignal,
 ) -> Result<Sender<String>, String> {
     let (stop_tx, stop_rx) = std::sync::mpsc::channel::<String>();
     super::session::ensure_watcher();
@@ -115,11 +123,17 @@ pub fn spawn_engine(
             engine_thread(
                 app,
                 meeting_id,
+                capture_run_id,
+                capture_fence,
+                protocol_version,
                 owner_uid,
                 event_id,
+                runtime_instance_id,
+                installation_id,
                 next_seq,
                 timeline_base_ms,
                 stop_rx,
+                finalization,
             )
         })
         .map_err(|e| format!("failed to spawn engine thread: {e}"))?;
@@ -127,7 +141,11 @@ pub fn spawn_engine(
 }
 
 fn spawn_capture_thread(shared: Arc<StreamShared>, loopback: bool) {
-    let name = if loopback { "meeting-loopback" } else { "meeting-mic" };
+    let name = if loopback {
+        "meeting-loopback"
+    } else {
+        "meeting-mic"
+    };
     let result = std::thread::Builder::new()
         .name(name.to_string())
         .spawn(move || capture_thread(shared, loopback));
@@ -169,6 +187,14 @@ fn capture_thread(shared: Arc<StreamShared>, loopback: bool) {
                 continue;
             }
         };
+        {
+            use sha2::{Digest, Sha256};
+            let mut stored = shared
+                .device_id_hash
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            *stored = format!("{:x}", Sha256::digest(device_id.as_bytes()));
+        }
 
         let mut raw: VecDeque<u8> = VecDeque::new();
         let mut last_device_check = Instant::now();
@@ -218,7 +244,11 @@ fn capture_thread(shared: Arc<StreamShared>, loopback: bool) {
 }
 
 fn default_device_id(loopback: bool) -> Option<String> {
-    let direction = if loopback { Direction::Render } else { Direction::Capture };
+    let direction = if loopback {
+        Direction::Render
+    } else {
+        Direction::Capture
+    };
     DeviceEnumerator::new()
         .ok()?
         .get_default_device(&direction)
@@ -231,7 +261,11 @@ fn open_stream(
     loopback: bool,
 ) -> Result<(wasapi::AudioClient, wasapi::AudioCaptureClient, String), String> {
     let enumerator = DeviceEnumerator::new().map_err(|e| e.to_string())?;
-    let device_direction = if loopback { Direction::Render } else { Direction::Capture };
+    let device_direction = if loopback {
+        Direction::Render
+    } else {
+        Direction::Capture
+    };
     let device = enumerator
         .get_default_device(&device_direction)
         .map_err(|e| e.to_string())?;
@@ -268,7 +302,12 @@ struct ChannelState {
 
 impl ChannelState {
     fn new(shared: Arc<StreamShared>) -> Self {
-        Self { shared, acc: Vec::new(), produced: 0, epoch: Instant::now() }
+        Self {
+            shared,
+            acc: Vec::new(),
+            produced: 0,
+            epoch: Instant::now(),
+        }
     }
 
     fn reset_clock(&mut self) {
@@ -289,7 +328,11 @@ impl ChannelState {
             return false;
         }
         self.produced += drained.len();
-        self.acc.extend(drained.iter().map(|s| (s.clamp(-1.0, 1.0) * 32767.0) as i16));
+        self.acc.extend(
+            drained
+                .iter()
+                .map(|s| (s.clamp(-1.0, 1.0) * 32767.0) as i16),
+        );
 
         let expected = (self.epoch.elapsed().as_millis() as usize) * SAMPLE_RATE / 1000;
         if expected <= self.produced + FILL_GUARD_FRAMES {
@@ -312,11 +355,17 @@ impl ChannelState {
 fn engine_thread(
     app: AppHandle,
     meeting_id: String,
+    capture_run_id: String,
+    capture_fence: i64,
+    protocol_version: u8,
     owner_uid: String,
     event_id: String,
+    runtime_instance_id: String,
+    installation_id: String,
     next_seq: u32,
     timeline_base_ms: i64,
     stop_rx: Receiver<String>,
+    finalization: super::FinalizationSignal,
 ) {
     let started_at_ms = super::now_ms();
     // A rejoin continues the first session's seq numbering and timeline
@@ -330,15 +379,19 @@ fn engine_thread(
         MAX_CAPTURE.saturating_sub(Duration::from_millis(timeline_base_ms.max(0) as u64));
     if session_budget.is_zero() {
         info!("meeting.audio: cap already reached for {meeting_id}, not restarting capture");
-        super::finalize_capture(
+        let result = super::finalize_capture(
             &app,
             &meeting_id,
+            &capture_run_id,
+            capture_fence,
             &owner_uid,
             &event_id,
+            &runtime_instance_id,
             started_at_ms,
             timeline_base_ms,
             "max_duration",
         );
+        finalization.finish(result);
         return;
     }
 
@@ -355,7 +408,7 @@ fn engine_thread(
     let mut segment_incomplete = false;
     let mut paused = false;
 
-    let stop_reason: String = 'run: loop {
+    let mut stop_reason: String = 'run: loop {
         // 1. External stop?
         if let Ok(reason) = stop_rx.try_recv() {
             break 'run reason;
@@ -378,8 +431,13 @@ fn engine_thread(
                 if !close_segment(
                     &app,
                     &meeting_id,
+                    &capture_run_id,
+                    capture_fence,
+                    protocol_version,
                     &owner_uid,
                     &event_id,
+                    &runtime_instance_id,
+                    &installation_id,
                     started_at_ms,
                     &mut seq,
                     &mut mic_state,
@@ -401,19 +459,17 @@ fn engine_thread(
                 loop_state.pump(true);
                 mic_state.reset_clock();
                 loop_state.reset_clock();
-                segment_start_ms =
-                    timeline_base_ms + capture_epoch.elapsed().as_millis() as i64;
+                segment_start_ms = timeline_base_ms + capture_epoch.elapsed().as_millis() as i64;
             }
             super::notify_paused(&app, paused);
         }
         // 5. Pump both channels (locked = drain-and-discard). A detected
         //    clock discontinuity taints the segment like a re-bind does.
-        let discontinuity =
-            mic_state.pump(paused) | loop_state.pump(paused);
+        let discontinuity = mic_state.pump(paused) | loop_state.pump(paused);
         // 6. A device re-bind mid-segment taints the segment as incomplete.
         if discontinuity
             || mic.rebound.swap(false, Ordering::Relaxed)
-            | loopback.rebound.swap(false, Ordering::Relaxed)
+                | loopback.rebound.swap(false, Ordering::Relaxed)
         {
             segment_incomplete = true;
         }
@@ -424,8 +480,13 @@ fn engine_thread(
             if !close_segment(
                 &app,
                 &meeting_id,
+                &capture_run_id,
+                capture_fence,
+                protocol_version,
                 &owner_uid,
                 &event_id,
+                &runtime_instance_id,
+                &installation_id,
                 started_at_ms,
                 &mut seq,
                 &mut mic_state,
@@ -450,11 +511,16 @@ fn engine_thread(
             segment_incomplete = true;
         }
     }
-    let _ = close_segment(
+    if !close_segment(
         &app,
         &meeting_id,
+        &capture_run_id,
+        capture_fence,
+        protocol_version,
         &owner_uid,
         &event_id,
+        &runtime_instance_id,
+        &installation_id,
         started_at_ms,
         &mut seq,
         &mut mic_state,
@@ -463,31 +529,42 @@ fn engine_thread(
         &mut emitted_ms,
         &mut segment_incomplete,
         false,
-    );
-    super::finalize_capture(
+    ) {
+        stop_reason = "capture_failed".to_string();
+    }
+    let result = super::finalize_capture(
         &app,
         &meeting_id,
+        &capture_run_id,
+        capture_fence,
         &owner_uid,
         &event_id,
+        &runtime_instance_id,
         started_at_ms,
         emitted_ms,
         &stop_reason,
     );
+    finalization.finish(result);
 }
 
 /// Closes the current accumulation into one FLAC segment (padding the shorter
 /// channel so both are equal length), records it, and re-arms the next
 /// segment's start offset. `exact` takes exactly SEGMENT_FRAMES (mid-capture
 /// close); otherwise everything accumulated is flushed (stop/pause), and
-/// tails under MIN_SEGMENT_FRAMES are dropped. Returns false when the segment
-/// could not be persisted (encode/encrypt/disk) - audio was lost, and the
+/// an entirely empty tail is ignored. Returns false when the segment could not
+/// be persisted (encode/encrypt/disk) - audio was lost, and the
 /// engine must stop rather than keep signaling a healthy recording.
 #[allow(clippy::too_many_arguments)]
 fn close_segment(
     app: &AppHandle,
     meeting_id: &str,
+    capture_run_id: &str,
+    capture_fence: i64,
+    protocol_version: u8,
     owner_uid: &str,
     event_id: &str,
+    runtime_instance_id: &str,
+    installation_id: &str,
     started_at_ms: i64,
     seq: &mut u32,
     mic: &mut ChannelState,
@@ -508,8 +585,12 @@ fn close_segment(
         return true;
     }
 
-    let mic_frames: Vec<i16> = drain_padded(&mut mic.acc, frames);
-    let loop_frames: Vec<i16> = drain_padded(&mut loopback.acc, frames);
+    // Keep the only in-memory samples intact until the encrypted file and its
+    // SQLite row commit. A failed encode or publication must never consume
+    // the tail and then let finalization describe the shorter evidence as a
+    // healthy capture.
+    let mic_frames = snapshot_padded(&mic.acc, frames);
+    let loop_frames = snapshot_padded(&loopback.acc, frames);
 
     let mut interleaved: Vec<i32> = Vec::with_capacity(frames * 2);
     for i in 0..frames {
@@ -524,18 +605,24 @@ fn close_segment(
             match super::record_segment(
                 app,
                 meeting_id,
+                capture_run_id,
+                capture_fence,
+                protocol_version,
                 owner_uid,
                 event_id,
+                runtime_instance_id,
+                installation_id,
                 started_at_ms,
                 *seq,
                 *segment_start_ms,
                 duration_ms,
                 &flac,
                 incomplete,
+                segment_audio_metrics(&mic_frames, &loop_frames, &mic.shared, &loopback.shared),
             ) {
                 Ok(()) => {
                     info!(
-                        "meeting.audio: segment {seq} closed ({duration_ms}ms, {} bytes{})",
+                        "meeting.audio: segment closed meeting={meeting_id} run={capture_run_id} fence={capture_fence} seq={seq} duration_ms={duration_ms} bytes={}{}",
                         flac.len(),
                         if incomplete { ", incomplete" } else { "" },
                     );
@@ -553,26 +640,116 @@ fn close_segment(
         }
     };
 
-    *seq += 1;
-    *segment_start_ms += duration_ms;
-    *emitted_ms = (*emitted_ms).max(*segment_start_ms);
-    *segment_incomplete = false;
+    if persisted {
+        drain_committed(&mut mic.acc, frames);
+        drain_committed(&mut loopback.acc, frames);
+        *seq += 1;
+        *segment_start_ms += duration_ms;
+        *emitted_ms = (*emitted_ms).max(*segment_start_ms);
+        *segment_incomplete = false;
+    }
     persisted
 }
 
-fn drain_padded(acc: &mut Vec<i16>, frames: usize) -> Vec<i16> {
+fn snapshot_padded(acc: &[i16], frames: usize) -> Vec<i16> {
     let take = frames.min(acc.len());
-    let mut out: Vec<i16> = acc.drain(..take).collect();
+    let mut out = acc[..take].to_vec();
     out.resize(frames, 0);
     out
+}
+
+fn drain_committed(acc: &mut Vec<i16>, frames: usize) {
+    let take = frames.min(acc.len());
+    acc.drain(..take);
+}
+
+fn segment_audio_metrics(
+    mic: &[i16],
+    system: &[i16],
+    mic_shared: &StreamShared,
+    system_shared: &StreamShared,
+) -> super::queue::SegmentAudioMetrics {
+    let mic_values = channel_metrics(mic);
+    let system_values = channel_metrics(system);
+    super::queue::SegmentAudioMetrics {
+        mic_rms_dbfs: mic_values.0,
+        system_rms_dbfs: system_values.0,
+        mic_clipping_ratio: mic_values.1,
+        system_clipping_ratio: system_values.1,
+        mic_zero_ratio: mic_values.2,
+        system_zero_ratio: system_values.2,
+        mic_vad_speech_ms: mic_values.3,
+        system_vad_speech_ms: system_values.3,
+        mic_device_id_hash: mic_shared
+            .device_id_hash
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone(),
+        system_device_id_hash: system_shared
+            .device_id_hash
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone(),
+    }
+}
+
+/// Returns RMS dBFS, clipping ratio, zero-sample ratio, and a conservative
+/// energy-derived VAD duration. The VAD is diagnostic evidence and a backend
+/// quality-gate input, not a speech transcription decision.
+fn channel_metrics(samples: &[i16]) -> (f64, f64, f64, i64) {
+    if samples.is_empty() {
+        return (-120.0, 0.0, 1.0, 0);
+    }
+    let mut square_sum = 0.0;
+    let mut clipping = 0usize;
+    let mut zero = 0usize;
+    for &sample in samples {
+        let normalized = sample as f64 / 32768.0;
+        square_sum += normalized * normalized;
+        let magnitude = (sample as i32).unsigned_abs();
+        if magnitude >= 32_760 {
+            clipping += 1;
+        }
+        if magnitude <= 1 {
+            zero += 1;
+        }
+    }
+    let rms = (square_sum / samples.len() as f64).sqrt();
+    let rms_dbfs = if rms <= f64::EPSILON {
+        -120.0
+    } else {
+        (20.0 * rms.log10()).max(-120.0)
+    };
+
+    const VAD_WINDOW: usize = SAMPLE_RATE / 50; // 20 ms
+    const VAD_RMS_THRESHOLD: f64 = 0.01; // approximately -40 dBFS
+    let mut speech_frames = 0usize;
+    for window in samples.chunks(VAD_WINDOW) {
+        let energy = window
+            .iter()
+            .map(|sample| {
+                let value = *sample as f64 / 32768.0;
+                value * value
+            })
+            .sum::<f64>()
+            / window.len().max(1) as f64;
+        if energy.sqrt() >= VAD_RMS_THRESHOLD {
+            speech_frames += window.len();
+        }
+    }
+    (
+        rms_dbfs,
+        clipping as f64 / samples.len() as f64,
+        zero as f64 / samples.len() as f64,
+        (speech_frames * 1000 / SAMPLE_RATE) as i64,
+    )
 }
 
 fn encode_flac(interleaved: &[i32]) -> Result<Vec<u8>, String> {
     let config = flacenc::config::Encoder::default()
         .into_verified()
         .map_err(|e| format!("flac config: {e:?}"))?;
-    let source =
-        flacenc::source::MemSource::from_samples(interleaved, 2, 16, SAMPLE_RATE);
+    let source = flacenc::source::MemSource::from_samples(interleaved, 2, 16, SAMPLE_RATE);
     let stream = flacenc::encode_with_fixed_block_size(&config, source, config.block_size)
         .map_err(|e| format!("flac encode: {e:?}"))?;
     let mut sink = flacenc::bitsink::ByteSink::new();
@@ -580,4 +757,40 @@ fn encode_flac(interleaved: &[i32]) -> Result<Vec<u8>, String> {
         .write(&mut sink)
         .map_err(|e| format!("flac write: {e:?}"))?;
     Ok(sink.as_slice().to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{channel_metrics, SAMPLE_RATE};
+
+    #[test]
+    fn channel_metrics_reports_silence_without_false_speech() {
+        let samples = vec![0_i16; SAMPLE_RATE];
+        let (rms_dbfs, clipping_ratio, zero_ratio, speech_ms) = channel_metrics(&samples);
+
+        assert_eq!(rms_dbfs, -120.0);
+        assert_eq!(clipping_ratio, 0.0);
+        assert_eq!(zero_ratio, 1.0);
+        assert_eq!(speech_ms, 0);
+    }
+
+    #[test]
+    fn channel_metrics_reports_energy_and_vad_duration() {
+        let samples = vec![16_384_i16; SAMPLE_RATE];
+        let (rms_dbfs, clipping_ratio, zero_ratio, speech_ms) = channel_metrics(&samples);
+
+        assert!((-6.03..=-6.01).contains(&rms_dbfs));
+        assert_eq!(clipping_ratio, 0.0);
+        assert_eq!(zero_ratio, 0.0);
+        assert_eq!(speech_ms, 1_000);
+    }
+
+    #[test]
+    fn channel_metrics_counts_positive_and_negative_clipping() {
+        let samples = [32_767_i16, -32_768_i16, 0_i16, 1_i16];
+        let (_, clipping_ratio, zero_ratio, _) = channel_metrics(&samples);
+
+        assert_eq!(clipping_ratio, 0.5);
+        assert_eq!(zero_ratio, 0.5);
+    }
 }

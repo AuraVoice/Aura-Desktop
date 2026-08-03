@@ -6,7 +6,6 @@ export const getAuraAppUrl = "https://auravoiceapp.com/app";
 export const privacyUrl = "https://auravoiceapp.com/privacy";
 export const termsUrl = "https://auravoiceapp.com/terms";
 export const webAuthUrl = "https://auravoiceapp.com/auth";
-export const dashboardUrl = "https://auravoiceapp.com/dashboard";
 // Opens Google Calendar's new-event composer directly (the connected calendar
 // is Google), for the agenda card's empty-state "Create event" action.
 export const createEventUrl = "https://calendar.google.com/calendar/u/0/r/eventedit";
@@ -286,6 +285,7 @@ export const desktopProfileSyncedKey = "desktop_profile_synced";
 // NOT the literal "anonymous" - aliasing that would chain-merge every signed-out
 // install into a single PostHog person.
 export const desktopAnonIdKey = "desktop_anon_id";
+export const desktopAnonAliasedUidKey = "desktop_anon_aliased_uid";
 // The onboarding phase, persisted so the first-run flow survives the sign-in
 // auth transition (OnboardingFlow unmounts once `user` is set; the tail - hotkey
 // tour + live demo - reads this to know it should keep running).

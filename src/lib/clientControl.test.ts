@@ -13,6 +13,8 @@ describe("guide.mode", () => {
       active: true,
       guide_session_id: "0123456789abcdef0123456789abcdef",
       generation: 4,
+      protocol_version: 1,
+      resume_task_id: null,
     });
   });
 

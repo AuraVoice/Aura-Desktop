@@ -10,7 +10,11 @@
 //! Everything platform-specific is `#[cfg(windows)]`; on other platforms the
 //! commands answer with an error string so a macOS build still compiles.
 
+mod evidence_store;
 pub mod queue;
+mod runtime_lease;
+
+pub use runtime_lease::MeetingRuntimeLease;
 
 #[cfg(windows)]
 mod audio;
@@ -21,11 +25,14 @@ pub mod detect;
 #[cfg(windows)]
 mod session;
 
-use std::sync::Mutex;
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 
 use log::{error, info, warn};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
+
+const RETENTION_MAINTENANCE_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 /// One live capture. `stop` hands the engine thread its shutdown reason; the
 /// engine owns finalizing (flush, manifest complete, state event) so every
@@ -34,11 +41,45 @@ use tauri::{AppHandle, Emitter, Manager};
 pub struct ActiveCapture {
     pub owner_uid: String,
     pub meeting_id: String,
+    pub capture_run_id: String,
+    pub capture_fence: i64,
     pub event_id: String,
     pub started_at_ms: i64,
     pub paused: bool,
     #[cfg(windows)]
     stop: std::sync::mpsc::Sender<String>,
+    #[cfg(windows)]
+    finalization: FinalizationSignal,
+}
+
+#[cfg(windows)]
+#[derive(Clone, Default)]
+pub(crate) struct FinalizationSignal(Arc<(Mutex<Option<Result<(), String>>>, Condvar)>);
+
+#[cfg(windows)]
+impl FinalizationSignal {
+    fn finish(&self, result: Result<(), String>) {
+        let (lock, condition) = &*self.0;
+        let mut state = lock.lock().unwrap_or_else(|error| error.into_inner());
+        if state.is_none() {
+            *state = Some(result);
+        }
+        condition.notify_all();
+    }
+
+    fn wait(&self, timeout: Duration) -> Result<(), String> {
+        let (lock, condition) = &*self.0;
+        let state = lock.lock().unwrap_or_else(|error| error.into_inner());
+        let (state, timeout_result) = condition
+            .wait_timeout_while(state, timeout, |value| value.is_none())
+            .map_err(|_| "meeting finalization wait failed".to_string())?;
+        if timeout_result.timed_out() && state.is_none() {
+            return Err("meeting finalization timed out".to_string());
+        }
+        state
+            .clone()
+            .unwrap_or_else(|| Err("meeting finalization did not report a result".to_string()))
+    }
 }
 
 #[derive(Default)]
@@ -66,6 +107,8 @@ pub struct CaptureStatePayload {
     pub owner_uid: String,
     pub active: bool,
     pub meeting_id: Option<String>,
+    pub capture_run_id: Option<String>,
+    pub capture_fence: Option<i64>,
     pub event_id: Option<String>,
     pub started_at_ms: Option<i64>,
     pub paused: bool,
@@ -77,6 +120,8 @@ pub struct CaptureStatePayload {
 pub struct SegmentReadyPayload {
     pub owner_uid: String,
     pub meeting_id: String,
+    pub capture_run_id: String,
+    pub capture_fence: i64,
     pub seq: u32,
     pub start_ms: i64,
     pub duration_ms: i64,
@@ -93,6 +138,41 @@ pub fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+fn require_runtime_owner(app: &AppHandle) -> Result<(), String> {
+    if app.state::<MeetingRuntimeLease>().owns_runtime() {
+        Ok(())
+    } else {
+        Err("meeting runtime is owned by another Aura process".to_string())
+    }
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MeetingRuntimeStatus {
+    pub owns_runtime: bool,
+    pub process_id: u32,
+    pub runtime_instance_id: String,
+    pub installation_id: String,
+}
+
+#[tauri::command]
+pub async fn meeting_runtime_status(app: AppHandle) -> Result<MeetingRuntimeStatus, String> {
+    let lease = app.state::<MeetingRuntimeLease>();
+    let owns_runtime = lease.owns_runtime();
+    let runtime_instance_id = lease.runtime_instance_id().to_string();
+    let blocking_app = app.clone();
+    let installation_id =
+        tauri::async_runtime::spawn_blocking(move || queue::installation_id(&blocking_app))
+            .await
+            .map_err(|error| error.to_string())??;
+    Ok(MeetingRuntimeStatus {
+        owns_runtime,
+        process_id: std::process::id(),
+        runtime_instance_id,
+        installation_id,
+    })
 }
 
 /// Best-effort native stop, used by security.rs when the account signs out:
@@ -147,11 +227,64 @@ fn cancel_all_join_watches(handle: &JoinWatchHandle) -> usize {
 /// than the retention window - an unsent capture is not worth keeping forever
 /// (MEETING_NOTES_PLAN.md section 6, "upload interrupted for days").
 pub fn startup_maintenance(app: &AppHandle) {
+    if require_runtime_owner(app).is_err() {
+        info!(
+            "meeting.runtime: process {} is passive; capture maintenance disabled",
+            std::process::id()
+        );
+        return;
+    }
     let app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let dropped = queue::prune_expired(&app);
-        if dropped > 0 {
-            warn!("meeting: pruned {dropped} expired capture(s) from the upload queue");
+    let runtime_instance_id = app
+        .state::<MeetingRuntimeLease>()
+        .runtime_instance_id()
+        .to_string();
+    tauri::async_runtime::spawn(async move {
+        let mut first_run = true;
+        loop {
+            let maintenance_app = app.clone();
+            let maintenance_runtime = runtime_instance_id.clone();
+            let result = tauri::async_runtime::spawn_blocking(move || {
+                queue::initialize(&maintenance_app)?;
+                let reconciliation = if first_run {
+                    queue::record_runtime_lease(&maintenance_app, &maintenance_runtime, true)?;
+                    Some(queue::reconcile(&maintenance_app)?)
+                } else {
+                    None
+                };
+                let removed = queue::prune_expired(&maintenance_app, &maintenance_runtime)?;
+                Ok::<_, String>((reconciliation, removed))
+            })
+            .await;
+            match result {
+                Ok(Ok((reconciliation, removed))) => {
+                    if let Some(report) = reconciliation {
+                        info!(
+                            "meeting.store: reconciliation recovered={} missing={} integrity_failed={} quarantined={} split_brain={}",
+                            report.recovered_orphans,
+                            report.missing_files,
+                            report.integrity_failures,
+                            report.quarantined_files,
+                            report.split_brain_conflicts,
+                        );
+                    }
+                    if removed > 0 {
+                        warn!("meeting: pruned {removed} expired capture(s) from local retention");
+                    }
+                }
+                Ok(Err(error)) => {
+                    error!("meeting.store: maintenance failed: {error}");
+                    sentry::capture_message(
+                        &format!("meeting evidence maintenance failed: {error}"),
+                        sentry::Level::Error,
+                    );
+                }
+                Err(error) => {
+                    error!("meeting.store: maintenance worker failed: {error}");
+                }
+            }
+            first_run = false;
+            tokio::time::sleep(RETENTION_MAINTENANCE_INTERVAL).await;
         }
     });
 }
@@ -165,11 +298,16 @@ pub fn startup_maintenance(app: &AppHandle) {
 pub async fn start_meeting_capture(
     app: AppHandle,
     meeting_id: String,
+    capture_run_id: String,
+    capture_fence: i64,
+    protocol_version: u8,
     event_id: String,
 ) -> Result<(), String> {
+    require_runtime_owner(&app)?;
     let ticket = crate::security::authorize(&app, crate::security::Operation::StartMeetingCapture)?;
     let owner_uid = ticket.uid().to_string();
     queue::validate_meeting_id(&meeting_id)?;
+    queue::validate_capture_run_id(&capture_run_id)?;
     #[cfg(windows)]
     {
         let handle = app.state::<MeetingCaptureHandle>();
@@ -180,11 +318,26 @@ pub async fn start_meeting_capture(
             }
         }
 
+        let started_at_ms = now_ms();
+        let runtime_instance_id = app
+            .state::<MeetingRuntimeLease>()
+            .runtime_instance_id()
+            .to_string();
+        let installation_id = queue::installation_id(&app)?;
         let offsets_app = app.clone();
-        let offsets_meeting_id = meeting_id.clone();
-        let offsets_owner_uid = owner_uid.clone();
+        let begin = queue::BeginCapture {
+            meeting_id: meeting_id.clone(),
+            capture_run_id: capture_run_id.clone(),
+            capture_fence,
+            protocol_version,
+            owner_uid: owner_uid.clone(),
+            event_id: event_id.clone(),
+            started_at_ms,
+            runtime_instance_id: runtime_instance_id.clone(),
+            installation_id: installation_id.clone(),
+        };
         let (next_seq, timeline_base_ms) = tauri::async_runtime::spawn_blocking(move || {
-            queue::capture_offsets(&offsets_app, &offsets_meeting_id, &offsets_owner_uid)
+            queue::begin_capture(&offsets_app, &begin)
         })
         .await
         .map_err(|e| e.to_string())??;
@@ -193,7 +346,6 @@ pub async fn start_meeting_capture(
             crate::security::Operation::StartMeetingCapture,
             &ticket,
         )?;
-        let started_at_ms = now_ms();
         // `capture_offsets` runs off-thread. Hold the capture-state lock from
         // the post-await check through publishing ActiveCapture so two start
         // commands cannot both create engines. A very fast engine finalize
@@ -204,13 +356,20 @@ pub async fn start_meeting_capture(
             if guard.is_some() {
                 return Err("a meeting capture is already active".to_string());
             }
+            let finalization = FinalizationSignal::default();
             let stop_tx = audio::spawn_engine(
                 app.clone(),
                 meeting_id.clone(),
+                capture_run_id.clone(),
+                capture_fence,
+                protocol_version,
                 owner_uid.clone(),
                 event_id.clone(),
+                runtime_instance_id.clone(),
+                installation_id,
                 next_seq,
                 timeline_base_ms,
+                finalization.clone(),
             )
             .map_err(|e| {
                 // Init failures stay silent to the user (ambient-surface
@@ -227,20 +386,27 @@ pub async fn start_meeting_capture(
             *guard = Some(ActiveCapture {
                 owner_uid: owner_uid.clone(),
                 meeting_id: meeting_id.clone(),
+                capture_run_id: capture_run_id.clone(),
+                capture_fence,
                 event_id: event_id.clone(),
                 started_at_ms,
                 paused: false,
                 stop: stop_tx,
+                finalization,
             });
         }
         crate::tray::set_recording(&app, true);
-        info!("meeting: capture started for {meeting_id} (event {event_id})");
+        info!(
+            "meeting: capture started meeting={meeting_id} run={capture_run_id} fence={capture_fence} event={event_id} runtime={runtime_instance_id}"
+        );
         emit_capture_state(
             &app,
             CaptureStatePayload {
                 owner_uid,
                 active: true,
                 meeting_id: Some(meeting_id),
+                capture_run_id: Some(capture_run_id),
+                capture_fence: Some(capture_fence),
                 event_id: Some(event_id),
                 started_at_ms: Some(started_at_ms),
                 paused: false,
@@ -269,7 +435,15 @@ pub async fn start_meeting_capture(
     }
     #[cfg(not(windows))]
     {
-        let _ = (app, meeting_id, event_id, ticket);
+        let _ = (
+            app,
+            meeting_id,
+            capture_run_id,
+            capture_fence,
+            protocol_version,
+            event_id,
+            ticket,
+        );
         Err("meeting capture is Windows-only".to_string())
     }
 }
@@ -278,17 +452,24 @@ pub async fn start_meeting_capture(
 /// clears the managed state, and emits the final capture-state event itself.
 #[tauri::command]
 pub async fn stop_meeting_capture(app: AppHandle, reason: String) -> Result<(), String> {
+    require_runtime_owner(&app)?;
     #[cfg(windows)]
     {
         let handle = app.state::<MeetingCaptureHandle>();
-        let stop = {
+        let active = {
             let guard = handle.0.lock().unwrap_or_else(|e| e.into_inner());
-            guard.as_ref().map(|active| active.stop.clone())
+            guard
+                .as_ref()
+                .map(|active| (active.stop.clone(), active.finalization.clone()))
         };
-        match stop {
-            Some(stop) => {
+        match active {
+            Some((stop, finalization)) => {
                 let _ = stop.send(reason);
-                Ok(())
+                tauri::async_runtime::spawn_blocking(move || {
+                    finalization.wait(Duration::from_secs(45))
+                })
+                .await
+                .map_err(|error| error.to_string())?
             }
             None => Ok(()), // already stopped - a double click is not an error
         }
@@ -305,6 +486,8 @@ pub async fn stop_meeting_capture(app: AppHandle, reason: String) -> Result<(), 
 pub struct CaptureStatus {
     pub active: bool,
     pub meeting_id: Option<String>,
+    pub capture_run_id: Option<String>,
+    pub capture_fence: Option<i64>,
     pub event_id: Option<String>,
     pub started_at_ms: Option<i64>,
     pub paused: bool,
@@ -322,6 +505,8 @@ pub fn capture_status(app: AppHandle) -> CaptureStatus {
             CaptureStatus {
                 active: true,
                 meeting_id: Some(active.meeting_id.clone()),
+                capture_run_id: Some(active.capture_run_id.clone()),
+                capture_fence: Some(active.capture_fence),
                 event_id: Some(active.event_id.clone()),
                 started_at_ms: Some(active.started_at_ms),
                 paused: active.paused,
@@ -330,6 +515,8 @@ pub fn capture_status(app: AppHandle) -> CaptureStatus {
         _ => CaptureStatus {
             active: false,
             meeting_id: None,
+            capture_run_id: None,
+            capture_fence: None,
             event_id: None,
             started_at_ms: None,
             paused: false,
@@ -340,12 +527,13 @@ pub fn capture_status(app: AppHandle) -> CaptureStatus {
 /// The upload pump's view of the durable queue: every meeting with its
 /// segments and upload/completion flags. File IO (manifest read), so async.
 #[tauri::command]
-pub async fn queue_snapshot(app: AppHandle) -> Result<queue::Manifest, String> {
+pub async fn queue_snapshot(app: AppHandle) -> Result<queue::QueueSnapshot, String> {
+    require_runtime_owner(&app)?;
     let ticket = crate::security::authorize(&app, crate::security::Operation::QueueSnapshot)?;
     let owner_uid = ticket.uid().to_string();
     let blocking_app = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        Ok(queue::load_for_owner(&blocking_app, &owner_uid))
+        queue::snapshot_for_owner(&blocking_app, &owner_uid)
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -360,30 +548,18 @@ pub async fn queue_snapshot(app: AppHandle) -> Result<queue::Manifest, String> {
 pub async fn read_segment(
     app: AppHandle,
     meeting_id: String,
+    capture_run_id: String,
     seq: u32,
 ) -> Result<tauri::ipc::Response, String> {
+    require_runtime_owner(&app)?;
     #[cfg(windows)]
     {
         let ticket = crate::security::authorize(&app, crate::security::Operation::ReadSegment)?;
         let owner_uid = ticket.uid().to_string();
         let blocking_app = app.clone();
         let result = tauri::async_runtime::spawn_blocking(move || {
-            // Only meetings this install itself captured (i.e. that Rust
-            // wrote into its own manifest) are readable - an arbitrary id
-            // can't probe the filesystem, even one that passes the charset
-            // check.
-            let manifest = queue::load_for_owner(&blocking_app, &owner_uid);
-            let Some(entry) = manifest.meetings.get(&meeting_id) else {
-                return Err("unknown meeting id".to_string());
-            };
-            if !entry.segments.iter().any(|segment| segment.seq == seq) {
-                return Err("unknown segment".to_string());
-            }
-            let path = queue::segment_path(&blocking_app, &meeting_id, seq)?;
-            let encrypted = std::fs::read(&path).map_err(|e| e.to_string())?;
-            let key = crypto::load_or_create_key(&blocking_app)?;
-            let plain = crypto::decrypt(&key, &encrypted)?;
-            Ok(tauri::ipc::Response::new(plain))
+            queue::read_segment(&blocking_app, &owner_uid, &meeting_id, &capture_run_id, seq)
+                .map(tauri::ipc::Response::new)
         })
         .await
         .map_err(|e| e.to_string())?;
@@ -394,28 +570,78 @@ pub async fn read_segment(
     }
     #[cfg(not(windows))]
     {
-        let _ = (app, meeting_id, seq);
+        let _ = (app, meeting_id, capture_run_id, seq);
         Err("meeting capture is Windows-only".to_string())
     }
 }
 
-/// Marks one segment uploaded in the manifest (JS calls this after the
-/// backend 200s the upload). The segment file itself stays until the whole
-/// meeting is acked, so a failed /complete can still re-verify bytes.
 #[tauri::command]
-pub async fn mark_segment_uploaded(
-    app: AppHandle,
-    meeting_id: String,
-    seq: u32,
-) -> Result<(), String> {
-    let ticket = crate::security::authorize(&app, crate::security::Operation::MarkSegmentUploaded)?;
+pub async fn claim_next_upload_job(app: AppHandle) -> Result<Option<queue::QueueJobLease>, String> {
+    require_runtime_owner(&app)?;
+    let ticket = crate::security::authorize(&app, crate::security::Operation::QueueSnapshot)?;
     let owner_uid = ticket.uid().to_string();
+    let runtime_instance_id = app
+        .state::<MeetingRuntimeLease>()
+        .runtime_instance_id()
+        .to_string();
     let blocking_app = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        queue::mark_uploaded(&blocking_app, &meeting_id, &owner_uid, seq)
+        queue::claim_next_upload_job(&blocking_app, &owner_uid, &runtime_instance_id)
     })
     .await
-    .map_err(|e| e.to_string())?;
+    .map_err(|error| error.to_string())?;
+    crate::security::recheck(&app, crate::security::Operation::QueueSnapshot, &ticket)?;
+    result
+}
+
+#[tauri::command]
+pub async fn claim_next_completion_job(
+    app: AppHandle,
+) -> Result<Option<queue::QueueJobLease>, String> {
+    require_runtime_owner(&app)?;
+    let ticket = crate::security::authorize(&app, crate::security::Operation::QueueSnapshot)?;
+    let owner_uid = ticket.uid().to_string();
+    let runtime_instance_id = app
+        .state::<MeetingRuntimeLease>()
+        .runtime_instance_id()
+        .to_string();
+    let blocking_app = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        queue::claim_next_completion_job(&blocking_app, &owner_uid, &runtime_instance_id)
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    crate::security::recheck(&app, crate::security::Operation::QueueSnapshot, &ticket)?;
+    result
+}
+
+#[tauri::command]
+pub async fn resolve_upload_job(
+    app: AppHandle,
+    job_id: String,
+    lease_token: String,
+    receipt: queue::UploadReceipt,
+) -> Result<(), String> {
+    require_runtime_owner(&app)?;
+    let ticket = crate::security::authorize(&app, crate::security::Operation::MarkSegmentUploaded)?;
+    let owner_uid = ticket.uid().to_string();
+    let runtime_instance_id = app
+        .state::<MeetingRuntimeLease>()
+        .runtime_instance_id()
+        .to_string();
+    let blocking_app = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        queue::resolve_upload_success(
+            &blocking_app,
+            &owner_uid,
+            &runtime_instance_id,
+            &job_id,
+            &lease_token,
+            &receipt,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?;
     crate::security::recheck(
         &app,
         crate::security::Operation::MarkSegmentUploaded,
@@ -424,31 +650,181 @@ pub async fn mark_segment_uploaded(
     result
 }
 
-/// The backend accepted /complete: this capture's local life is over. Deletes
-/// segment files and the manifest entry. Refused while the same meeting is
-/// actively capturing again (a rejoin raced the pump's completion pass) so
-/// the ack can never delete the directory underneath a live engine - the
-/// pump's backoff retries once the rejoined capture ends.
 #[tauri::command]
-pub async fn mark_meeting_acked(app: AppHandle, meeting_id: String) -> Result<(), String> {
+pub async fn resolve_completion_job(
+    app: AppHandle,
+    job_id: String,
+    lease_token: String,
+    receipt: queue::CompletionReceipt,
+) -> Result<(), String> {
+    require_runtime_owner(&app)?;
+    let ticket = crate::security::authorize(&app, crate::security::Operation::MarkMeetingAcked)?;
+    let owner_uid = ticket.uid().to_string();
+    let runtime_instance_id = app
+        .state::<MeetingRuntimeLease>()
+        .runtime_instance_id()
+        .to_string();
+    let blocking_app = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        queue::resolve_completion_success(
+            &blocking_app,
+            &owner_uid,
+            &runtime_instance_id,
+            &job_id,
+            &lease_token,
+            &receipt,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    crate::security::recheck(&app, crate::security::Operation::MarkMeetingAcked, &ticket)?;
+    result
+}
+
+#[tauri::command]
+pub async fn fail_queue_job(
+    app: AppHandle,
+    job_id: String,
+    lease_token: String,
+    classification: String,
+    error_code: String,
+) -> Result<queue::JobFailureResult, String> {
+    require_runtime_owner(&app)?;
+    let ticket = crate::security::authorize(&app, crate::security::Operation::MarkSegmentUploaded)?;
+    let owner_uid = ticket.uid().to_string();
+    let runtime_instance_id = app
+        .state::<MeetingRuntimeLease>()
+        .runtime_instance_id()
+        .to_string();
+    let blocking_app = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        queue::fail_job(
+            &blocking_app,
+            &owner_uid,
+            &runtime_instance_id,
+            &job_id,
+            &lease_token,
+            &classification,
+            &error_code,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    crate::security::recheck(
+        &app,
+        crate::security::Operation::MarkSegmentUploaded,
+        &ticket,
+    )?;
+    result
+}
+
+#[tauri::command]
+pub async fn retry_capture_jobs(app: AppHandle, capture_run_id: String) -> Result<bool, String> {
+    require_runtime_owner(&app)?;
+    let ticket = crate::security::authorize(&app, crate::security::Operation::MarkSegmentUploaded)?;
+    let owner_uid = ticket.uid().to_string();
+    let runtime_instance_id = app
+        .state::<MeetingRuntimeLease>()
+        .runtime_instance_id()
+        .to_string();
+    let blocking_app = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        queue::retry_capture_jobs(
+            &blocking_app,
+            &owner_uid,
+            &capture_run_id,
+            &runtime_instance_id,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    crate::security::recheck(
+        &app,
+        crate::security::Operation::MarkSegmentUploaded,
+        &ticket,
+    )?;
+    result
+}
+
+#[tauri::command]
+pub async fn local_recordings(app: AppHandle) -> Result<Vec<queue::LocalRecording>, String> {
+    require_runtime_owner(&app)?;
+    let ticket = crate::security::authorize(&app, crate::security::Operation::QueueSnapshot)?;
+    let owner_uid = ticket.uid().to_string();
+    let blocking_app = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        queue::local_recordings(&blocking_app, &owner_uid)
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    crate::security::recheck(&app, crate::security::Operation::QueueSnapshot, &ticket)?;
+    result
+}
+
+#[tauri::command]
+pub async fn export_local_recording(
+    app: AppHandle,
+    meeting_id: String,
+    capture_run_id: String,
+    include_audio: bool,
+) -> Result<queue::ExportResult, String> {
+    require_runtime_owner(&app)?;
+    let ticket = crate::security::authorize(&app, crate::security::Operation::ReadSegment)?;
+    let owner_uid = ticket.uid().to_string();
+    let blocking_app = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let logs = crate::logging::read_redacted_log_tail(&blocking_app, 200)
+            .unwrap_or_else(|error| vec![format!("log tail unavailable: {error}")]);
+        queue::export_bundle(
+            &blocking_app,
+            &owner_uid,
+            &meeting_id,
+            &capture_run_id,
+            include_audio,
+            &logs,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    crate::security::recheck(&app, crate::security::Operation::ReadSegment, &ticket)?;
+    result
+}
+
+#[tauri::command]
+pub async fn delete_local_recording(
+    app: AppHandle,
+    meeting_id: String,
+    capture_run_id: String,
+) -> Result<(), String> {
+    require_runtime_owner(&app)?;
     let ticket = crate::security::authorize(&app, crate::security::Operation::MarkMeetingAcked)?;
     let owner_uid = ticket.uid().to_string();
     {
         let handle = app.state::<MeetingCaptureHandle>();
-        let guard = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        let guard = handle.0.lock().unwrap_or_else(|error| error.into_inner());
         if guard
             .as_ref()
-            .is_some_and(|active| active.owner_uid == owner_uid && active.meeting_id == meeting_id)
+            .is_some_and(|active| active.capture_run_id == capture_run_id)
         {
-            return Err("meeting is actively capturing; ack refused".to_string());
+            return Err("an active recording cannot be deleted".to_string());
         }
     }
+    let runtime_instance_id = app
+        .state::<MeetingRuntimeLease>()
+        .runtime_instance_id()
+        .to_string();
     let blocking_app = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
-        queue::remove_meeting(&blocking_app, &meeting_id, &owner_uid)
+        queue::request_local_deletion(
+            &blocking_app,
+            &owner_uid,
+            &meeting_id,
+            &capture_run_id,
+            &runtime_instance_id,
+        )
     })
     .await
-    .map_err(|e| e.to_string())?;
+    .map_err(|error| error.to_string())?;
     crate::security::recheck(&app, crate::security::Operation::MarkMeetingAcked, &ticket)?;
     result
 }
@@ -462,6 +838,7 @@ pub fn start_join_watch(
     window_start_ms: i64,
     window_end_ms: i64,
 ) -> Result<(), String> {
+    require_runtime_owner(&app)?;
     let ticket = crate::security::authorize(&app, crate::security::Operation::StartJoinWatch)?;
     #[cfg(windows)]
     {
@@ -490,11 +867,13 @@ pub fn start_join_watch(
 }
 
 #[tauri::command]
-pub fn stop_join_watch(app: AppHandle, event_id: String) {
+pub fn stop_join_watch(app: AppHandle, event_id: String) -> Result<(), String> {
+    require_runtime_owner(&app)?;
     #[cfg(windows)]
     detect::stop_join_watch(app, event_id);
     #[cfg(not(windows))]
     let _ = (app, event_id);
+    Ok(())
 }
 
 #[derive(Clone, Serialize)]
@@ -513,11 +892,15 @@ pub fn debug_force_join(app: AppHandle, event_id: String) -> Result<(), String> 
     if !cfg!(debug_assertions) {
         return Err("debug_force_join is dev-only".to_string());
     }
-    app.emit("meeting-join-detected", JoinDetectedPayload {
-        event_id,
-        app: "debug".to_string(),
-        window_title: "debug".to_string(),
-    })
+    require_runtime_owner(&app)?;
+    app.emit(
+        "meeting-join-detected",
+        JoinDetectedPayload {
+            event_id,
+            app: "debug".to_string(),
+            window_title: "debug".to_string(),
+        },
+    )
     .map_err(|e| e.to_string())
 }
 
@@ -529,34 +912,61 @@ pub fn debug_force_join(app: AppHandle, event_id: String) -> Result<(), String> 
 pub(crate) fn record_segment(
     app: &AppHandle,
     meeting_id: &str,
+    capture_run_id: &str,
+    capture_fence: i64,
+    protocol_version: u8,
     owner_uid: &str,
     event_id: &str,
+    runtime_instance_id: &str,
+    installation_id: &str,
     started_at_ms: i64,
     seq: u32,
     start_ms: i64,
     duration_ms: i64,
     flac_bytes: &[u8],
     incomplete: bool,
+    metrics: queue::SegmentAudioMetrics,
 ) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+
     let key = crypto::load_or_create_key(app)?;
-    let encrypted = crypto::encrypt(&key, flac_bytes)?;
-    queue::write_segment(
-        app,
-        meeting_id,
-        owner_uid,
-        event_id,
+    let content_sha256 = format!("{:x}", Sha256::digest(flac_bytes));
+    let mut metadata = queue::SegmentRecoveryMetadata {
+        schema_version: 2,
+        encryption_version: 2,
+        owner_uid: owner_uid.to_string(),
+        meeting_id: meeting_id.to_string(),
+        capture_run_id: capture_run_id.to_string(),
+        capture_fence,
+        protocol_version,
+        event_id: event_id.to_string(),
         started_at_ms,
+        runtime_instance_id: runtime_instance_id.to_string(),
+        installation_id: installation_id.to_string(),
         seq,
         start_ms,
         duration_ms,
-        &encrypted,
         incomplete,
-    )?;
+        content_sha256,
+        encrypted_sha256: String::new(),
+        byte_length: flac_bytes.len() as u64,
+        encrypted_byte_length: 0,
+        channel_count: 2,
+        sample_rate_hz: 16_000,
+        metrics,
+    };
+    let encrypted = crypto::encrypt_with_aad(&key, flac_bytes, &metadata.aad())?;
+    let encrypted_sha256 = format!("{:x}", Sha256::digest(&encrypted));
+    metadata.encrypted_sha256 = encrypted_sha256;
+    metadata.encrypted_byte_length = encrypted.len() as u64;
+    queue::publish_segment(app, &metadata, &encrypted)?;
     if let Err(e) = app.emit(
         "meeting-segment-ready",
         SegmentReadyPayload {
             owner_uid: owner_uid.to_string(),
             meeting_id: meeting_id.to_string(),
+            capture_run_id: capture_run_id.to_string(),
+            capture_fence,
             seq,
             start_ms,
             duration_ms,
@@ -581,6 +991,8 @@ pub(crate) fn notify_paused(app: &AppHandle, paused: bool) {
                     owner_uid: active.owner_uid.clone(),
                     active: true,
                     meeting_id: Some(active.meeting_id.clone()),
+                    capture_run_id: Some(active.capture_run_id.clone()),
+                    capture_fence: Some(active.capture_fence),
                     event_id: Some(active.event_id.clone()),
                     started_at_ms: Some(active.started_at_ms),
                     paused,
@@ -601,22 +1013,33 @@ pub(crate) fn notify_paused(app: &AppHandle, paused: bool) {
 pub(crate) fn finalize_capture(
     app: &AppHandle,
     meeting_id: &str,
+    capture_run_id: &str,
+    capture_fence: i64,
     owner_uid: &str,
     event_id: &str,
+    runtime_instance_id: &str,
     started_at_ms: i64,
     total_duration_ms: i64,
     reason: &str,
-) {
-    if let Err(e) = queue::mark_completed(
+) -> Result<(), String> {
+    let persistence = queue::finalize_capture(
         app,
-        meeting_id,
         owner_uid,
-        event_id,
-        started_at_ms,
+        meeting_id,
+        capture_run_id,
+        capture_fence,
+        runtime_instance_id,
         total_duration_ms,
         reason,
-    ) {
-        error!("meeting: failed to mark capture completed in manifest: {e}");
+    );
+    let final_reason = persistence
+        .as_ref()
+        .map(|_| reason)
+        .unwrap_or("manifest_persist_failed");
+    if let Err(error) = &persistence {
+        error!(
+            "meeting: durable finalization failed meeting={meeting_id} run={capture_run_id} fence={capture_fence}: {error}"
+        );
     }
     {
         let handle = app.state::<MeetingCaptureHandle>();
@@ -624,7 +1047,9 @@ pub(crate) fn finalize_capture(
         *guard = None;
     }
     crate::tray::set_recording(app, false);
-    info!("meeting: capture finished for {meeting_id} ({reason})");
+    info!(
+        "meeting: capture finished meeting={meeting_id} run={capture_run_id} fence={capture_fence} reason={final_reason}"
+    );
     if reason == "capture_failed" && !cfg!(debug_assertions) {
         sentry::capture_message(
             &format!("meeting capture failed mid-session for {meeting_id}"),
@@ -637,12 +1062,15 @@ pub(crate) fn finalize_capture(
             owner_uid: owner_uid.to_string(),
             active: false,
             meeting_id: Some(meeting_id.to_string()),
+            capture_run_id: Some(capture_run_id.to_string()),
+            capture_fence: Some(capture_fence),
             event_id: Some(event_id.to_string()),
             started_at_ms: Some(started_at_ms),
             paused: false,
-            reason: reason.to_string(),
+            reason: final_reason.to_string(),
         },
     );
+    persistence.map(|_| ())
 }
 
 #[cfg(test)]

@@ -18,6 +18,7 @@ export type MeetingActivityPhase =
 
 export interface MeetingActivity {
   meetingId: string;
+  captureRunId?: string;
   eventId: string;
   phase: MeetingActivityPhase;
   segmentCount: number;

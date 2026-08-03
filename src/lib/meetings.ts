@@ -6,6 +6,31 @@ import { logError } from "./log";
 export const meetingCapReachedCode = "meeting_cap_reached";
 export const meetingConflictCode = "meeting_already_claimed";
 
+export type MeetingJobFailureClassification =
+  | "transient"
+  | "auth"
+  | "paused"
+  | "terminal";
+
+export class MeetingTransportError extends Error {
+  status: number;
+  code: string;
+  classification: MeetingJobFailureClassification;
+
+  constructor(
+    message: string,
+    status: number,
+    code: string,
+    classification: MeetingJobFailureClassification,
+  ) {
+    super(message);
+    this.name = "MeetingTransportError";
+    this.status = status;
+    this.code = code;
+    this.classification = classification;
+  }
+}
+
 export class MeetingCapError extends Error {
   secondsUntilReset: number | null;
 
@@ -36,6 +61,10 @@ export class MeetingGoneError extends Error {
 
 export interface MeetingClaim {
   meetingId: string;
+  captureRunId: string;
+  captureFence: number;
+  leaseExpiresAt: string | null;
+  protocolVersion: 1 | 2;
   capMinutes: number;
   maxCaptureMinutes: number;
   rejoined: boolean;
@@ -62,6 +91,7 @@ export type MeetingStatus =
   | "capturing"
   | "uploaded"
   | "synthesizing"
+  | "needs_attention"
   | "ready"
   | "excluded"
   | "failed";
@@ -72,6 +102,8 @@ export type MeetingProcessingStage =
   | "queued"
   | "transcribing"
   | "building_insights"
+  | "quality_check"
+  | "needs_attention"
   | "ready";
 
 export interface MeetingDoc {
@@ -86,6 +118,14 @@ export interface MeetingDoc {
   attemptCount: number;
   lastErrorAt: string | null;
   statusRevision: number;
+  artifactRevision: number;
+  qualityOutcome: string | null;
+  qualityPolicyVersion: string | null;
+  transcriptArtifact: {
+    object: string;
+    generation: string;
+    sha256: string;
+  } | null;
   createdAt: string;
   updatedAt: string;
   note: MeetingNote | null;
@@ -112,6 +152,7 @@ export async function claimMeeting(args: {
   startTime: string;
   endTime: string;
   deviceId: string;
+  runtimeInstanceId: string;
 }): Promise<MeetingClaim> {
   const response = await authFetch("/meetings/claim", {
     method: "POST",
@@ -122,6 +163,8 @@ export async function claimMeeting(args: {
       start_time: args.startTime,
       end_time: args.endTime,
       device_id: args.deviceId,
+      installation_id: args.deviceId,
+      runtime_instance_id: args.runtimeInstanceId,
     }),
   });
   if (response.status === 402) {
@@ -139,12 +182,26 @@ export async function claimMeeting(args: {
     cap_minutes?: unknown;
     max_capture_minutes?: unknown;
     rejoined?: unknown;
+    capture_run_id?: unknown;
+    capture_fence?: unknown;
+    lease_expires_at?: unknown;
   };
   if (typeof data.meeting_id !== "string" || !data.meeting_id) {
     throw new Error("Meeting claim response missing meeting_id");
   }
+  const hasV2Identity =
+    typeof data.capture_run_id === "string"
+    && data.capture_run_id.length > 0
+    && typeof data.capture_fence === "number"
+    && Number.isSafeInteger(data.capture_fence)
+    && data.capture_fence >= 0;
   return {
     meetingId: data.meeting_id,
+    captureRunId: hasV2Identity ? data.capture_run_id as string : crypto.randomUUID(),
+    captureFence: hasV2Identity ? data.capture_fence as number : 0,
+    leaseExpiresAt:
+      typeof data.lease_expires_at === "string" ? data.lease_expires_at : null,
+    protocolVersion: hasV2Identity ? 2 : 1,
     capMinutes: typeof data.cap_minutes === "number" ? data.cap_minutes : 60,
     maxCaptureMinutes:
       typeof data.max_capture_minutes === "number" ? data.max_capture_minutes : 240,
@@ -155,55 +212,285 @@ export async function claimMeeting(args: {
 /** One raw FLAC segment body; offsets ride headers so the body stays pure
  * audio. 60s timeout: segments are ~10 MB and this runs on a background pump
  * with its own retry/backoff, so patience beats a spurious abort. */
-export async function uploadSegment(
-  meetingId: string,
-  seq: number,
-  bytes: Uint8Array,
-  startMs: number,
-  durationMs: number,
-  incomplete: boolean,
-): Promise<void> {
+export interface UploadReceipt {
+  receiptId: string;
+  object: string;
+  generation: string;
+  contentSha256: string;
+  byteLength: number;
+  acceptedAt: string;
+}
+
+export async function uploadSegment(args: {
+  jobId: string;
+  meetingId: string;
+  captureRunId: string;
+  captureFence: number;
+  protocolVersion: 1 | 2;
+  seq: number;
+  bytes: Uint8Array;
+  startMs: number;
+  durationMs: number;
+  incomplete: boolean;
+  contentSha256: string;
+  byteLength: number;
+  channelCount: number;
+  sampleRateHz: number;
+}): Promise<UploadReceipt> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 60_000);
   try {
-    const body = new Uint8Array(bytes).buffer as ArrayBuffer;
-    const response = await authFetch(`/meetings/${meetingId}/segments/${seq}`, {
-      method: "POST",
+    const body = new Uint8Array(args.bytes).buffer as ArrayBuffer;
+    const path = args.protocolVersion === 2
+      ? `/meetings/${args.meetingId}/capture-runs/${args.captureRunId}/segments/${args.seq}`
+      : `/meetings/${args.meetingId}/segments/${args.seq}`;
+    const response = await authFetch(path, {
+      method: args.protocolVersion === 2 ? "PUT" : "POST",
       headers: {
         "Content-Type": "audio/flac",
-        "X-Segment-Start-Ms": String(startMs),
-        "X-Segment-Duration-Ms": String(durationMs),
-        "X-Segment-Incomplete": incomplete ? "true" : "false",
+        "Idempotency-Key": args.jobId,
+        "X-Capture-Fence": String(args.captureFence),
+        "X-Content-SHA256": args.contentSha256,
+        "X-Byte-Length": String(args.byteLength),
+        "X-Start-Ms": String(args.startMs),
+        "X-Duration-Ms": String(args.durationMs),
+        "X-Channel-Count": String(args.channelCount),
+        "X-Sample-Rate-Hz": String(args.sampleRateHz),
+        "X-Incomplete": args.incomplete ? "true" : "false",
+        // Legacy aliases stay during the compatibility window.
+        "X-Segment-Start-Ms": String(args.startMs),
+        "X-Segment-Duration-Ms": String(args.durationMs),
+        "X-Segment-Incomplete": args.incomplete ? "true" : "false",
       },
       body,
       signal: controller.signal,
     });
-    if (response.status === 404) throw new MeetingGoneError();
-    if (!response.ok) {
-      throw new Error(`Segment upload failed (${response.status})`);
+    if (args.protocolVersion === 1 && response.ok) {
+      return {
+        receiptId: `legacy:${args.jobId}`,
+        object: `legacy/meetings/${args.meetingId}/${args.seq}`,
+        generation: "legacy-unverified",
+        contentSha256: args.contentSha256,
+        byteLength: args.byteLength,
+        acceptedAt: new Date().toISOString(),
+      };
     }
+    const payload = await readJsonObject(response);
+    if (!response.ok && !(response.status === 409 && isSameIdentity(payload))) {
+      throw transportError("Segment upload", response.status, payload);
+    }
+    return parseUploadReceipt(payload, args.contentSha256, args.byteLength);
   } finally {
     clearTimeout(timeoutId);
   }
 }
 
-export async function completeMeeting(
-  meetingId: string,
-  args: { segmentCount: number; totalDurationMs: number; reason: string },
-): Promise<void> {
-  const response = await authFetch(`/meetings/${meetingId}/complete`, {
+export interface CompletionReceipt {
+  receiptId: string;
+  manifestSha256: string;
+  acceptedAt: string;
+}
+
+export interface MeetingCompletionSegment {
+  seq: number;
+  startMs: number;
+  durationMs: number;
+  incomplete: boolean;
+  contentSha256: string;
+  byteLength: number;
+  channelCount: number;
+  sampleRateHz: number;
+  metrics: {
+    micRmsDbfs: number;
+    systemRmsDbfs: number;
+    micClippingRatio: number;
+    systemClippingRatio: number;
+    micZeroRatio: number;
+    systemZeroRatio: number;
+    micVadSpeechMs: number;
+    systemVadSpeechMs: number;
+    micDeviceIdHash: string;
+    systemDeviceIdHash: string;
+  };
+}
+
+export async function completeMeeting(args: {
+    jobId: string;
+    meetingId: string;
+    captureRunId: string;
+    captureFence: number;
+    protocolVersion: 1 | 2;
+    segmentCount: number;
+    totalDurationMs: number;
+    reason: string;
+    segmentDigests: string[];
+    manifestSegments: MeetingCompletionSegment[];
+    manifestSha256: string;
+  }): Promise<CompletionReceipt> {
+  const path = args.protocolVersion === 2
+    ? `/meetings/${args.meetingId}/capture-runs/${args.captureRunId}/complete`
+    : `/meetings/${args.meetingId}/complete`;
+  const response = await authFetch(path, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "Idempotency-Key": args.jobId,
+    },
     body: JSON.stringify({
+      capture_fence: args.captureFence,
       segment_count: args.segmentCount,
       total_duration_ms: args.totalDurationMs,
       reason: args.reason,
+      segment_digests: args.segmentDigests,
+      segments: args.manifestSegments.map((segment) => ({
+        seq: segment.seq,
+        start_ms: segment.startMs,
+        duration_ms: segment.durationMs,
+        incomplete: segment.incomplete,
+        content_sha256: segment.contentSha256,
+        byte_length: segment.byteLength,
+        channel_count: segment.channelCount,
+        sample_rate_hz: segment.sampleRateHz,
+        audio_metrics: {
+          mic_rms_dbfs: segment.metrics.micRmsDbfs,
+          system_rms_dbfs: segment.metrics.systemRmsDbfs,
+          mic_clipping_ratio: segment.metrics.micClippingRatio,
+          system_clipping_ratio: segment.metrics.systemClippingRatio,
+          mic_zero_ratio: segment.metrics.micZeroRatio,
+          system_zero_ratio: segment.metrics.systemZeroRatio,
+          mic_vad_speech_ms: segment.metrics.micVadSpeechMs,
+          system_vad_speech_ms: segment.metrics.systemVadSpeechMs,
+          mic_device_id_hash: segment.metrics.micDeviceIdHash,
+          system_device_id_hash: segment.metrics.systemDeviceIdHash,
+        },
+      })),
+      manifest_sha256: args.manifestSha256,
     }),
   });
-  if (response.status === 404) throw new MeetingGoneError();
-  if (!response.ok) {
-    throw new Error(`Meeting complete failed (${response.status})`);
+  if (args.protocolVersion === 1 && response.ok) {
+    return {
+      receiptId: `legacy:${args.jobId}`,
+      manifestSha256: args.manifestSha256,
+      acceptedAt: new Date().toISOString(),
+    };
   }
+  const payload = await readJsonObject(response);
+  if (!response.ok && !(response.status === 409 && isSameIdentity(payload))) {
+    throw transportError("Meeting complete", response.status, payload);
+  }
+  return parseCompletionReceipt(payload, args.manifestSha256);
+}
+
+async function readJsonObject(response: Response): Promise<Record<string, unknown>> {
+  try {
+    const payload = await response.json();
+    return typeof payload === "object" && payload !== null
+      ? payload as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function errorCode(payload: Record<string, unknown>, fallback: string): string {
+  const detail = typeof payload.detail === "object" && payload.detail !== null
+    ? payload.detail as Record<string, unknown>
+    : payload;
+  return typeof detail.code === "string" && detail.code.length > 0
+    ? detail.code
+    : fallback;
+}
+
+function isSameIdentity(payload: Record<string, unknown>): boolean {
+  return [
+    "segment_already_exists",
+    "upload_already_accepted",
+    "completion_already_accepted",
+    "idempotent_replay",
+  ].includes(errorCode(payload, ""));
+}
+
+function transportError(
+  operation: string,
+  status: number,
+  payload: Record<string, unknown>,
+): MeetingTransportError {
+  const code = errorCode(payload, `http_${status}`);
+  let classification: MeetingJobFailureClassification;
+  if (status === 401) classification = "auth";
+  else if (status === 403) classification = "paused";
+  else if (status === 408 || status === 429 || status >= 500 || status === 404) {
+    classification = "transient";
+  } else {
+    classification = "terminal";
+  }
+  return new MeetingTransportError(
+    `${operation} failed (${status}, ${code})`,
+    status,
+    code,
+    classification,
+  );
+}
+
+function parseUploadReceipt(
+  payload: Record<string, unknown>,
+  expectedDigest: string,
+  expectedLength: number,
+): UploadReceipt {
+  const receipt = {
+    receiptId: typeof payload.receipt_id === "string" ? payload.receipt_id : "",
+    object: typeof payload.object === "string" ? payload.object : "",
+    generation: typeof payload.generation === "string"
+      ? payload.generation
+      : typeof payload.generation === "number"
+      ? String(payload.generation)
+      : "",
+    contentSha256:
+      typeof payload.content_sha256 === "string" ? payload.content_sha256 : "",
+    byteLength: typeof payload.byte_length === "number" ? payload.byte_length : -1,
+    acceptedAt: typeof payload.accepted_at === "string" ? payload.accepted_at : "",
+  };
+  if (
+    !receipt.receiptId
+    || !receipt.object
+    || !receipt.generation
+    || !receipt.acceptedAt
+    || receipt.contentSha256 !== expectedDigest
+    || receipt.byteLength !== expectedLength
+  ) {
+    throw new MeetingTransportError(
+      "Segment upload returned an invalid receipt",
+      200,
+      "invalid_upload_receipt",
+      "terminal",
+    );
+  }
+  return receipt;
+}
+
+function parseCompletionReceipt(
+  payload: Record<string, unknown>,
+  expectedManifest: string,
+): CompletionReceipt {
+  const receipt = {
+    receiptId: typeof payload.receipt_id === "string" ? payload.receipt_id : "",
+    manifestSha256:
+      typeof payload.manifest_sha256 === "string" ? payload.manifest_sha256 : "",
+    acceptedAt: typeof payload.accepted_at === "string" ? payload.accepted_at : "",
+  };
+  if (
+    !receipt.receiptId
+    || !receipt.acceptedAt
+    || receipt.manifestSha256 !== expectedManifest
+  ) {
+    throw new MeetingTransportError(
+      "Meeting completion returned an invalid receipt",
+      200,
+      "invalid_completion_receipt",
+      "terminal",
+    );
+  }
+  return receipt;
 }
 
 function parseNote(raw: unknown): MeetingNote | null {
@@ -238,6 +525,7 @@ const meetingStatuses = new Set<MeetingStatus>([
   "capturing",
   "uploaded",
   "synthesizing",
+  "needs_attention",
   "ready",
   "excluded",
   "failed",
@@ -248,6 +536,8 @@ const processingStages = new Set<MeetingProcessingStage>([
   "queued",
   "transcribing",
   "building_insights",
+  "quality_check",
+  "needs_attention",
   "ready",
 ]);
 
@@ -261,6 +551,25 @@ export function parseMeetingDoc(raw: unknown): MeetingDoc | null {
     && processingStages.has(row.processing_stage as MeetingProcessingStage)
     ? row.processing_stage as MeetingProcessingStage
     : null;
+  const artifact = typeof row.transcript_artifact === "object"
+    && row.transcript_artifact !== null
+    ? row.transcript_artifact as Record<string, unknown>
+    : null;
+  const transcriptArtifact = artifact
+    && typeof artifact.object === "string"
+    && typeof artifact.generation === "string"
+    && typeof artifact.sha256 === "string"
+    ? {
+        object: artifact.object,
+        generation: artifact.generation,
+        sha256: artifact.sha256,
+      }
+    : null;
+  if (status === "ready" && !transcriptArtifact && row.artifact_revision !== undefined) {
+    // V2 documents may never report ready without an immutable pointer. A
+    // legacy document has no artifact_revision field and stays compatible.
+    return null;
+  }
   return {
     meetingId,
     eventId: typeof row.event_id === "string" ? row.event_id : "",
@@ -273,6 +582,11 @@ export function parseMeetingDoc(raw: unknown): MeetingDoc | null {
     attemptCount: typeof row.attempt_count === "number" ? row.attempt_count : 0,
     lastErrorAt: typeof row.last_error_at === "string" ? row.last_error_at : null,
     statusRevision: typeof row.status_revision === "number" ? row.status_revision : 0,
+    artifactRevision: typeof row.artifact_revision === "number" ? row.artifact_revision : 0,
+    qualityOutcome: typeof row.quality_outcome === "string" ? row.quality_outcome : null,
+    qualityPolicyVersion:
+      typeof row.quality_policy_version === "string" ? row.quality_policy_version : null,
+    transcriptArtifact,
     createdAt: typeof row.created_at === "string" ? row.created_at : "",
     updatedAt: typeof row.updated_at === "string" ? row.updated_at : "",
     note: parseNote(row.note),

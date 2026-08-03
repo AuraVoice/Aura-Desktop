@@ -8,13 +8,15 @@
 
 #![cfg(windows)]
 
-use aes_gcm::aead::{Aead, KeyInit, OsRng};
+use std::io::Write;
+
+use aes_gcm::aead::{Aead, KeyInit, OsRng, Payload};
 use aes_gcm::{AeadCore, Aes256Gcm, Key, Nonce};
 use tauri::{AppHandle, Manager};
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{LocalFree, HLOCAL};
 use windows::Win32::Security::Cryptography::{
-    CryptProtectData, CryptUnprotectData, CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN,
+    CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
 };
 
 const KEY_FILE: &str = "key.bin";
@@ -31,30 +33,40 @@ fn key_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
 }
 
 /// Loads the segment key, minting and DPAPI-wrapping a fresh one on first
-/// use. A wrapped blob that no longer unwraps (profile reset, corrupted file)
-/// is replaced with a new key - the old segments are unrecoverable either
-/// way, and new captures must not fail because of stale ones.
+/// use. A wrapped blob that no longer unwraps fails closed. Replacing it would
+/// make every retained recording permanently unreadable while making new
+/// captures appear healthy.
 pub fn load_or_create_key(app: &AppHandle) -> Result<[u8; 32], String> {
     let path = key_path(app)?;
     if let Ok(wrapped) = std::fs::read(&path) {
-        match dpapi_unprotect(&wrapped) {
-            Ok(key_bytes) if key_bytes.len() == 32 => {
-                let mut key = [0u8; 32];
-                key.copy_from_slice(&key_bytes);
-                return Ok(key);
-            }
-            _ => log::warn!("meeting.crypto: stored key failed to unwrap, minting a new one"),
+        let key_bytes = dpapi_unprotect(&wrapped)
+            .map_err(|e| format!("stored meeting key could not be unwrapped: {e}"))?;
+        if key_bytes.len() != 32 {
+            return Err("stored meeting key has an invalid length".to_string());
         }
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&key_bytes);
+        return Ok(key);
     }
 
     let key = Aes256Gcm::generate_key(OsRng);
     let wrapped = dpapi_protect(key.as_slice())?;
-    std::fs::write(&path, wrapped).map_err(|e| e.to_string())?;
+    let tmp = path.with_extension(format!("bin.{}.tmp", std::process::id()));
+    let mut file = std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&tmp)
+        .map_err(|e| e.to_string())?;
+    file.write_all(&wrapped).map_err(|e| e.to_string())?;
+    file.sync_all().map_err(|e| e.to_string())?;
+    super::evidence_store::durable_rename(&tmp, &path)?;
     let mut out = [0u8; 32];
     out.copy_from_slice(key.as_slice());
     Ok(out)
 }
 
+/// Legacy v1 encryption without associated data. Retained only so valid
+/// manifest.json recordings can migrate and export.
 pub fn encrypt(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, String> {
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
@@ -67,6 +79,27 @@ pub fn encrypt(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// V2 encryption binds the ciphertext to its owner, meeting, capture run,
+/// fence, sequence, and plaintext digest through caller-supplied AAD.
+pub fn encrypt_with_aad(key: &[u8; 32], plaintext: &[u8], aad: &[u8]) -> Result<Vec<u8>, String> {
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
+    let ciphertext = cipher
+        .encrypt(
+            &nonce,
+            Payload {
+                msg: plaintext,
+                aad,
+            },
+        )
+        .map_err(|e| format!("encrypt failed: {e}"))?;
+    let mut out = Vec::with_capacity(NONCE_LEN + ciphertext.len());
+    out.extend_from_slice(nonce.as_slice());
+    out.extend_from_slice(&ciphertext);
+    Ok(out)
+}
+
+/// Legacy v1 decryption without associated data.
 pub fn decrypt(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>, String> {
     if data.len() <= NONCE_LEN {
         return Err("segment too short to decrypt".to_string());
@@ -75,6 +108,23 @@ pub fn decrypt(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>, String> {
     let nonce = Nonce::from_slice(&data[..NONCE_LEN]);
     cipher
         .decrypt(nonce, &data[NONCE_LEN..])
+        .map_err(|e| format!("decrypt failed: {e}"))
+}
+
+pub fn decrypt_with_aad(key: &[u8; 32], data: &[u8], aad: &[u8]) -> Result<Vec<u8>, String> {
+    if data.len() <= NONCE_LEN {
+        return Err("segment too short to decrypt".to_string());
+    }
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
+    let nonce = Nonce::from_slice(&data[..NONCE_LEN]);
+    cipher
+        .decrypt(
+            nonce,
+            Payload {
+                msg: &data[NONCE_LEN..],
+                aad,
+            },
+        )
         .map_err(|e| format!("decrypt failed: {e}"))
 }
 

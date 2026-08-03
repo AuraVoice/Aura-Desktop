@@ -1,10 +1,12 @@
+pub mod capture;
 pub mod fingerprint;
 
 use std::io::Cursor;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use image::{DynamicImage, ImageFormat, RgbaImage};
+use image::codecs::jpeg::JpegEncoder;
+use image::{DynamicImage, RgbaImage};
 use log::{info, warn};
 use serde::Serialize;
 use tauri::{ipc::Response, AppHandle, Emitter, Manager};
@@ -91,7 +93,17 @@ pub struct GuideRuntime {
     epoch: u64,
     capture_in_flight: bool,
     needs_reseed: bool,
+    geometry_revision: u64,
 }
+
+/// The persistent capture session for the current armed epoch.
+///
+/// Held apart from `GuideRuntime` rather than inside it: the runtime derives
+/// `Debug` and `Default`, a live D3D11 device does neither, and the two have
+/// genuinely different lifetimes - the runtime is per Guide session, this is
+/// per physical output and is recreated whenever that output changes.
+#[derive(Default)]
+pub struct GuideCaptureHandle(pub Mutex<Option<capture::GuideCaptureSession>>);
 
 pub struct GuideRuntimeHandle(pub Mutex<GuideRuntime>);
 
@@ -149,6 +161,15 @@ pub struct GuideArmedPayload {
     session_id: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuideObservationState {
+    active_process: String,
+    active_window_id: String,
+    active_window_title: String,
+    geometry_revision: u64,
+}
+
 #[derive(Clone, Copy, Debug)]
 #[repr(u8)]
 enum EnvelopeVerdict {
@@ -158,9 +179,9 @@ enum EnvelopeVerdict {
     Pending = 3,
     Skip = 4,
     // A frame the change-filter would NOT have sent (the screen is static), streamed
-    // only because the caller forced it - the continuous ~2s Guide cadence. Carries
-    // geometry + bytes exactly like Send; the client stamps change:"0" so the backend
-    // refreshes its latest frame without firing a proactive nudge.
+    // only because an explicit observation reason forced it. Carries geometry + bytes
+    // exactly like Send; the client stamps change:"0" so the backend refreshes its
+    // latest frame without firing a proactive nudge.
     SendForced = 5,
 }
 
@@ -275,13 +296,64 @@ fn resolve_monitor(cursor_x: i32, cursor_y: i32) -> Result<PinnedMonitor, String
     })
 }
 
-fn capture_monitor(pinned: &PinnedMonitor) -> Result<CapturedMonitor, String> {
-    let monitor = Monitor::all()
+fn find_monitor(pinned: &PinnedMonitor) -> Result<Monitor, String> {
+    Monitor::all()
         .map_err(|e| e.to_string())?
         .into_iter()
         .find(|monitor| monitor.id().ok() == Some(pinned.id))
-        .ok_or_else(|| format!("pinned monitor {} is no longer connected", pinned.name))?;
+        .ok_or_else(|| format!("pinned monitor {} is no longer connected", pinned.name))
+}
+
+/// One Guide tick's pixels, through the persistent capture session.
+///
+/// `Ok(None)` means the desktop has not been presented since the previous tick,
+/// so the caller's existing fingerprint is still accurate and no readback,
+/// downsample or classification is needed at all. That is the whole point of
+/// the persistent session: a static screen, which is most of what Guide watches,
+/// stops costing a full-monitor capture every 750 ms.
+///
+/// `allow_unchanged` is false for forced and reseeding ticks, which need real
+/// pixels regardless. Those fall through to `xcap`, exactly as before.
+///
+/// Monitor metadata is still read per tick (`find_monitor`), which is a cheap
+/// display enumeration - the expensive part was only ever `capture_image`.
+fn capture_tick(
+    app: &AppHandle,
+    pinned: &PinnedMonitor,
+    allow_unchanged: bool,
+) -> Result<Option<CapturedMonitor>, String> {
+    let monitor = find_monitor(pinned)?;
+    let left = monitor.x().map_err(|e| e.to_string())?;
+    let top = monitor.y().map_err(|e| e.to_string())?;
+
+    if let Some(handle) = app.try_state::<GuideCaptureHandle>() {
+        let mut guard = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        // Recreated rather than reused when the pinned monitor moved: a
+        // duplication session belongs to one physical output.
+        let session = match guard.as_mut() {
+            Some(session) if session.matches(left, top) => session,
+            _ => guard.insert(capture::GuideCaptureSession::new(left, top)),
+        };
+        match session.tick(allow_unchanged) {
+            capture::CaptureTick::Captured(image) => {
+                return assemble_monitor(&monitor, image).map(Some);
+            }
+            // Positive evidence only. The session returns this exclusively when
+            // a live duplication reported no presentation AND this tick allowed
+            // an unchanged answer.
+            capture::CaptureTick::Unchanged => return Ok(None),
+            // Duplication could not answer. This is NOT evidence the screen is
+            // still - treating it as such is how Guide would go blind for a
+            // whole epoch after a device loss - so fall through and capture.
+            capture::CaptureTick::Unavailable => {}
+        }
+    }
+
     let image = monitor.capture_image().map_err(|e| e.to_string())?;
+    assemble_monitor(&monitor, image).map(Some)
+}
+
+fn assemble_monitor(monitor: &Monitor, image: RgbaImage) -> Result<CapturedMonitor, String> {
     let fingerprint = Fingerprint::from_rgba(&image);
     let geometry = Geometry {
         monitor_id: monitor.id().map_err(|e| e.to_string())?,
@@ -301,13 +373,29 @@ fn capture_monitor(pinned: &PinnedMonitor) -> Result<CapturedMonitor, String> {
     })
 }
 
-fn encode_jpeg(image: RgbaImage) -> Result<Vec<u8>, String> {
+/// Resizes and encodes one Guide frame, matching the per-turn capture path.
+///
+/// Guide used to ship the FULL monitor image at the `image` crate's default
+/// quality. Two things went wrong with that. A busy 4K or 5K screen could
+/// exceed the backend's 2MB `_MAX_FRAME_BYTES`, and the frame was dropped as
+/// `frame_size_limit_exceeded` - Guide went blind with no spoken symptom. Every
+/// surviving frame then paid a full-resolution LANCZOS resize in the voice
+/// worker, on every send tick, for pixels no model ever saw.
+///
+/// Returns the ENCODED dimensions. The caller MUST stamp them back onto the
+/// geometry, which `assemble_monitor` filled with full-monitor values.
+fn encode_jpeg(image: RgbaImage) -> Result<(Vec<u8>, u32, u32), String> {
+    let resized =
+        crate::screenshot::downscale_for_model(DynamicImage::ImageRgba8(image).into_rgb8());
+    let (width, height) = (resized.width(), resized.height());
     let mut bytes = Vec::new();
-    DynamicImage::ImageRgba8(image)
-        .into_rgb8()
-        .write_to(&mut Cursor::new(&mut bytes), ImageFormat::Jpeg)
-        .map_err(|e| e.to_string())?;
-    Ok(bytes)
+    JpegEncoder::new_with_quality(
+        &mut Cursor::new(&mut bytes),
+        crate::screenshot::MODEL_FRAME_JPEG_QUALITY,
+    )
+    .encode_image(&resized)
+    .map_err(|e| e.to_string())?;
+    Ok((bytes, width, height))
 }
 
 fn response(
@@ -384,6 +472,10 @@ fn armed_payload(app: &AppHandle) -> GuideArmedPayload {
 }
 
 fn emit_armed(app: &AppHandle, payload: GuideArmedPayload) {
+    info!(
+        "guide: armed state changed - armed={} epoch={}",
+        payload.armed, payload.epoch
+    );
     if let Err(error) = app.emit("guide-armed", payload) {
         log::error!("guide: failed to emit guide-armed: {error}");
     }
@@ -437,6 +529,10 @@ pub async fn arm_guide(app: AppHandle) -> Result<GuideArmedPayload, String> {
         clear(&app, false);
         return Ok(armed_payload(&app));
     }
+    if let Err(error) = crate::overlay::summon_bar(&app) {
+        clear(&app, true);
+        return Err(format!("Guide indicator unavailable: {error}"));
+    }
     emit_armed(&app, payload.clone());
     Ok(payload)
 }
@@ -472,6 +568,7 @@ pub fn clear(app: &AppHandle, emit: bool) {
         runtime.clear();
         changed
     };
+    release_capture_session(app);
     if emit && changed {
         emit_armed(app, armed_payload(app));
     }
@@ -481,7 +578,19 @@ pub fn on_security_disarmed(app: &AppHandle) {
     if let Some(runtime) = runtime_handle(app) {
         runtime.0.lock().unwrap_or_else(|e| e.into_inner()).clear();
     }
+    release_capture_session(app);
     emit_armed(app, armed_payload(app));
+}
+
+/// Tears down the duplication session on every path out of an armed epoch.
+///
+/// Not optional housekeeping: a live duplication holds a GPU resource and keeps
+/// the output duplicated for this process, so leaving one behind after disarm
+/// would mean Guide never really stopped watching.
+fn release_capture_session(app: &AppHandle) {
+    if let Some(handle) = app.try_state::<GuideCaptureHandle>() {
+        *handle.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
 }
 
 pub fn toggle(app: &AppHandle) {
@@ -586,7 +695,7 @@ pub async fn capture_guide_frame(
         ));
     }
 
-    let (pinned, session_id, sequence, awaiting) = {
+    let (pinned, session_id, sequence, awaiting, allow_unchanged) = {
         let handle = runtime_handle(&app).ok_or_else(|| "Guide runtime unavailable".to_string())?;
         let mut runtime = handle.0.lock().unwrap_or_else(|e| e.into_inner());
         if runtime.epoch != epoch {
@@ -614,6 +723,13 @@ pub async fn capture_guide_frame(
         if awaiting && force {
             runtime.dirty = true;
         }
+        // "Nothing was presented" may only short-circuit a plain, idle tick.
+        // A forced tick must produce bytes even on a static screen; a reseeding
+        // tick (or the very first one) has no prior fingerprint to stand on;
+        // and an awaiting tick re-sends its retained frame as Pending further
+        // down, which is a different answer from Same.
+        let allow_unchanged =
+            !force && !awaiting && !runtime.needs_reseed && runtime.prev_tick.is_some();
         (
             runtime
                 .monitor
@@ -622,12 +738,37 @@ pub async fn capture_guide_frame(
             runtime.session_id,
             runtime.sequence,
             awaiting,
+            allow_unchanged,
         )
     };
 
-    let captured = tauri::async_runtime::spawn_blocking(move || capture_monitor(&pinned))
-        .await
-        .map_err(|e| e.to_string())??;
+    let capture_app = app.clone();
+    let captured = tauri::async_runtime::spawn_blocking(move || {
+        capture_tick(&capture_app, &pinned, allow_unchanged)
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    // Nothing on screen has been presented since the previous tick, so the
+    // fingerprint the runtime already holds is still exactly right. This is the
+    // path the persistent capture session exists to make free: no readback, no
+    // 64x36 downsample, no tile classification, no allocation.
+    let Some(captured) = captured else {
+        let handle = runtime_handle(&app).ok_or_else(|| "Guide runtime unavailable".to_string())?;
+        let mut runtime = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        runtime.capture_in_flight = false;
+        if runtime.epoch != epoch || runtime.session_id != session_id {
+            return Err("Guide session changed during capture".to_string());
+        }
+        log_tick(EnvelopeVerdict::Same, None);
+        return Ok(response(
+            EnvelopeVerdict::Same,
+            session_id,
+            epoch,
+            sequence,
+            None,
+        ));
+    };
     if let Err(error) =
         crate::security::recheck(&app, crate::security::Operation::CaptureGuide, &ticket)
     {
@@ -664,6 +805,9 @@ pub async fn capture_guide_frame(
             .geometry
             .as_ref()
             .is_some_and(|geometry| !geometry.identity_eq(&captured.geometry));
+        if runtime.geometry.is_none() || geometry_changed {
+            runtime.geometry_revision = runtime.geometry_revision.saturating_add(1);
+        }
         if geometry_changed {
             runtime.last_committed = None;
             runtime.detector.reset();
@@ -707,7 +851,7 @@ pub async fn capture_guide_frame(
             }
             // A per-frame ack can move the lifecycle out of AwaitingResponse while
             // this forced capture was still in flight (the fast per-frame ack races
-            // the ~2s force tick). Only re-send the retained pending frame if it is
+            // the adaptive capture request). Only re-send the retained pending frame if it is
             // still awaiting; otherwise it was already acked, so fall through and
             // treat this tick as a fresh capture instead of hitting an unreachable
             // panic (see the 2026-07-24 mod.rs:704 crash).
@@ -743,11 +887,20 @@ pub async fn capture_guide_frame(
         return Ok(response(verdict, session_id, epoch, sequence, None));
     }
 
-    let geometry = captured.geometry;
+    let mut geometry = captured.geometry;
     let fingerprint = captured.fingerprint;
-    let jpeg = tauri::async_runtime::spawn_blocking(move || encode_jpeg(captured.image))
-        .await
-        .map_err(|e| e.to_string())??;
+    let (jpeg, jpeg_width_px, jpeg_height_px) =
+        tauri::async_runtime::spawn_blocking(move || encode_jpeg(captured.image))
+            .await
+            .map_err(|e| e.to_string())??;
+    // `assemble_monitor` stamped FULL-MONITOR dimensions here, because the
+    // fingerprint and tile classifier consume the image at native resolution.
+    // The encoded frame is smaller, and both `screenPointFor` (desktop) and
+    // `ScreenFrame._scaled` (backend) map a model coordinate back to the screen
+    // by the jpeg/monitor ratio. Leaving the pre-resize values would put every
+    // Guide highlight at a fraction of its correct position, silently.
+    geometry.jpeg_width_px = jpeg_width_px;
+    geometry.jpeg_height_px = jpeg_height_px;
     crate::security::recheck(&app, crate::security::Operation::CaptureGuide, &ticket)?;
 
     // A real (tile-classified) change sends Send and drives a proactive nudge; a
@@ -819,6 +972,27 @@ pub fn ack_guide_response(app: AppHandle, frame_id: String, epoch: u64) -> Resul
         .unwrap_or_else(|e| e.into_inner())
         .ack(&frame_id, epoch);
     result
+}
+
+#[tauri::command]
+pub fn guide_observation_state(
+    app: AppHandle,
+    epoch: u64,
+) -> Result<GuideObservationState, String> {
+    crate::security::authorize_guide(&app, epoch)?;
+    let geometry_revision = runtime_handle(&app)
+        .ok_or_else(|| "Guide runtime unavailable".to_string())?
+        .0
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .geometry_revision;
+    let (active_process, active_window_id, active_window_title) = foreground_window_details();
+    Ok(GuideObservationState {
+        active_process,
+        active_window_id,
+        active_window_title,
+        geometry_revision,
+    })
 }
 
 /// (process stem, window id, window title) for the foreground window.
