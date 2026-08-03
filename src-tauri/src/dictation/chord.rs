@@ -123,6 +123,10 @@ pub enum ChordSignal {
     Release,
     /// The chord was abandoned before it ever completed. Drop the warm client.
     Cancel,
+    /// Escape was pressed while a finished transcript was being held for a text
+    /// box that never got focus. Drop it. Emitted only while something is
+    /// actually held, so an ordinary Escape costs nothing.
+    CancelPending,
 }
 
 /// One edge of the chord as seen by the hook.

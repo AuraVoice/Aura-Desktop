@@ -1,93 +1,114 @@
-/* The dictation HUD window. Transparent, click-through, never focused, so
-   nothing here is interactive and nothing scrolls: a long partial is clamped
-   to two lines instead, which keeps a native OS scrollbar off the surface. */
+/* The dictation HUD window. The notch itself comes from NotchBar.css so both
+   surfaces stay one shape; only the two things unique to this window live here.
 
-.dictation-hud {
-  box-sizing: border-box;
+   Transparent and click-through, so nothing is interactive and nothing scrolls:
+   the failure message is clamped to two lines instead, which keeps a native OS
+   scrollbar off the surface. */
+
+/* The same reset App.css gives the overlay window. It has to be repeated here,
+   not imported: App.css is pulled in by App.tsx, and this window renders
+   DictationHud instead (main.tsx routes on the window label), so it has been
+   living with the browser's default 8px body margin. That was survivable for a
+   460x104 card and is not for a 184x29 notch, which would sit offset and
+   clipped. Any future window with its own React root needs this too. */
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
   width: 100%;
   height: 100%;
-  padding: 14px 18px;
-  border-radius: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: rgba(16, 17, 22, 0.86);
-  backdrop-filter: blur(18px);
-  color: rgba(255, 255, 255, 0.94);
+  background: transparent;
+  overflow: hidden;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* No kebab and no guide dot in this window, so the control gutter NotchBar.css
+   reserves on the right would push the waveform off center. */
+.notch-bar-inner.is-bare {
+  padding: 4px 14px;
+}
+
+/* The failure pill. Rust swaps the window to this footprint for the error phase
+   only; every other phase is the wordless notch. */
+.dictation-message {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  height: 100%;
+  padding: 10px 14px;
+  border-radius: 12px;
   font-family:
     "Segoe UI Variable Text",
     "Segoe UI",
     system-ui,
     sans-serif;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
   overflow: hidden;
   user-select: none;
 }
 
-.dictation-hud__row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+/* Held text: the label and the words stack, so the transcript gets the width. */
+.dictation-message.is-pending {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
 }
 
-.dictation-hud__dot {
+.dictation-message__row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.dictation-message__label {
+  font-size: 12px;
+  letter-spacing: 0.02em;
+  color: var(--glass-text-dim);
+}
+
+.dictation-message__dot {
+  flex: 0 0 auto;
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.35);
-  flex: 0 0 auto;
-}
-
-.dictation-hud--listening .dictation-hud__dot {
-  background: #ff5f57;
-  animation: dictation-pulse 1.4s ease-in-out infinite;
-}
-
-.dictation-hud--transcribing .dictation-hud__dot {
-  background: #f5c451;
-}
-
-.dictation-hud--inserted .dictation-hud__dot {
-  background: #4cd07d;
-}
-
-.dictation-hud--error .dictation-hud__dot {
   background: #ff8f6b;
 }
 
-.dictation-hud__hint {
-  font-size: 12px;
-  letter-spacing: 0.02em;
-  color: rgba(255, 255, 255, 0.62);
+/* Amber, not the failure orange: the words are still coming. */
+.dictation-message.is-pending .dictation-message__dot {
+  background: #f5c451;
+  animation: dictation-hold-pulse 1.6s ease-in-out infinite;
 }
 
-.dictation-hud__text {
-  margin: 0;
-  font-size: 15px;
-  line-height: 1.35;
-  /* Two lines, then an ellipsis. Never a scroll container. */
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.dictation-hud--error .dictation-hud__text {
-  color: rgba(255, 255, 255, 0.68);
-}
-
-@keyframes dictation-pulse {
+@keyframes dictation-hold-pulse {
   0%,
   100% {
     opacity: 1;
   }
   50% {
-    opacity: 0.35;
+    opacity: 0.4;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .dictation-hud--listening .dictation-hud__dot {
+  .dictation-message.is-pending .dictation-message__dot {
     animation: none;
   }
+}
+
+.dictation-message__text {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.3;
+  color: var(--glass-text-bright);
+  /* Two lines, then an ellipsis. Never a scroll container. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }

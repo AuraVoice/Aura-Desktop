@@ -18,8 +18,9 @@
 // src-tauri/src/dictation/stt.rs was transcribed from. Bumping it means
 // re-checking those structs against that release's c-api.h.
 //
-// Idempotent: it exits immediately once every target file is present, so
-// chaining it into `npm run build` costs nothing after the first run.
+// Idempotent: it exits once every target file is present AND matches the
+// digest recorded when it was installed, so chaining it into `npm run build`
+// costs one pass of hashing after the first run and nothing else.
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -44,9 +45,24 @@ const MODEL_NAME = "sherpa-onnx-streaming-zipformer-en-20M-2023-02-17";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
-const targetDir = path.join(repoRoot, "src-tauri", "resources", "dictation");
+const resourcesDir = path.join(repoRoot, "src-tauri", "resources");
+const targetDir = path.join(resourcesDir, "dictation");
+// A sibling of the target so the swap at the end is a same-volume rename.
+const stagingDir = path.join(resourcesDir, ".dictation-staging");
 const cacheDir = path.join(repoRoot, "node_modules", ".cache", "dictation");
-const manifestPath = path.join(targetDir, "installed.json");
+const MANIFEST_NAME = "installed.json";
+const manifestPath = path.join(targetDir, MANIFEST_NAME);
+
+// The DLLs are copied out under fixed names, so they can be required by name.
+// The four model roles are resolved from the archive (the epoch/avg numbers in
+// those file names move between releases) and then recorded in the manifest,
+// which is what the runtime reads. bpe.vocab is the only optional file.
+const REQUIRED_LIBS = ["sherpa-onnx-c-api.dll", "onnxruntime.dll"];
+const REQUIRED_ROLES = ["encoder", "decoder", "joiner", "tokens"];
+// Bumped whenever the manifest's shape changes, so an install written by an
+// older version of this script is reinstalled instead of half-understood.
+// Version 2 added per-file digests and the resolved model role names.
+const MANIFEST_VERSION = 2;
 
 const LIBS_ARCHIVE = `sherpa-onnx-${SHERPA_VERSION}-win-x64-shared.tar.bz2`;
 const MODEL_ARCHIVE = `${MODEL_NAME}.tar.bz2`;
@@ -92,10 +108,20 @@ async function sha256(file) {
   return hash.digest("hex");
 }
 
-/// The installed resources are trusted only when the manifest says they came
-/// from exactly these pinned archives AND every file it lists is still present
-/// at its recorded, non-zero size. Anything else means a version bump, a
-/// partial install, or tampering, and triggers a full reinstall.
+/// The installed resources are trusted only when ALL of this holds:
+///   - the manifest names exactly these pinned archives and this script's
+///     manifest version,
+///   - it declares every required role and every required DLL,
+///   - every file it lists is present at its recorded size AND its recorded
+///     SHA-256,
+///   - and the directory holds no native file the manifest does not list.
+///
+/// Sizes alone are not enough. These are native code and model weights loaded
+/// straight into Aura's process, and a release machine keeps this directory
+/// across many builds: a same-size corrupted DLL, or a leftover encoder from a
+/// previous model that the runtime might pick instead, would both pass a name
+/// and length check and then ship. Anything short of a full match triggers a
+/// clean reinstall rather than a repair, so no partial state survives.
 async function alreadyInstalled() {
   let manifest;
   try {
@@ -104,6 +130,7 @@ async function alreadyInstalled() {
     return false;
   }
   if (
+    manifest.manifestVersion !== MANIFEST_VERSION ||
     manifest.sherpaVersion !== SHERPA_VERSION ||
     manifest.modelName !== MODEL_NAME ||
     manifest.archives?.libs !== ARCHIVES.libs.sha256 ||
@@ -112,18 +139,63 @@ async function alreadyInstalled() {
     console.log("dictation: pinned version or digest changed, reinstalling");
     return false;
   }
-  for (const [name, recorded] of Object.entries(manifest.files ?? {})) {
+
+  const files = manifest.files ?? {};
+  const declared = new Set(Object.keys(files));
+  const roles = manifest.model ?? {};
+  const required = [...REQUIRED_LIBS];
+  for (const role of REQUIRED_ROLES) {
+    const name = roles[role];
+    if (typeof name !== "string" || !name) {
+      console.log(`dictation: the manifest declares no ${role}, reinstalling`);
+      return false;
+    }
+    required.push(name);
+  }
+  if (roles.bpeVocab) {
+    required.push(roles.bpeVocab);
+  }
+  for (const name of required) {
+    if (!declared.has(name)) {
+      console.log(`dictation: ${name} is not in the manifest, reinstalling`);
+      return false;
+    }
+  }
+
+  for (const [name, recorded] of Object.entries(files)) {
+    const file = path.join(targetDir, name);
     let info;
     try {
-      info = await stat(path.join(targetDir, name));
+      info = await stat(file);
     } catch {
       console.log(`dictation: ${name} is missing, reinstalling`);
       return false;
     }
-    if (info.size === 0 || info.size !== recorded) {
+    if (!recorded?.sha256 || info.size === 0 || info.size !== recorded.bytes) {
       console.log(`dictation: ${name} has an unexpected size, reinstalling`);
       return false;
     }
+    if ((await sha256(file)) !== recorded.sha256) {
+      console.log(`dictation: ${name} failed its SHA-256 check, reinstalling`);
+      return false;
+    }
+  }
+
+  // A file the manifest never wrote is either a stale model from an earlier
+  // pin or something dropped in by hand. Either way the runtime could resolve
+  // it, so the directory is rebuilt rather than trusted.
+  let present;
+  try {
+    present = await readdir(targetDir);
+  } catch {
+    return false;
+  }
+  for (const name of present) {
+    if (name === MANIFEST_NAME || declared.has(name)) {
+      continue;
+    }
+    console.log(`dictation: ${name} is not from this install, reinstalling`);
+    return false;
   }
   return true;
 }
@@ -211,15 +283,22 @@ async function main() {
   extract(libsArchive, extractDir);
   extract(modelArchive, extractDir);
 
+  // Everything is built in a staging directory that starts empty, and the
+  // target is only replaced once the whole set is in place and verified. A
+  // reinstall therefore cannot leave a stale model file behind for the runtime
+  // to resolve, and an interrupted run leaves the previous good install alone.
+  await rm(stagingDir, { recursive: true, force: true });
+  await mkdir(stagingDir, { recursive: true });
+
   const installed = [];
   async function install(from, name) {
-    const to = path.join(targetDir, name);
+    const to = path.join(stagingDir, name);
     await copyFile(from, to);
     const info = await stat(to);
     if (info.size === 0) {
       throw new Error(`${name} was installed empty`);
     }
-    installed.push([name, info.size]);
+    installed.push([name, { bytes: info.size, sha256: await sha256(to) }]);
   }
 
   const libsDir = path.join(
@@ -227,16 +306,19 @@ async function main() {
     `sherpa-onnx-${SHERPA_VERSION}-win-x64-shared`,
     "lib",
   );
-  for (const name of ["sherpa-onnx-c-api.dll", "onnxruntime.dll"]) {
+  for (const name of REQUIRED_LIBS) {
     await install(path.join(libsDir, name), name);
   }
 
   const modelDir = path.join(extractDir, MODEL_NAME);
-  const encoder = await pickModelFile(modelDir, "encoder", true);
-  const decoder = await pickModelFile(modelDir, "decoder", false);
-  const joiner = await pickModelFile(modelDir, "joiner", true);
-  for (const name of [encoder, decoder, joiner, "tokens.txt"]) {
-    await install(path.join(modelDir, name), name);
+  const roles = {
+    encoder: await pickModelFile(modelDir, "encoder", true),
+    decoder: await pickModelFile(modelDir, "decoder", false),
+    joiner: await pickModelFile(modelDir, "joiner", true),
+    tokens: "tokens.txt",
+  };
+  for (const role of REQUIRED_ROLES) {
+    await install(path.join(modelDir, roles[role]), roles[role]);
   }
 
   // bpe.vocab is what sherpa-onnx needs to tokenize hotwords for a BPE English
@@ -247,6 +329,7 @@ async function main() {
   const bpeVocab = path.join(modelDir, "bpe.vocab");
   if (await exists(bpeVocab)) {
     await install(bpeVocab, "bpe.vocab");
+    roles.bpeVocab = "bpe.vocab";
   } else {
     console.warn(
       "dictation: bpe.vocab is not in the model archive, contextual biasing will be off",
@@ -254,15 +337,21 @@ async function main() {
   }
 
   await writeFile(
-    manifestPath,
+    path.join(stagingDir, MANIFEST_NAME),
     `${JSON.stringify(
       {
+        manifestVersion: MANIFEST_VERSION,
         sherpaVersion: SHERPA_VERSION,
         modelName: MODEL_NAME,
         archives: {
           libs: ARCHIVES.libs.sha256,
           model: ARCHIVES.model.sha256,
         },
+        // The runtime reads these exact names rather than scanning the
+        // directory for a prefix match, so which encoder/joiner precision was
+        // installed is decided here, once, and never re-guessed on the user's
+        // machine.
+        model: roles,
         files: Object.fromEntries(installed),
       },
       null,
@@ -270,6 +359,12 @@ async function main() {
     )}\n`,
   );
 
+  // Swap last. rename() onto an existing directory fails on Windows, so the
+  // old one is removed first; the window between the two is the only moment
+  // the target is incomplete, and a crash inside it leaves the staging copy on
+  // disk for the next run to rebuild from scratch.
+  await rm(targetDir, { recursive: true, force: true });
+  await rename(stagingDir, targetDir);
   await rm(extractDir, { recursive: true, force: true });
   console.log(`dictation: installed the runtime and model into ${targetDir}`);
 }

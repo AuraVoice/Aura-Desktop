@@ -19,6 +19,7 @@ mod sentry_setup;
 mod system_control;
 mod toast;
 mod tray;
+mod uia;
 mod updater;
 mod voice_toggle_key;
 mod win_focus;
@@ -298,6 +299,7 @@ pub fn run() {
             dictation::dictation_vocabulary,
             dictation::dictation_add_vocabulary,
             dictation::dictation_record_correction,
+            uia::capture_structured_context,
             toast::show_actionable_toast,
             toast::take_pending_toast_activation
         ])
@@ -322,6 +324,11 @@ pub fn run() {
             // thread: the on-device recognizer, WASAPI capture, and the
             // SendInput burst all live there, never on the message pump.
             app.manage(dictation::start(app.handle().clone()));
+
+            // Owns the COM apartment for UI Automation. Started once here so
+            // the first turn does not pay for CoCreateInstance, and so
+            // dictation's insert path has a worker to ask before it types.
+            app.manage(uia::UiaWorker::start());
 
             app.manage(voice_toggle_key::start(app.handle().clone()));
 

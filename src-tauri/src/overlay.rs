@@ -28,8 +28,10 @@ const COMPANION_HEIGHT: f64 = 400.0;
 // (NOTCH_MAIN wide x NOTCH_CROSS tall); on Left/Right it renders rotated, so its
 // on-screen footprint is NOTCH_CROSS wide x NOTCH_MAIN tall. 184x29 is 40% of the
 // old 460x72 bar.
-const NOTCH_MAIN: f64 = 184.0;
-const NOTCH_CROSS: f64 = 29.0;
+// pub(crate): dictation/hud.rs docks its own always-on-top notch to the same
+// edge with the same metrics, so the two surfaces cannot drift apart.
+pub(crate) const NOTCH_MAIN: f64 = 184.0;
+pub(crate) const NOTCH_CROSS: f64 = 29.0;
 // The card that fills the below/beside-notch slot keeps a fixed readable size in
 // its natural orientation regardless of edge: CARD_CROSS wide, and as tall as the
 // slot extent React passes (content-measured for drafts, fixed for other cards,
@@ -37,7 +39,7 @@ const NOTCH_CROSS: f64 = 29.0;
 // Left/Right it sits beside the notch and grows the window along its width.
 const CARD_CROSS: f64 = 380.0;
 // Gap between the notch and an open card (matches the CSS grid gap).
-const NOTCH_GAP: f64 = 6.0;
+pub(crate) const NOTCH_GAP: f64 = 6.0;
 const SETUP_WIDTH: f64 = 600.0;
 // Tall enough for the first-run question steps (heading + up to six choices +
 // optional freetext + button). Sign-in and consent fit comfortably within this
@@ -103,7 +105,7 @@ impl NotchEdge {
         }
     }
 
-    fn as_stored(self) -> &'static str {
+    pub(crate) fn as_stored(self) -> &'static str {
         match self {
             Self::Top => "top",
             Self::Bottom => "bottom",
@@ -114,7 +116,7 @@ impl NotchEdge {
 
     /// Left/Right dock the pill rotated to vertical, so its footprint's long axis
     /// is vertical and a card grows horizontally beside it.
-    fn is_vertical(self) -> bool {
+    pub(crate) fn is_vertical(self) -> bool {
         matches!(self, Self::Left | Self::Right)
     }
 }
@@ -203,7 +205,7 @@ impl Default for OverlayStateHandle {
     }
 }
 
-fn main_window(app: &AppHandle) -> Option<WebviewWindow> {
+pub(crate) fn main_window(app: &AppHandle) -> Option<WebviewWindow> {
     app.get_webview_window(MAIN_WINDOW)
 }
 
@@ -347,11 +349,6 @@ fn active_display_bounds(window: &WebviewWindow) -> (LogicalPosition<f64>, Logic
 fn active_display_work_area(
     window: &WebviewWindow,
 ) -> (LogicalPosition<f64>, LogicalSize<f64>) {
-    use windows::Win32::Foundation::POINT;
-    use windows::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTOPRIMARY,
-    };
-
     let (full_pos, full_size) = active_display_bounds(window);
     let scale = window
         .cursor_position()
@@ -360,6 +357,23 @@ fn active_display_work_area(
         .or_else(|| window.primary_monitor().ok().flatten())
         .map(|m| m.scale_factor())
         .unwrap_or(1.0);
+    work_area_within(full_pos, full_size, scale)
+}
+
+/// The work area of the display whose FULL bounds are given, rather than of
+/// whichever display the cursor happens to be on. dictation/hud.rs docks to the
+/// monitor that owns the window being typed into, which is not always the one
+/// under the cursor, so it resolves that monitor itself and calls this.
+#[cfg(target_os = "windows")]
+pub(crate) fn work_area_within(
+    full_pos: LogicalPosition<f64>,
+    full_size: LogicalSize<f64>,
+    scale: f64,
+) -> (LogicalPosition<f64>, LogicalSize<f64>) {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::Graphics::Gdi::{
+        GetMonitorInfoW, MonitorFromPoint, MONITORINFO, MONITOR_DEFAULTTOPRIMARY,
+    };
 
     // Sample a physical point just inside the display's top-left to resolve its
     // HMONITOR, then read rcMonitor/rcWork (both physical device pixels). The
@@ -402,12 +416,21 @@ fn active_display_work_area(
     active_display_bounds(window)
 }
 
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn work_area_within(
+    full_pos: LogicalPosition<f64>,
+    full_size: LogicalSize<f64>,
+    _scale: f64,
+) -> (LogicalPosition<f64>, LogicalSize<f64>) {
+    (full_pos, full_size)
+}
+
 /// The Bar window's size for the current edge and open card. On Top/Bottom the
 /// pill is horizontal and a card grows the window's height; on Left/Right the
 /// pill is vertical (footprint NOTCH_CROSS wide x NOTCH_MAIN tall) and a card
 /// grows the window's width beside it. `slot` is the card's height extent React
 /// passes via set_slot_height (None when no card is open).
-fn bar_size(edge: NotchEdge, slot: Option<f64>) -> LogicalSize<f64> {
+pub(crate) fn bar_size(edge: NotchEdge, slot: Option<f64>) -> LogicalSize<f64> {
     if edge.is_vertical() {
         let width = NOTCH_CROSS + slot.map_or(0.0, |_| NOTCH_GAP + CARD_CROSS);
         let height = slot.map_or(NOTCH_MAIN, |extent| NOTCH_MAIN.max(extent));
@@ -422,7 +445,7 @@ fn bar_size(edge: NotchEdge, slot: Option<f64>) -> LogicalSize<f64> {
 /// Anchors the Bar window to its edge within the work area. The window contains
 /// the notch (centered on the edge's cross-axis) plus any card growing inward,
 /// so anchoring the whole window flush to the edge keeps the pill centered on it.
-fn bar_position(
+pub(crate) fn bar_position(
     edge: NotchEdge,
     work_pos: LogicalPosition<f64>,
     work_size: LogicalSize<f64>,

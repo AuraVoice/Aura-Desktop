@@ -12,6 +12,12 @@
 //!     invariant that the module never acts on user applications
 //!   - anything that could reach win_focus::force_foreground, whose lone Alt
 //!     tap drops the target window into keyboard menu mode and eats the text
+//!
+//! UI Automation IS used, read-only, to ask one question first: would these
+//! keystrokes land in a text box at all (`uia::focus`)? Typing is aimed at
+//! whatever holds focus, so without that question a sentence delivered to a web
+//! app's list view is a burst of its single-key shortcuts. Reading the answer
+//! stays inside the invariant above; only SetValue would not.
 
 #![cfg(windows)]
 
@@ -23,9 +29,12 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
-    KEYEVENTF_UNICODE, VIRTUAL_KEY, VK_CONTROL, VK_LMENU, VK_LWIN, VK_RMENU, VK_RWIN,
+    KEYEVENTF_UNICODE, VIRTUAL_KEY, VK_CONTROL, VK_LMENU, VK_LWIN, VK_MENU, VK_RMENU, VK_RWIN,
+    VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
+
+use crate::uia::FocusVerdict;
 
 /// UTF-16 code units per SendInput call. One giant array is silently dropped by
 /// Electron apps, RDP sessions and Windows Terminal; small chunks with a gap
@@ -52,8 +61,18 @@ pub enum InsertOutcome {
     KeysHeld,
     /// The target window belongs to a higher integrity level process, so
     /// Windows drops our input with no error at all (UIPI). Task Manager,
-    /// regedit, an elevated terminal, most installers.
+    /// regedit, an elevated terminal, most installers. Means NOTHING was
+    /// typed: the very first chunk was refused.
     Blocked,
+    /// Some chunks landed and a later one was refused. Distinct from `Blocked`
+    /// because part of the sentence is already in the user's document, and
+    /// telling them nothing was typed is a lie they would act on.
+    PartiallyInserted,
+    /// No text field has focus, so the keystrokes would have landed on
+    /// whatever else was there. The caller holds the text instead of typing it.
+    NoTextField,
+    /// A password field has focus. Never typed into, and never held for later.
+    PasswordField,
 }
 
 pub fn foreground_window() -> isize {
@@ -62,7 +81,12 @@ pub fn foreground_window() -> isize {
 
 /// Types `text` into `target` after the guards pass. HWNDs are carried as raw
 /// isize (win_focus.rs's rule) and never stored across threads.
-pub fn insert_text(text: &str, target: isize) -> InsertOutcome {
+///
+/// `verdict` answers "would these keystrokes land in a text box", and is
+/// checked LAST, immediately before typing, because it is the guard most
+/// sensitive to time: the user can click somewhere else during the keyup wait
+/// above, and a verdict read before that wait would describe the wrong control.
+pub fn insert_text(text: &str, target: isize, verdict: FocusVerdict) -> InsertOutcome {
     if foreground_window() != target {
         return InsertOutcome::FocusChanged;
     }
@@ -78,7 +102,49 @@ pub fn insert_text(text: &str, target: isize) -> InsertOutcome {
     if is_protected_target(target) {
         return InsertOutcome::Blocked;
     }
+    match verdict {
+        FocusVerdict::Password => return InsertOutcome::PasswordField,
+        FocusVerdict::NotTypable => return InsertOutcome::NoTextField,
+        // Unknown types. See uia/focus.rs: refusing on an uncertain verdict
+        // would break dictation in whatever application was misjudged, which is
+        // worse than the shortcut hazard the check exists to avoid.
+        FocusVerdict::Typable | FocusVerdict::Unknown => {}
+    }
     send_unicode(text)
+}
+
+/// The deferred write: types text that was held because no text box had focus
+/// when the chord came up, into whatever has focus NOW.
+///
+/// It deliberately does not compare against the original target. Focus moving
+/// is the whole reason this path exists; the user clicking into a reply box, in
+/// this app or another one, is the event it is waiting for. Every other guard
+/// still applies, and the caller has already confirmed the verdict.
+pub fn insert_text_here(text: &str) -> InsertOutcome {
+    let target = foreground_window();
+    if target == 0 {
+        return InsertOutcome::FocusChanged;
+    }
+    // The chord is long gone by now, but the user may be mid-shortcut in the
+    // app they just clicked into. Injecting Unicode while Ctrl is down turns
+    // the whole insert into control chords, so this tick is skipped and the
+    // caller tries again on the next one.
+    if !modifiers_idle() {
+        return InsertOutcome::KeysHeld;
+    }
+    if is_protected_target(target) {
+        return InsertOutcome::Blocked;
+    }
+    send_unicode(text)
+}
+
+/// No modifier physically down. Cheaper than `wait_for_keys_up` and
+/// non-blocking, because the deferred path can simply wait for a better moment.
+fn modifiers_idle() -> bool {
+    const MODIFIERS: [VIRTUAL_KEY; 5] = [VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN];
+    !MODIFIERS
+        .iter()
+        .any(|key| unsafe { GetAsyncKeyState(key.0 as i32) } as u16 & 0x8000 != 0)
 }
 
 /// Waits for the chord to be fully off the keyboard, then runs the Win guard
@@ -193,6 +259,10 @@ fn send_unicode(text: &str) -> InsertOutcome {
     let mut chunk: Vec<INPUT> = Vec::with_capacity(CHUNK_UNITS * 2);
     let mut pending_units = 0usize;
     let mut first = true;
+    // Tracked separately from `first`, which is only about the inter-chunk gap
+    // and goes false on a REFUSED flush too. This one answers the question the
+    // caller's message depends on: is any of this already in the document?
+    let mut landed_any = false;
     for character in text.chars() {
         let mut buffer = [0u16; 2];
         let units = character.encode_utf16(&mut buffer);
@@ -205,16 +275,28 @@ fn send_unicode(text: &str) -> InsertOutcome {
         pending_units += units.len();
         if pending_units >= CHUNK_UNITS {
             if !flush(&chunk, &mut first) {
-                return InsertOutcome::Blocked;
+                return refusal(landed_any);
             }
+            landed_any = true;
             chunk.clear();
             pending_units = 0;
         }
     }
     if !chunk.is_empty() && !flush(&chunk, &mut first) {
-        return InsertOutcome::Blocked;
+        return refusal(landed_any);
     }
     InsertOutcome::Inserted
+}
+
+/// Which failure a refused chunk actually is. A first-chunk refusal is UIPI and
+/// nothing was typed; a later one means the user is looking at a half-written
+/// sentence, which needs different copy.
+fn refusal(landed_any: bool) -> InsertOutcome {
+    if landed_any {
+        InsertOutcome::PartiallyInserted
+    } else {
+        InsertOutcome::Blocked
+    }
 }
 
 /// Returns false when Windows accepted none of the events. That is what UIPI

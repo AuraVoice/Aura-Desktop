@@ -66,7 +66,7 @@ impl DictationStatus {
 }
 
 #[cfg(windows)]
-pub use platform::{signal, start, DictationHandle};
+pub use platform::{is_holding_text, signal, start, DictationHandle};
 
 #[cfg(windows)]
 mod platform {
@@ -96,15 +96,30 @@ mod platform {
     /// on screen before the HUD hides itself.
     const CAPTION_LINGER: Duration = Duration::from_millis(2200);
     const FAILURE_LINGER: Duration = Duration::from_millis(4000);
-    /// How long one chord key must be held, with nothing else pressed, before
-    /// the microphone is opened at all. Ordinary shortcuts (Ctrl+C, Ctrl+V,
-    /// Ctrl-click, Win+E) are cancelled by the hook the moment their second key
-    /// lands, which is well inside this window, so they never reach the device.
-    const PREWARM_DEBOUNCE: Duration = Duration::from_millis(250);
+    /// How long a hold that ended before the model finished loading keeps
+    /// waiting for the in-flight load. Only ever paid on the first hold of a
+    /// session, and only when the user out-typed the loader; the buffered audio
+    /// is decoded the moment the recognizer lands, so a short first utterance on
+    /// a slow machine is transcribed instead of thrown away.
+    const LOAD_GRACE: Duration = Duration::from_millis(4000);
     /// Budget for draining the packet WASAPI still holds when the chord comes
     /// up. Without it a user who releases the instant they stop speaking loses
     /// the last word.
     const TAIL_DRAIN: Duration = Duration::from_millis(80);
+    /// How often the microphone level is pushed at the HUD's waveform. The
+    /// device delivers every 20 to 30ms, which is more than the canvas can use:
+    /// it smooths across frames anyway, so 20 updates a second reads as live
+    /// while keeping the event traffic trivial. Only ever sent during a hold.
+    const LEVEL_EVERY: Duration = Duration::from_millis(50);
+    /// How long a finished transcript waits for a text box when none had focus
+    /// as the chord came up. Long enough to alt-tab and click into a reply box,
+    /// short enough that text can never appear somewhere the user has stopped
+    /// associating with what they said.
+    const PENDING_WINDOW: Duration = Duration::from_secs(10);
+    /// How often the held text re-asks where focus is. Each ask is a single
+    /// cross-process property read, and it is skipped outright whenever the UIA
+    /// worker is busy with a voice turn.
+    const PROBE_TICK: Duration = Duration::from_millis(250);
     /// Named so logging.rs's panic hook can recognize it and refuse to format
     /// a panic payload raised there.
     pub const MODEL_THREAD: &str = "aura-dictation-model";
@@ -176,6 +191,16 @@ mod platform {
             let _ = tx.send(Message::Chord(chord_signal));
         }
     }
+
+    /// True while a finished transcript is being held for a text box. Read by
+    /// the keyboard hook on every Escape so the common case (nothing held) is a
+    /// single relaxed atomic load and no channel traffic at all.
+    pub fn is_holding_text() -> bool {
+        HOLDING_TEXT.load(Ordering::Relaxed)
+    }
+
+    static HOLDING_TEXT: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
 
     pub fn start(app: AppHandle) -> DictationHandle {
         let (tx, rx) = std::sync::mpsc::channel::<Message>();
@@ -314,6 +339,12 @@ mod platform {
         fn ready(&self) -> Option<&Recognizer> {
             self.recognizer.as_ref()
         }
+
+        /// A load is still in flight, so "not ready" means "not yet" rather
+        /// than "not in this build". Only used to pick the HUD's wording.
+        fn loading(&self) -> bool {
+            self.loading.is_some()
+        }
     }
 
     /// The dedicated worker. Everything expensive lives here and never on the
@@ -353,39 +384,72 @@ mod platform {
 
         let mut model = ModelState::default();
         let mut capture: Option<Capture> = None;
+        // A finished transcript with nowhere to go yet. Held HERE, in the loop
+        // that also receives chord signals, so waiting for a text box can never
+        // swallow a signal: a message arriving mid-hold cancels the hold and is
+        // then handled normally, exactly as if nothing had been pending.
+        let mut pending: Option<PendingText> = None;
         loop {
-            let Ok(message) = rx.recv() else {
-                break;
+            let received = if pending.is_some() {
+                match rx.recv_timeout(PROBE_TICK) {
+                    Ok(message) => Some(message),
+                    Err(RecvTimeoutError::Timeout) => None,
+                    Err(RecvTimeoutError::Disconnected) => break,
+                }
+            } else {
+                match rx.recv() {
+                    Ok(message) => Some(message),
+                    Err(_) => break,
+                }
             };
+            let Some(message) = received else {
+                // A quiet tick, which only happens while text is held: ask
+                // again whether a text box has appeared.
+                if let Some(held) = pending.take() {
+                    pending = advance_pending(&app, held);
+                    set_holding(pending.is_some());
+                }
+                continue;
+            };
+            // A new dictation supersedes held text: words from an earlier hold
+            // must never land inside a newer one. Escape drops it outright.
+            //
+            // Chord NOISE deliberately does not. Prewarm, and the Cancel that
+            // an ordinary Ctrl+C produces, both arrive constantly while the
+            // user works, and losing held text to a copy shortcut would make
+            // the hold feel arbitrary.
+            if matches!(
+                message,
+                Message::Chord(ChordSignal::Arm) | Message::Chord(ChordSignal::CancelPending)
+            ) {
+                if let Some(held) = pending.take() {
+                    discard_pending(&app, held, "superseded", None);
+                    set_holding(false);
+                }
+            }
             match message {
                 Message::Shutdown => break,
+                Message::Chord(ChordSignal::CancelPending) => {
+                    // Already dropped above. The signal only fires while
+                    // something is held, so there is nothing else to do.
+                }
                 Message::Chord(ChordSignal::Prewarm) => {
-                    // Prewarm NEVER opens the microphone. It only warms the
-                    // model, which is CPU and memory and produces no privacy
-                    // signal: no device handle, no Windows "in use" indicator.
+                    // Deliberately inert. Prewarm means "one chord key is down",
+                    // and this hook cannot see mouse input, so a Ctrl-click or a
+                    // Ctrl-drag through a file list is indistinguishable from a
+                    // long deliberate Ctrl hold. Nothing expensive may hang off
+                    // it: not the microphone (a device handle would light the
+                    // Windows "in use" indicator) and not the model either,
+                    // whose 130 to 200MB working set would otherwise stay
+                    // resident for the whole session after a stray drag by a
+                    // user who never dictates.
                     //
-                    // That matters because this hook cannot see mouse input, so
-                    // Ctrl-click or Ctrl-drag through a file list looks exactly
-                    // like a long deliberate Ctrl hold. Anything gated purely on
-                    // a timer would open the device for it. The microphone is
-                    // therefore opened only once the FULL chord is down, and the
-                    // WASAPI cold start hides behind the 200 to 400ms a human
-                    // takes before their first phoneme after completing it.
-                    //
-                    // The debounce still guards the model load, so an ordinary
-                    // Ctrl+C (cancelled by the hook the instant its second key
-                    // lands) does not even pay for that.
-                    match rx.recv_timeout(PREWARM_DEBOUNCE) {
-                        Ok(Message::Shutdown) => break,
-                        Ok(Message::Chord(ChordSignal::Arm)) => {
-                            if handle_arm(&app, &mut model, &mut capture, &rx, &status) {
-                                break;
-                            }
-                        }
-                        Ok(Message::Chord(_)) => continue,
-                        Err(RecvTimeoutError::Timeout) => model.begin_load(&app, &status),
-                        Err(RecvTimeoutError::Disconnected) => break,
-                    }
+                    // Both the device and the model start only once the FULL
+                    // chord is down (`handle_arm`). The WASAPI cold start hides
+                    // behind the 200 to 400ms a human takes before their first
+                    // phoneme, and a model load that outruns a short first
+                    // utterance is covered by LOAD_GRACE in `run_utterance`
+                    // rather than by warming ahead of a guess.
                 }
                 Message::Chord(ChordSignal::Cancel) | Message::Chord(ChordSignal::Release) => {
                     // Either an abandoned prewarm, or a release with no matching
@@ -393,13 +457,140 @@ mod platform {
                     capture = None;
                 }
                 Message::Chord(ChordSignal::Arm) => {
-                    if handle_arm(&app, &mut model, &mut capture, &rx, &status) {
+                    let mut held = None;
+                    let shutting_down =
+                        handle_arm(&app, &mut model, &mut capture, &rx, &status, &mut held);
+                    if let Some(text) = held {
+                        pending = Some(PendingText::new(text));
+                        set_holding(true);
+                    }
+                    if shutting_down {
                         break;
                     }
                 }
             }
         }
+        if let Some(held) = pending.take() {
+            discard_pending(&app, held, "shutting down", None);
+            set_holding(false);
+        }
         hud::hide(&app);
+    }
+
+    /// A transcript waiting for somewhere to land.
+    struct PendingText {
+        text: String,
+        expires_at: Instant,
+        /// The HUD generation of the hold that produced it, so the closing
+        /// caption cannot be hidden by a stale timer from an earlier utterance.
+        generation: u64,
+    }
+
+    impl PendingText {
+        fn new(text: String) -> Self {
+            Self {
+                text,
+                expires_at: Instant::now() + PENDING_WINDOW,
+                generation: HUD_GENERATION.load(Ordering::SeqCst),
+            }
+        }
+    }
+
+    fn set_holding(holding: bool) {
+        HOLDING_TEXT.store(holding, Ordering::Relaxed);
+    }
+
+    /// One tick of the hold: land the text if a text box now has focus, expire
+    /// it if the window has run out, otherwise keep waiting. Returns the text
+    /// still being held, or None once it is resolved either way.
+    fn advance_pending(app: &AppHandle, held: PendingText) -> Option<PendingText> {
+        // Only a CONFIDENT yes lands the text. Unknown deliberately does not:
+        // on the insert path Unknown means "type, refusing is worse", but here
+        // the user has already been told the text is waiting for a text box,
+        // and dropping it into an ambiguous pane instead would be exactly the
+        // surprise this whole path exists to avoid.
+        let probe = crate::uia::probe_focus(app);
+        if matches!(probe.verdict, crate::uia::FocusVerdict::Typable) {
+            match insert::insert_text_here(&held.text) {
+                InsertOutcome::Inserted => {
+                    info!(
+                        "dictation: held text landed role={} chars={}",
+                        probe.role,
+                        held.text.chars().count()
+                    );
+                    finish_with(
+                        app,
+                        held.generation,
+                        HudUpdate::new(HudPhase::Inserted).with_text(held.text),
+                        CAPTION_LINGER,
+                    );
+                    return None;
+                }
+                // A modifier is down, or the click landed on an elevated
+                // window. Neither is final: keep waiting for a better moment.
+                InsertOutcome::KeysHeld | InsertOutcome::Blocked => {}
+                // Part of it is already in the document. This one MUST resolve
+                // the hold: every other outcome here is safe to retry on the
+                // next tick, and retrying this one would type the whole
+                // sentence a second time on top of the half already there.
+                InsertOutcome::PartiallyInserted => {
+                    warn!(
+                        "dictation: held text landed only partially role={}",
+                        probe.role
+                    );
+                    finish_with(
+                        app,
+                        held.generation,
+                        HudUpdate::new(HudPhase::Error).with_message(
+                            "Only part of that was typed. Check it before you send it.",
+                        ),
+                        FAILURE_LINGER,
+                    );
+                    return None;
+                }
+                other => {
+                    warn!("dictation: held text could not be typed ({other:?})");
+                }
+            }
+        }
+        if Instant::now() >= held.expires_at {
+            discard_pending(
+                app,
+                held,
+                "no text box appeared",
+                Some("No text box, so nothing was typed."),
+            );
+            return None;
+        }
+        Some(held)
+    }
+
+    /// Drops held text without typing it. The transcript itself is never
+    /// logged, only the reason.
+    ///
+    /// `caption` is None for the two reasons the user does not need told about.
+    /// A superseding hold is about to publish `Listening` over the caption
+    /// anyway, and a shutdown hides the HUD two lines later; in both cases the
+    /// caption would also carry the OLD generation, so it flashes red for a
+    /// moment at the start of the hold that replaced it.
+    fn discard_pending(
+        app: &AppHandle,
+        held: PendingText,
+        reason: &str,
+        caption: Option<&str>,
+    ) {
+        info!(
+            "dictation: held text discarded ({reason}) chars={}",
+            held.text.chars().count()
+        );
+        if let Some(caption) = caption {
+            finish_with(
+                app,
+                held.generation,
+                HudUpdate::new(HudPhase::Error).with_message(caption),
+                FAILURE_LINGER,
+            );
+        }
     }
 
     /// One hold, with the device always released afterwards. Returns true when
@@ -410,6 +601,7 @@ mod platform {
         capture: &mut Option<Capture>,
         rx: &Receiver<Message>,
         status: &Arc<Mutex<DictationStatus>>,
+        held: &mut Option<String>,
     ) -> bool {
         model.begin_load(app, status);
         if capture.is_none() {
@@ -420,7 +612,7 @@ mod platform {
         // format a panic raised on this thread, so no payload that might carry
         // transcript text reaches the plaintext log.
         let shutting_down = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_utterance(app, model, capture, rx, status)
+            run_utterance(app, model, capture, rx, status, held)
         }))
         .unwrap_or_else(|_| {
             error!("dictation: an utterance panicked, the worker is continuing");
@@ -453,6 +645,7 @@ mod platform {
         capture: &mut Option<Capture>,
         rx: &Receiver<Message>,
         status: &Arc<Mutex<DictationStatus>>,
+        held: &mut Option<String>,
     ) -> bool {
         let generation = HUD_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
         // Snapshot the target BEFORE the HUD exists on screen, so nothing this
@@ -473,8 +666,8 @@ mod platform {
             );
             return shutting_down;
         };
-        // Drop whatever the prewarm window captured while the user was still
-        // reaching for the second key.
+        // Drop whatever WASAPI had already buffered when the device opened, so
+        // the utterance starts at the chord and not before it.
         active_capture.discard_pending();
 
         let vocabulary = vocab::load_vocab(app).unwrap_or_default();
@@ -482,6 +675,7 @@ mod platform {
 
         let started_at = Instant::now();
         let mut last_partial = Instant::now();
+        let mut last_level = Instant::now();
         let mut captured_frames = 0usize;
         let mut heard_speech = false;
         let mut shutting_down = false;
@@ -494,18 +688,34 @@ mod platform {
 
         // Phase 1: warm-up. Only runs while the first load of the session is
         // still in flight. `model` is borrowed mutably here and only here.
+        //
+        // Releasing the chord in here does NOT end the utterance. On a slow
+        // machine the very first dictation ("send it today") can be over before
+        // the recognizer lands, and bailing out at that point would discard
+        // every buffered sample and tell the user dictation is unavailable, for
+        // the one hold most likely to be their first ever. So a release only
+        // stops the capture and starts the LOAD_GRACE clock; the loop keeps
+        // polling the loader and the buffered audio is decoded on arrival.
+        let mut released_at: Option<Instant> = None;
         while model.ready().is_none() && !model.failed {
-            match poll_signal(rx) {
-                Signal::Shutdown => {
-                    shutting_down = true;
-                    released = true;
-                    break;
+            // Signals are read only until the hold ends. Anything the user does
+            // DURING the grace period (giving up and pressing the chord again,
+            // most likely, since the HUD is still saying "getting ready") stays
+            // queued for the worker loop to handle in order once this utterance
+            // finishes, instead of being consumed here and dropped on the floor.
+            if released_at.is_none() {
+                match poll_signal(rx) {
+                    Signal::Shutdown => {
+                        shutting_down = true;
+                        released = true;
+                        break;
+                    }
+                    Signal::Ended => {
+                        released = true;
+                        released_at = Some(Instant::now());
+                    }
+                    Signal::None => {}
                 }
-                Signal::Ended => {
-                    released = true;
-                    break;
-                }
-                Signal::None => {}
             }
             let samples = active_capture.drain();
             if !samples.is_empty() {
@@ -515,6 +725,16 @@ mod platform {
                 }
                 pending.extend_from_slice(&samples);
             }
+            // The waveform runs from the very first drain, so the mic is
+            // visibly working while the model is still loading. That is the
+            // stretch where the old HUD looked most broken.
+            if last_level.elapsed() >= LEVEL_EVERY {
+                last_level = Instant::now();
+                hud::publish_level(app, audio::level(&samples));
+            }
+            // Always polled before any exit below, so a load that finished
+            // during this iteration is collected rather than abandoned.
+            model.poll(status);
             if last_partial.elapsed() >= PARTIAL_EVERY {
                 last_partial = Instant::now();
                 hud::publish(
@@ -523,21 +743,37 @@ mod platform {
                         .with_message("Getting the on-device model ready"),
                 );
             }
-            if started_at.elapsed() >= audio::MAX_HOLD {
-                capped = true;
-                released = true;
-                break;
+            match released_at {
+                Some(at) => {
+                    if at.elapsed() >= LOAD_GRACE {
+                        break;
+                    }
+                }
+                None => {
+                    if started_at.elapsed() >= audio::MAX_HOLD {
+                        capped = true;
+                        released = true;
+                        break;
+                    }
+                }
             }
-            model.poll(status);
         }
 
+        let still_loading = model.loading();
         let Some(recognizer) = model.ready() else {
             let shutting_down = shutting_down || (!released && drain_until_release(rx));
+            // A load that is STILL running only ran out of grace, which is a
+            // "try again in a second", not the permanent "this build has no
+            // recognizer" that a failed or missing install means.
+            let message = if still_loading {
+                "The on-device model is still starting. Try that again in a moment."
+            } else {
+                "On-device dictation is not available in this build."
+            };
             finish_with(
                 app,
                 generation,
-                HudUpdate::new(HudPhase::Error)
-                    .with_message("On-device dictation is not available in this build."),
+                HudUpdate::new(HudPhase::Error).with_message(message),
                 FAILURE_LINGER,
             );
             return shutting_down;
@@ -582,6 +818,14 @@ mod platform {
                     heard_speech = true;
                 }
                 stream.accept(&samples);
+            }
+
+            // An empty drain publishes 0.0 rather than being skipped: flat bars
+            // are the honest reading for a muted or dead device, and that is
+            // the whole reason the waveform is here.
+            if last_level.elapsed() >= LEVEL_EVERY {
+                last_level = Instant::now();
+                hud::publish_level(app, audio::level(&samples));
             }
 
             if last_partial.elapsed() >= PARTIAL_EVERY {
@@ -643,16 +887,44 @@ mod platform {
         let final_text =
             vocab::apply_corrections(&decoded, &corrections, &vocabulary, app_key.as_deref());
 
-        let outcome = insert::insert_text(&final_text, target);
+        // Asked here, at the last possible moment, because this is the only
+        // point at which "where would these keystrokes go" has its final
+        // answer. Bounded and fails open; see uia/focus.rs.
+        let probe = crate::uia::probe_focus(app);
+        let outcome = insert::insert_text(&final_text, target, probe.verdict);
         info!(
-            "dictation: hold_ms={hold_ms} frames={captured_frames} chars={} outcome={outcome:?}",
-            final_text.chars().count()
+            "dictation: hold_ms={hold_ms} frames={captured_frames} chars={} role={} \
+             verdict={:?} outcome={outcome:?}",
+            final_text.chars().count(),
+            probe.role,
+            probe.verdict
         );
+
+        // The one outcome that does not end the utterance. The words are kept
+        // and the HUD says so; the worker loop waits for a text box and types
+        // them there. The caption is published directly rather than through
+        // finish_with, which would schedule the HUD's own hide.
+        if matches!(outcome, InsertOutcome::NoTextField) {
+            hud::publish(
+                app,
+                HudUpdate::new(HudPhase::Pending)
+                    .with_text(final_text.clone())
+                    .with_message("Waiting for a text box"),
+            );
+            *held = Some(final_text);
+            return shutting_down;
+        }
 
         let (update, linger) = match outcome {
             InsertOutcome::Inserted => (
                 HudUpdate::new(HudPhase::Inserted).with_text(final_text),
                 CAPTION_LINGER,
+            ),
+            InsertOutcome::NoTextField => unreachable!("handled above"),
+            InsertOutcome::PasswordField => (
+                HudUpdate::new(HudPhase::Error)
+                    .with_message("Aura does not type into password fields."),
+                FAILURE_LINGER,
             ),
             InsertOutcome::FocusChanged => (
                 HudUpdate::new(HudPhase::Error)
@@ -675,6 +947,15 @@ mod platform {
                     .with_message(
                         "Windows blocked typing into that window because it runs as administrator.",
                     ),
+                FAILURE_LINGER,
+            ),
+            // The text is NOT offered back here the way it is for the outcomes
+            // above: part of it is already in the document, so showing the
+            // whole sentence would invite the user to paste a duplicate.
+            InsertOutcome::PartiallyInserted => (
+                HudUpdate::new(HudPhase::Error).with_message(
+                    "Only part of that was typed. Check it before you send it.",
+                ),
                 FAILURE_LINGER,
             ),
         };
@@ -704,6 +985,10 @@ mod platform {
     /// Publishes the closing caption and schedules the HUD to hide, unless a
     /// newer hold has started in the meantime.
     fn finish_with(app: &AppHandle, generation: u64, update: HudUpdate, linger: Duration) {
+        // Every terminal path funnels through here, so this is the one place
+        // the waveform has to be told the hold is over. Without it the bars
+        // would hold their last spike for the whole caption linger.
+        hud::publish_level(app, 0.0);
         hud::publish(app, update);
         let handle = app.clone();
         tauri::async_runtime::spawn(async move {

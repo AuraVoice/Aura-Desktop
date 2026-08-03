@@ -188,11 +188,81 @@ fn pick(dir: &Path, candidates: &[&str], preferred_marker: &str) -> Option<PathB
     best
 }
 
+/// The `model` block of `installed.json`, written by the predownload script
+/// when it installed these exact files.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InstalledModel {
+    encoder: String,
+    decoder: String,
+    joiner: String,
+    tokens: String,
+    #[serde(default)]
+    bpe_vocab: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct InstalledManifest {
+    model: InstalledModel,
+}
+
 impl ModelPaths {
+    /// Which precision of encoder and joiner was installed is decided ONCE, at
+    /// build time, and recorded in `installed.json` by name. Reading those exact
+    /// names here means the runtime never has to guess between two files that
+    /// both look like an encoder: a directory scan would resolve whichever the
+    /// filesystem happened to return first, so a bundle that somehow carried
+    /// both an old and a new model could load a mismatched encoder/joiner pair
+    /// and either fail to initialize or quietly recognize badly.
+    ///
+    /// The prefix scan below is kept only as a fallback for a resource
+    /// directory assembled without the manifest, and it logs when it is used.
+    fn resolve(dir: &Path) -> Result<Self, String> {
+        match Self::from_manifest(dir) {
+            Ok(Some(paths)) => return Ok(paths),
+            Ok(None) => warn!("dictation.stt: no installed.json, falling back to a name scan"),
+            Err(e) => warn!("dictation.stt: installed.json unusable ({e}), falling back to a name scan"),
+        }
+        Self::from_scan(dir)
+    }
+
+    /// `Ok(None)` when there is no manifest at all; `Err` when there is one and
+    /// it cannot be trusted (unparseable, or naming a file that is not there).
+    fn from_manifest(dir: &Path) -> Result<Option<Self>, String> {
+        let manifest_path = dir.join("installed.json");
+        if !manifest_path.is_file() {
+            return Ok(None);
+        }
+        let raw = std::fs::read_to_string(&manifest_path)
+            .map_err(|e| format!("could not read installed.json: {e}"))?;
+        let manifest: InstalledManifest =
+            serde_json::from_str(&raw).map_err(|e| format!("could not parse installed.json: {e}"))?;
+        let named = |name: &str| -> Result<PathBuf, String> {
+            let path = dir.join(name);
+            if path.is_file() {
+                Ok(path)
+            } else {
+                Err(format!("{name} is named by installed.json but not installed"))
+            }
+        };
+        Ok(Some(Self {
+            encoder: named(&manifest.model.encoder)?,
+            decoder: named(&manifest.model.decoder)?,
+            joiner: named(&manifest.model.joiner)?,
+            tokens: named(&manifest.model.tokens)?,
+            bpe_vocab: manifest
+                .model
+                .bpe_vocab
+                .as_deref()
+                .map(|name| dir.join(name))
+                .filter(|path| path.is_file()),
+        }))
+    }
+
     /// The predownload script normalizes nothing beyond extracting the release
     /// archive, so the exact epoch/avg numbers in the file names are matched by
     /// prefix rather than hardcoded. INT8 variants win where both exist.
-    fn resolve(dir: &Path) -> Result<Self, String> {
+    fn from_scan(dir: &Path) -> Result<Self, String> {
         let encoder = pick(dir, &["encoder"], ".int8.")
             .ok_or_else(|| format!("no encoder model in {}", dir.display()))?;
         // The decoder is tiny and its INT8 build is not always shipped; either

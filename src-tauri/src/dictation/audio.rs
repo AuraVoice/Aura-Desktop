@@ -123,12 +123,9 @@ impl Drop for Capture {
     }
 }
 
-/// RMS over the whole utterance. Used ONLY to suppress an empty insert: never
-/// for endpointing, and never to trim leading silence, which would eat the
-/// first phoneme.
-pub fn is_silence(samples: &[f32]) -> bool {
+fn rms(samples: &[f32]) -> f64 {
     if samples.is_empty() {
-        return true;
+        return 0.0;
     }
     let sum: f64 = samples
         .iter()
@@ -137,10 +134,35 @@ pub fn is_silence(samples: &[f32]) -> bool {
             value * value
         })
         .sum();
-    let rms = (sum / samples.len() as f64).sqrt();
+    (sum / samples.len() as f64).sqrt()
+}
+
+/// RMS over the whole utterance. Used ONLY to suppress an empty insert: never
+/// for endpointing, and never to trim leading silence, which would eat the
+/// first phoneme.
+pub fn is_silence(samples: &[f32]) -> bool {
+    if samples.is_empty() {
+        return true;
+    }
     // Roughly -50 dBFS. Below this there is no speech to transcribe, only
     // room tone and preamp noise.
-    rms < 0.003
+    rms(samples) < 0.003
+}
+
+/// One drain's loudness as 0..1, for the HUD's waveform and nothing else. It is
+/// deliberately NOT the `is_silence` threshold: that one decides whether to
+/// insert text and must stay conservative, while this one only has to look
+/// honest. An empty drain returns 0.0 rather than being skipped, so a muted or
+/// dead device renders flat bars instead of freezing on the last spike.
+///
+/// Shaped, not raw: RMS is heavily bottom-weighted, so a linear mapping leaves
+/// normal speech sitting near the floor. The floor subtraction keeps room tone
+/// at rest and the exponent opens up the conversational range.
+pub fn level(samples: &[f32]) -> f32 {
+    const FLOOR: f64 = 0.004;
+    const GAIN: f64 = 11.0;
+    let shaped = ((rms(samples) - FLOOR).max(0.0) * GAIN).min(1.0).powf(0.62);
+    shaped as f32
 }
 
 /// How long a single hold may last before the worker stops on its own. A chord

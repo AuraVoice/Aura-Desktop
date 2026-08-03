@@ -1,5 +1,5 @@
-//! The dictation HUD: a small always-on-top caption strip that shows streaming
-//! partials while the chord is held.
+//! The dictation HUD: the notch, docked to the same screen edge as the voice
+//! bar, showing a live microphone waveform while the chord is held.
 //!
 //! This is its OWN window (label "dictation"), not an overlay.rs presentation,
 //! for two reasons. Any path into the overlay can reach
@@ -7,25 +7,43 @@
 //! whose whole contract is that the target window keeps it) and taps Alt,
 //! dropping the target into keyboard menu mode. And
 //! `OverlayPresentation::Bar` is already in use whenever a voice session is
-//! live, so the two surfaces would fight over `applied_presentation`.
+//! live, so the two surfaces would fight over `applied_presentation`. Dictation
+//! also has to work signed out, which the overlay's React root does not.
+//!
+//! It still LOOKS like the voice bar, because it reuses overlay.rs's own notch
+//! metrics and edge anchoring rather than a second set of constants. The user
+//! docked their notch somewhere on purpose; dictation appears there too.
 //!
 //! main.tsx routes on the window label, and "dictation" is listed in
 //! capabilities/default.json's `windows` array. Without that entry the label
 //! gets ZERO permissions, including core:default, so it could not even listen
 //! for its own events.
 
+use std::sync::atomic::{AtomicIsize, Ordering};
 use std::sync::Mutex;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{
+    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder,
+};
+
+use crate::overlay::{self, NotchEdge, OverlayPresentation};
 
 pub const DICTATION_WINDOW: &str = "dictation";
 
-const HUD_WIDTH: f64 = 460.0;
-const HUD_HEIGHT: f64 = 104.0;
-/// Distance from the bottom of the work area. High enough to clear the taskbar
-/// on a default Windows setup without covering the app the user is typing into.
-const HUD_BOTTOM_MARGIN: f64 = 120.0;
+/// The message pill. The notch itself is wordless by design, but a blocked or
+/// misdirected insert has to say so somewhere, and this window is the only
+/// surface dictation owns. Used ONLY for `Error` and `Pending`, so the normal
+/// path never grows past the notch. `Pending` is taller because it carries the
+/// held transcript as well as the explanation.
+const MESSAGE_WIDTH: f64 = 340.0;
+const MESSAGE_HEIGHT: f64 = 44.0;
+const PENDING_HEIGHT: f64 = 78.0;
+
+/// The window the current hold is typing into, remembered so a later phase
+/// change can re-place the HUD on the right display without the worker having
+/// to thread the target through every publish.
+static LAST_TARGET: AtomicIsize = AtomicIsize::new(0);
 
 /// What the HUD is currently telling the user. Every caption is derived from
 /// one of these; the chord itself is always rendered from
@@ -38,6 +56,10 @@ pub enum HudPhase {
     Transcribing,
     Inserted,
     Error,
+    /// Decoded, but no text box had focus, so the words are being held until
+    /// one does. The only phase that shows the transcript on screen, and it
+    /// earns that: the user has to know something is waiting, and what.
+    Pending,
 }
 
 #[derive(Clone, Serialize)]
@@ -50,6 +72,10 @@ pub struct HudUpdate {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
     pub chord_label: &'static str,
+    /// Which edge the notch is docked to, so React renders the matching
+    /// orientation. Stamped by `publish` from live overlay state rather than at
+    /// construction, so no call site has to know about it.
+    pub edge: &'static str,
 }
 
 /// The last update published, so a webview that was created moments ago can ask
@@ -74,6 +100,7 @@ impl HudUpdate {
             text: String::new(),
             message: None,
             chord_label: super::chord::DICTATION_CHORD.label(),
+            edge: NotchEdge::default().as_stored(),
         }
     }
 
@@ -101,7 +128,9 @@ fn build_window(app: &AppHandle) -> Result<(), String> {
         WebviewUrl::App("index.html".into()),
     )
     .title("Aura Dictation")
-    .inner_size(HUD_WIDTH, HUD_HEIGHT)
+    // Provisional: `place_window` sets the real size for the current edge and
+    // phase before the window is ever shown.
+    .inner_size(MESSAGE_WIDTH, MESSAGE_HEIGHT)
     .decorations(false)
     .transparent(true)
     .shadow(false)
@@ -176,7 +205,53 @@ fn target_center(_target: isize) -> Option<(f64, f64)> {
     None
 }
 
-fn position_window(window: &tauri::WebviewWindow, target: isize) {
+/// The HUD's footprint for one phase. Everything except a failure is the notch,
+/// at exactly the voice bar's metrics for the current edge.
+fn surface_size(edge: NotchEdge, phase: HudPhase) -> LogicalSize<f64> {
+    match phase {
+        HudPhase::Error => LogicalSize::new(MESSAGE_WIDTH, MESSAGE_HEIGHT),
+        HudPhase::Pending => LogicalSize::new(MESSAGE_WIDTH, PENDING_HEIGHT),
+        _ => overlay::bar_size(edge, None),
+    }
+}
+
+/// True when the voice bar is currently docked to this same edge ON THIS SAME
+/// display. Both surfaces are always-on-top and both anchor flush to the edge,
+/// so without this they would draw on the same pixels the moment someone
+/// dictates into a chat box during a live call.
+fn voice_notch_shares_display(
+    app: &AppHandle,
+    full_pos: LogicalPosition<f64>,
+    full_size: LogicalSize<f64>,
+    scale: f64,
+) -> bool {
+    if !matches!(overlay::snapshot(app).presentation, OverlayPresentation::Bar) {
+        return false;
+    }
+    let Some(main) = overlay::main_window(app) else {
+        return false;
+    };
+    let Ok(position) = main.outer_position() else {
+        return false;
+    };
+    // Coarse containment on purpose: converting the main window's physical
+    // origin with the TARGET display's scale is only approximate under mixed
+    // DPI, and all this decides is whether to step out of the way.
+    let origin = position.to_logical::<f64>(scale);
+    origin.x >= full_pos.x
+        && origin.x < full_pos.x + full_size.width
+        && origin.y >= full_pos.y
+        && origin.y < full_pos.y + full_size.height
+}
+
+/// Sizes and anchors the HUD for the current edge and phase. Called on every
+/// show and on every transition into the failure pill, and it caches NOTHING:
+/// the user can re-dock the notch between two holds, and an "already applied"
+/// cache that outlives one failed resize is exactly the desync that froze the
+/// sibling app's overlay (see CLAUDE.md).
+fn place_window(app: &AppHandle, window: &tauri::WebviewWindow, target: isize, phase: HudPhase) {
+    let edge = overlay::snapshot(app).notch_edge;
+    let size = surface_size(edge, phase);
     let monitor = target_center(target)
         .and_then(|(x, y)| window.monitor_from_point(x, y).ok().flatten())
         .or_else(|| window.primary_monitor().ok().flatten());
@@ -184,11 +259,23 @@ fn position_window(window: &tauri::WebviewWindow, target: isize) {
         return;
     };
     let scale = monitor.scale_factor();
-    let size = monitor.size().to_logical::<f64>(scale);
-    let origin = monitor.position().to_logical::<f64>(scale);
-    let x = origin.x + (size.width - HUD_WIDTH) / 2.0;
-    let y = origin.y + size.height - HUD_HEIGHT - HUD_BOTTOM_MARGIN;
-    let _ = window.set_position(tauri::LogicalPosition::new(x, y));
+    let full_size = monitor.size().to_logical::<f64>(scale);
+    let full_pos = monitor.position().to_logical::<f64>(scale);
+    let (work_pos, work_size) = overlay::work_area_within(full_pos, full_size, scale);
+    let mut position = overlay::bar_position(edge, work_pos, work_size, size);
+
+    if voice_notch_shares_display(app, full_pos, full_size, scale) {
+        let inset = overlay::NOTCH_CROSS + overlay::NOTCH_GAP;
+        match edge {
+            NotchEdge::Top => position.y += inset,
+            NotchEdge::Bottom => position.y -= inset,
+            NotchEdge::Left => position.x += inset,
+            NotchEdge::Right => position.x -= inset,
+        }
+    }
+
+    let _ = window.set_size(size);
+    let _ = window.set_position(position);
 }
 
 /// Builds the window if needed, positions it on the monitor that owns `target`,
@@ -196,6 +283,7 @@ fn position_window(window: &tauri::WebviewWindow, target: isize) {
 /// never pays for a second webview, and ordinary Ctrl or Win presses do not
 /// silently create one.
 pub fn show(app: &AppHandle, target: isize) {
+    LAST_TARGET.store(target, Ordering::Relaxed);
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
         if let Err(e) = build_window(&handle) {
@@ -203,7 +291,7 @@ pub fn show(app: &AppHandle, target: isize) {
             return;
         }
         if let Some(window) = handle.get_webview_window(DICTATION_WINDOW) {
-            position_window(&window, target);
+            place_window(&handle, &window, target, HudPhase::Listening);
             let _ = window.show();
         }
     });
@@ -221,9 +309,38 @@ pub fn hide(app: &AppHandle) {
 /// Pushes one state update at the HUD. Safe to call from the worker thread.
 /// The update is recorded before it is emitted, so a webview that has not
 /// finished registering its listener can still pull the current state.
-pub fn publish(app: &AppHandle, update: HudUpdate) {
+pub fn publish(app: &AppHandle, mut update: HudUpdate) {
+    update.edge = overlay::snapshot(app).notch_edge.as_stored();
+    let phase = update.phase;
     *LAST_UPDATE.lock().unwrap_or_else(|e| e.into_inner()) = Some(update.clone());
     if let Some(window) = app.get_webview_window(DICTATION_WINDOW) {
         let _ = window.emit("dictation-update", update);
+    }
+    // The two phases that need words grow the surface from the notch to the
+    // message pill. Once per hold at most, never on the normal path.
+    if matches!(phase, HudPhase::Error | HudPhase::Pending) {
+        let handle = app.clone();
+        let target = LAST_TARGET.load(Ordering::Relaxed);
+        let _ = app.run_on_main_thread(move || {
+            if let Some(window) = handle.get_webview_window(DICTATION_WINDOW) {
+                place_window(&handle, &window, target, phase);
+            }
+        });
+    }
+}
+
+/// Pushes one microphone level (0..1) at the HUD's waveform, roughly 20 times a
+/// second and only while a hold is live.
+///
+/// Deliberately NOT recorded in `LAST_UPDATE`: a level is a transient reading,
+/// and a webview that misses one gets the next in 50ms. Only captions need the
+/// pull-on-mount path, because a caption that arrives before the listener
+/// exists would otherwise leave the HUD blank.
+///
+/// This carries no speech, only loudness, so it is subject to the same rule as
+/// everything else here: never logged, at any level.
+pub fn publish_level(app: &AppHandle, level: f32) {
+    if let Some(window) = app.get_webview_window(DICTATION_WINDOW) {
+        let _ = window.emit("dictation-level", level);
     }
 }

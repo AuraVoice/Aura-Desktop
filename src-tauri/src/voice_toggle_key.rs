@@ -140,7 +140,7 @@ mod platform {
     use tokio::sync::mpsc as tokio_mpsc;
     use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::Threading::GetCurrentThreadId;
-    use windows::Win32::UI::Input::KeyboardAndMouse::{VK_LCONTROL, VK_RCONTROL};
+    use windows::Win32::UI::Input::KeyboardAndMouse::{VK_ESCAPE, VK_LCONTROL, VK_RCONTROL};
     use windows::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, DispatchMessageW, GetMessageW, PeekMessageW, SetWindowsHookExW,
         TranslateMessage, UnhookWindowsHookEx, HC_ACTION, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MSG,
@@ -251,6 +251,16 @@ mod platform {
             };
             if let Some(signal) = chord_outcome.as_ref().and_then(|outcome| outcome.signal) {
                 crate::dictation::signal(signal);
+            }
+            // Escape is the escape hatch for held dictation text. Gated on the
+            // flag so an ordinary Escape (every dialog, every editor, all day)
+            // is one relaxed atomic load in this hook and nothing else.
+            if is_down && !is_injected && event.vkCode == VK_ESCAPE.0 as u32 {
+                if crate::dictation::is_holding_text() {
+                    crate::dictation::signal(
+                        crate::dictation::chord::ChordSignal::CancelPending,
+                    );
+                }
             }
             // Only a chord that actually contains the voice toggle key needs
             // the classifier suppressed; DICTATION_CHORD::RightCtrlOnly (with
