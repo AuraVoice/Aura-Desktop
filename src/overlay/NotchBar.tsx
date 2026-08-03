@@ -34,6 +34,7 @@ interface NotchBarProps {
   edge: NotchEdge;
   dragHandlers?: NotchDragHandlers;
   guideArmed?: boolean;
+  guideActive?: boolean;
   menuOpen?: boolean;
   onMenuToggle?: () => void;
 }
@@ -43,17 +44,19 @@ export function NotchBar({
   edge,
   dragHandlers,
   guideArmed = false,
+  guideActive = false,
   menuOpen = false,
   onMenuToggle,
 }: NotchBarProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   useAudioLevels(voice.room, voice.status, canvasRef);
+  const showGuideStatus = guideArmed || guideActive;
 
   return (
     <div className={`notch-shell notch-shell-${edge}`} {...dragHandlers}>
       <GlassSurface className={`notch-bar notch-bar-${voice.status}`} draggable={false}>
         <div className="notch-shape">
-          <div className={`notch-bar-inner${guideArmed ? " has-guide" : ""}`}>
+          <div className={`notch-bar-inner${showGuideStatus ? " has-guide" : ""}`}>
             <div className="notch-recorder" aria-hidden="true">
               <canvas ref={canvasRef} className="notch-visualizer" />
             </div>
@@ -72,11 +75,17 @@ export function NotchBar({
                 <KebabIcon />
               </button>
             )}
-            {guideArmed && (
+            {showGuideStatus && (
               <span
-                className="notch-guide-indicator"
-                aria-label="Guide Mode is watching this screen"
-                title="Guide Mode active"
+                className={`notch-guide-indicator ${
+                  guideActive ? "is-active" : "is-starting"
+                }`}
+                aria-label={
+                  guideActive
+                    ? "Guide Mode is watching this screen"
+                    : "Guide Mode is starting"
+                }
+                title={guideActive ? "Guide Mode active" : "Guide Mode starting"}
               />
             )}
           </div>

@@ -1,7 +1,7 @@
 use std::sync::Mutex;
 use std::time::Instant;
 
-use log::{error, info};
+use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewWindow};
 use tauri_plugin_store::StoreExt;
@@ -1028,6 +1028,10 @@ pub fn point_at(
     label: &str,
 ) {
     let (Some(handle), Some(window)) = (state_handle(app), main_window(app)) else {
+        warn!(
+            "GuideTrace: stage=execution outcome=failed \
+             reason=pointer_native_state_unavailable"
+        );
         return;
     };
 
@@ -1041,6 +1045,10 @@ pub fn point_at(
         state.pointing_generation = state.pointing_generation.wrapping_add(1);
         state.pointing_generation
     };
+    info!(
+        "GuideTrace: stage=execution outcome=started \
+         reason=pointer_native_overlay_takeover generation={pointing_generation}"
+    );
 
     let result = window
         .set_size(LogicalSize::new(monitor_w, monitor_h))
@@ -1098,6 +1106,11 @@ pub fn point_at(
         }),
     ) {
         error!("overlay::point_at: failed to emit pointing-target: {e}");
+    } else {
+        info!(
+            "GuideTrace: stage=execution outcome=succeeded \
+             reason=pointer_native_target_emitted generation={pointing_generation}"
+        );
     }
 
     let watchdog_app = app.clone();

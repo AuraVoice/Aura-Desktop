@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent, type FormEvent } from "react";
+import { useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { signInWithCustomToken, signInWithEmailAndPassword } from "firebase/auth";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { auth } from "../lib/firebase";
@@ -8,6 +8,7 @@ import { webAuthCopy } from "../lib/webAuthCopy";
 import { formatPairingCodeForDisplay, rawPairingCode } from "../lib/pairingCodeFormat";
 import { pairingCodeLength, pairingErrorCopy } from "../lib/pairingCopy";
 import { logError } from "../lib/log";
+import { beginDesktopSignIn } from "../lib/acquisitionAnalytics";
 import { useWebAuthSignIn } from "./useWebAuthSignIn";
 import "./SignInForm.css";
 
@@ -20,6 +21,7 @@ export function SignInForm({ initialMode = "pairing" }: { initialMode?: Mode }) 
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const submittingRef = useRef(false);
   const webAuth = useWebAuthSignIn();
 
   function switchMode(next: Mode) {
@@ -28,6 +30,9 @@ export function SignInForm({ initialMode = "pairing" }: { initialMode?: Mode }) 
   }
 
   async function submitPairing(candidate: string) {
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    const attempt = beginDesktopSignIn("pairing");
     setSubmitting(true);
     setError(null);
     let customToken: string;
@@ -40,6 +45,8 @@ export function SignInForm({ initialMode = "pairing" }: { initialMode?: Mode }) 
         logError("SignInForm: submitPairing", err);
         setError(pairingErrorCopy.otherFailure);
       }
+      attempt.failed(err, "pairing_claim_failed");
+      submittingRef.current = false;
       setSubmitting(false);
       return;
     }
@@ -48,10 +55,13 @@ export function SignInForm({ initialMode = "pairing" }: { initialMode?: Mode }) 
       // AuthProvider's auth-state listener takes it from here (pushes
       // set_panel_variant("bar") once Firebase resolves the new user).
       await signInWithCustomToken(auth, customToken);
+      attempt.completed();
     } catch (err) {
       logError("SignInForm: signInWithCustomToken", err);
       setError(pairingErrorCopy.signInFailed);
+      attempt.failed(err, "custom_token_exchange");
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   }
@@ -71,14 +81,20 @@ export function SignInForm({ initialMode = "pairing" }: { initialMode?: Mode }) 
 
   async function handleEmailSubmit(event: FormEvent) {
     event.preventDefault();
+    if (submittingRef.current) return;
+    submittingRef.current = true;
+    const attempt = beginDesktopSignIn("email");
     setSubmitting(true);
     setError(null);
     try {
       await signInWithEmailAndPassword(auth, email.trim(), password);
+      attempt.completed();
     } catch (err) {
       logError("SignInForm: signInWithEmailAndPassword", err);
       setError("Couldn't sign in. Check your email and password.");
+      attempt.failed(err, "email_sign_in_failed");
     } finally {
+      submittingRef.current = false;
       setSubmitting(false);
     }
   }

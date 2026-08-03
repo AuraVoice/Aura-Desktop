@@ -232,10 +232,12 @@ pub fn run() {
         .manage(OverlayStateHandle::default())
         .manage(security::SecurityHandle::default())
         .manage(guide::GuideRuntimeHandle::default())
+        .manage(guide::GuideCaptureHandle::default())
         .manage(guide::GuideToggleHandle::default())
         .manage(ForegroundGeneration::default())
         .manage(updater::PendingUpdate::default())
         .manage(updater::UpdatedNotice::default())
+        .manage(meeting::MeetingRuntimeLease::acquire())
         .manage(meeting::MeetingCaptureHandle::default())
         .manage(meeting::JoinWatchHandle::default())
         .manage(toast::PendingToastActivation::default())
@@ -269,6 +271,7 @@ pub fn run() {
             guide::disarm_guide,
             guide::guide_armed_state,
             guide::capture_guide_frame,
+            guide::guide_observation_state,
             guide::commit_guide_frame,
             guide::ack_guide_response,
             updater::install_update,
@@ -284,12 +287,20 @@ pub fn run() {
             saved_images::read_saved_image,
             saved_images::prune_saved_images,
             meeting::start_meeting_capture,
+            meeting::meeting_runtime_status,
             meeting::stop_meeting_capture,
             meeting::capture_status,
             meeting::queue_snapshot,
             meeting::read_segment,
-            meeting::mark_segment_uploaded,
-            meeting::mark_meeting_acked,
+            meeting::claim_next_upload_job,
+            meeting::claim_next_completion_job,
+            meeting::resolve_upload_job,
+            meeting::resolve_completion_job,
+            meeting::fail_queue_job,
+            meeting::retry_capture_jobs,
+            meeting::local_recordings,
+            meeting::export_local_recording,
+            meeting::delete_local_recording,
             meeting::start_join_watch,
             meeting::stop_join_watch,
             meeting::debug_force_join,
@@ -389,6 +400,8 @@ pub fn run() {
                             sentry::Level::Error,
                         );
                     }
+                } else {
+                    info!("hotkeys: registered {name}");
                 }
             }
 
@@ -464,7 +477,10 @@ pub fn run() {
             screenshot::startup_maintenance(app.handle());
             #[cfg(windows)]
             screenshot_store::startup_maintenance(app.handle());
-
+            // Owns the one background thread that encrypts and writes per-turn
+            // captures, so the voice response never waits on disk.
+            #[cfg(windows)]
+            app.manage(screenshot_store::PersistenceQueue::start(app.handle()));
             let updater_handle = app.handle().clone();
             tauri::async_runtime::spawn(updater::run_update_loop(updater_handle));
 
@@ -476,8 +492,21 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while running tauri application")
+        .run(|app, event| {
+            // Give queued per-turn captures a brief chance to reach disk before
+            // the process goes away. Best effort by design: a frame still in the
+            // queue at exit is lost, which is the durability trade the queue
+            // makes so a spoken turn never blocks on encryption.
+            #[cfg(windows)]
+            if matches!(event, tauri::RunEvent::Exit) {
+                if let Some(queue) = app.try_state::<screenshot_store::PersistenceQueue>() {
+                    queue.drain_for_shutdown();
+                }
+            }
+            let _ = (app, event);
+        });
 }
 
 #[cfg(test)]

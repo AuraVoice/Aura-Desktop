@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { logError } from "../lib/log";
+import { logError, logInfo } from "../lib/log";
 import "./PointingOverlay.css";
 
 const FLIGHT_MS = 900;
@@ -40,6 +40,11 @@ export function PointingOverlay() {
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     listen<PointingTargetPayload>("pointing-target", (event) => {
+      logInfo("GuideTrace", JSON.stringify({
+        stage: "execution",
+        outcome: "succeeded",
+        reason: "pointer_overlay_target_received",
+      }));
       setTarget({ x: event.payload.x, y: event.payload.y });
       setLabel(event.payload.label ?? "");
       setLanded(false);
@@ -88,7 +93,15 @@ export function PointingOverlay() {
   useEffect(() => {
     if (!target) return;
     const timeoutId = setTimeout(() => {
-      invoke("cancel_pointing").catch((err) => logError("PointingOverlay: cancel_pointing", err));
+      invoke("cancel_pointing")
+        .then(() =>
+          logInfo("GuideTrace", JSON.stringify({
+            stage: "execution",
+            outcome: "succeeded",
+            reason: "pointer_overlay_completed",
+          })),
+        )
+        .catch((err) => logError("PointingOverlay: cancel_pointing", err));
     }, TOTAL_HOLD_MS);
     return () => clearTimeout(timeoutId);
   }, [target]);

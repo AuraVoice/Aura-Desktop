@@ -2,6 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { logError } from "../lib/log";
+import {
+  trackOnboardingCompleted,
+  trackOnboardingStepCompleted,
+} from "../lib/acquisitionAnalytics";
 import { HotkeyTourStep } from "./HotkeyTourStep";
 import { AgentDemoStep } from "./AgentDemoStep";
 import type { VoiceBarState } from "./useVoiceBar";
@@ -80,13 +84,21 @@ export function OnboardingTail({ voice, onComplete }: OnboardingTailProps) {
     await invoke("dismiss_bar").catch((err) =>
       logError("OnboardingTail: dismiss_bar", err),
     );
+    void trackOnboardingStepCompleted("agent_demo");
+    void trackOnboardingCompleted();
     onComplete();
   }
 
   return (
     <div className="onboarding-flow">
       {step === "hotkeyTour" && (
-        <HotkeyTourStep keyLabel={keyLabel} onContinue={() => setStep("agentDemo")} />
+        <HotkeyTourStep
+          keyLabel={keyLabel}
+          onContinue={() => {
+            void trackOnboardingStepCompleted("hotkey_tour");
+            setStep("agentDemo");
+          }}
+        />
       )}
       {step === "agentDemo" && (
         <AgentDemoStep voice={voice} onFinish={() => void finishDemo()} />

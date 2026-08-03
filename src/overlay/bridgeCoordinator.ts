@@ -12,8 +12,14 @@ const BRIDGE_HEARTBEAT = "bridge_heartbeat";
 // Keep HOLD alive under the worker's 8s heartbeat timeout.
 const HEARTBEAT_INTERVAL_MS = 3_000;
 const SAFE_BOUNDARY_POLL_MS = 150;
-// Once the worker is warm, don't wait forever for a perfect gap; hand off anyway.
-const MAX_BOUNDARY_WAIT_MS = 4_000;
+// A verified LiveKit agent should publish hold_ready immediately after its
+// AgentSession starts. Bound version/configuration drift so Realtime cannot
+// remain the accidental owner of an otherwise-live call forever.
+const HOLD_READY_TIMEOUT_MS = 5_000;
+// Never transfer ownership while either side is mid-utterance. If Realtime
+// never reports a quiet boundary, fail into the caller's cold LiveKit recovery
+// instead of clipping the final assistant message.
+const SAFE_BOUNDARY_TIMEOUT_MS = 30_000;
 
 export interface BridgeCoordinatorOptions {
   room: Room;
@@ -43,10 +49,13 @@ export class BridgeCoordinator {
   private readonly onActive: () => void;
 
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private holdReadyTimer: ReturnType<typeof setTimeout> | null = null;
   private boundaryTimer: ReturnType<typeof setTimeout> | null = null;
   private agentTrack: RemoteTrack | null = null;
   private handoverId: string | null = null;
+  private holdReadyReceived = false;
   private handoverAttempted = false;
+  private failureReported = false;
   private applied = false;
   private torn = false;
 
@@ -81,13 +90,19 @@ export class BridgeCoordinator {
 
   /** Best-effort "agent connected" hint; the real handover gate is hold_ready. */
   onAgentReady(): void {
+    if (this.torn || this.applied || this.holdReadyReceived || this.holdReadyTimer) return;
     logInfo("bridge: agent ready", "best-effort; waiting on hold_ready");
+    this.holdReadyTimer = setTimeout(() => {
+      this.holdReadyTimer = null;
+      this.fail(new Error(`bridge: hold_ready timed out (${HOLD_READY_TIMEOUT_MS}ms)`));
+    }, HOLD_READY_TIMEOUT_MS);
   }
 
   teardown(): void {
     if (this.torn) return;
     this.torn = true;
     this.stopHeartbeat();
+    this.clearHoldReadyTimer();
     this.clearBoundaryTimer();
     try {
       this.realtime.close();
@@ -112,8 +127,18 @@ export class BridgeCoordinator {
 
   private onHoldReady(): void {
     if (this.handoverAttempted || this.torn) return;
+    this.holdReadyReceived = true;
+    this.clearHoldReadyTimer();
+    logInfo("bridge: hold_ready", "worker is warm; waiting for Realtime boundary");
     this.startHeartbeat();
     this.waitForBoundaryThenHandover();
+  }
+
+  private clearHoldReadyTimer(): void {
+    if (this.holdReadyTimer) {
+      clearTimeout(this.holdReadyTimer);
+      this.holdReadyTimer = null;
+    }
   }
 
   private startHeartbeat(): void {
@@ -140,11 +165,16 @@ export class BridgeCoordinator {
   }
 
   private waitForBoundaryThenHandover(): void {
-    const deadline = Date.now() + MAX_BOUNDARY_WAIT_MS;
+    const deadline = Date.now() + SAFE_BOUNDARY_TIMEOUT_MS;
     const tick = () => {
       if (this.handoverAttempted || this.torn) return;
-      if (this.realtime.atSafeBoundary() || Date.now() >= deadline) {
+      if (this.realtime.atSafeBoundary()) {
+        logInfo("bridge: safe boundary", "Realtime finished; beginning handover");
         this.beginHandover();
+        return;
+      }
+      if (Date.now() >= deadline) {
+        this.fail(new Error(`bridge: safe boundary timed out (${SAFE_BOUNDARY_TIMEOUT_MS}ms)`));
         return;
       }
       this.boundaryTimer = setTimeout(tick, SAFE_BOUNDARY_POLL_MS);
@@ -180,7 +210,7 @@ export class BridgeCoordinator {
       .publishTrack(this.sharedTrack, { source: Track.Source.Microphone })
       .catch((err) => {
         logError("bridge: publishTrack", err);
-        this.onFatal(err);
+        this.fail(err);
       });
 
     // Unmute the worker's voice, then drop the Realtime leg.
@@ -209,11 +239,20 @@ export class BridgeCoordinator {
       const data = new TextEncoder().encode(JSON.stringify(payload));
       void this.room.localParticipant.publishData(data, { reliable: true }).catch((err) => {
         logError("bridge: publishData", err);
-        this.onFatal(err);
+        this.fail(err);
       });
     } catch (err) {
       logError("bridge: publish", err);
-      this.onFatal(err);
+      this.fail(err);
     }
+  }
+
+  private fail(reason: unknown): void {
+    if (this.failureReported || this.torn) return;
+    this.failureReported = true;
+    this.stopHeartbeat();
+    this.clearHoldReadyTimer();
+    this.clearBoundaryTimer();
+    this.onFatal(reason);
   }
 }

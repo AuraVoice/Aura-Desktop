@@ -55,17 +55,30 @@ const mocks = vi.hoisted(() => {
     }
   }
 
+  class FakeBridgeCoordinator {
+    static instances: FakeBridgeCoordinator[] = [];
+    options: {
+      onFatal: (reason: unknown) => void;
+      onActive: () => void;
+    };
+    attachAgentAudio = vi.fn();
+    handleDataMessage = vi.fn(() => false);
+    onAgentReady = vi.fn();
+    teardown = vi.fn();
+
+    constructor(options: FakeBridgeCoordinator["options"]) {
+      this.options = options;
+      FakeBridgeCoordinator.instances.push(this);
+    }
+  }
+
   return {
     FakeRoom,
+    FakeBridgeCoordinator,
     roomEvents,
     fetchVoiceToken: vi.fn(),
+    validateAgentDataMessage: vi.fn(),
     startRealtimeLeg: vi.fn(),
-    BridgeCoordinator: class {
-      attachAgentAudio() {}
-      handleDataMessage() { return false; }
-      onAgentReady() {}
-      teardown() {}
-    },
     invoke: vi.fn(async () => {}),
   };
 });
@@ -85,12 +98,12 @@ vi.mock("../lib/api", () => ({
   routeToDashboardForExpiredSession: vi.fn(async () => {}),
 }));
 vi.mock("../lib/agentData", () => ({
-  validateAgentDataMessage: vi.fn(() => ({ kind: "rejected" })),
+  validateAgentDataMessage: mocks.validateAgentDataMessage,
 }));
 vi.mock("../lib/log", () => ({ logError: vi.fn(), logInfo: vi.fn() }));
 vi.mock("../lib/analytics", () => ({ trackEvent: vi.fn() }));
 vi.mock("../lib/realtime", () => ({ startRealtimeLeg: mocks.startRealtimeLeg }));
-vi.mock("./bridgeCoordinator", () => ({ BridgeCoordinator: mocks.BridgeCoordinator }));
+vi.mock("./bridgeCoordinator", () => ({ BridgeCoordinator: mocks.FakeBridgeCoordinator }));
 
 import { useVoiceBar, type VoiceBarState } from "./useVoiceBar";
 
@@ -104,8 +117,11 @@ function Harness() {
 
 beforeEach(async () => {
   mocks.FakeRoom.instances.length = 0;
+  mocks.FakeBridgeCoordinator.instances.length = 0;
   mocks.invoke.mockClear();
   mocks.fetchVoiceToken.mockReset();
+  mocks.validateAgentDataMessage.mockReset();
+  mocks.validateAgentDataMessage.mockReturnValue({ kind: "rejected" });
   voice = null;
   await act(async () => {
     renderer = create(<Harness />);
@@ -120,7 +136,12 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-const token = { token: "token", url: "wss://livekit.test", room: "voice-room" };
+const token = {
+  token: "token",
+  url: "wss://livekit.test",
+  room: "voice-room",
+  realtime_bridge_enabled: true,
+};
 
 describe("useVoiceBar cancellation boundaries", () => {
   it("warms LiveKit before Realtime fallback and retries with a normal worker", async () => {
@@ -147,6 +168,106 @@ describe("useVoiceBar cancellation boundaries", () => {
     expect(mocks.startRealtimeLeg).toHaveBeenCalledTimes(1);
     expect(track.stop).toHaveBeenCalledTimes(1);
     expect(voice?.desiredActive).toBe(true);
+  });
+
+  it("replaces a bridge room with one cold LiveKit room when hold_ready times out", async () => {
+    const track = { stop: vi.fn() } as unknown as MediaStreamTrack;
+    const realtime = {
+      transcript: vi.fn(() => []),
+      hasSpoken: vi.fn(() => true),
+      atSafeBoundary: vi.fn(() => true),
+      close: vi.fn(),
+    };
+    vi.stubGlobal("navigator", {
+      mediaDevices: { getUserMedia: vi.fn(async () => ({ getAudioTracks: () => [track] })) },
+    });
+    vi.stubGlobal("Audio", class {
+      autoplay = false;
+      muted = false;
+      play = vi.fn(async () => {});
+      pause = vi.fn();
+      srcObject: MediaStream | null = null;
+    });
+    mocks.fetchVoiceToken.mockResolvedValue(token);
+    mocks.startRealtimeLeg.mockResolvedValue(realtime);
+
+    await act(async () => {
+      await voice?.startBridgedSession();
+    });
+    expect(mocks.FakeBridgeCoordinator.instances).toHaveLength(1);
+
+    await act(async () => {
+      mocks.FakeBridgeCoordinator.instances[0].options.onFatal(
+        new Error("bridge: hold_ready timed out (5000ms)"),
+      );
+      await vi.waitFor(() => expect(mocks.fetchVoiceToken).toHaveBeenCalledTimes(2));
+    });
+
+    expect(mocks.fetchVoiceToken).toHaveBeenNthCalledWith(1, "standard", true);
+    expect(mocks.fetchVoiceToken).toHaveBeenNthCalledWith(2, "standard", false);
+    expect(mocks.FakeRoom.instances).toHaveLength(2);
+    expect(mocks.FakeRoom.instances[0].disconnect).toHaveBeenCalledTimes(1);
+    expect(track.stop).toHaveBeenCalled();
+    expect(voice?.desiredActive).toBe(true);
+  });
+
+  it("replays hold_ready when the worker wins the concurrent startup race", async () => {
+    const track = { stop: vi.fn() } as unknown as MediaStreamTrack;
+    const realtimeStart = deferred<{
+      transcript: () => never[];
+      hasSpoken: () => boolean;
+      atSafeBoundary: () => boolean;
+      close: ReturnType<typeof vi.fn>;
+    }>();
+    vi.stubGlobal("navigator", {
+      mediaDevices: { getUserMedia: vi.fn(async () => ({ getAudioTracks: () => [track] })) },
+    });
+    vi.stubGlobal("Audio", class {
+      autoplay = false;
+      muted = false;
+      play = vi.fn(async () => {});
+      pause = vi.fn();
+      srcObject: MediaStream | null = null;
+    });
+    mocks.fetchVoiceToken.mockResolvedValue(token);
+    mocks.startRealtimeLeg.mockReturnValue(realtimeStart.promise);
+    mocks.validateAgentDataMessage.mockReturnValue({
+      kind: "agent-unknown",
+      reason: "unknown-type",
+    });
+
+    let startPromise: Promise<void> | undefined;
+    act(() => {
+      startPromise = voice?.startBridgedSession();
+    });
+    const room = await vi.waitFor(() => {
+      const current = mocks.FakeRoom.instances[0];
+      expect(current?.connect).toHaveBeenCalled();
+      return current;
+    });
+    const holdReady = new TextEncoder().encode(JSON.stringify({ type: "hold_ready" }));
+    act(() => {
+      room.handlers.get(mocks.roomEvents.DataReceived)?.(
+        holdReady,
+        { isLocal: false, isAgent: true, identity: "agent" },
+        "reliable",
+        undefined,
+      );
+    });
+    expect(mocks.FakeBridgeCoordinator.instances).toHaveLength(0);
+
+    await act(async () => {
+      realtimeStart.resolve({
+        transcript: () => [],
+        hasSpoken: () => true,
+        atSafeBoundary: () => true,
+        close: vi.fn(),
+      });
+      await startPromise;
+    });
+
+    const coordinator = mocks.FakeBridgeCoordinator.instances[0];
+    expect(coordinator.handleDataMessage).toHaveBeenCalledWith({ type: "hold_ready" });
   });
 
   it("does not connect if the user stops while the token request is pending", async () => {

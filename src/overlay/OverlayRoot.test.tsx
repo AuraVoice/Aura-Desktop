@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   useGuideMode: vi.fn(),
   useDraftCard: vi.fn(),
   guideStop: vi.fn(),
+  startBridgedSession: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("../state/AuthProvider", () => ({
@@ -35,6 +36,7 @@ vi.mock("./useVoiceBar", () => ({
     isVoiceCapped: false,
     desiredActive: false,
     startSession: vi.fn(),
+    startBridgedSession: mocks.startBridgedSession,
     endSession: vi.fn(() => Promise.resolve()),
     toggleSession: vi.fn(),
     room: null,
@@ -73,6 +75,8 @@ beforeEach(() => {
   mocks.user = { uid: "user-1" };
   mocks.useGuideMode.mockReturnValue({
     armed: false,
+    active: false,
+    epoch: 0,
     stop: mocks.guideStop,
   });
   mocks.useDraftCard.mockReturnValue({ phase: "idle", reset: vi.fn() });
@@ -144,6 +148,8 @@ describe("OverlayRoot meeting background services", () => {
   it("keeps Guide Mode out of the card slot so drafts remain conversationally available", () => {
     mocks.useGuideMode.mockReturnValue({
       armed: true,
+      active: false,
+      epoch: 3,
       stop: mocks.guideStop,
     });
     mocks.useDraftCard.mockReturnValue({ phase: "ready", reset: vi.fn() });
@@ -157,12 +163,15 @@ describe("OverlayRoot meeting background services", () => {
     expect(text).not.toContain("Still checking");
     expect(text).toContain('"children":["draft"]');
     expect(mocks.invoke).toHaveBeenCalledWith("set_slot_height", { height: 180 });
+    expect(mocks.startBridgedSession).toHaveBeenCalledWith("guide");
   });
 
   it("stops Guide mode and clears the slot when sign-out reaches the root", () => {
     mocks.user = null;
     mocks.useGuideMode.mockReturnValue({
       armed: true,
+      active: false,
+      epoch: 3,
       stop: mocks.guideStop,
     });
 

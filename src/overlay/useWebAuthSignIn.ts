@@ -6,6 +6,7 @@ import { startWebAuth, pollWebAuthStatusOnce } from "../lib/api";
 import { webAuthUrl } from "../lib/copy";
 import { logError, logInfo } from "../lib/log";
 import { trackEvent } from "../lib/analytics";
+import { beginDesktopSignIn } from "../lib/acquisitionAnalytics";
 
 // An OAuth round trip in a real browser realistically takes several seconds
 // minimum (choosing an account, maybe 2FA) - polling immediately would just
@@ -43,6 +44,8 @@ export function useWebAuthSignIn() {
   const codeRef = useRef<string | null>(null);
   const deadlineMsRef = useRef<number | null>(null);
   const isMountedRef = useRef(true);
+  const startingRef = useRef(false);
+  const signInAttemptRef = useRef<ReturnType<typeof beginDesktopSignIn> | null>(null);
 
   const clearPollTimer = useCallback(() => {
     if (pollTimerRef.current) {
@@ -63,6 +66,7 @@ export function useWebAuthSignIn() {
     if (Date.now() > deadline) {
       logInfo("useWebAuthSignIn: poll", "client-side deadline exceeded, showing expired");
       trackEvent("web_auth_expired", { reason: "client_deadline" });
+      signInAttemptRef.current?.failed("client_deadline");
       safeSetState({ phase: "expired" });
       return;
     }
@@ -89,9 +93,11 @@ export function useWebAuthSignIn() {
         await signInWithCustomToken(auth, result.customToken);
         logInfo("useWebAuthSignIn: poll", "signed in via web-auth handshake");
         trackEvent("web_auth_completed");
+        signInAttemptRef.current?.completed();
       } catch (err) {
         logError("useWebAuthSignIn: signInWithCustomToken failed", err);
         trackEvent("web_auth_failed", { reason: "custom_token_exchange" });
+        signInAttemptRef.current?.failed(err, "custom_token_exchange");
         safeSetState({ phase: "error" });
       }
       return;
@@ -100,6 +106,7 @@ export function useWebAuthSignIn() {
     if (result.status === "failed") {
       logInfo("useWebAuthSignIn: poll", `session failed, reason=${result.reason}`);
       trackEvent("web_auth_failed", { reason: result.reason });
+      signInAttemptRef.current?.failed(result.reason);
       safeSetState({ phase: "failed", reason: result.reason });
       return;
     }
@@ -107,11 +114,15 @@ export function useWebAuthSignIn() {
     // expired | not_found: both read as "this link is no longer good".
     logInfo("useWebAuthSignIn: poll", `session ${result.status}, showing expired`);
     trackEvent("web_auth_expired", { reason: result.status });
+    signInAttemptRef.current?.failed(result.status);
     safeSetState({ phase: "expired" });
   }, [safeSetState]);
 
   const start = useCallback(async () => {
+    if (startingRef.current) return;
+    startingRef.current = true;
     clearPollTimer();
+    signInAttemptRef.current = beginDesktopSignIn("google");
     safeSetState({ phase: "opening" });
     try {
       const { code, expiresInSeconds } = await startWebAuth();
@@ -128,7 +139,10 @@ export function useWebAuthSignIn() {
     } catch (err) {
       logError("useWebAuthSignIn: start failed", err);
       trackEvent("web_auth_failed", { reason: "start_or_open_browser" });
+      signInAttemptRef.current?.failed(err, "start_or_open_browser");
       safeSetState({ phase: "error" });
+    } finally {
+      startingRef.current = false;
     }
   }, [clearPollTimer, poll, safeSetState]);
 
@@ -136,6 +150,7 @@ export function useWebAuthSignIn() {
     if (codeRef.current) {
       logInfo("useWebAuthSignIn: cancel", "user cancelled an in-flight web-auth session");
       trackEvent("web_auth_cancelled");
+      signInAttemptRef.current?.failed("user_cancelled");
     }
     clearPollTimer();
     codeRef.current = null;

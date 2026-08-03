@@ -69,7 +69,7 @@ describe("NotchBar", () => {
 
   it("shows Guide Mode as a passive status indicator, not another control", () => {
     const html = renderToStaticMarkup(
-      <NotchBar voice={voiceState()} edge="top" guideArmed />,
+      <NotchBar voice={voiceState()} edge="top" guideActive />,
     );
     expect(html).toContain("notch-guide-indicator");
     expect(html).toContain("Guide Mode is watching this screen");

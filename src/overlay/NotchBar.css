@@ -281,10 +281,8 @@
   height: 100%;
 }
 
-/* Red "recording" dot while Guide Mode is armed (was a small teal dot). Fatter
-   than the old indicator and slowly pulsing so it reads as an active capture,
-   not a passive status light. The pulse animates box-shadow/opacity only, never
-   transform, so the translateY(-50%) vertical centering is preserved. */
+/* Guide status stays amber while the agent handshake is pending. It turns red
+   and pulses only after the agent confirms it has received a screen frame. */
 .notch-guide-indicator {
   position: absolute;
   right: 13px;
@@ -293,9 +291,17 @@
   height: 9px;
   transform: translateY(-50%);
   border-radius: 50%;
+  pointer-events: none;
+}
+
+.notch-guide-indicator.is-starting {
+  background: #f59e0b;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.8);
+}
+
+.notch-guide-indicator.is-active {
   background: #ef4444;
   box-shadow: 0 0 10px rgba(239, 68, 68, 0.95);
-  pointer-events: none;
   animation: notch-guide-pulse 1.6s ease-in-out infinite;
 }
 

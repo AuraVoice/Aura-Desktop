@@ -106,7 +106,11 @@ describe("useTurnScreenCapture room-scoped geometry", () => {
     });
 
     await captureFirstTurn(room);
-    expect(mocks.invoke).toHaveBeenCalledWith("capture_turn_screen_with_geometry");
+    // The capture command carries the turn id since structured context landed:
+    // both halves of a turn's evidence are correlated by it on the backend.
+    expect(mocks.invoke).toHaveBeenCalledWith("capture_turn_screen_with_geometry", {
+      turnContextId: expect.any(String),
+    });
 
     act(() => {
       room.emit(RoomEvent.DataReceived, new Uint8Array(), undefined, undefined, "agent_events");

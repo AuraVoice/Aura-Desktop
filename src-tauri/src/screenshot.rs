@@ -1,10 +1,27 @@
 use std::io::Cursor;
 use std::path::Path;
+use std::time::Instant;
 
-use image::ImageFormat;
+use image::codecs::jpeg::JpegEncoder;
+use image::imageops::FilterType;
 use log::{info, warn};
-use tauri::{ipc::Response, AppHandle, Manager};
+use serde::Serialize;
+use tauri::{ipc::Response, AppHandle, Emitter, Manager};
 use xcap::Monitor;
+
+/// Longest edge the model ever needs. A 2880x1800 panel encodes to ~1.6MB and
+/// roughly 2.5k vision tokens per turn, and the backend downscaled it to
+/// exactly this anyway - so the capture is resized here instead, before the
+/// JPEG encode, the IPC copy, the LiveKit upload AND the encrypted write. Every
+/// one of those was paying for pixels the model never saw.
+const MODEL_FRAME_LONG_EDGE_PX: u32 = 1280;
+
+/// Matches the backend's own encode quality, so a frame that survives the
+/// safety-net downscale there looks the same as one that skipped it.
+///
+/// `pub(crate)` so Guide encodes at the same quality as the per-turn path
+/// rather than the `image` crate's default (see `guide::encode_jpeg`).
+pub(crate) const MODEL_FRAME_JPEG_QUALITY: u8 = 82;
 
 /// Geometry of one captured frame - carried as a fixed-width binary header in
 /// front of the JPEG bytes (see `write_le`) so an `element.point` response
@@ -29,12 +46,41 @@ const LEGACY_SCREENSHOTS_DIR: &str = "screenshots";
 struct CapturedFrame {
     payload: Vec<u8>,
     jpeg_bytes: Vec<u8>,
+    stages: CaptureStages,
 }
 
 impl CapturedFrame {
     fn into_response(self) -> Response {
         Response::new(self.payload)
     }
+}
+
+/// Per-stage timings for one capture, emitted as a `capture-stages` event just
+/// before the command returns. Deliberately carried on an event rather than in
+/// the response body: the 28-byte geometry header is mirrored in Rust, three
+/// TypeScript `DataView` readers and the Guide envelope, and widening it to
+/// carry telemetry would be a wire change for no functional gain.
+///
+/// Nothing here can identify what was on screen: durations, byte counts and
+/// pixel dimensions only.
+#[derive(Default, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureStages {
+    turn_context_id: String,
+    native_capture_ms: u64,
+    resize_ms: u64,
+    jpeg_encode_ms: u64,
+    persistence_enqueue_ms: u64,
+    /// Only "after" exists, and that is the point: the frame is resized BEFORE
+    /// it is ever encoded, so a full-resolution JPEG is never produced and its
+    /// size cannot be measured without doing the work this change removed. The
+    /// source/output pixel dimensions below carry the shrink instead.
+    jpeg_bytes_after: u64,
+    source_width_px: u32,
+    source_height_px: u32,
+    jpeg_width_px: u32,
+    jpeg_height_px: u32,
+    resized: bool,
 }
 
 impl ScreenFrameGeometry {
@@ -60,7 +106,10 @@ impl ScreenFrameGeometry {
 /// xcap's capture plus JPEG encoding is slow enough (worse on 4K/multi-monitor
 /// or debug builds) that it was tripping Windows' "Not Responding" state.
 #[tauri::command]
-pub async fn capture_cursor_display_with_geometry(app: AppHandle) -> Result<Response, String> {
+pub async fn capture_cursor_display_with_geometry(
+    app: AppHandle,
+    turn_context_id: Option<String>,
+) -> Result<Response, String> {
     // Native authorization, not the frontend's armed boolean: capture needs a
     // signed-in session, a live voice call, and screen sight armed - all
     // tracked in security.rs, all cleared on sign-out/disconnect/restart.
@@ -81,8 +130,11 @@ pub async fn capture_cursor_display_with_geometry(app: AppHandle) -> Result<Resp
     // the frame instead of returning it (the JS side already applied the same
     // rule to its own armed flag; this makes it authoritative).
     crate::security::recheck(&app, crate::security::Operation::CaptureScreen, &ticket)?;
+    // An explicit capture is something the user asked for, so it keeps the
+    // synchronous write: the command only succeeds once the frame is safely on
+    // disk. Only the incidental per-turn capture below trades that for latency.
     let persistence_app = app.clone();
-    let frame = tauri::async_runtime::spawn_blocking(move || {
+    let mut frame = tauri::async_runtime::spawn_blocking(move || {
         #[cfg(windows)]
         crate::screenshot_store::save_capture(&persistence_app, "explicit", &frame.jpeg_bytes)?;
         Ok::<CapturedFrame, String>(frame)
@@ -90,11 +142,20 @@ pub async fn capture_cursor_display_with_geometry(app: AppHandle) -> Result<Resp
     .await
     .map_err(|e| e.to_string())??;
     crate::security::note_capture(&app);
+    frame.stages.turn_context_id = turn_context_id.unwrap_or_default();
+    emit_capture_stages(&app, &frame.stages);
     Ok(frame.into_response())
 }
 
+/// The per-spoken-turn capture. Unlike the explicit capture above, this one
+/// hands persistence to the background queue and returns immediately: the
+/// frame's job is to reach the model, and making the user wait on AES-GCM plus
+/// a directory prune before it could even start uploading bought nothing.
 #[tauri::command]
-pub async fn capture_turn_screen_with_geometry(app: AppHandle) -> Result<Response, String> {
+pub async fn capture_turn_screen_with_geometry(
+    app: AppHandle,
+    turn_context_id: Option<String>,
+) -> Result<Response, String> {
     let ticket = crate::security::authorize(&app, crate::security::Operation::CaptureTurnScreen)?;
 
     let window = app
@@ -104,21 +165,45 @@ pub async fn capture_turn_screen_with_geometry(app: AppHandle) -> Result<Respons
     let cursor_x = cursor.x as i32;
     let cursor_y = cursor.y as i32;
 
-    let frame = tauri::async_runtime::spawn_blocking(move || capture_frame(cursor_x, cursor_y))
+    let mut frame = tauri::async_runtime::spawn_blocking(move || capture_frame(cursor_x, cursor_y))
         .await
         .map_err(|e| e.to_string())??;
 
     crate::security::recheck(&app, crate::security::Operation::CaptureTurnScreen, &ticket)?;
-    let persistence_app = app.clone();
-    let frame = tauri::async_runtime::spawn_blocking(move || {
-        #[cfg(windows)]
-        crate::screenshot_store::save_capture(&persistence_app, "turn", &frame.jpeg_bytes)?;
-        Ok::<CapturedFrame, String>(frame)
-    })
-    .await
-    .map_err(|e| e.to_string())??;
+
+    let enqueue_started = Instant::now();
+    #[cfg(windows)]
+    {
+        use tauri::Manager as _;
+        if let Some(queue) = app.try_state::<crate::screenshot_store::PersistenceQueue>() {
+            queue.enqueue("turn", frame.jpeg_bytes.clone());
+        }
+    }
+    frame.stages.persistence_enqueue_ms = enqueue_started.elapsed().as_millis() as u64;
+
     crate::security::note_capture(&app);
+    frame.stages.turn_context_id = turn_context_id.unwrap_or_default();
+    emit_capture_stages(&app, &frame.stages);
     Ok(frame.into_response())
+}
+
+/// Publishes the stage timings for one capture. Failing to emit telemetry must
+/// never fail a capture, so the result is deliberately dropped.
+fn emit_capture_stages(app: &AppHandle, stages: &CaptureStages) {
+    info!(
+        "[Capture] {{native_capture_ms:{}, resize_ms:{}, jpeg_encode_ms:{}, \
+         persistence_enqueue_ms:{}, jpeg_bytes_after:{}, source_px:{}x{}, jpeg_px:{}x{}}}",
+        stages.native_capture_ms,
+        stages.resize_ms,
+        stages.jpeg_encode_ms,
+        stages.persistence_enqueue_ms,
+        stages.jpeg_bytes_after,
+        stages.source_width_px,
+        stages.source_height_px,
+        stages.jpeg_width_px,
+        stages.jpeg_height_px,
+    );
+    let _ = app.emit("capture-stages", stages);
 }
 
 /// Removes plaintext turn screenshots written by v0.3.0 before turn capture
@@ -148,11 +233,29 @@ fn remove_legacy_screenshots(base_dir: &Path) -> Result<bool, String> {
 /// followed directly by the JPEG bytes, so the frontend reads it as an
 /// `ArrayBuffer` with no base64 encode/decode round trip.
 fn capture_frame(cursor_x: i32, cursor_y: i32) -> Result<CapturedFrame, String> {
+    let mut stages = CaptureStages::default();
+
+    let capture_started = Instant::now();
     let monitor = Monitor::from_point(cursor_x, cursor_y).map_err(|e| e.to_string())?;
     let captured = monitor.capture_image().map_err(|e| e.to_string())?;
     let rgb_image = image::DynamicImage::ImageRgba8(captured).into_rgb8();
-    let (jpeg_width_px, jpeg_height_px) = (rgb_image.width(), rgb_image.height());
+    stages.native_capture_ms = capture_started.elapsed().as_millis() as u64;
+    stages.source_width_px = rgb_image.width();
+    stages.source_height_px = rgb_image.height();
 
+    let resize_started = Instant::now();
+    let rgb_image = downscale_for_model(rgb_image);
+    stages.resize_ms = resize_started.elapsed().as_millis() as u64;
+    let (jpeg_width_px, jpeg_height_px) = (rgb_image.width(), rgb_image.height());
+    stages.jpeg_width_px = jpeg_width_px;
+    stages.jpeg_height_px = jpeg_height_px;
+    stages.resized = jpeg_width_px != stages.source_width_px;
+
+    // monitor_* stay in PHYSICAL screen pixels while jpeg_* now describe the
+    // resized image. That split is what keeps pointing correct: the mapping in
+    // screenFrame.ts (screenPointFor) and the backend's ScreenFrame._scaled
+    // both convert a model coordinate from jpeg space into monitor space by
+    // ratio, so shrinking the image needs no change on either side.
     let geometry = ScreenFrameGeometry {
         monitor_left_px: monitor.x().map_err(|e| e.to_string())?,
         monitor_top_px: monitor.y().map_err(|e| e.to_string())?,
@@ -163,10 +266,13 @@ fn capture_frame(cursor_x: i32, cursor_y: i32) -> Result<CapturedFrame, String> 
         jpeg_height_px,
     };
 
+    let encode_started = Instant::now();
     let mut jpeg_bytes: Vec<u8> = Vec::new();
-    rgb_image
-        .write_to(&mut Cursor::new(&mut jpeg_bytes), ImageFormat::Jpeg)
+    JpegEncoder::new_with_quality(&mut Cursor::new(&mut jpeg_bytes), MODEL_FRAME_JPEG_QUALITY)
+        .encode_image(&rgb_image)
         .map_err(|e| e.to_string())?;
+    stages.jpeg_encode_ms = encode_started.elapsed().as_millis() as u64;
+    stages.jpeg_bytes_after = jpeg_bytes.len() as u64;
 
     let mut payload = Vec::with_capacity(GEOMETRY_HEADER_LEN + jpeg_bytes.len());
     geometry.write_le(&mut payload);
@@ -175,7 +281,29 @@ fn capture_frame(cursor_x: i32, cursor_y: i32) -> Result<CapturedFrame, String> 
     Ok(CapturedFrame {
         payload,
         jpeg_bytes,
+        stages,
     })
+}
+
+/// Shrinks to `MODEL_FRAME_LONG_EDGE_PX` on the long edge, preserving aspect
+/// ratio. Never upscales: a small window stays exactly as captured.
+///
+/// `Triangle` rather than `Lanczos3`: at these ratios Lanczos costs noticeably
+/// more CPU on the response path for a difference that does not survive JPEG
+/// quality 82, and this runs on every spoken turn.
+///
+/// `pub(crate)` so Guide shares this exact rule. Two capture paths that
+/// disagreed on frame size once meant Guide shipped full-resolution frames the
+/// backend then had to resize, and oversized ones it silently dropped.
+pub(crate) fn downscale_for_model(image: image::RgbImage) -> image::RgbImage {
+    let long_edge = image.width().max(image.height());
+    if long_edge <= MODEL_FRAME_LONG_EDGE_PX || long_edge == 0 {
+        return image;
+    }
+    let scale = f64::from(MODEL_FRAME_LONG_EDGE_PX) / f64::from(long_edge);
+    let width = ((f64::from(image.width()) * scale).round() as u32).max(1);
+    let height = ((f64::from(image.height()) * scale).round() as u32).max(1);
+    image::imageops::resize(&image, width, height, FilterType::Triangle)
 }
 
 #[cfg(test)]

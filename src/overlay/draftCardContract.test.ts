@@ -47,6 +47,53 @@ describe("draft card cross-repository contract", () => {
     expect(parseCreatedDraft({ draft_id: "d", length: "medium", text: "hi" })).toBeNull();
   });
 
+  it("treats the structured artifact body as the exact copyable content", () => {
+    const draft = parseCreatedDraft({
+      draft_id: "legacy-id",
+      channel: "email_reply",
+      text: "Legacy speech that must not enter the overlay.",
+      artifact: {
+        id: "a".repeat(32),
+        revision: 3,
+        kind: "outbound_message",
+        channel: "email_reply",
+        title: "Email reply",
+        body: "Exact body only.",
+        format: "plain_text",
+        language: "en",
+        copy_mode: "exact",
+        body_sha256: "b".repeat(64),
+      },
+    });
+
+    expect(draft).toMatchObject({
+      draftId: "a".repeat(32),
+      revision: 3,
+      channel: "email_reply",
+      text: "Exact body only.",
+      title: "Email reply",
+      contentFormat: "plain_text",
+    });
+  });
+
+  it("rejects a structured artifact without the exact-copy contract", () => {
+    expect(
+      parseCreatedDraft({
+        artifact: {
+          id: "a".repeat(32),
+          revision: 1,
+          kind: "outbound_message",
+          channel: "on_screen",
+          title: "Draft",
+          body: "Body",
+          format: "plain_text",
+          copy_mode: "preview",
+          body_sha256: "b".repeat(64),
+        },
+      }),
+    ).toBeNull();
+  });
+
   it("grows with content while staying within display-safe bounds", () => {
     expect(boundedDraftSlotHeight(90, 900)).toBe(142);
     expect(boundedDraftSlotHeight(300, 900)).toBe(306);

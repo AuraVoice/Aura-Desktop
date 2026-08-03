@@ -5,6 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { auth } from "../lib/firebase";
 import { logError } from "../lib/log";
 import { syncProfileOnSignIn } from "../lib/profile";
+import { initializeAcquisitionAnalytics } from "../lib/acquisitionAnalytics";
 
 interface AuthContextValue {
   user: User | null;
@@ -56,9 +57,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // and is a cheap no-op for returning users, so it's safe to fire on
       // every signed-in callback including the initial one.
       if (nextUser) {
-        void syncProfileOnSignIn(nextUser.uid).catch((err) =>
-          logError("AuthProvider: syncProfileOnSignIn", err),
-        );
+        void initializeAcquisitionAnalytics()
+          .then(() => syncProfileOnSignIn(nextUser.uid))
+          .catch((err) => logError("AuthProvider: syncProfileOnSignIn", err));
       }
     });
 

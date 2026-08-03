@@ -3,6 +3,7 @@ import { authFetch, AuthRequiredError } from "./api";
 import { aliasAnonymousToUser, setPersonProperties } from "./analytics";
 import {
   desktopAnonIdKey,
+  desktopAnonAliasedUidKey,
   desktopProfileSyncedKey,
   desktopRoleKey,
   desktopWhereHeardKey,
@@ -83,6 +84,14 @@ export async function syncProfileOnSignIn(uid: string): Promise<void> {
     return;
   }
 
+  const anonId = await store.get<string>(desktopAnonIdKey);
+  const aliasedUid = await store.get<string>(desktopAnonAliasedUidKey);
+  if (anonId && aliasedUid !== uid && await aliasAnonymousToUser(anonId, uid)) {
+    await store.set(desktopAnonAliasedUidKey, uid).catch((err) =>
+      logError("profile: persist aliased uid", err),
+    );
+  }
+
   const alreadySynced = await store.get<boolean>(desktopProfileSyncedKey);
   if (alreadySynced) return;
 
@@ -97,9 +106,6 @@ export async function syncProfileOnSignIn(uid: string): Promise<void> {
     );
     return;
   }
-
-  const anonId = await store.get<string>(desktopAnonIdKey);
-  if (anonId) aliasAnonymousToUser(anonId, uid);
 
   const props: Record<string, unknown> = {};
   if (whereHeard) {

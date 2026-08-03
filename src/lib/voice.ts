@@ -6,6 +6,7 @@ export interface VoiceTokenResponse {
   token: string;
   url: string;
   room: string;
+  realtime_bridge_enabled?: boolean;
 }
 
 export type VoiceSessionMode = "standard" | "guide";

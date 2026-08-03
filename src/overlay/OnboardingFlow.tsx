@@ -18,7 +18,11 @@ import {
 } from "../lib/copy";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { exit } from "@tauri-apps/plugin-process";
-import { setPersonProperties, setTelemetryEnabled } from "../lib/analytics";
+import { setPersonProperties } from "../lib/analytics";
+import {
+  telemetryConsentAccepted,
+  trackOnboardingStepCompleted,
+} from "../lib/acquisitionAnalytics";
 import { getOrCreateAnonId, type StoredAnswer } from "../lib/profile";
 import { initSentryIfEnabled } from "../lib/sentry";
 import { logError, logInfo } from "../lib/log";
@@ -225,14 +229,14 @@ export function OnboardingFlow() {
     setPersonProperties(props, anonId ?? undefined);
   }
 
-  function acceptConsent() {
-    storeRef.current?.set(desktopConsentAcceptedKey, true).catch((err) =>
+  async function acceptConsent() {
+    await storeRef.current?.set(desktopConsentAcceptedKey, true).catch((err) =>
       logError("OnboardingFlow: persist consent", err),
     );
     // Flip immediately in-memory so telemetry starts this session too, not
     // just after the next launch - App.tsx's own startup read covers future
     // launches, this covers the one where consent was just given.
-    setTelemetryEnabled(true);
+    void telemetryConsentAccepted().then(() => trackOnboardingStepCompleted("consent"));
     initSentryIfEnabled(true);
     setConsentAccepted(true);
   }
@@ -253,12 +257,17 @@ export function OnboardingFlow() {
     <div className="onboarding-flow">
       {step === "welcome" && (
         <WelcomeStep
-          onNext={() => setStep("getApp")}
+          onNext={() => {
+            void trackOnboardingStepCompleted("welcome");
+            setStep("getApp");
+          }}
           onSkipToLink={() => {
+            void trackOnboardingStepCompleted("welcome");
             setInitialSignInMode("pairing");
             setStep("link");
           }}
           onGoogleSignup={() => {
+            void trackOnboardingStepCompleted("welcome");
             setInitialSignInMode("google");
             setStep("link");
           }}
@@ -266,7 +275,10 @@ export function OnboardingFlow() {
       )}
       {step === "getApp" && (
         <GetAppStep
-          onNext={() => setStep("whereHeard")}
+          onNext={() => {
+            void trackOnboardingStepCompleted("get_app");
+            setStep("whereHeard");
+          }}
           onBack={() => setStep("welcome")}
         />
       )}
@@ -281,6 +293,7 @@ export function OnboardingFlow() {
           onSubmit={(answer) => {
             setWhereHeardAnswer(answer);
             void persistAnswer(desktopWhereHeardKey, "where_heard", answer);
+            void trackOnboardingStepCompleted("where_heard");
             setStep("role");
           }}
         />
@@ -296,6 +309,7 @@ export function OnboardingFlow() {
           onSubmit={(answer) => {
             setRoleAnswer(answer);
             void persistAnswer(desktopRoleKey, "role", answer);
+            void trackOnboardingStepCompleted("role");
             setInitialSignInMode("pairing");
             setStep("link");
           }}

@@ -83,6 +83,29 @@ export function OverlayRoot() {
     signedIn: user !== null,
     onPoint: handleGuidePoint,
   });
+  const guideVoiceEpochRef = useRef<number | null>(null);
+  const startGuideVoice = voice.startBridgedSession;
+  useEffect(() => {
+    if (!guide.armed) {
+      guideVoiceEpochRef.current = null;
+      return;
+    }
+    if (!user || guideVoiceEpochRef.current === guide.epoch) return;
+    guideVoiceEpochRef.current = guide.epoch;
+    if (voice.desiredActive) return;
+    void startGuideVoice("guide").catch((error) => {
+      logError("OverlayRoot: start Guide voice", error);
+      void invoke("disarm_guide").catch((disarmError) =>
+        logError("OverlayRoot: disarm after Guide voice failure", disarmError),
+      );
+    });
+  }, [
+    guide.armed,
+    guide.epoch,
+    startGuideVoice,
+    user,
+    voice.desiredActive,
+  ]);
   // Long-press-to-move is only armed on the resting bar (never mid-card or
   // mid-onboarding); the notch itself is the drag handle.
   const notchMove = useNotchMove(presentation === "bar");
@@ -414,6 +437,7 @@ export function OverlayRoot() {
         edge={notchEdge}
         dragHandlers={notchMove.dragHandlers}
         guideArmed={guide.armed}
+        guideActive={guide.active}
         menuOpen={menuOpen}
         onMenuToggle={() => {
           setInboxOpen(false);
