@@ -108,6 +108,21 @@ Meeting Notes (MEETING_NOTES_PLAN.md) adds `src-tauri/src/meeting/` (WASAPI capt
 
 ## Working style
 
+- **Keep edits surgical.** Change only the lines needed for the requested behavior.
+  Never reflow signatures, imports, comments, whitespace, or nearby code. Do not
+  run `cargo fmt`, `rustfmt`, Prettier, format-document, or broad autofix tools.
+  For `MEETING_RECORDING_V2_ARCHITECTURE.md`, do not run `git diff` or any
+  git-diff variant; inspect the exact edited lines directly instead.
+
+- **TEST FREEZE. YOU MUST NOT write any new test file, test function, test case, or fixture.** In force until Varun bumps the version or asks for tests in the current message. Nothing else lifts it: not a rule that "needs" a test, not a bug you just fixed, not a coverage gap you noticed. Never offer to add tests while it is in force.
+
+  **YOU MUST NOT write a test in order to find, reproduce, or diagnose an error.** This is the specific waste the freeze exists to stop: writing a test, compiling it, running it, and iterating on the test itself burns far more time than asking the real object directly. To verify something, in this order:
+  1. `cd backend && python -c "import src.main; print('OK')"` for import and wiring.
+  2. A throwaway `python -c` that inspects the real value (`print` the live registry, the built prompt, the serialized schema). This is inspection, not a test, and is always allowed. Never save it to a file.
+  3. Run the EXISTING suite. It is comprehensive; if a change is wrong it almost always already breaks something.
+
+  Repairing an EXISTING test IS allowed and expected: a stale fake, a drifted import, or an assertion that no longer matches shipped behaviour is a broken verification path, not new test surface. Fixing a fake's signature, re-pointing an assertion at a renamed mechanism, or adding a helper an existing test needs to keep working is repair. A new case, file, or fixture is not.
+
 - Never use em-dashes anywhere, in UI copy or in code/comments. Use plain human phrasing, not AI-sounding wording.
 - Never ship the default OS scrollbar. The dashboard hides scrollbars app-wide via `.db-app *::-webkit-scrollbar` (`dashboard.css`); any new scroll container must either hide its scrollbar or use a slim custom-styled one. Watch portaled elements: anything rendered outside `.db-app` (e.g. a `createPortal` to `document.body`) loses both that scrollbar rule and the `--db-*` tokens, so it falls back to raw chrome and a transparent background. Portal into `.db-app` instead.
 - Ask before running long-running or launching commands (`npm run tauri dev`, etc.) - the user runs those themselves and reports back, since they iterate faster than a tool-call round trip and Claude can't visually verify a GUI window anyway. Fast, silent checks (`cargo check`, `tsc --noEmit`) are fine to run directly.
@@ -138,12 +153,3 @@ Key routing rules:
 - Save progress, checkpoint, resume → invoke checkpoint
 - Code quality, health check → invoke health
 
-## graphify
-
-This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
-
-Rules:
-- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
-- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
-- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
-- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
