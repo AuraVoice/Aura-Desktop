@@ -11,6 +11,7 @@ import {
   CreditCard,
   Smartphone,
   HelpCircle,
+  Mic,
   type LucideIcon,
 } from "lucide-react";
 
@@ -49,6 +50,7 @@ export const navSections: NavSection[] = [
     heading: "Settings",
     items: [
       { to: "/general", label: "General", Icon: Settings },
+      { to: "/dictation", label: "Dictation", Icon: Mic },
       { to: "/connectors", label: "Connectors", Icon: Link2 },
       { to: "/account", label: "Account", Icon: User },
       { to: "/billing", label: "Billing", Icon: CreditCard },

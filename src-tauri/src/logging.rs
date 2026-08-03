@@ -62,8 +62,14 @@ fn panicking_thread_handles_speech() -> bool {
         // "aura-dictation-decode" owns the recognizer, the stream and every
         // decoded string in the process, so it is the MOST important name here,
         // not an afterthought: a panic raised there is the one most likely to
-        // carry a transcript in its payload.
-        Some("aura-dictation") | Some("aura-dictation-model") | Some("aura-dictation-decode")
+        // carry a transcript in its payload. "aura-dictation-trace" holds the
+        // same class of content - raw transcripts, inserted text, and the
+        // user's corrections - for as long as a field is being watched, so its
+        // panic payload is exactly as sensitive.
+        Some("aura-dictation")
+            | Some("aura-dictation-model")
+            | Some("aura-dictation-decode")
+            | Some("aura-dictation-trace")
     )
 }
 

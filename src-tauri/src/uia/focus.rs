@@ -95,7 +95,18 @@ impl FocusProbe {
 
 /// Runs on the UIA worker thread only: `IUIAutomation` and its elements belong
 /// to that apartment.
-pub(super) fn probe(automation: &IUIAutomation) -> FocusProbe {
+///
+/// `anchors` is `Some` only when opt-in training-trace capture is switched on
+/// AND the caller is about to type. It rides on this request rather than
+/// getting its own because this probe already happens immediately before the
+/// keystrokes: a second round trip here would be paid on every utterance and
+/// would land squarely on the warm keyup budget `dictation/mod.rs` watches.
+/// Nothing is read for it until the verdict is known to allow typing, so a
+/// password field or a list view costs nothing extra.
+pub(super) fn probe(
+    automation: &IUIAutomation,
+    anchors: Option<&mut super::anchor::AnchorStore>,
+) -> FocusProbe {
     // No pointer-element fallback, unlike the context walk. "What is under the
     // cursor" answers a different question than "where would a keystroke go",
     // and only the second one is relevant to typing.
@@ -149,6 +160,14 @@ pub(super) fn probe(automation: &IUIAutomation) -> FocusProbe {
         },
         _ => FocusVerdict::Unknown,
     };
+    // Only the two verdicts that actually type park a baseline. `NotTypable`
+    // holds the text and waits for a text box, and the field it eventually
+    // lands in is a different element that gets its own probe.
+    if let Some(anchors) = anchors {
+        if matches!(verdict, FocusVerdict::Typable | FocusVerdict::Unknown) {
+            anchors.park_baseline(&focused);
+        }
+    }
     FocusProbe { verdict, role }
 }
 

@@ -1,12 +1,12 @@
 /* The dictation HUD window. The resting pill is passive but cursor-aware so its
-   native hover hint can teach the hotkey. Active and message phases are
+   hover surface can teach the hotkey. Active and message phases are
    click-through. Nothing scrolls. */
 
 /* The same reset App.css gives the overlay window. It has to be repeated here,
    not imported: App.css is pulled in by App.tsx, and this window renders
    DictationHud instead (main.tsx routes on the window label), so it has been
    living with the browser's default 8px body margin. That was survivable for a
-   460x104 card and is not for a 184x29 notch, which would sit offset and
+   460x104 card and is not for an 8x40 pill, which would sit offset and
    clipped. Any future window with its own React root needs this too. */
 html,
 body,
@@ -32,62 +32,106 @@ body,
 }
 
 .dictation-launcher__surface {
-  display: grid;
   width: 100%;
   height: 100%;
-  place-items: center;
   border-radius: 999px;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.34);
+  background: rgba(20, 22, 23, 0.94);
+  box-shadow: none;
 }
 
-.dictation-launcher__power {
+.dictation-launcher__surface::after {
+  padding: 1px;
+  background: rgba(151, 155, 157, 0.82);
+}
+
+.dictation-launcher__hover {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  height: 100%;
+}
+
+.dictation-launcher-left .dictation-launcher__hover {
+  flex-direction: row-reverse;
+}
+
+.dictation-launcher-top .dictation-launcher__hover {
+  flex-direction: column-reverse;
+}
+
+.dictation-launcher-bottom .dictation-launcher__hover {
+  flex-direction: column;
+}
+
+.dictation-launcher__hint {
+  flex: 0 0 164px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 164px;
+  height: 31px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.96);
+  font-family:
+    "Segoe UI Variable Text",
+    "Segoe UI",
+    system-ui,
+    sans-serif;
+  font-size: 13px;
+  line-height: 1;
+  color: #fff;
+  white-space: nowrap;
+}
+
+.dictation-launcher__hint strong {
+  font-weight: 700;
+}
+
+.dictation-launcher__mic {
+  flex: 0 0 28px;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 46px;
+  border-radius: 999px;
+  background: rgba(49, 49, 49, 0.98);
+}
+
+.dictation-launcher__mic::after,
+.dictation-launcher__hint::after {
+  background: rgba(151, 155, 157, 0.58);
+}
+
+.dictation-launcher__mic svg {
   width: 17px;
-  height: 17px;
-  color: rgba(151, 240, 225, 0.92);
-  filter: drop-shadow(0 0 5px rgba(86, 214, 196, 0.42));
-}
-
-.dictation-launcher__power path {
+  height: 21px;
   stroke: currentColor;
-  stroke-width: 1.9;
+  stroke-width: 2.2;
   stroke-linecap: round;
+  stroke-linejoin: round;
+  color: #fff;
 }
 
-.notch-shell.dictation-active {
-  animation: dictation-expand-horizontal 220ms cubic-bezier(0.16, 1, 0.3, 1) both;
+.dictation-launcher-top .dictation-launcher__mic,
+.dictation-launcher-bottom .dictation-launcher__mic {
+  flex-basis: 28px;
+  width: 46px;
+  height: 28px;
 }
 
-.notch-shell-left.dictation-active,
-.notch-shell-right.dictation-active {
-  animation-name: dictation-expand-vertical;
+.dictation-launcher-top .dictation-launcher__hint,
+.dictation-launcher-bottom .dictation-launcher__hint {
+  flex-basis: 31px;
 }
 
-@keyframes dictation-expand-horizontal {
-  from {
-    opacity: 0.72;
-    transform: scaleX(0.24);
-  }
-  to {
-    opacity: 1;
-    transform: scaleX(1);
-  }
-}
-
-@keyframes dictation-expand-vertical {
-  from {
-    opacity: 0.72;
-    transform: scaleY(0.24);
-  }
-  to {
-    opacity: 1;
-    transform: scaleY(1);
-  }
-}
-
-/* No kebab and no guide dot in this window, so the control gutter NotchBar.css
-   reserves on the right would push the waveform off center. */
-.notch-bar-inner.is-bare {
-  padding: 4px 14px;
+.dictation-listening-visualizer {
+  position: absolute;
+  inset: 4px 2px;
+  width: calc(100% - 4px);
+  height: calc(100% - 8px);
 }
 
 /* The failure pill. Rust swaps the window to this footprint for the error phase
@@ -154,7 +198,6 @@ body,
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .notch-shell.dictation-active,
   .dictation-message.is-pending .dictation-message__dot {
     animation: none;
   }

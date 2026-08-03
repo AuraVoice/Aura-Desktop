@@ -95,7 +95,7 @@ pub struct CorrectionStore {
     pub entries: Vec<CorrectionEntry>,
 }
 
-fn dictation_dir(app: &AppHandle) -> Result<PathBuf, String> {
+pub(super) fn dictation_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app
         .path()
         .app_local_data_dir()
@@ -109,7 +109,7 @@ fn dictation_dir(app: &AppHandle) -> Result<PathBuf, String> {
 /// use. A wrapped blob that no longer unwraps fails closed rather than being
 /// replaced, so a machine/profile change surfaces as an error instead of
 /// silently discarding a vocabulary the user spent weeks building.
-fn load_or_create_key(app: &AppHandle) -> Result<[u8; 32], String> {
+pub(super) fn load_or_create_key(app: &AppHandle) -> Result<[u8; 32], String> {
     let path = dictation_dir(app)?.join(KEY_FILE);
     if let Ok(wrapped) = std::fs::read(&path) {
         let key_bytes = dpapi_unprotect(&wrapped)
@@ -139,7 +139,7 @@ fn load_or_create_key(app: &AppHandle) -> Result<[u8; 32], String> {
     Ok(out)
 }
 
-fn encrypt(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, String> {
+pub(super) fn encrypt(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, String> {
     let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
     let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
     let ciphertext = cipher
@@ -151,7 +151,7 @@ fn encrypt(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-fn decrypt(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>, String> {
+pub(super) fn decrypt(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>, String> {
     if data.len() <= NONCE_LEN {
         return Err("dictation store too short to decrypt".to_string());
     }

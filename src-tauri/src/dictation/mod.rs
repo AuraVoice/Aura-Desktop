@@ -34,6 +34,8 @@ mod insert;
 #[cfg(windows)]
 mod stt;
 #[cfg(windows)]
+pub mod trace;
+#[cfg(windows)]
 mod vocab;
 
 use serde::Serialize;
@@ -66,7 +68,7 @@ impl DictationStatus {
 }
 
 #[cfg(windows)]
-pub use platform::{is_holding_text, signal, start, DictationHandle};
+pub use platform::{is_capturing, is_holding_text, signal, start, DictationHandle};
 
 #[cfg(windows)]
 mod platform {
@@ -85,6 +87,7 @@ mod platform {
     use super::hud::{self, HudPhase, HudUpdate};
     use super::insert::{self, InsertOutcome};
     use super::stt::{Recognizer, Stream, MODEL_ID, STREAMING_CHUNK_SAMPLES};
+    use super::trace;
     use super::vocab;
     use super::{DictationStatus, DICTATION_CHORD};
 
@@ -203,6 +206,20 @@ mod platform {
     }
 
     static HOLDING_PENDING: std::sync::atomic::AtomicBool =
+        std::sync::atomic::AtomicBool::new(false);
+
+    /// True from the moment a hold is armed until its text has been dealt with.
+    ///
+    /// Read by the training-trace worker so a background observation never
+    /// claims the UI Automation apartment while the user is mid-utterance. The
+    /// probe on the insert path already fails open to "type anyway", so this is
+    /// not a correctness guard - it just stops the two features from routinely
+    /// racing when there is no reason for them to.
+    pub fn is_capturing() -> bool {
+        CHORD_ACTIVE.load(Ordering::Relaxed)
+    }
+
+    static CHORD_ACTIVE: std::sync::atomic::AtomicBool =
         std::sync::atomic::AtomicBool::new(false);
 
     pub fn start(app: AppHandle) -> DictationHandle {
@@ -552,14 +569,25 @@ mod platform {
     }
 
     /// A transcript waiting for somewhere to land.
+    ///
+    /// `raw` and `tokens` ride along unused on the normal path: they exist so
+    /// that text which eventually lands in a text box the user clicked into is
+    /// as complete a training trace as text that landed immediately. Both are
+    /// empty when trace capture is off.
     struct PendingPayload {
         text: String,
         samples: Vec<f32>,
+        raw: String,
+        tokens: Vec<(String, f32)>,
+        app_hint: Option<String>,
     }
 
     struct PendingText {
         text: String,
         samples: Vec<f32>,
+        raw: String,
+        tokens: Vec<(String, f32)>,
+        app_hint: Option<String>,
         expires_at: Instant,
         /// The HUD generation of the hold that produced it, so the closing
         /// caption cannot be hidden by a stale timer from an earlier utterance.
@@ -571,10 +599,44 @@ mod platform {
             Self {
                 text: payload.text,
                 samples: payload.samples,
+                raw: payload.raw,
+                tokens: payload.tokens,
+                app_hint: payload.app_hint,
                 expires_at: Instant::now() + PENDING_WINDOW,
                 generation: HUD_GENERATION.load(Ordering::SeqCst),
             }
         }
+    }
+
+    /// Hands one finished utterance to the training-trace worker.
+    ///
+    /// Everything expensive about a trace - the UI Automation round trip that
+    /// confirms where the text landed, the WAV encode, encryption, the index
+    /// write - happens on that worker, so all this costs the dictation thread
+    /// is building a struct and a channel send. The samples are moved, never
+    /// copied.
+    fn hand_to_trace(
+        app: &AppHandle,
+        raw: &str,
+        inserted: &str,
+        tokens: Vec<(String, f32)>,
+        samples: Vec<f32>,
+        app_hint: Option<String>,
+    ) {
+        let Some(handle) = trace::handle(app) else {
+            return;
+        };
+        handle.capture(trace::Utterance {
+            raw_transcript: raw.to_string(),
+            inserted_text: inserted.to_string(),
+            locally_corrected: raw != inserted,
+            tokens: tokens
+                .into_iter()
+                .map(|(token, at_seconds)| trace::record::TokenTiming { token, at_seconds })
+                .collect(),
+            samples,
+            app_hint,
+        });
     }
 
     struct FailedUtterance {
@@ -623,13 +685,19 @@ mod platform {
     /// One tick of the hold: land the text if a text box now has focus, expire
     /// it if the window has run out, otherwise keep waiting. Returns the text
     /// still being held, or None once it is resolved either way.
-    fn advance_pending(app: &AppHandle, held: PendingText) -> Option<PendingText> {
+    fn advance_pending(app: &AppHandle, mut held: PendingText) -> Option<PendingText> {
+        // The baseline has to exist BEFORE the keystrokes, and this tick is the
+        // only place that knows an insert is about to happen, so it is read on
+        // every probe while text is held rather than only on the tick that
+        // lands. That is a few milliseconds every 250ms for at most the ten
+        // second holding window, and only while trace capture is on.
+        let tracing = trace::wants_anchor(app);
         // Only a CONFIDENT yes lands the text. Unknown deliberately does not:
         // on the insert path Unknown means "type, refusing is worse", but here
         // the user has already been told the text is waiting for a text box,
         // and dropping it into an ambiguous pane instead would be exactly the
         // surprise this whole path exists to avoid.
-        let probe = crate::uia::probe_focus(app);
+        let probe = crate::uia::probe_focus(app, tracing);
         if matches!(probe.verdict, crate::uia::FocusVerdict::Typable) {
             match insert::insert_text_here(&held.text) {
                 InsertOutcome::Inserted => {
@@ -638,6 +706,16 @@ mod platform {
                         probe.role,
                         held.text.chars().count()
                     );
+                    if tracing {
+                        hand_to_trace(
+                            app,
+                            &held.raw,
+                            &held.text,
+                            std::mem::take(&mut held.tokens),
+                            std::mem::take(&mut held.samples),
+                            held.app_hint.clone(),
+                        );
+                    }
                     finish_with(
                         app,
                         held.generation,
@@ -692,6 +770,7 @@ mod platform {
         if capture.is_none() {
             *capture = open_capture();
         }
+        CHORD_ACTIVE.store(true, Ordering::Relaxed);
         let cold = model.ready().is_none();
         model.begin_load(app, status);
         // A panic inside one utterance must not take dictation down for the
@@ -711,6 +790,7 @@ mod platform {
             false
         });
         *capture = None;
+        CHORD_ACTIVE.store(false, Ordering::Relaxed);
         shutting_down
     }
 
@@ -1062,6 +1142,17 @@ mod platform {
         };
         decode_time += finish_time;
         let decoded = stream.text();
+        // Opt-in, default off. Read ONCE here so every later decision in this
+        // utterance agrees about whether it is being traced, even if the user
+        // toggles the setting while the words are being typed.
+        let tracing = trace::wants_anchor(app);
+        // Token timings have to be taken before the stream is dropped, and are
+        // not worth fetching for an utterance nobody is tracing.
+        let tokens = if tracing {
+            stream.tokens()
+        } else {
+            Vec::new()
+        };
         drop(stream);
 
         let hold_ms = started_at.elapsed().as_millis();
@@ -1116,8 +1207,11 @@ mod platform {
 
         // Asked here, at the last possible moment, because this is the only
         // point at which "where would these keystrokes go" has its final
-        // answer. Bounded and fails open; see uia/focus.rs.
-        let probe = crate::uia::probe_focus(app);
+        // answer. Bounded and fails open; see uia/focus.rs. When tracing is on
+        // this same round trip also reads the field's "before" text, so
+        // verifying where the keystrokes landed costs no extra call in front of
+        // them.
+        let probe = crate::uia::probe_focus(app, tracing);
         let outcome = insert::insert_text(&final_text, target, probe.verdict);
         info!(
             "dictation: model={MODEL_ID} phase=insert hold_ms={hold_ms} frames={captured_frames} chars={} role={} \
@@ -1141,8 +1235,26 @@ mod platform {
             *held = Some(PendingPayload {
                 text: final_text,
                 samples: utterance,
+                raw: decoded,
+                tokens,
+                app_hint: app_key,
             });
             return shutting_down;
+        }
+
+        // Training-trace capture, only on a real insert and only when the user
+        // switched it on. `mem::take` rather than a move because the compiler
+        // cannot see that the branch above already returned; the buffer is
+        // never read again on this path either way.
+        if tracing && matches!(outcome, InsertOutcome::Inserted) {
+            hand_to_trace(
+                app,
+                &decoded,
+                &final_text,
+                tokens,
+                std::mem::take(&mut utterance),
+                app_key,
+            );
         }
 
         let (update, linger) = match outcome {
@@ -1279,6 +1391,12 @@ pub fn dictation_hud_state() -> hud::HudUpdate {
 }
 
 #[cfg(windows)]
+#[tauri::command]
+pub fn dictation_set_hud_hovered(app: tauri::AppHandle, hovered: bool) {
+    hud::set_hovered(&app, hovered);
+}
+
+#[cfg(windows)]
 pub(crate) fn show_hud(app: &tauri::AppHandle) {
     hud::show_idle(app);
 }
@@ -1299,6 +1417,10 @@ pub(crate) fn refresh_hud_placement(_app: &tauri::AppHandle) {}
 pub fn dictation_hud_state() -> DictationStatus {
     DictationStatus::unavailable(NOT_SUPPORTED)
 }
+
+#[cfg(not(windows))]
+#[tauri::command]
+pub fn dictation_set_hud_hovered(_hovered: bool) {}
 
 /// The user's saved biasing phrases, split into the global list and the
 /// per-app lists keyed by exe stem.
@@ -1347,6 +1469,397 @@ pub async fn dictation_add_vocabulary(
         Err(NOT_SUPPORTED.to_string())
     }
 }
+
+// ---------------------------------------------------------------------------
+// Training-trace capture (Settings > Dictation > Improve recognition).
+//
+// Every command here is deliberately WITHOUT a `security::Operation`, for the
+// reason the module header gives: dictation has to work signed out, offline,
+// on first launch, before any account exists, and so does the switch that
+// controls what it records about itself. The data never leaves the machine, so
+// there is no session for an authorization check to protect.
+//
+// All async, per the main-thread-blocking rule at the top of CLAUDE.md: every
+// one of these touches the filesystem, and several decrypt as they go.
+// ---------------------------------------------------------------------------
+
+/// Whether the upload pump has anything to do, and how much.
+#[derive(Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SharePumpState {
+    pub sharing: bool,
+    pub pending_uploads: usize,
+    pub pending_deletions: usize,
+}
+
+/// The settings, plus the ceilings the user does not set, so the page can
+/// explain what "and then it stops growing" means without hardcoding numbers
+/// that would drift out of step with the Rust side.
+#[derive(Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TraceSettingsView {
+    pub enabled: bool,
+    pub capture_audio: bool,
+    pub retention_days: u32,
+    pub excluded_apps: Vec<String>,
+    pub max_traces: usize,
+    pub max_audio_bytes: u64,
+    /// Where an export would be written, so the button can say so before
+    /// anyone commits to writing one.
+    pub export_directory: Option<String>,
+    /// Uploading settled traces to Aura. A separate decision from `enabled`;
+    /// see `trace::settings`.
+    pub sharing_enabled: bool,
+    /// Which consent text the user accepted, and which one is current. When
+    /// they differ the UI must re-ask rather than carry the old consent
+    /// forward.
+    pub consent_version: u32,
+    pub current_consent_version: u32,
+}
+
+/// Registered in `lib.rs` by their full path (`dictation::trace_commands::*`)
+/// rather than re-exported: `#[tauri::command]` generates companion items
+/// alongside each function that `generate_handler!` resolves by module path, so
+/// a plain `pub use` of the functions alone leaves those behind.
+#[cfg(windows)]
+pub mod trace_commands {
+    use super::{trace, SharePumpState, TraceSettingsView};
+
+    impl TraceSettingsView {
+        fn build(app: &tauri::AppHandle, settings: trace::settings::TraceSettings) -> Self {
+            Self {
+                enabled: settings.enabled,
+                capture_audio: settings.capture_audio,
+                retention_days: settings.retention_days,
+                excluded_apps: settings.excluded_apps,
+                max_traces: trace::settings::MAX_TRACES,
+                max_audio_bytes: trace::settings::MAX_AUDIO_BYTES,
+                export_directory: trace::export::export_root(app)
+                    .map(|path| path.to_string_lossy().to_string()),
+                sharing_enabled: settings.sharing_enabled,
+                consent_version: settings.consent_version,
+                current_consent_version: trace::settings::CONSENT_VERSION,
+            }
+        }
+    }
+
+    /// The current opt-in state and retention policy.
+    #[tauri::command]
+    pub async fn dictation_trace_settings(
+        app: tauri::AppHandle,
+    ) -> Result<TraceSettingsView, String> {
+        let settings = trace::handle(&app)
+            .map(|handle| handle.snapshot())
+            .unwrap_or_default();
+        Ok(TraceSettingsView::build(&app, settings))
+    }
+
+    /// Saves the opt-in state. Returns what was actually stored after clamping,
+    /// so the UI renders the truth rather than what it asked for.
+    #[tauri::command]
+    pub async fn dictation_set_trace_settings(
+        app: tauri::AppHandle,
+        enabled: bool,
+        capture_audio: bool,
+        retention_days: u32,
+        excluded_apps: Vec<String>,
+        sharing_enabled: bool,
+    ) -> Result<TraceSettingsView, String> {
+        let next = trace::settings::TraceSettings {
+            enabled,
+            capture_audio,
+            retention_days,
+            excluded_apps,
+            sharing_enabled,
+            // Turning sharing on here IS the act of consenting, so the current
+            // version is stamped on. `sanitized` clears it again if capture is
+            // off, so a sharing flag can never outlive the thing it shares.
+            consent_version: if sharing_enabled {
+                trace::settings::CONSENT_VERSION
+            } else {
+                0
+            },
+        };
+        let blocking_app = app.clone();
+        let saved =
+            tauri::async_runtime::spawn_blocking(move || trace::settings::save(&blocking_app, next))
+                .await
+                .map_err(|e| e.to_string())??;
+        if let Some(handle) = trace::handle(&app) {
+            handle.apply(saved.clone());
+        }
+        Ok(TraceSettingsView::build(&app, saved))
+    }
+
+    /// Counts and storage size for the settings page's summary line.
+    #[tauri::command]
+    pub async fn dictation_trace_summary(
+        app: tauri::AppHandle,
+    ) -> Result<trace::record::TraceSummary, String> {
+        tauri::async_runtime::spawn_blocking(move || trace::store::summary(&app))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+
+    /// The traces themselves, newest first, for review.
+    #[tauri::command]
+    pub async fn dictation_trace_list(
+        app: tauri::AppHandle,
+        limit: Option<usize>,
+    ) -> Result<Vec<trace::record::TraceRecord>, String> {
+        let limit = limit.unwrap_or(100).min(500);
+        tauri::async_runtime::spawn_blocking(move || trace::store::list(&app, limit))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+
+    /// One trace's audio, as WAV bytes.
+    ///
+    /// Returned as a raw IPC response rather than base64, following
+    /// `saved_images::read_saved_image`: the webview reads it as an
+    /// `ArrayBuffer` and hands it straight to a Blob URL with no encode/decode
+    /// round trip.
+    #[tauri::command]
+    pub async fn dictation_trace_audio(
+        app: tauri::AppHandle,
+        trace_id: String,
+    ) -> Result<tauri::ipc::Response, String> {
+        tauri::async_runtime::spawn_blocking(move || {
+            trace::store::read_audio(&app, &trace_id).map(tauri::ipc::Response::new)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+
+    /// Deletes one trace and its audio.
+    #[tauri::command]
+    pub async fn dictation_delete_trace(
+        app: tauri::AppHandle,
+        trace_id: String,
+    ) -> Result<bool, String> {
+        tauri::async_runtime::spawn_blocking(move || trace::store::delete(&app, &trace_id))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+
+    /// Deletes every stored trace. The dictation vocabulary and its key live in
+    /// the parent directory and are deliberately untouched, so wiping the
+    /// training corpus never costs the user the vocabulary they built up.
+    #[tauri::command]
+    pub async fn dictation_delete_all_traces(app: tauri::AppHandle) -> Result<usize, String> {
+        tauri::async_runtime::spawn_blocking(move || trace::store::delete_all(&app))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+
+    // --- Sharing queue.
+    //
+    // Rust owns the queue; JavaScript performs the HTTP, because the Firebase ID
+    // token lives in the JS SDK. Meeting segments upload the same way
+    // (`useMeetingCapture.ts` claims a lease, calls `authFetch`, resolves it),
+    // and this follows that split rather than inventing a second one.
+
+    /// What the pump needs to decide whether to do anything at all this tick.
+    ///
+    /// One cheap call instead of claiming blindly: with sharing off and nothing
+    /// owed, the pump does a single read and goes back to sleep rather than
+    /// decrypting the index and encoding audio to discover there is no work.
+    ///
+    /// `pendingDeletions` is reported even when sharing is off, because revoking
+    /// consent is precisely the case where deletes are owed and uploads are not.
+    #[tauri::command]
+    pub async fn dictation_share_pump_state(
+        app: tauri::AppHandle,
+    ) -> Result<SharePumpState, String> {
+        let sharing = trace::handle(&app).is_some_and(|handle| handle.shares());
+        let summary = tauri::async_runtime::spawn_blocking({
+            let app = app.clone();
+            move || trace::store::summary(&app)
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+        Ok(SharePumpState {
+            sharing,
+            pending_uploads: summary.pending_share,
+            pending_deletions: summary.pending_deletions,
+        })
+    }
+
+    /// The next trace due for upload, or null when the queue is empty, sharing
+    /// is off, or everything is waiting out a backoff.
+    #[tauri::command]
+    pub async fn dictation_claim_trace_upload(
+        app: tauri::AppHandle,
+    ) -> Result<Option<trace::upload::TraceUploadLease>, String> {
+        let Some(settings) = trace::handle(&app).map(|handle| handle.snapshot()) else {
+            return Ok(None);
+        };
+        tauri::async_runtime::spawn_blocking(move || trace::upload::claim(&app, &settings))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+
+    /// The FLAC body for a claimed trace, as raw IPC bytes.
+    #[tauri::command]
+    pub async fn dictation_trace_upload_audio(
+        app: tauri::AppHandle,
+        trace_id: String,
+    ) -> Result<tauri::ipc::Response, String> {
+        tauri::async_runtime::spawn_blocking(move || {
+            trace::upload::audio_body(&app, &trace_id).map(tauri::ipc::Response::new)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+
+    /// Both halves reached the server.
+    #[tauri::command]
+    pub async fn dictation_resolve_trace_upload(
+        app: tauri::AppHandle,
+        trace_id: String,
+    ) -> Result<(), String> {
+        tauri::async_runtime::spawn_blocking(move || trace::upload::resolve(&app, &trace_id))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+
+    /// The attempt failed. `retryable` false means it will never succeed on its
+    /// own (rejected payload, digest conflict) and the trace is abandoned.
+    #[tauri::command]
+    pub async fn dictation_fail_trace_upload(
+        app: tauri::AppHandle,
+        trace_id: String,
+        retryable: bool,
+    ) -> Result<(), String> {
+        tauri::async_runtime::spawn_blocking(move || {
+            trace::upload::fail(&app, &trace_id, retryable)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+
+    /// The next server-side delete still owed, if any. Stays queued until
+    /// `dictation_resolve_trace_deletion` confirms it, so a crash mid-request
+    /// retries rather than dropping the obligation.
+    #[tauri::command]
+    pub async fn dictation_claim_trace_deletion(
+        app: tauri::AppHandle,
+    ) -> Result<Option<String>, String> {
+        tauri::async_runtime::spawn_blocking(move || trace::store::claim_tombstone(&app))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+
+    #[tauri::command]
+    pub async fn dictation_resolve_trace_deletion(
+        app: tauri::AppHandle,
+        trace_id: String,
+    ) -> Result<(), String> {
+        tauri::async_runtime::spawn_blocking(move || {
+            trace::store::resolve_tombstone(&app, &trace_id)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+
+    /// Writes a NeMo-compatible dataset to the Downloads folder.
+    #[tauri::command]
+    pub async fn dictation_export_traces(
+        app: tauri::AppHandle,
+        include_audio: bool,
+        only_verified: bool,
+    ) -> Result<trace::export::ExportResult, String> {
+        tauri::async_runtime::spawn_blocking(move || {
+            trace::export::export(&app, include_audio, only_verified)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+}
+
+/// Everywhere but Windows there is no recognizer, so there is nothing to
+/// improve and nothing stored to review. Same shape as `dictation_hud_state`'s
+/// two definitions: one name per platform, registered once in `lib.rs`.
+#[cfg(not(windows))]
+pub mod trace_commands {
+    use super::{SharePumpState, TraceSettingsView, NOT_SUPPORTED};
+
+    #[tauri::command]
+    pub async fn dictation_share_pump_state() -> Result<SharePumpState, String> {
+        Err(NOT_SUPPORTED.to_string())
+    }
+
+    #[tauri::command]
+    pub async fn dictation_trace_settings() -> Result<TraceSettingsView, String> {
+        Err(NOT_SUPPORTED.to_string())
+    }
+
+    #[tauri::command]
+    pub async fn dictation_set_trace_settings() -> Result<TraceSettingsView, String> {
+        Err(NOT_SUPPORTED.to_string())
+    }
+
+    #[tauri::command]
+    pub async fn dictation_trace_summary() -> Result<(), String> {
+        Err(NOT_SUPPORTED.to_string())
+    }
+
+    #[tauri::command]
+    pub async fn dictation_trace_list() -> Result<(), String> {
+        Err(NOT_SUPPORTED.to_string())
+    }
+
+    #[tauri::command]
+    pub async fn dictation_trace_audio() -> Result<(), String> {
+        Err(NOT_SUPPORTED.to_string())
+    }
+
+    #[tauri::command]
+    pub async fn dictation_delete_trace() -> Result<(), String> {
+        Err(NOT_SUPPORTED.to_string())
+    }
+
+    #[tauri::command]
+    pub async fn dictation_delete_all_traces() -> Result<(), String> {
+        Err(NOT_SUPPORTED.to_string())
+    }
+
+    #[tauri::command]
+    pub async fn dictation_export_traces() -> Result<(), String> {
+        Err(NOT_SUPPORTED.to_string())
+    }
+
+    #[tauri::command]
+    pub async fn dictation_claim_trace_upload() -> Result<(), String> {
+        Err(NOT_SUPPORTED.to_string())
+    }
+
+    #[tauri::command]
+    pub async fn dictation_trace_upload_audio() -> Result<(), String> {
+        Err(NOT_SUPPORTED.to_string())
+    }
+
+    #[tauri::command]
+    pub async fn dictation_resolve_trace_upload() -> Result<(), String> {
+        Err(NOT_SUPPORTED.to_string())
+    }
+
+    #[tauri::command]
+    pub async fn dictation_fail_trace_upload() -> Result<(), String> {
+        Err(NOT_SUPPORTED.to_string())
+    }
+
+    #[tauri::command]
+    pub async fn dictation_claim_trace_deletion() -> Result<(), String> {
+        Err(NOT_SUPPORTED.to_string())
+    }
+
+    #[tauri::command]
+    pub async fn dictation_resolve_trace_deletion() -> Result<(), String> {
+        Err(NOT_SUPPORTED.to_string())
+    }
+}
+
 
 /// Records one confirmed correction. It only starts being applied once the same
 /// pair has been confirmed three times.

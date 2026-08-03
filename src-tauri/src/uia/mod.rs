@@ -23,9 +23,13 @@
 //! Read-only. This module never invokes a UI Automation pattern that acts on
 //! the user's applications.
 
+#[cfg(windows)]
+mod anchor;
 pub mod contract;
 #[cfg(windows)]
 mod focus;
+#[cfg(windows)]
+mod span;
 #[cfg(windows)]
 mod tree;
 #[cfg(windows)]
@@ -34,6 +38,8 @@ mod worker;
 use log::info;
 use tauri::AppHandle;
 
+#[cfg(windows)]
+pub use anchor::{AnchorId, AnchorOutcome, FieldIdentity, SpanObservation, SpanOutcome};
 pub use contract::StructuredContext;
 #[cfg(windows)]
 pub use focus::{FocusProbe, FocusVerdict};
@@ -62,13 +68,51 @@ impl UiaWorker {
 /// dictation has to work signed out, offline, on first launch, and this reads
 /// no content at all - a control type for a window the user is already looking
 /// at. Gating it would break exactly the case dictation exists for.
+///
+/// `capture_anchor` asks the same round trip to also park a training-trace
+/// baseline of the field about to be typed into. It is only ever true when the
+/// user has switched trace capture on AND this probe precedes a real insert;
+/// see `anchor.rs` for why it rides here instead of getting its own call.
 #[cfg(windows)]
-pub fn probe_focus(app: &AppHandle) -> FocusProbe {
+pub fn probe_focus(app: &AppHandle, capture_anchor: bool) -> FocusProbe {
     use tauri::Manager;
 
     match app.try_state::<UiaWorker>() {
-        Some(worker) => worker.probe_focus(),
+        Some(worker) => worker.probe_focus(capture_anchor),
         None => FocusProbe::unknown(),
+    }
+}
+
+/// Confirms where dictation's keystrokes landed, for training-trace capture.
+/// Blocking and bounded; runs after the text is on screen, never before it.
+#[cfg(windows)]
+pub fn anchor_insert(app: &AppHandle, trace_id: &str, inserted: &str) -> AnchorOutcome {
+    use tauri::Manager;
+
+    match app.try_state::<UiaWorker>() {
+        Some(worker) => worker.anchor_insert(trace_id, inserted),
+        None => AnchorOutcome {
+            anchor_id: None,
+            identity: FieldIdentity::default(),
+            refusal: Some("uia_unavailable"),
+        },
+    }
+}
+
+/// Re-reads watched fields and retires finished anchors in one round trip.
+/// Blocking; call it from the trace worker thread, never from the thread that
+/// pumps window messages.
+#[cfg(windows)]
+pub fn anchor_observe(
+    app: &AppHandle,
+    read: Vec<AnchorId>,
+    retire: Vec<AnchorId>,
+) -> Vec<SpanObservation> {
+    use tauri::Manager;
+
+    match app.try_state::<UiaWorker>() {
+        Some(worker) => worker.anchor_observe(read, retire),
+        None => Vec::new(),
     }
 }
 

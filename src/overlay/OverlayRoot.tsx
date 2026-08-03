@@ -15,6 +15,7 @@ import { useDraftCard } from "./useDraftCard";
 import { useUpdateReady } from "./useUpdateReady";
 import { useMeetings } from "./useMeetings";
 import { useMeetingArm } from "./useMeetingArm";
+import { useDictationUpload } from "./useDictationUpload";
 import { useMeetingCapture } from "./useMeetingCapture";
 import { useCallbackCard } from "./useCallbackCard";
 import { useDesktopNotifications } from "../state/useDesktopNotifications";
@@ -131,6 +132,10 @@ export function OverlayRoot() {
     callLive,
     autoSummon: false,
   });
+  // Drains the dictation trace sharing queue. Mounted here rather than in the
+  // dashboard because the overlay is always running and the dashboard is not;
+  // it idles on one cheap read per minute when there is nothing to send.
+  useDictationUpload(user !== null);
   const meetingArm = useMeetingArm(user?.uid ?? null);
   const meetingCapture = useMeetingCapture({
     uid: user?.uid ?? null,

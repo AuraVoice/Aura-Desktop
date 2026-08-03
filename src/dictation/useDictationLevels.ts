@@ -19,6 +19,39 @@ import {
 /// nothing is listening.
 const LEVEL_TTL_MS = 200;
 
+function paintVerticalLevel(
+  context: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+  level: number,
+  now: number,
+  staticFrame: boolean,
+) {
+  const count = 5;
+  const segmentHeight = Math.min(3, height / 14);
+  const gap = segmentHeight * 1.6;
+  const clusterHeight = count * segmentHeight + (count - 1) * gap;
+  const startY = (height - clusterHeight) / 2;
+  const gradient = context.createLinearGradient(0, 0, width, 0);
+  gradient.addColorStop(0, "rgba(104, 221, 205, 0.42)");
+  gradient.addColorStop(0.5, "rgba(151, 240, 225, 0.96)");
+  gradient.addColorStop(1, "rgba(104, 221, 205, 0.42)");
+  context.fillStyle = gradient;
+  context.shadowColor = "rgba(86, 214, 196, 0.42)";
+  context.shadowBlur = 3;
+
+  for (let index = 0; index < count; index += 1) {
+    const ripple = staticFrame ? 0.42 : (Math.sin(now / 105 + index * 1.15) + 1) / 2;
+    const energy = staticFrame ? 0.35 : Math.min(1, 0.12 + ripple * 0.16 + level * (0.58 + ripple * 0.28));
+    const segmentWidth = 1.5 + energy * Math.max(1, width - 2.5);
+    const x = (width - segmentWidth) / 2;
+    const y = startY + index * (segmentHeight + gap);
+    context.beginPath();
+    context.roundRect(x, y, segmentWidth, segmentHeight, segmentHeight / 2);
+    context.fill();
+  }
+}
+
 /// Paints the dictation waveform from levels streamed by the Rust capture loop.
 ///
 /// The voice bar can analyse a LiveKit track directly in the webview; dictation
@@ -31,6 +64,7 @@ const LEVEL_TTL_MS = 200;
 export function useDictationLevels(
   canvasRef: RefObject<HTMLCanvasElement | null>,
   active: boolean,
+  vertical = false,
 ) {
   useEffect(() => {
     const canvasElement = canvasRef.current;
@@ -64,6 +98,11 @@ export function useDictationLevels(
     function draw(now: number, staticFrame = false) {
       const { width, height } = sizeCanvas(canvas, context);
       context.clearRect(0, 0, width, height);
+
+      if (vertical) {
+        paintVerticalLevel(context, width, height, currentLevel(now), now, staticFrame);
+        return;
+      }
 
       const maxHalfHeight = maxHalfHeightFor(height);
       if (staticFrame) {
@@ -105,5 +144,5 @@ export function useDictationLevels(
       cancelAnimationFrame(animationFrame);
       void pending.then((unlisten) => unlisten());
     };
-  }, [canvasRef, active]);
+  }, [canvasRef, active, vertical]);
 }

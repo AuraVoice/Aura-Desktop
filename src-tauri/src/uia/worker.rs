@@ -36,6 +36,7 @@ use std::time::{Duration, Instant};
 
 use log::warn;
 
+use super::anchor::{AnchorId, AnchorOutcome, AnchorStore, SpanObservation};
 use super::contract::{QualityReason, StructuredContext};
 use super::focus::FocusProbe;
 
@@ -52,6 +53,13 @@ const REPLY_TIMEOUT: Duration = Duration::from_millis(300);
 /// worse than no answer, and no answer means "type anyway".
 const PROBE_TIMEOUT: Duration = Duration::from_millis(120);
 
+/// Budget for the training-trace anchor calls. Generous next to the probe
+/// because neither of them sits in front of a keystroke: the insert
+/// confirmation runs after the text is already on screen, and observations run
+/// minutes later on a background thread. A miss costs one trace its edit
+/// tracking, so waiting a little longer for a real answer is the better trade.
+const ANCHOR_TIMEOUT: Duration = Duration::from_millis(600);
+
 enum Request {
     Capture {
         turn_context_id: String,
@@ -64,7 +72,25 @@ enum Request {
     /// Shares this apartment because every UI Automation call in the process
     /// must, and shares the busy flag so neither feature can stall the other.
     FocusProbe {
+        /// Park a training-trace baseline on the same round trip. Only ever
+        /// true when the user has switched trace capture on.
+        capture_anchor: bool,
         reply: std::sync::mpsc::Sender<FocusProbe>,
+    },
+    /// Confirm where a freshly typed string landed, for training-trace capture.
+    /// Runs after the keystrokes, so it is off the latency path entirely.
+    AnchorInsert {
+        trace_id: String,
+        inserted: String,
+        reply: std::sync::mpsc::Sender<AnchorOutcome>,
+    },
+    /// Re-read watched fields and report where their spans went. `retire` is
+    /// carried on the same request so the observation schedule never needs a
+    /// second round trip just to drop a finished anchor.
+    AnchorObserve {
+        read: Vec<AnchorId>,
+        retire: Vec<AnchorId>,
+        reply: std::sync::mpsc::Sender<Vec<SpanObservation>>,
     },
 }
 
@@ -174,7 +200,7 @@ impl UiaWorker {
     /// someone else's process, a machine with no UI Automation, a hung
     /// application. Dictation must not become less reliable than it was because
     /// a second feature was busy.
-    pub fn probe_focus(&self) -> FocusProbe {
+    pub fn probe_focus(&self, capture_anchor: bool) -> FocusProbe {
         if self
             .busy
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -189,7 +215,10 @@ impl UiaWorker {
                 .requests
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            requests.try_send(Request::FocusProbe { reply: reply_tx })
+            requests.try_send(Request::FocusProbe {
+                capture_anchor,
+                reply: reply_tx,
+            })
         };
         if send_result.is_err() {
             // Nothing was handed over, so this is the one place the caller may
@@ -203,6 +232,84 @@ impl UiaWorker {
         reply_rx
             .recv_timeout(PROBE_TIMEOUT)
             .unwrap_or_else(|_| FocusProbe::unknown())
+    }
+
+    /// Blocking. Confirms where the text dictation just typed actually landed.
+    ///
+    /// Every failure resolves to "no anchor", which costs the utterance its
+    /// edit tracking and nothing else: the audio and the transcript are already
+    /// captured by the time this runs, and the text is already on screen.
+    ///
+    /// The claim/release discipline below is the same one `capture` documents.
+    /// The caller releases its own claim only when nothing was handed over, and
+    /// a timeout deliberately does NOT, because the call is still running inside
+    /// the other process.
+    pub fn anchor_insert(&self, trace_id: &str, inserted: &str) -> AnchorOutcome {
+        let refused = |refusal: &'static str| AnchorOutcome {
+            anchor_id: None,
+            identity: Default::default(),
+            refusal: Some(refusal),
+        };
+        if self
+            .busy
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return refused("worker_busy");
+        }
+        let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+        let send_result = {
+            let requests = self
+                .requests
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            requests.try_send(Request::AnchorInsert {
+                trace_id: trace_id.to_string(),
+                inserted: inserted.to_string(),
+                reply: reply_tx,
+            })
+        };
+        if send_result.is_err() {
+            self.busy.store(false, Ordering::Release);
+            return refused("worker_unavailable");
+        }
+        reply_rx
+            .recv_timeout(ANCHOR_TIMEOUT)
+            .unwrap_or_else(|_| refused("anchor_timeout"))
+    }
+
+    /// Blocking. Re-reads the named anchors and retires the finished ones.
+    /// An empty reply means nothing could be observed this tick; the caller
+    /// simply tries again on the next one.
+    pub fn anchor_observe(
+        &self,
+        read: Vec<AnchorId>,
+        retire: Vec<AnchorId>,
+    ) -> Vec<SpanObservation> {
+        if self
+            .busy
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return Vec::new();
+        }
+        let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+        let send_result = {
+            let requests = self
+                .requests
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            requests.try_send(Request::AnchorObserve {
+                read,
+                retire,
+                reply: reply_tx,
+            })
+        };
+        if send_result.is_err() {
+            self.busy.store(false, Ordering::Release);
+            return Vec::new();
+        }
+        reply_rx.recv_timeout(ANCHOR_TIMEOUT).unwrap_or_default()
     }
 }
 
@@ -233,6 +340,12 @@ fn worker_loop(requests: std::sync::mpsc::Receiver<Request>, busy: Arc<AtomicBoo
         };
     let _ = automation.as_raw();
 
+    // Every watched text field lives here, on this thread, for exactly the
+    // reason the module header gives for `IUIAutomation` itself: these are COM
+    // proxies into other processes, they are not `Send`, and they belong to
+    // this apartment. Callers only ever hold opaque ids.
+    let mut anchors = AnchorStore::default();
+
     while let Ok(request) = requests.recv() {
         match request {
             Request::Capture {
@@ -262,10 +375,34 @@ fn worker_loop(requests: std::sync::mpsc::Receiver<Request>, busy: Arc<AtomicBoo
                 // moved on.
                 let _ = reply.send(context);
             }
-            Request::FocusProbe { reply } => {
-                let probe = super::focus::probe(&automation);
+            Request::FocusProbe {
+                capture_anchor,
+                reply,
+            } => {
+                let probe = super::focus::probe(
+                    &automation,
+                    capture_anchor.then_some(&mut anchors),
+                );
                 busy.store(false, Ordering::Release);
                 let _ = reply.send(probe);
+            }
+            Request::AnchorInsert {
+                trace_id,
+                inserted,
+                reply,
+            } => {
+                let outcome = anchors.confirm_insert(&automation, &trace_id, &inserted);
+                busy.store(false, Ordering::Release);
+                let _ = reply.send(outcome);
+            }
+            Request::AnchorObserve {
+                read,
+                retire,
+                reply,
+            } => {
+                let observations = anchors.observe(&read, &retire);
+                busy.store(false, Ordering::Release);
+                let _ = reply.send(observations);
             }
         }
     }

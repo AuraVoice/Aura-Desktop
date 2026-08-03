@@ -2,15 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { GlassSurface } from "../overlay/GlassSurface";
-import { NOTCH_PATH } from "../overlay/NotchBar";
 import type { NotchEdge } from "../overlay/notchEdge";
 import { useDictationLevels } from "./useDictationLevels";
 // This window renders DictationHud, not App, so it loads none of App's CSS.
-// The glass tokens and the notch geometry have to be pulled in explicitly or
-// the surface falls back to raw chrome on a transparent background.
+// The glass tokens have to be pulled in explicitly or the surface falls back
+// to raw chrome on a transparent background.
 import "../theme/theme.css";
 import "../overlay/GlassSurface.css";
-import "../overlay/NotchBar.css";
 import "./DictationHud.css";
 
 /// Mirrors HudPhase in src-tauri/src/dictation/hud.rs.
@@ -29,8 +27,13 @@ interface DictationUpdate {
   /// Always rendered from the Rust side's DICTATION_CHORD.label(). Nothing in
   /// this file may hardcode a chord string.
   chordLabel: string;
-  /// The edge Rust docked this window to. Geometry is Rust's; this only picks
-  /// the matching rotation class.
+  /// The edge Rust docked this window to. Geometry is Rust's; this only stamps
+  /// the matching dock class.
+  edge: NotchEdge;
+}
+
+interface DictationLauncherProps {
+  hotkey: string;
   edge: NotchEdge;
 }
 
@@ -41,24 +44,50 @@ const IDLE: DictationUpdate = {
   edge: "top",
 };
 
-/// The notch has no status styling of its own, but the class is applied for
-/// parity with the voice bar so a future style hooks both surfaces at once.
-function statusFor(phase: DictationPhase): string {
-  switch (phase) {
-    case "listening":
-      return "listening";
-    case "transcribing":
-      return "processing";
-    case "error":
-      return "error";
-    default:
-      return "idle";
-  }
+function DictationLauncher({ hotkey, edge }: DictationLauncherProps) {
+  const [hovered, setHovered] = useState(false);
+
+  const updateHover = (next: boolean) => {
+    setHovered(next);
+    void invoke("dictation_set_hud_hovered", { hovered: next }).catch(() => {
+      setHovered(!next);
+    });
+  };
+
+  const label = hotkey ? `Dictate with ${hotkey}` : "Dictate";
+  return (
+    <div
+      className={`dictation-launcher dictation-launcher-${edge}`}
+      onPointerEnter={() => updateHover(true)}
+      onPointerLeave={() => updateHover(false)}
+      role="status"
+      aria-label={label}
+    >
+      {hovered ? (
+        <div className="dictation-launcher__hover">
+          <GlassSurface className="dictation-launcher__hint" draggable={false}>
+            <span>Dictate</span>
+            {hotkey && <strong>{hotkey}</strong>}
+          </GlassSurface>
+          <GlassSurface className="dictation-launcher__mic" draggable={false}>
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <rect x="8.5" y="2.5" width="7" height="13" rx="3.5" />
+              <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3.5M8.5 21.5h7" />
+            </svg>
+          </GlassSurface>
+        </div>
+      ) : (
+        <GlassSurface className="dictation-launcher__surface" draggable={false}>
+          {null}
+        </GlassSurface>
+      )}
+    </div>
+  );
 }
 
 /// The dictation HUD window: a persistent passive pill between holds, then the
-/// same notch the voice bar uses while the hotkey is held. The pill has no click
-/// action; only the keyboard hook can start capture and recognition.
+/// same pill enlarged while the hotkey is held. The pill has no click action;
+/// only the keyboard hook can start capture and recognition.
 ///
 /// It is deliberately wordless. The partial transcript is not shown, because
 /// the words are already landing in the app being typed into, and a second copy
@@ -67,9 +96,8 @@ function statusFor(phase: DictationPhase): string {
 export function DictationHud() {
   const [update, setUpdate] = useState<DictationUpdate>(IDLE);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const listening = update.phase === "listening";
 
-  useDictationLevels(canvasRef, listening);
+  useDictationLevels(canvasRef, update.phase === "listening", true);
 
   useEffect(() => {
     let live = true;
@@ -97,29 +125,7 @@ export function DictationHud() {
   }, []);
 
   if (update.phase === "idle") {
-    const hint = update.chordLabel
-      ? `Dictate\nHold ${update.chordLabel}`
-      : "Dictate";
-    return (
-      <div
-        className={`dictation-launcher dictation-launcher-${update.edge}`}
-        title={hint}
-        role="status"
-        aria-label={hint.replace("\n", ". ")}
-      >
-        <GlassSurface className="dictation-launcher__surface" draggable={false}>
-          <svg
-            className="dictation-launcher__power"
-            viewBox="0 0 24 24"
-            fill="none"
-            aria-hidden="true"
-          >
-            <path d="M12 3v8" />
-            <path d="M7.4 5.8a8 8 0 1 0 9.2 0" />
-          </svg>
-        </GlassSurface>
-      </div>
-    );
+    return <DictationLauncher hotkey={update.chordLabel} edge={update.edge} />;
   }
 
   // Held text: the only place the transcript is shown, because the user has to
@@ -152,37 +158,13 @@ export function DictationHud() {
   }
 
   return (
-    <div className={`notch-shell notch-shell-${update.edge} dictation-active`}>
-      <GlassSurface
-        className={`notch-bar notch-bar-${statusFor(update.phase)}`}
-        draggable={false}
-      >
-        <div className="notch-shape">
-          <div className="notch-bar-inner is-bare">
-            <div className="notch-recorder" aria-hidden="true">
-              <canvas ref={canvasRef} className="notch-visualizer" />
-            </div>
-          </div>
-        </div>
-        <svg
-          className="notch-outline"
-          viewBox="0 0 184 29"
-          preserveAspectRatio="none"
-          aria-hidden="true"
-        >
-          <defs>
-            <linearGradient id="dictation-notch-stroke" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stopColor="var(--glass-border-top)" />
-              <stop offset="1" stopColor="var(--glass-border-bottom)" />
-            </linearGradient>
-          </defs>
-          <path
-            d={NOTCH_PATH}
-            fill="none"
-            stroke="url(#dictation-notch-stroke)"
-            strokeWidth="1"
-          />
-        </svg>
+    <div
+      className={`dictation-launcher dictation-launcher-${update.edge} is-active`}
+      role="status"
+      aria-label={update.phase === "listening" ? "Dictation listening" : "Dictation processing"}
+    >
+      <GlassSurface className="dictation-launcher__surface" draggable={false}>
+        <canvas ref={canvasRef} className="dictation-listening-visualizer" aria-hidden="true" />
       </GlassSurface>
     </div>
   );

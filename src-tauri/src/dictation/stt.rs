@@ -497,6 +497,46 @@ impl Stream<'_> {
         Ok(started_at.elapsed())
     }
 
+    /// The decoded tokens and, when the model reports them, when each one
+    /// starts. Only ever called once per utterance, after `finish`, and only
+    /// when opt-in training-trace capture is on: it is one extra result fetch
+    /// and a copy of a handful of short strings, but it is not free and the
+    /// insert path has no use for it.
+    ///
+    /// `timestamps` is documented as optional in sherpa-onnx's C API and may be
+    /// null even when `count` is non-zero, so it is read defensively rather
+    /// than indexed alongside the tokens unconditionally.
+    pub fn tokens(&self) -> Vec<(String, f32)> {
+        let api = &self.recognizer.api;
+        unsafe {
+            let result = (api.get_result)(self.recognizer.handle, self.handle);
+            if result.is_null() {
+                return Vec::new();
+            }
+            let count = (*result).count.max(0) as usize;
+            let mut out = Vec::with_capacity(count);
+            if !(*result).tokens_arr.is_null() {
+                let tokens = std::slice::from_raw_parts((*result).tokens_arr, count);
+                let timestamps = if (*result).timestamps.is_null() {
+                    None
+                } else {
+                    Some(std::slice::from_raw_parts((*result).timestamps, count))
+                };
+                for (index, token) in tokens.iter().enumerate() {
+                    if token.is_null() {
+                        continue;
+                    }
+                    out.push((
+                        CStr::from_ptr(*token).to_string_lossy().into_owned(),
+                        timestamps.map(|stamps| stamps[index]).unwrap_or(0.0),
+                    ));
+                }
+            }
+            (api.destroy_result)(result);
+            out
+        }
+    }
+
     /// The text decoded so far. Safe to call between chunks for partials.
     pub fn text(&self) -> String {
         let api = &self.recognizer.api;

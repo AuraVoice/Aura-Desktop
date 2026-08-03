@@ -1,5 +1,5 @@
-//! The dictation HUD: the notch, docked to the same screen edge as the voice
-//! bar, showing a live microphone waveform while the chord is held.
+//! The dictation HUD: a thin pill docked to the same screen edge as the voice
+//! bar, enlarging while the chord is held.
 //!
 //! This is its OWN window (label "dictation"), not an overlay.rs presentation,
 //! for two reasons. Any path into the overlay can reach
@@ -10,16 +10,15 @@
 //! live, so the two surfaces would fight over `applied_presentation`. Dictation
 //! also has to work signed out, which the overlay's React root does not.
 //!
-//! It still LOOKS like the voice bar, because it reuses overlay.rs's own notch
-//! metrics and edge anchoring rather than a second set of constants. The user
-//! docked their notch somewhere on purpose; dictation appears there too.
+//! It reuses overlay.rs's edge anchoring. The user docked their notch somewhere
+//! on purpose; dictation appears there too.
 //!
 //! main.tsx routes on the window label, and "dictation" is listed in
 //! capabilities/default.json's `windows` array. Without that entry the label
 //! gets ZERO permissions, including core:default, so it could not even listen
 //! for its own events.
 
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::Mutex;
 
 use serde::Serialize;
@@ -31,15 +30,21 @@ use crate::overlay::{self, NotchEdge, OverlayPresentation};
 
 pub const DICTATION_WINDOW: &str = "dictation";
 
-/// The resting pill stays visible between holds and expands to the full notch
-/// only while dictation is active.
-const RESTING_MAIN: f64 = 44.0;
-const RESTING_CROSS: f64 = 28.0;
+/// The resting pill stays visible between holds and expands only while
+/// dictation is active.
+const RESTING_WIDTH: f64 = 8.0;
+const RESTING_HEIGHT: f64 = 40.0;
+const ACTIVE_WIDTH: f64 = 12.0;
+const ACTIVE_HEIGHT: f64 = 65.0;
+const HOVER_SIDE_WIDTH: f64 = 196.0;
+const HOVER_SIDE_HEIGHT: f64 = 46.0;
+const HOVER_TOP_WIDTH: f64 = 164.0;
+const HOVER_TOP_HEIGHT: f64 = 63.0;
 
-/// The message pill. The notch itself is wordless by design, but a blocked or
+/// The message pill. The active pill is wordless by design, but a blocked or
 /// misdirected insert has to say so somewhere, and this window is the only
 /// surface dictation owns. Used ONLY for `Error` and `Pending`, so the normal
-/// path never grows past the notch. `Pending` is taller because it carries the
+/// path never grows past the pill. `Pending` is taller because it carries the
 /// held transcript as well as the explanation.
 const MESSAGE_WIDTH: f64 = 340.0;
 const MESSAGE_HEIGHT: f64 = 44.0;
@@ -49,6 +54,7 @@ const PENDING_HEIGHT: f64 = 78.0;
 /// change can re-place the HUD on the right display without the worker having
 /// to thread the target through every publish.
 static LAST_TARGET: AtomicIsize = AtomicIsize::new(0);
+static IDLE_HOVERED: AtomicBool = AtomicBool::new(false);
 
 /// What the HUD is currently telling the user. Every caption is derived from
 /// one of these; the chord itself is always rendered from
@@ -133,7 +139,7 @@ fn build_window(app: &AppHandle) -> Result<(), String> {
         WebviewUrl::App("index.html".into()),
     )
     .title("Aura Dictation")
-    .inner_size(RESTING_MAIN, RESTING_CROSS)
+    .inner_size(RESTING_WIDTH, RESTING_HEIGHT)
     .decorations(false)
     .transparent(true)
     .shadow(false)
@@ -209,22 +215,26 @@ fn target_center(_target: isize) -> Option<(f64, f64)> {
     None
 }
 
-fn resting_size(edge: NotchEdge) -> LogicalSize<f64> {
-    if edge.is_vertical() {
-        LogicalSize::new(RESTING_CROSS, RESTING_MAIN)
-    } else {
-        LogicalSize::new(RESTING_MAIN, RESTING_CROSS)
-    }
+fn resting_size(_edge: NotchEdge) -> LogicalSize<f64> {
+    LogicalSize::new(RESTING_WIDTH, RESTING_HEIGHT)
 }
 
 /// The HUD's footprint for one phase. Idle is the compact persistent pill;
-/// active phases use the voice bar's full metrics for the current edge.
+/// active phases enlarge it while keeping the same vertical silhouette.
 fn surface_size(edge: NotchEdge, phase: HudPhase) -> LogicalSize<f64> {
     match phase {
+        HudPhase::Idle if IDLE_HOVERED.load(Ordering::Relaxed) => match edge {
+            NotchEdge::Top | NotchEdge::Bottom => {
+                LogicalSize::new(HOVER_TOP_WIDTH, HOVER_TOP_HEIGHT)
+            }
+            NotchEdge::Left | NotchEdge::Right => {
+                LogicalSize::new(HOVER_SIDE_WIDTH, HOVER_SIDE_HEIGHT)
+            }
+        },
         HudPhase::Idle => resting_size(edge),
         HudPhase::Error => LogicalSize::new(MESSAGE_WIDTH, MESSAGE_HEIGHT),
         HudPhase::Pending => LogicalSize::new(MESSAGE_WIDTH, PENDING_HEIGHT),
-        _ => overlay::bar_size(edge, None),
+        _ => LogicalSize::new(ACTIVE_WIDTH, ACTIVE_HEIGHT),
     }
 }
 
@@ -314,6 +324,7 @@ pub fn show(app: &AppHandle, target: isize) {
 /// Creates and shows the passive resting pill without starting capture or
 /// loading the recognizer. The keyboard hook remains the only source of Arm.
 pub fn show_idle(app: &AppHandle) {
+    IDLE_HOVERED.store(false, Ordering::Relaxed);
     let mut update = HudUpdate::new(HudPhase::Idle);
     update.edge = overlay::snapshot(app).notch_edge.as_stored();
     *LAST_UPDATE.lock().unwrap_or_else(|e| e.into_inner()) = Some(update.clone());
@@ -328,6 +339,24 @@ pub fn show_idle(app: &AppHandle) {
             let _ = window.set_ignore_cursor_events(false);
             let _ = window.show();
             let _ = window.emit("dictation-update", update);
+        }
+    });
+}
+
+pub fn set_hovered(app: &AppHandle, hovered: bool) {
+    if last_update().phase != HudPhase::Idle {
+        return;
+    }
+    IDLE_HOVERED.store(hovered, Ordering::Relaxed);
+    let handle = app.clone();
+    let target = LAST_TARGET.load(Ordering::Relaxed);
+    let _ = app.run_on_main_thread(move || {
+        if last_update().phase != HudPhase::Idle {
+            IDLE_HOVERED.store(false, Ordering::Relaxed);
+            return;
+        }
+        if let Some(window) = handle.get_webview_window(DICTATION_WINDOW) {
+            place_window(&handle, &window, target, HudPhase::Idle);
         }
     });
 }
@@ -362,6 +391,7 @@ pub fn hide(app: &AppHandle) {
 /// The update is recorded before it is emitted, so a webview that has not
 /// finished registering its listener can still pull the current state.
 pub fn publish(app: &AppHandle, mut update: HudUpdate) {
+    IDLE_HOVERED.store(false, Ordering::Relaxed);
     update.edge = overlay::snapshot(app).notch_edge.as_stored();
     let phase = update.phase;
     *LAST_UPDATE.lock().unwrap_or_else(|e| e.into_inner()) = Some(update.clone());
