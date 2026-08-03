@@ -30,6 +30,49 @@ pub fn init() -> sentry::ClientInitGuard {
         dsn,
         release: sentry::release_name!(),
         debug: cfg!(debug_assertions),
+        before_send: Some(std::sync::Arc::new(|event| {
+            if mentions_dictation(&event) {
+                None
+            } else {
+                Some(event)
+            }
+        })),
         ..Default::default()
+    })
+}
+
+/// Module path prefix of everything that can hold speech in memory.
+const DICTATION_MODULE: &str = "aura_desktop_lib::dictation";
+
+/// Drops any event that originated inside the dictation module.
+///
+/// This is LOAD BEARING, not defense in depth. `..Default::default()` above
+/// means `default_integrations: true`, which installs Sentry's panic capture,
+/// and v1 runs the on-device decoder in this same process. A panic anywhere in
+/// that code path would ship a report whose message, frames or locals can carry
+/// transcript text off the machine, which is exactly what the feature promises
+/// never happens. The message check catches the `capture_message` path, the
+/// frame check catches the panic path.
+fn mentions_dictation(event: &sentry::protocol::Event<'static>) -> bool {
+    if event
+        .message
+        .as_deref()
+        .is_some_and(|message| message.contains("dictation"))
+    {
+        return true;
+    }
+    event.exception.values.iter().any(|exception| {
+        exception.stacktrace.iter().any(|stacktrace| {
+            stacktrace.frames.iter().any(|frame| {
+                frame
+                    .module
+                    .as_deref()
+                    .is_some_and(|module| module.starts_with(DICTATION_MODULE))
+                    || frame
+                        .function
+                        .as_deref()
+                        .is_some_and(|function| function.starts_with(DICTATION_MODULE))
+            })
+        })
     })
 }

@@ -245,8 +245,9 @@ unsafe extern "system" fn collect_visible_windows(
 /// PID -> lowercase exe file stem ("chrome", "spotify") for one window. Local
 /// mirror of detect.rs's private helper of the same name, kept here so this
 /// module stays self-contained rather than reaching into the meeting module.
+/// Also the per-app profile key for dictation's contextual biasing.
 #[cfg(target_os = "windows")]
-fn process_stem_for_window(hwnd_raw: isize) -> Option<String> {
+pub(crate) fn process_stem_for_window(hwnd_raw: isize) -> Option<String> {
     unsafe {
         let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
         let mut pid: u32 = 0;

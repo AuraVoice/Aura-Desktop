@@ -48,6 +48,9 @@ getrandom = "0.3"
 sha2 = "0.10"
 sentry = { version = "0.48", default-features = false, features = ["backtrace", "contexts", "debug-images", "panic", "reqwest", "rustls"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
+# Local dictation's post-decode correction pass (dictation/vocab.rs): phonetic
+# aliases via double-metaphone. Pure Rust, no C deps.
+rphonetic = "3"
 
 # Win32 bindings - win_focus.rs and the meeting/ module use this, Windows
 # only. Scoping it to a target-specific dependency table (rather than
@@ -100,6 +103,12 @@ aes-gcm = "0.10"
 # their bytes. rustls-tls keeps it off any native OpenSSL. Windows-only: the
 # cache commands no-op on other platforms.
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+# Local dictation's speech recognition (dictation/stt.rs) loads the prebuilt
+# CPU-only sherpa-onnx C API at runtime rather than linking it, so the build
+# needs no cmake and no C++ toolchain, and the GPU provider DLLs are absent by
+# construction. The library and the model are fetched at build time by
+# scripts/predownload-dictation-model.mjs and bundled as Tauri resources.
+libloading = "0.9"
 # Actionable Windows toasts (toast.rs): the notification plugin cannot route a
 # toast click on Windows (its action API is mobile-only), this crate can via
 # the in-process Activated handler.

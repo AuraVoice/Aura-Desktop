@@ -25,6 +25,7 @@ import { MobileAppPage } from "./pages/MobileAppPage";
 import { ComingSoonPage } from "./pages/ComingSoonPage";
 import { InsightsPage } from "./pages/InsightsPage";
 import { GeneralPage } from "./pages/GeneralPage";
+import { DictationPage } from "./pages/DictationPage";
 import { DashboardOnboarding } from "./DashboardOnboarding";
 import { useDashboardUser } from "./useDashboardUser";
 import { useDashboardNotifications } from "./useDashboardNotifications";
@@ -43,6 +44,7 @@ export const dashboardPages: Record<string, ReactElement> = {
   "/meetings": <MeetingsPage />,
   "/insights": <InsightsPage />,
   "/general": <GeneralPage />,
+  "/dictation": <DictationPage />,
   "/account": <AccountPage />,
   "/billing": <BillingPage />,
   "/connectors": <ConnectorsPage />,

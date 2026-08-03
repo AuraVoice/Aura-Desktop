@@ -2,6 +2,7 @@ mod auth_cache;
 mod autostart;
 mod connector_oauth;
 mod dashboard;
+mod dictation;
 mod entitlement;
 mod guide;
 mod hotkeys;
@@ -18,6 +19,7 @@ mod sentry_setup;
 mod system_control;
 mod toast;
 mod tray;
+mod uia;
 mod updater;
 mod voice_toggle_key;
 mod win_focus;
@@ -292,6 +294,28 @@ pub fn run() {
             meeting::stop_join_watch,
             meeting::debug_force_join,
             voice_toggle_key::voice_toggle_key_status,
+            dictation::dictation_status,
+            dictation::dictation_hud_state,
+            dictation::dictation_set_hud_hovered,
+            dictation::dictation_vocabulary,
+            dictation::dictation_add_vocabulary,
+            dictation::dictation_record_correction,
+            dictation::trace_commands::dictation_trace_settings,
+            dictation::trace_commands::dictation_set_trace_settings,
+            dictation::trace_commands::dictation_trace_summary,
+            dictation::trace_commands::dictation_trace_list,
+            dictation::trace_commands::dictation_trace_audio,
+            dictation::trace_commands::dictation_delete_trace,
+            dictation::trace_commands::dictation_delete_all_traces,
+            dictation::trace_commands::dictation_export_traces,
+            dictation::trace_commands::dictation_share_pump_state,
+            dictation::trace_commands::dictation_claim_trace_upload,
+            dictation::trace_commands::dictation_trace_upload_audio,
+            dictation::trace_commands::dictation_resolve_trace_upload,
+            dictation::trace_commands::dictation_fail_trace_upload,
+            dictation::trace_commands::dictation_claim_trace_deletion,
+            dictation::trace_commands::dictation_resolve_trace_deletion,
+            uia::capture_structured_context,
             toast::show_actionable_toast,
             toast::take_pending_toast_activation
         ])
@@ -311,6 +335,26 @@ pub fn run() {
             // configured-key tap into a channel. Event emission happens outside
             // the hook on Tauri's async runtime, and the managed handle asks
             // the hook thread to unhook when the process exits.
+            // Started BEFORE the keyboard listener so the hook's first chord
+            // edge already has a worker to signal. Owns the "aura-dictation"
+            // thread: the on-device recognizer, WASAPI capture, and the
+            // SendInput burst all live there, never on the message pump.
+            app.manage(dictation::start(app.handle().clone()));
+
+            // Opt-in training-trace capture. Started unconditionally because
+            // starting it is cheap - it reads one small JSON file and then
+            // parks on an empty channel - and because the settings page has to
+            // be able to switch it on without a restart. With the setting off
+            // (the default) it never reads a text field, never creates a
+            // directory, and never receives a message.
+            #[cfg(windows)]
+            app.manage(dictation::trace::start(app.handle().clone()));
+
+            // Owns the COM apartment for UI Automation. Started once here so
+            // the first turn does not pay for CoCreateInstance, and so
+            // dictation's insert path has a worker to ask before it types.
+            app.manage(uia::UiaWorker::start());
+
             app.manage(voice_toggle_key::start(app.handle().clone()));
 
             // tauri.conf.json's `skipTaskbar: true` keeps this off the Windows
@@ -384,6 +428,7 @@ pub fn run() {
             };
             overlay::load_persisted_center(app.handle());
             overlay::set_panel_variant(app.handle(), initial_variant);
+            dictation::show_hud(app.handle());
 
             // Present right after a user-initiated update restart. The update
             // relaunch reuses the original args, so a boot-launched instance

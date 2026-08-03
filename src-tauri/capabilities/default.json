@@ -1,12 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main overlay window and the in-app dashboard window",
-  "windows": ["main", "dashboard"],
+  "description": "Capability for the main overlay window, the in-app dashboard window, and the dictation HUD",
+  "windows": ["main", "dashboard", "dictation"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
     "opener:default",
+    "opener:allow-open-path",
     "os:allow-hostname",
     "log:default",
     "store:default",

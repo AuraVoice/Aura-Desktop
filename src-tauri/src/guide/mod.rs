@@ -349,6 +349,12 @@ fn log_tick(verdict: EnvelopeVerdict, classification: Option<&Classification>) {
     );
 }
 
+/// Whether Guide Mode is armed right now. Read by uia/mod.rs, which widens the
+/// structured context walk's budget for a guide turn.
+pub(crate) fn is_armed(app: &AppHandle) -> bool {
+    armed_payload(app).armed
+}
+
 fn armed_payload(app: &AppHandle) -> GuideArmedPayload {
     // Lock order for the rare two-state reads and writes is SecurityState,
     // then GuideRuntime. Neither lock is held across event or window work.
@@ -813,6 +819,67 @@ pub fn ack_guide_response(app: AppHandle, frame_id: String, epoch: u64) -> Resul
         .unwrap_or_else(|e| e.into_inner())
         .ack(&frame_id, epoch);
     result
+}
+
+/// (process stem, window id, window title) for the foreground window.
+/// Shared with `uia::tree`, which needs the same app identity alongside the
+/// accessibility snapshot rather than a second copy of this Win32 dance.
+#[cfg(windows)]
+pub(crate) fn foreground_window_details() -> (String, String, String) {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
+    };
+
+    unsafe {
+        let hwnd = GetForegroundWindow();
+        if hwnd.0.is_null() {
+            return (String::new(), String::new(), String::new());
+        }
+        let window_id = format!("{:x}", hwnd.0 as usize);
+        let title_len = GetWindowTextLengthW(hwnd);
+        let title = if title_len > 0 {
+            let mut buffer = vec![0_u16; title_len as usize + 1];
+            let copied = GetWindowTextW(hwnd, &mut buffer);
+            String::from_utf16_lossy(&buffer[..copied.max(0) as usize])
+        } else {
+            String::new()
+        };
+        let mut pid = 0_u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid == 0 {
+            return (String::new(), window_id, title);
+        }
+        let Ok(process) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
+            return (String::new(), window_id, title);
+        };
+        let mut path_buffer = vec![0_u16; 1024];
+        let mut path_len = path_buffer.len() as u32;
+        let process_name = QueryFullProcessImageNameW(
+            process,
+            PROCESS_NAME_FORMAT(0),
+            windows::core::PWSTR(path_buffer.as_mut_ptr()),
+            &mut path_len,
+        )
+        .ok()
+        .and_then(|_| {
+            std::path::Path::new(&String::from_utf16_lossy(&path_buffer[..path_len as usize]))
+                .file_stem()
+                .map(|value| value.to_string_lossy().to_string())
+        })
+        .unwrap_or_default();
+        let _ = CloseHandle(process);
+        (process_name, window_id, title)
+    }
+}
+
+#[cfg(not(windows))]
+pub(crate) fn foreground_window_details() -> (String, String, String) {
+    (String::new(), String::new(), String::new())
 }
 
 #[cfg(test)]

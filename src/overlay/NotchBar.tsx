@@ -13,7 +13,10 @@ import "./NotchBar.css";
 // edge and its rounded side facing center. The per-edge rotation that hugs each
 // edge lives in NotchBar.css (.notch-shell-<edge>); the shape is authored once
 // here for the Top orientation and rotated as a whole.
-const NOTCH_PATH = "M0,0 H184 V5.6 C184,18.4 172,28.8 153.6,28.8 H30.4 C12,28.8 0,18.4 0,5.6 Z";
+// Exported because the dictation HUD renders the same silhouette in its own
+// window. One path string, so the two notches cannot drift apart.
+export const NOTCH_PATH =
+  "M0,0 H184 V5.6 C184,18.4 172,28.8 153.6,28.8 H30.4 C12,28.8 0,18.4 0,5.6 Z";
 
 // Pointer handlers the move gesture (useNotchMove) attaches to the pill so a
 // press-and-drag can lift it into edge-picking. Optional so NotchBar still
