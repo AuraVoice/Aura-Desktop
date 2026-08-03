@@ -135,7 +135,7 @@ export function OverlayRoot() {
   // Drains the dictation trace sharing queue. Mounted here rather than in the
   // dashboard because the overlay is always running and the dashboard is not;
   // it idles on one cheap read per minute when there is nothing to send.
-  useDictationUpload(user !== null);
+  useDictationUpload(user?.uid ?? null);
   const meetingArm = useMeetingArm(user?.uid ?? null);
   const meetingCapture = useMeetingCapture({
     uid: user?.uid ?? null,

@@ -162,6 +162,10 @@ pub struct TraceRecord {
     // the only reason the review UI can honestly say "shared" or "not shared".
     #[serde(default)]
     pub share_state: ShareState,
+    /// Firebase UID that owned the first attempted upload. Once set, this trace
+    /// may only be uploaded or resolved while that same account is current.
+    #[serde(default)]
+    pub upload_owner_uid: Option<String>,
     #[serde(default)]
     pub share_attempts: u32,
     /// Wall-clock time before which no upload attempt may be made. Wall clock

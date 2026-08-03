@@ -38,6 +38,9 @@ const MAX_SHARE_ATTEMPTS: u32 = 8;
 /// shipping this before the backend exists harmless: by the fourth failure a
 /// client is asking twice an hour, and by the sixth, twice a day.
 const BACKOFF_SECONDS: [i64; 8] = [30, 60, 300, 1_800, 7_200, 21_600, 43_200, 86_400];
+/// A monthly reset can be at most one long month away. A little headroom keeps
+/// clock skew from turning a legitimate reset into a retry-budget failure.
+const MAX_QUOTA_PAUSE_MS: i64 = 32 * 24 * 60 * 60 * 1_000;
 
 /// Everything the JS pump needs to upload one trace, in the exact shape the
 /// backend contract expects as its metadata body. Serialized straight through
@@ -113,8 +116,12 @@ pub fn enqueue_backlog(app: &AppHandle, settings: &TraceSettings) -> Result<usiz
 
 /// The next trace due for upload, or `None` when the queue is empty or
 /// everything in it is still waiting out a backoff.
-pub fn claim(app: &AppHandle, settings: &TraceSettings) -> Result<Option<TraceUploadLease>, String> {
-    if !settings.shares() {
+pub fn claim(
+    app: &AppHandle,
+    settings: &TraceSettings,
+    owner_uid: &str,
+) -> Result<Option<TraceUploadLease>, String> {
+    if !settings.shares() || !valid_owner_uid(owner_uid) {
         return Ok(None);
     }
     let now = store::now_ms();
@@ -123,19 +130,7 @@ pub fn claim(app: &AppHandle, settings: &TraceSettings) -> Result<Option<TraceUp
     // The record is read here, but the FLAC body is produced separately by
     // `audio_body` - the pump asks for it in a second call, so a large body
     // never rides through the lease payload.
-    let record = store::with_records(app, |records| {
-        let found = records
-            .iter()
-            .filter(|record| {
-                record.share_state == ShareState::Pending
-                    && record.share_next_attempt_ms <= now
-                    && record.is_shareable()
-            })
-            // Oldest first, so a backlog drains in the order it happened.
-            .min_by_key(|record| record.recorded_at_ms)
-            .cloned();
-        (false, found)
-    })?;
+    let record = store::claim_upload(app, owner_uid, now)?;
 
     let Some(record) = record else {
         return Ok(None);
@@ -145,7 +140,7 @@ pub fn claim(app: &AppHandle, settings: &TraceSettings) -> Result<Option<TraceUp
     let Ok(wav) = store::read_audio(app, &record.trace_id) else {
         // The blob went while the record survived (retention, or a manual
         // wipe). Not retryable, and not an error worth surfacing.
-        store::update(app, &record.trace_id, |stored| {
+        store::update_owned(app, &record.trace_id, owner_uid, |stored| {
             stored.share_state = ShareState::Ineligible;
             stored.has_audio = false;
         })?;
@@ -180,14 +175,17 @@ pub fn claim(app: &AppHandle, settings: &TraceSettings) -> Result<Option<TraceUp
 /// The FLAC body for a claimed trace. Re-encoded rather than cached, because
 /// caching it would double the disk cost of every shared utterance for the sake
 /// of one request.
-pub fn audio_body(app: &AppHandle, trace_id: &str) -> Result<Vec<u8>, String> {
+pub fn audio_body(app: &AppHandle, trace_id: &str, owner_uid: &str) -> Result<Vec<u8>, String> {
+    if !valid_owner_uid(owner_uid) || !store::upload_owner_matches(app, trace_id, owner_uid)? {
+        return Err("trace upload owner mismatch".to_string());
+    }
     let wav = store::read_audio(app, trace_id)?;
     super::flac::from_wav(&wav)
 }
 
 /// The server has both halves.
-pub fn resolve(app: &AppHandle, trace_id: &str) -> Result<(), String> {
-    store::update(app, trace_id, |record| {
+pub fn resolve(app: &AppHandle, trace_id: &str, owner_uid: &str) -> Result<(), String> {
+    store::update_owned(app, trace_id, owner_uid, |record| {
         record.share_state = ShareState::Uploaded;
         record.shared_at_ms = Some(store::now_ms());
         record.share_next_attempt_ms = 0;
@@ -199,9 +197,14 @@ pub fn resolve(app: &AppHandle, trace_id: &str) -> Result<(), String> {
 /// succeed on their own - a rejected payload, a digest conflict - and true for
 /// everything transient, including the 404 that every attempt gets until the
 /// backend ships.
-pub fn fail(app: &AppHandle, trace_id: &str, retryable: bool) -> Result<(), String> {
+pub fn fail(
+    app: &AppHandle,
+    trace_id: &str,
+    owner_uid: &str,
+    retryable: bool,
+) -> Result<(), String> {
     let now = store::now_ms();
-    store::update(app, trace_id, |record| {
+    store::update_owned(app, trace_id, owner_uid, |record| {
         record.share_attempts = record.share_attempts.saturating_add(1);
         if !retryable || record.share_attempts >= MAX_SHARE_ATTEMPTS {
             record.share_state = ShareState::Failed;
@@ -212,6 +215,29 @@ pub fn fail(app: &AppHandle, trace_id: &str, retryable: bool) -> Result<(), Stri
     })?;
     info!("dictation.trace: share attempt failed retryable={retryable}");
     Ok(())
+}
+
+/// Persists one account's monthly quota reset without touching any trace's
+/// attempt count. Invalid, expired, or implausibly distant values return false
+/// so JavaScript can use the ordinary bounded retry path instead.
+pub fn pause_for_quota(
+    app: &AppHandle,
+    owner_uid: &str,
+    blocked_until_ms: i64,
+) -> Result<bool, String> {
+    if !valid_owner_uid(owner_uid) {
+        return Ok(false);
+    }
+    let now = store::now_ms();
+    if blocked_until_ms <= now || blocked_until_ms > now.saturating_add(MAX_QUOTA_PAUSE_MS) {
+        return Ok(false);
+    }
+    store::pause_uploads(app, owner_uid, blocked_until_ms)?;
+    Ok(true)
+}
+
+fn valid_owner_uid(owner_uid: &str) -> bool {
+    !owner_uid.trim().is_empty() && owner_uid.len() <= 128
 }
 
 /// Lowercase hex SHA-256, matching what the backend contract expects in

@@ -223,6 +223,14 @@ fn worker_thread(
     initial: TraceSettings,
 ) {
     let mut current = initial;
+    // Converges a settings write that reached disk just before a crash. Active
+    // owner-bound work must become deletion obligations even if the worker
+    // never observed the original on-to-off transition.
+    if !current.shares() {
+        if let Err(error) = store::tombstone_all_shared(&app) {
+            warn!("dictation.trace: startup revocation queue failed: {error}");
+        }
+    }
     // A UI Automation anchor cannot survive the process, so anything left
     // watching from the last run is settled now rather than waiting forever.
     if current.enabled {
@@ -415,6 +423,7 @@ fn capture(app: &AppHandle, settings: &TraceSettings, utterance: Utterance) -> O
         // is not confirmed until the field has been watched to the end. Only
         // `settle()` may promote this.
         share_state: record::ShareState::Ineligible,
+        upload_owner_uid: None,
         share_attempts: 0,
         share_next_attempt_ms: 0,
         shared_at_ms: None,

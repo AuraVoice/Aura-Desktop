@@ -315,6 +315,7 @@ pub fn run() {
             dictation::trace_commands::dictation_fail_trace_upload,
             dictation::trace_commands::dictation_claim_trace_deletion,
             dictation::trace_commands::dictation_resolve_trace_deletion,
+            dictation::trace_commands::dictation_pause_trace_uploads,
             uia::capture_structured_context,
             toast::show_actionable_toast,
             toast::take_pending_toast_activation
