@@ -41,6 +41,7 @@ const AUDIO_DIR: &str = "audio";
 const INDEX_FILE: &str = "index.enc";
 
 #[derive(Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct TraceIndex {
     #[serde(default)]
     version: u32,
@@ -55,12 +56,30 @@ struct TraceIndex {
     /// delete button a lie.
     #[serde(default)]
     tombstones: Vec<String>,
+    /// Account-bound server deletes written by builds that know which Firebase
+    /// namespace received the upload. Legacy string tombstones remain above so
+    /// old stores stay readable, but are never claimed under an arbitrary user.
+    #[serde(default)]
+    deletion_obligations: Vec<DeletionObligation>,
+    /// One monthly-quota reset per Firebase account. Expired rows are removed
+    /// during the next claim, so the list stays naturally bounded.
+    #[serde(default)]
+    quota_pauses: Vec<QuotaPause>,
 }
 
-/// Ceiling on unsent tombstones. Reached only if the server is unreachable for a
-/// very long time while the user deletes a lot; past it the oldest are dropped,
-/// because an unbounded list of ids in an encrypted blob is its own problem.
-const MAX_TOMBSTONES: usize = 2_000;
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeletionObligation {
+    trace_id: String,
+    owner_uid: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct QuotaPause {
+    owner_uid: String,
+    blocked_until_ms: i64,
+}
 
 /// Guards every read-modify-write of the index. A `OnceLock` rather than a
 /// managed Tauri state so `store` functions stay callable from anywhere without
@@ -115,6 +134,8 @@ fn read_index(app: &AppHandle) -> Result<TraceIndex, String> {
             version: TRACE_SCHEMA_VERSION,
             traces: Vec::new(),
             tombstones: Vec::new(),
+            deletion_obligations: Vec::new(),
+            quota_pauses: Vec::new(),
         });
     };
     let key = super::super::vocab::load_or_create_key(app)?;
@@ -128,6 +149,8 @@ fn read_index(app: &AppHandle) -> Result<TraceIndex, String> {
             version: TRACE_SCHEMA_VERSION,
             traces: Vec::new(),
             tombstones: Vec::new(),
+            deletion_obligations: Vec::new(),
+            quota_pauses: Vec::new(),
         });
     }
     Ok(index)
@@ -169,48 +192,172 @@ fn with_index<R>(
     Ok(result)
 }
 
-/// Records that a trace which had reached the server must now be deleted there.
-/// Idempotent: the same id is never queued twice.
-fn remember_tombstone(index: &mut TraceIndex, trace_id: &str) {
-    if index.tombstones.iter().any(|id| id == trace_id) {
+/// Records that a trace which may have reached the server must now be deleted
+/// there. Idempotent, durable, and account-bound.
+fn remember_tombstone(index: &mut TraceIndex, trace_id: &str, owner_uid: &str) {
+    if index
+        .deletion_obligations
+        .iter()
+        .any(|item| item.trace_id == trace_id)
+    {
         return;
     }
-    if index.tombstones.len() >= MAX_TOMBSTONES {
-        index.tombstones.remove(0);
-    }
-    index.tombstones.push(trace_id.to_string());
+    index.deletion_obligations.push(DeletionObligation {
+        trace_id: trace_id.to_string(),
+        owner_uid: owner_uid.to_string(),
+    });
 }
 
-/// The next id whose server-side copy still needs deleting, if any. Left in the
-/// list until `resolve_tombstone` confirms, so a crash mid-request retries
-/// rather than dropping the obligation.
-pub fn claim_tombstone(app: &AppHandle) -> Result<Option<String>, String> {
+/// The next id whose server-side copy still needs deleting for this account.
+/// Left in the list until `resolve_tombstone` confirms, so a crash mid-request
+/// retries rather than dropping the obligation.
+pub fn claim_tombstone(app: &AppHandle, owner_uid: &str) -> Result<Option<String>, String> {
     with_index(app, |index| {
-        (false, index.tombstones.first().cloned())
+        let found = index
+            .deletion_obligations
+            .iter()
+            .find(|item| item.owner_uid == owner_uid)
+            .map(|item| item.trace_id.clone());
+        (false, found)
     })
 }
 
-pub fn resolve_tombstone(app: &AppHandle, trace_id: &str) -> Result<(), String> {
+pub fn resolve_tombstone(
+    app: &AppHandle,
+    trace_id: &str,
+    owner_uid: &str,
+) -> Result<(), String> {
     with_index(app, |index| {
-        let before = index.tombstones.len();
-        index.tombstones.retain(|id| id != trace_id);
-        (index.tombstones.len() != before, ())
+        let before = index.deletion_obligations.len();
+        index
+            .deletion_obligations
+            .retain(|item| item.trace_id != trace_id || item.owner_uid != owner_uid);
+        (index.deletion_obligations.len() != before, ())
     })
 }
 
-/// Queues a server-side delete for every trace already uploaded, and marks them
-/// so nothing re-queues them for upload. This is what makes revoking the sharing
-/// consent mean something rather than merely stopping future uploads.
-pub fn tombstone_all_shared(app: &AppHandle) -> Result<usize, String> {
+/// Atomically selects the oldest upload for this account and binds an unowned
+/// trace before the lease can cross into JavaScript. A persisted quota pause or
+/// outstanding delete prevents the claim.
+pub fn claim_upload(
+    app: &AppHandle,
+    owner_uid: &str,
+    now: i64,
+) -> Result<Option<TraceRecord>, String> {
     with_index(app, |index| {
-        let shared: Vec<String> = index
+        let pause_count = index.quota_pauses.len();
+        index
+            .quota_pauses
+            .retain(|pause| pause.blocked_until_ms > now);
+        let mut changed = pause_count != index.quota_pauses.len();
+        if index
+            .quota_pauses
+            .iter()
+            .any(|pause| pause.owner_uid == owner_uid)
+        {
+            return (changed, None);
+        }
+
+        let candidate = index
             .traces
             .iter()
-            .filter(|record| record.share_state == ShareState::Uploaded)
-            .map(|record| record.trace_id.clone())
+            .enumerate()
+            .filter(|(_, record)| {
+                record.share_state == ShareState::Pending
+                    && record.share_next_attempt_ms <= now
+                    && record.is_shareable()
+                    && record
+                        .upload_owner_uid
+                        .as_deref()
+                        .is_none_or(|bound| bound == owner_uid)
+                    && !index.tombstones.iter().any(|id| id == &record.trace_id)
+                    && !index
+                        .deletion_obligations
+                        .iter()
+                        .any(|item| item.trace_id == record.trace_id)
+            })
+            .min_by_key(|(_, record)| record.recorded_at_ms)
+            .map(|(position, _)| position);
+        let Some(position) = candidate else {
+            return (changed, None);
+        };
+        if index.traces[position].upload_owner_uid.is_none() {
+            index.traces[position].upload_owner_uid = Some(owner_uid.to_string());
+            changed = true;
+        }
+        (changed, Some(index.traces[position].clone()))
+    })
+}
+
+pub fn pause_uploads(
+    app: &AppHandle,
+    owner_uid: &str,
+    blocked_until_ms: i64,
+) -> Result<(), String> {
+    with_index(app, |index| {
+        index
+            .quota_pauses
+            .retain(|pause| pause.owner_uid != owner_uid);
+        index.quota_pauses.push(QuotaPause {
+            owner_uid: owner_uid.to_string(),
+            blocked_until_ms,
+        });
+        (true, ())
+    })
+}
+
+pub fn upload_owner_matches(
+    app: &AppHandle,
+    trace_id: &str,
+    owner_uid: &str,
+) -> Result<bool, String> {
+    with_records(app, |records| {
+        let matches = records.iter().any(|record| {
+            record.trace_id == trace_id
+                && record.upload_owner_uid.as_deref() == Some(owner_uid)
+        });
+        (false, matches)
+    })
+}
+
+pub fn update_owned(
+    app: &AppHandle,
+    trace_id: &str,
+    owner_uid: &str,
+    update: impl FnOnce(&mut TraceRecord),
+) -> Result<bool, String> {
+    with_records(app, |records| {
+        match records.iter_mut().find(|record| {
+            record.trace_id == trace_id
+                && record.upload_owner_uid.as_deref() == Some(owner_uid)
+        }) {
+            Some(record) => {
+                update(record);
+                (true, true)
+            }
+            None => (false, false),
+        }
+    })
+}
+
+/// Queues a server-side delete for every trace ever bound to an account, and
+/// marks them so nothing re-queues them for upload until that delete resolves.
+/// This is what makes revoking sharing meaningful after a partial upload.
+pub fn tombstone_all_shared(app: &AppHandle) -> Result<usize, String> {
+    with_index(app, |index| {
+        let shared: Vec<(String, String)> = index
+            .traces
+            .iter()
+            .filter(|record| record.share_state != ShareState::Ineligible)
+            .filter_map(|record| {
+                record
+                    .upload_owner_uid
+                    .as_ref()
+                    .map(|owner| (record.trace_id.clone(), owner.clone()))
+            })
             .collect();
-        for trace_id in &shared {
-            remember_tombstone(index, trace_id);
+        for (trace_id, owner_uid) in &shared {
+            remember_tombstone(index, trace_id, owner_uid);
         }
         for record in index.traces.iter_mut() {
             if record.share_state != ShareState::Ineligible {
@@ -221,7 +368,7 @@ pub fn tombstone_all_shared(app: &AppHandle) -> Result<usize, String> {
             }
         }
         let count = shared.len();
-        (true, count)
+        (count > 0, count)
     })
 }
 
@@ -281,20 +428,22 @@ fn remove_audio(app: &AppHandle, trace_id: &str) {
 
 /// Deletes one trace and its audio.
 ///
-/// A trace that had already been uploaded leaves a tombstone behind, so the
-/// server copy is deleted too. Without that, deleting a shared recording would
-/// remove only the local half and the button would be lying.
+/// A trace ever bound for upload leaves an account-bound tombstone behind, so a
+/// partial metadata-only upload is deleted too.
 pub fn delete(app: &AppHandle, trace_id: &str) -> Result<bool, String> {
     let removed = with_index(app, |index| {
         let before = index.traces.len();
-        let was_shared = index
+        let upload_owner = index
             .traces
             .iter()
-            .any(|record| record.trace_id == trace_id && record.share_state == ShareState::Uploaded);
+            .find(|record| record.trace_id == trace_id)
+            .and_then(|record| record.upload_owner_uid.clone());
         index.traces.retain(|record| record.trace_id != trace_id);
         let removed = index.traces.len() != before;
-        if removed && was_shared {
-            remember_tombstone(index, trace_id);
+        if removed {
+            if let Some(owner_uid) = upload_owner {
+                remember_tombstone(index, trace_id, &owner_uid);
+            }
         }
         (removed, removed)
     })?;
@@ -310,23 +459,27 @@ pub fn delete(app: &AppHandle, trace_id: &str) -> Result<bool, String> {
 /// in the parent directory and survive, so wiping the training corpus never
 /// costs the user the vocabulary they built up.
 pub fn delete_all(app: &AppHandle) -> Result<usize, String> {
-    // The tombstones for anything already uploaded have to be written BEFORE the
+    // The tombstones for anything ever bound have to be written BEFORE the
     // index file is removed, and they are the one thing that must survive it -
     // so the index is rewritten holding only them, rather than deleted outright.
-    let (count, pending) = with_index(app, |index| {
+    let (count, pending, paused) = with_index(app, |index| {
         let count = index.traces.len();
-        let shared: Vec<String> = index
+        let shared: Vec<(String, String)> = index
             .traces
             .iter()
-            .filter(|record| record.share_state == ShareState::Uploaded)
-            .map(|record| record.trace_id.clone())
+            .filter_map(|record| {
+                record
+                    .upload_owner_uid
+                    .as_ref()
+                    .map(|owner| (record.trace_id.clone(), owner.clone()))
+            })
             .collect();
-        for trace_id in &shared {
-            remember_tombstone(index, trace_id);
+        for (trace_id, owner_uid) in &shared {
+            remember_tombstone(index, trace_id, owner_uid);
         }
         index.traces.clear();
-        let pending = index.tombstones.len();
-        (true, (count, pending))
+        let pending = index.tombstones.len() + index.deletion_obligations.len();
+        (true, (count, pending, !index.quota_pauses.is_empty()))
     })?;
 
     let dir = trace_dir(app)?;
@@ -336,7 +489,7 @@ pub fn delete_all(app: &AppHandle) -> Result<usize, String> {
     }
     // Nothing was ever shared and nothing is queued: drop the index file
     // entirely, so "delete everything" really does leave no trace store behind.
-    if pending == 0 {
+    if pending == 0 && !paused {
         let index_path = dir.join(INDEX_FILE);
         if index_path.exists() {
             std::fs::remove_file(&index_path).map_err(|e| e.to_string())?;
@@ -352,15 +505,43 @@ pub fn delete_all(app: &AppHandle) -> Result<usize, String> {
 /// comes back rather than on a timer that may never fire.
 pub fn prune(app: &AppHandle, retention_days: u32) -> Result<usize, String> {
     let cutoff = now_ms() - (retention_days as i64 * 24 * 60 * 60 * 1000);
-    let (dropped, survivors) = with_records(app, |records| {
-        let before = records.len();
-        records.retain(|record| record.recorded_at_ms >= cutoff);
-        records.sort_by_key(|record| record.recorded_at_ms);
-        if records.len() > MAX_TRACES {
-            records.drain(..records.len() - MAX_TRACES);
+    let (dropped, survivors) = with_index(app, |index| {
+        let before = index.traces.len();
+        let mut removed: Vec<(String, String)> = index
+            .traces
+            .iter()
+            .filter(|record| record.recorded_at_ms < cutoff)
+            .filter_map(|record| {
+                record
+                    .upload_owner_uid
+                    .as_ref()
+                    .map(|owner| (record.trace_id.clone(), owner.clone()))
+            })
+            .collect();
+        index
+            .traces
+            .retain(|record| record.recorded_at_ms >= cutoff);
+        index
+            .traces
+            .sort_by_key(|record| record.recorded_at_ms);
+        if index.traces.len() > MAX_TRACES {
+            removed.extend(
+                index.traces[..index.traces.len() - MAX_TRACES]
+                    .iter()
+                    .filter_map(|record| {
+                        record
+                            .upload_owner_uid
+                            .as_ref()
+                            .map(|owner| (record.trace_id.clone(), owner.clone()))
+                    }),
+            );
+            index.traces.drain(..index.traces.len() - MAX_TRACES);
         }
-        let dropped = before - records.len();
-        (dropped > 0, (dropped, records.clone()))
+        for (trace_id, owner_uid) in removed {
+            remember_tombstone(index, &trace_id, &owner_uid);
+        }
+        let dropped = before - index.traces.len();
+        (dropped > 0, (dropped, index.traces.clone()))
     })?;
 
     // Audio is reconciled against the surviving records rather than against a
@@ -462,7 +643,7 @@ pub fn summary(app: &AppHandle) -> Result<TraceSummary, String> {
                 .iter()
                 .filter(|record| record.share_state == ShareState::Pending)
                 .count(),
-            pending_deletions: index.tombstones.len(),
+            pending_deletions: index.tombstones.len() + index.deletion_obligations.len(),
         };
         (false, summary)
     })

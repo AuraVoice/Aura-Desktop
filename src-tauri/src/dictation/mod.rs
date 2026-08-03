@@ -1525,6 +1525,14 @@ pub struct TraceSettingsView {
 pub mod trace_commands {
     use super::{trace, SharePumpState, TraceSettingsView};
 
+    fn require_current_owner(app: &tauri::AppHandle, owner_uid: &str) -> Result<(), String> {
+        if crate::security::current_uid(app).as_deref() == Some(owner_uid) {
+            Ok(())
+        } else {
+            Err("dictation upload account changed".to_string())
+        }
+    }
+
     impl TraceSettingsView {
         fn build(app: &tauri::AppHandle, settings: trace::settings::TraceSettings) -> Self {
             Self {
@@ -1690,11 +1698,18 @@ pub mod trace_commands {
     #[tauri::command]
     pub async fn dictation_claim_trace_upload(
         app: tauri::AppHandle,
+        owner_uid: String,
     ) -> Result<Option<trace::upload::TraceUploadLease>, String> {
+        require_current_owner(&app, &owner_uid)?;
         let Some(settings) = trace::handle(&app).map(|handle| handle.snapshot()) else {
             return Ok(None);
         };
-        tauri::async_runtime::spawn_blocking(move || trace::upload::claim(&app, &settings))
+        tauri::async_runtime::spawn_blocking(move || {
+            require_current_owner(&app, &owner_uid)?;
+            let lease = trace::upload::claim(&app, &settings, &owner_uid)?;
+            require_current_owner(&app, &owner_uid)?;
+            Ok(lease)
+        })
             .await
             .map_err(|e| e.to_string())?
     }
@@ -1704,9 +1719,14 @@ pub mod trace_commands {
     pub async fn dictation_trace_upload_audio(
         app: tauri::AppHandle,
         trace_id: String,
+        owner_uid: String,
     ) -> Result<tauri::ipc::Response, String> {
+        require_current_owner(&app, &owner_uid)?;
         tauri::async_runtime::spawn_blocking(move || {
-            trace::upload::audio_body(&app, &trace_id).map(tauri::ipc::Response::new)
+            require_current_owner(&app, &owner_uid)?;
+            let bytes = trace::upload::audio_body(&app, &trace_id, &owner_uid)?;
+            require_current_owner(&app, &owner_uid)?;
+            Ok(tauri::ipc::Response::new(bytes))
         })
         .await
         .map_err(|e| e.to_string())?
@@ -1717,8 +1737,13 @@ pub mod trace_commands {
     pub async fn dictation_resolve_trace_upload(
         app: tauri::AppHandle,
         trace_id: String,
+        owner_uid: String,
     ) -> Result<(), String> {
-        tauri::async_runtime::spawn_blocking(move || trace::upload::resolve(&app, &trace_id))
+        require_current_owner(&app, &owner_uid)?;
+        tauri::async_runtime::spawn_blocking(move || {
+            require_current_owner(&app, &owner_uid)?;
+            trace::upload::resolve(&app, &trace_id, &owner_uid)
+        })
             .await
             .map_err(|e| e.to_string())?
     }
@@ -1729,10 +1754,13 @@ pub mod trace_commands {
     pub async fn dictation_fail_trace_upload(
         app: tauri::AppHandle,
         trace_id: String,
+        owner_uid: String,
         retryable: bool,
     ) -> Result<(), String> {
+        require_current_owner(&app, &owner_uid)?;
         tauri::async_runtime::spawn_blocking(move || {
-            trace::upload::fail(&app, &trace_id, retryable)
+            require_current_owner(&app, &owner_uid)?;
+            trace::upload::fail(&app, &trace_id, &owner_uid, retryable)
         })
         .await
         .map_err(|e| e.to_string())?
@@ -1744,8 +1772,15 @@ pub mod trace_commands {
     #[tauri::command]
     pub async fn dictation_claim_trace_deletion(
         app: tauri::AppHandle,
+        owner_uid: String,
     ) -> Result<Option<String>, String> {
-        tauri::async_runtime::spawn_blocking(move || trace::store::claim_tombstone(&app))
+        require_current_owner(&app, &owner_uid)?;
+        tauri::async_runtime::spawn_blocking(move || {
+            require_current_owner(&app, &owner_uid)?;
+            let trace_id = trace::store::claim_tombstone(&app, &owner_uid)?;
+            require_current_owner(&app, &owner_uid)?;
+            Ok(trace_id)
+        })
             .await
             .map_err(|e| e.to_string())?
     }
@@ -1754,9 +1789,29 @@ pub mod trace_commands {
     pub async fn dictation_resolve_trace_deletion(
         app: tauri::AppHandle,
         trace_id: String,
+        owner_uid: String,
     ) -> Result<(), String> {
+        require_current_owner(&app, &owner_uid)?;
         tauri::async_runtime::spawn_blocking(move || {
-            trace::store::resolve_tombstone(&app, &trace_id)
+            require_current_owner(&app, &owner_uid)?;
+            trace::store::resolve_tombstone(&app, &trace_id, &owner_uid)
+        })
+        .await
+        .map_err(|e| e.to_string())?
+    }
+
+    /// Persists a backend-provided monthly reset for this account. False means
+    /// the timestamp was unusable and the caller must apply normal backoff.
+    #[tauri::command]
+    pub async fn dictation_pause_trace_uploads(
+        app: tauri::AppHandle,
+        owner_uid: String,
+        blocked_until_ms: i64,
+    ) -> Result<bool, String> {
+        require_current_owner(&app, &owner_uid)?;
+        tauri::async_runtime::spawn_blocking(move || {
+            require_current_owner(&app, &owner_uid)?;
+            trace::upload::pause_for_quota(&app, &owner_uid, blocked_until_ms)
         })
         .await
         .map_err(|e| e.to_string())?
@@ -1856,6 +1911,11 @@ pub mod trace_commands {
 
     #[tauri::command]
     pub async fn dictation_resolve_trace_deletion() -> Result<(), String> {
+        Err(NOT_SUPPORTED.to_string())
+    }
+
+    #[tauri::command]
+    pub async fn dictation_pause_trace_uploads() -> Result<(), String> {
         Err(NOT_SUPPORTED.to_string())
     }
 }

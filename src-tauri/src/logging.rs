@@ -59,17 +59,10 @@ pub fn install_panic_hook() {
 fn panicking_thread_handles_speech() -> bool {
     matches!(
         std::thread::current().name(),
-        // "aura-dictation-decode" owns the recognizer, the stream and every
-        // decoded string in the process, so it is the MOST important name here,
-        // not an afterthought: a panic raised there is the one most likely to
-        // carry a transcript in its payload. "aura-dictation-trace" holds the
-        // same class of content - raw transcripts, inserted text, and the
-        // user's corrections - for as long as a field is being watched, so its
-        // panic payload is exactly as sensitive.
-        Some("aura-dictation")
-            | Some("aura-dictation-model")
-            | Some("aura-dictation-decode")
-            | Some("aura-dictation-trace")
+        // The trace worker holds raw transcripts, inserted text and the user's
+        // corrections in memory for as long as a field is being watched, so its
+        // panic payload is exactly as sensitive as the recognizer's own.
+        Some("aura-dictation") | Some("aura-dictation-model") | Some("aura-dictation-trace")
     )
 }
 

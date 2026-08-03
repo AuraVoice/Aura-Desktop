@@ -77,6 +77,7 @@ export interface TraceRecord {
   /** Short machine token explaining why no anchor was made, when none was. */
   anchorNote: string | null;
   shareState: ShareState;
+  uploadOwnerUid: string | null;
   sharedAtMs: number | null;
 }
 

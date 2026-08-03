@@ -6,6 +6,7 @@ import {
   classifyUploadFailure,
   deleteRemoteTrace,
   failTraceUpload,
+  pauseTraceUploads,
   resolveTraceDeletion,
   resolveTraceUpload,
   sharePumpState,
@@ -42,24 +43,25 @@ const FIRST_TICK_MS = 8_000;
  * saturating the connection in one burst. */
 const MAX_PER_TICK = 8;
 
-export function useDictationUpload(signedIn: boolean) {
+export function useDictationUpload(ownerUid: string | null) {
   // Guards against two pumps running at once if a tick outlives its interval.
   const runningRef = useRef(false);
 
   useEffect(() => {
-    if (!signedIn) return;
+    if (!ownerUid) return;
+    const activeOwnerUid = ownerUid;
 
     let cancelled = false;
     const isCurrent = () => !cancelled;
 
     async function drainDeletions(): Promise<void> {
       for (let handled = 0; handled < MAX_PER_TICK && isCurrent(); handled += 1) {
-        const traceId = await claimTraceDeletion();
+        const traceId = await claimTraceDeletion(activeOwnerUid);
         if (!traceId || !isCurrent()) return;
         try {
-          await deleteRemoteTrace(traceId);
+          await deleteRemoteTrace(traceId, activeOwnerUid);
           if (!isCurrent()) return;
-          await resolveTraceDeletion(traceId);
+          await resolveTraceDeletion(traceId, activeOwnerUid);
         } catch {
           // Left queued. The obligation to delete outlives any single attempt,
           // which is the whole reason tombstones are persisted.
@@ -70,16 +72,23 @@ export function useDictationUpload(signedIn: boolean) {
 
     async function drainUploads(): Promise<void> {
       for (let handled = 0; handled < MAX_PER_TICK && isCurrent(); handled += 1) {
-        const lease = await claimTraceUpload();
+        const lease = await claimTraceUpload(activeOwnerUid);
         if (!lease || !isCurrent()) return;
         try {
-          await uploadTrace(lease);
+          await uploadTrace(lease, activeOwnerUid);
           if (!isCurrent()) return;
-          await resolveTraceUpload(lease.traceId);
+          await resolveTraceUpload(lease.traceId, activeOwnerUid);
         } catch (err) {
           if (!isCurrent()) return;
           const failure = classifyUploadFailure(err);
-          await failTraceUpload(lease.traceId, failure.retryable).catch((inner) =>
+          const paused = failure.quotaResetAtMs === null
+            ? false
+            : await pauseTraceUploads(activeOwnerUid, failure.quotaResetAtMs).catch((inner) => {
+                logError("useDictationUpload: record quota pause", inner);
+                return false;
+              });
+          if (paused) return;
+          await failTraceUpload(lease.traceId, activeOwnerUid, failure.retryable).catch((inner) =>
             logError("useDictationUpload: record failure", inner),
           );
           // Stop the tick rather than marching through the rest of the queue:
@@ -119,5 +128,5 @@ export function useDictationUpload(signedIn: boolean) {
       clearTimeout(first);
       clearInterval(interval);
     };
-  }, [signedIn]);
+  }, [ownerUid]);
 }

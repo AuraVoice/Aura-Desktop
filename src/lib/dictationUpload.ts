@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { authFetch, AuthRequiredError } from "./api";
+import { auth } from "./firebase";
 import type { EditOp } from "./dictationTraces";
 
 /**
@@ -49,10 +50,12 @@ export interface SharePumpState {
 /** A failed attempt, already classified into "try again later" vs "never". */
 export class TraceUploadError extends Error {
   retryable: boolean;
+  quotaResetAtMs: number | null;
 
-  constructor(message: string, retryable: boolean) {
+  constructor(message: string, retryable: boolean, quotaResetAtMs: number | null = null) {
     super(message);
     this.retryable = retryable;
+    this.quotaResetAtMs = quotaResetAtMs;
   }
 }
 
@@ -74,8 +77,33 @@ function classifyStatus(status: number): TraceUploadError {
   if (status === 413 || status === 400 || status === 422) {
     return new TraceUploadError(`Trace rejected (${status})`, false);
   }
-  // 404 (not deployed), 429 (quota), 5xx (transient) all wait.
+  // 404 (not deployed), malformed 429, and 5xx (transient) all wait.
   return new TraceUploadError(`Upload failed (${status})`, true);
+}
+
+async function classifyResponse(response: Response): Promise<TraceUploadError> {
+  if (response.status === 429) {
+    try {
+      const body = (await response.json()) as { resetsAtMs?: unknown };
+      if (typeof body.resetsAtMs === "number" && Number.isFinite(body.resetsAtMs)) {
+        return new TraceUploadError("Monthly upload quota reached", true, body.resetsAtMs);
+      }
+    } catch {
+      // Missing or malformed quota data uses the normal bounded retry path.
+    }
+  }
+  return classifyStatus(response.status);
+}
+
+function authFetchForUid(
+  ownerUid: string,
+  path: string,
+  init?: RequestInit,
+): Promise<Response> {
+  if (auth.currentUser?.uid !== ownerUid) {
+    return Promise.reject(new AuthRequiredError("Signed-in account changed"));
+  }
+  return authFetch(path, init);
 }
 
 /** Anything thrown that is not an HTTP status: offline, DNS, TLS, aborted. */
@@ -93,13 +121,13 @@ export function classifyUploadFailure(error: unknown): TraceUploadError {
 }
 
 /** Step 1: the metadata. Creates the record server-side. */
-async function putMetadata(lease: TraceUploadLease): Promise<void> {
-  const response = await authFetch(`/dictation/traces/${lease.traceId}`, {
+async function putMetadata(lease: TraceUploadLease, ownerUid: string): Promise<void> {
+  const response = await authFetchForUid(ownerUid, `/dictation/traces/${lease.traceId}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(lease),
   });
-  if (!response.ok) throw classifyStatus(response.status);
+  if (!response.ok) throw await classifyResponse(response);
 }
 
 /** Step 2: the audio. Split from the metadata so an `edits[]` array never has
@@ -107,10 +135,11 @@ async function putMetadata(lease: TraceUploadLease): Promise<void> {
  * later by simply skipping this call. */
 async function putAudio(
   traceId: string,
+  ownerUid: string,
   digest: string,
   bytes: Uint8Array,
 ): Promise<void> {
-  const response = await authFetch(`/dictation/traces/${traceId}/audio`, {
+  const response = await authFetchForUid(ownerUid, `/dictation/traces/${traceId}/audio`, {
     method: "PUT",
     headers: {
       "Content-Type": "audio/flac",
@@ -118,7 +147,7 @@ async function putAudio(
     },
     body: new Uint8Array(bytes).buffer as ArrayBuffer,
   });
-  if (!response.ok) throw classifyStatus(response.status);
+  if (!response.ok) throw await classifyResponse(response);
 }
 
 /**
@@ -128,17 +157,18 @@ async function putAudio(
  * rather than audio with no label. The retry re-`PUT`s both under the same
  * trace id, and the server treats a byte-identical body as a no-op.
  */
-export async function uploadTrace(lease: TraceUploadLease): Promise<void> {
-  await putMetadata(lease);
+export async function uploadTrace(lease: TraceUploadLease, ownerUid: string): Promise<void> {
+  await putMetadata(lease, ownerUid);
   const raw = await invoke<ArrayBuffer>("dictation_trace_upload_audio", {
     traceId: lease.traceId,
+    ownerUid,
   });
-  await putAudio(lease.traceId, lease.audioSha256, new Uint8Array(raw));
+  await putAudio(lease.traceId, ownerUid, lease.audioSha256, new Uint8Array(raw));
 }
 
 /** Deletes the server's copy of a trace the user removed locally. */
-export async function deleteRemoteTrace(traceId: string): Promise<void> {
-  const response = await authFetch(`/dictation/traces/${traceId}`, {
+export async function deleteRemoteTrace(traceId: string, ownerUid: string): Promise<void> {
+  const response = await authFetchForUid(ownerUid, `/dictation/traces/${traceId}`, {
     method: "DELETE",
   });
   // A 404 here means the server never had it, or already dropped it. Either
@@ -152,22 +182,30 @@ export function sharePumpState(): Promise<SharePumpState> {
   return invoke<SharePumpState>("dictation_share_pump_state");
 }
 
-export function claimTraceUpload(): Promise<TraceUploadLease | null> {
-  return invoke<TraceUploadLease | null>("dictation_claim_trace_upload");
+export function claimTraceUpload(ownerUid: string): Promise<TraceUploadLease | null> {
+  return invoke<TraceUploadLease | null>("dictation_claim_trace_upload", { ownerUid });
 }
 
-export function resolveTraceUpload(traceId: string): Promise<void> {
-  return invoke("dictation_resolve_trace_upload", { traceId });
+export function resolveTraceUpload(traceId: string, ownerUid: string): Promise<void> {
+  return invoke("dictation_resolve_trace_upload", { traceId, ownerUid });
 }
 
-export function failTraceUpload(traceId: string, retryable: boolean): Promise<void> {
-  return invoke("dictation_fail_trace_upload", { traceId, retryable });
+export function failTraceUpload(
+  traceId: string,
+  ownerUid: string,
+  retryable: boolean,
+): Promise<void> {
+  return invoke("dictation_fail_trace_upload", { traceId, ownerUid, retryable });
 }
 
-export function claimTraceDeletion(): Promise<string | null> {
-  return invoke<string | null>("dictation_claim_trace_deletion");
+export function claimTraceDeletion(ownerUid: string): Promise<string | null> {
+  return invoke<string | null>("dictation_claim_trace_deletion", { ownerUid });
 }
 
-export function resolveTraceDeletion(traceId: string): Promise<void> {
-  return invoke("dictation_resolve_trace_deletion", { traceId });
+export function resolveTraceDeletion(traceId: string, ownerUid: string): Promise<void> {
+  return invoke("dictation_resolve_trace_deletion", { traceId, ownerUid });
+}
+
+export function pauseTraceUploads(ownerUid: string, blockedUntilMs: number): Promise<boolean> {
+  return invoke<boolean>("dictation_pause_trace_uploads", { ownerUid, blockedUntilMs });
 }
