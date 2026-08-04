@@ -631,7 +631,7 @@ pub fn summary(app: &AppHandle) -> Result<TraceSummary, String> {
                 .count(),
             with_edits: records
                 .iter()
-                .filter(|record| !record.edits.is_empty())
+                .filter(|record| record.edits.iter().any(|edit| edit.class.is_ground_truth()))
                 .count(),
             audio_bytes: audio,
             oldest_recorded_at_ms: records.iter().map(|record| record.recorded_at_ms).min(),

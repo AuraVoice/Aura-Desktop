@@ -241,6 +241,8 @@ pub struct TraceSummary {
     pub total: usize,
     pub verified: usize,
     pub watching: usize,
+    /// Verified traces with at least one recognition-relevant correction.
+    /// Manual additions and other writing-style edits are excluded.
     pub with_edits: usize,
     pub audio_bytes: u64,
     pub oldest_recorded_at_ms: Option<i64>,

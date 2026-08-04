@@ -456,8 +456,8 @@ fn identity_of(element: &IUIAutomationElement) -> Option<FieldIdentity> {
 }
 
 fn app_stem(element: &IUIAutomationElement) -> Option<String> {
-    let hwnd = unsafe { element.CurrentNativeWindowHandle() }.ok()?;
-    crate::system_control::process_stem_for_window(hwnd.0 as isize)
+    let pid = unsafe { element.CurrentProcessId() }.ok()? as u32;
+    crate::system_control::process_stem_for_pid(pid)
         .map(|stem| stem.to_ascii_lowercase())
 }
 

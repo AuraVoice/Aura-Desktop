@@ -242,19 +242,29 @@ unsafe extern "system" fn collect_visible_windows(
     }
 }
 
-/// PID -> lowercase exe file stem ("chrome", "spotify") for one window. Local
+/// Window -> lowercase exe file stem ("chrome", "spotify"). Local
 /// mirror of detect.rs's private helper of the same name, kept here so this
 /// module stays self-contained rather than reaching into the meeting module.
 /// Also the per-app profile key for dictation's contextual biasing.
 #[cfg(target_os = "windows")]
 pub(crate) fn process_stem_for_window(hwnd_raw: isize) -> Option<String> {
-    unsafe {
+    let pid = unsafe {
         let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
         let mut pid: u32 = 0;
         GetWindowThreadProcessId(hwnd, Some(&mut pid));
         if pid == 0 {
             return None;
         }
+        pid
+    };
+    process_stem_for_pid(pid)
+}
+
+/// PID -> lowercase exe file stem for UI Automation elements that do not own
+/// a native HWND, which is normal for browser and Electron child controls.
+#[cfg(target_os = "windows")]
+pub(crate) fn process_stem_for_pid(pid: u32) -> Option<String> {
+    unsafe {
         let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
         let mut buffer = vec![0u16; 1024];
         let mut size = buffer.len() as u32;

@@ -627,6 +627,7 @@ mod platform {
             return;
         };
         handle.capture(trace::Utterance {
+            typed_at: Instant::now(),
             raw_transcript: raw.to_string(),
             inserted_text: inserted.to_string(),
             locally_corrected: raw != inserted,
