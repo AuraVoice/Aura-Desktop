@@ -608,6 +608,7 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
             state.applied_slot_height = Some(slot_height);
             state.applied_notch_edge = Some(notch_edge);
         }
+        crate::dictation::set_overlay_visible(app, false);
         emit_overlay_changed(app);
         info!(
             "overlay::apply: hide complete in {:?}",
@@ -669,6 +670,7 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
         state.applied_notch_edge = Some(notch_edge);
     }
     emit_overlay_changed(app);
+    crate::dictation::set_overlay_visible(app, true);
     crate::dictation::refresh_hud_placement(app);
     info!(
         "overlay::apply: presentation={presentation:?} variant={panel_variant:?} applied in {:?}",

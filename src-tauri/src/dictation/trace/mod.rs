@@ -1,7 +1,7 @@
 //! Opt-in, fully local training-trace capture for the on-device recognizer.
 //!
 //! One trace is one utterance: the audio, what Nemotron decoded, what was
-//! actually typed, and then - by watching the real text field for up to fifteen
+//! actually typed, and then - by watching the real text field for up to nine
 //! minutes - what the user turned it into. That last part is the only signal in
 //! the product that says the model was wrong about a specific sound, and it is
 //! the reason this exists.
@@ -71,8 +71,12 @@ const OBSERVE_AT: [Duration; 7] = [
     Duration::from_secs(45),
     Duration::from_secs(120),
     Duration::from_secs(300),
-    Duration::from_secs(900),
+    Duration::from_secs(540),
 ];
+
+/// Hard stop for correction tracking. The last scheduled read gets 30 seconds
+/// of retry room, but a busy field can never extend the watch to ten minutes.
+const MAX_WATCH_DURATION: Duration = Duration::from_secs(570);
 
 /// How long a tick waits when it could not run: a chord is being held, or the
 /// UI Automation worker is inside another process. Short enough that a deferred
@@ -93,6 +97,9 @@ pub const TRACE_THREAD: &str = "aura-dictation-trace";
 /// `samples` is moved, never copied: it is the utterance buffer the worker
 /// already owns and is about to drop.
 pub struct Utterance {
+    /// Monotonic start of the correction window, captured immediately after
+    /// SendInput returns rather than after background encoding and storage.
+    pub typed_at: Instant,
     pub raw_transcript: String,
     pub inserted_text: String,
     pub locally_corrected: bool,
@@ -117,6 +124,7 @@ struct Watch {
     /// Index into `OBSERVE_AT`.
     step: usize,
     due_at: Instant,
+    expires_at: Instant,
 }
 
 /// Managed as Tauri state. The dictation worker reads `enabled` through it and
@@ -250,6 +258,9 @@ fn worker_thread(
     let mut retire: Vec<AnchorId> = Vec::new();
 
     loop {
+        // Run due work before receiving another capture so a burst of queued
+        // utterances cannot starve observation or the hard retirement bound.
+        observe_due(&app, &current, &mut watches, &mut retire);
         let timeout = watches
             .iter()
             .map(|watch| watch.due_at)
@@ -348,6 +359,7 @@ fn maintain(app: &AppHandle, settings: &TraceSettings) {
 /// Stores one utterance and, when the insert could be verified, starts watching
 /// the field it landed in.
 fn capture(app: &AppHandle, settings: &TraceSettings, utterance: Utterance) -> Option<Watch> {
+    let typed_at = utterance.typed_at;
     // The user's own exclusion list, checked against the window the dictation
     // worker snapshotted, BEFORE any field is read.
     if let Some(hint) = utterance.app_hint.as_deref() {
@@ -440,11 +452,14 @@ fn capture(app: &AppHandle, settings: &TraceSettings, utterance: Utterance) -> O
         anchor.refusal
     );
 
-    anchor.anchor_id.map(|anchor_id| Watch {
-        trace_id,
-        anchor_id,
-        step: 0,
-        due_at: Instant::now() + OBSERVE_AT[0],
+    anchor.anchor_id.map(|anchor_id| {
+        Watch {
+            trace_id,
+            anchor_id,
+            step: 0,
+            due_at: typed_at + OBSERVE_AT[0],
+            expires_at: typed_at + MAX_WATCH_DURATION,
+        }
     })
 }
 
@@ -456,6 +471,28 @@ fn observe_due(
     retire: &mut Vec<AnchorId>,
 ) {
     let now = Instant::now();
+    let mut index = 0;
+    while index < watches.len() {
+        if now < watches[index].expires_at {
+            index += 1;
+            continue;
+        }
+        settle(
+            app,
+            settings,
+            &watches[index].trace_id,
+            TraceState::AnchorLost,
+            None,
+        );
+        let expired = watches.remove(index);
+        if !watches.iter().any(|watch| watch.anchor_id == expired.anchor_id) {
+            retire.push(expired.anchor_id);
+        }
+        info!("dictation.trace: settled state=anchor_lost reason=window_elapsed");
+    }
+    if watches.is_empty() {
+        return;
+    }
     // Never contend with a hold. `probe_focus` fails open to "type anyway", so
     // a busy worker would only ever make dictation slightly less careful, but
     // there is no reason to spend that when the tick can simply wait.

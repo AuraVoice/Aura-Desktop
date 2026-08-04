@@ -85,6 +85,7 @@ export interface TraceSummary {
   total: number;
   verified: number;
   watching: number;
+  /** Traces with recognition corrections, excluding manual writing-style edits. */
   withEdits: number;
   audioBytes: number;
   oldestRecordedAtMs: number | null;
