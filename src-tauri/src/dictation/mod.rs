@@ -1407,11 +1407,21 @@ pub(crate) fn refresh_hud_placement(app: &tauri::AppHandle) {
     hud::refresh_placement(app);
 }
 
+/// Mutual exclusivity with the Buddy agent overlay: called from
+/// `overlay::apply_result` on every real presentation transition.
+#[cfg(windows)]
+pub(crate) fn set_overlay_visible(app: &tauri::AppHandle, visible: bool) {
+    hud::set_overlay_suppressed(app, visible);
+}
+
 #[cfg(not(windows))]
 pub(crate) fn show_hud(_app: &tauri::AppHandle) {}
 
 #[cfg(not(windows))]
 pub(crate) fn refresh_hud_placement(_app: &tauri::AppHandle) {}
+
+#[cfg(not(windows))]
+pub(crate) fn set_overlay_visible(_app: &tauri::AppHandle, _visible: bool) {}
 
 #[cfg(not(windows))]
 #[tauri::command]

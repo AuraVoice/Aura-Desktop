@@ -56,6 +56,15 @@ const PENDING_HEIGHT: f64 = 78.0;
 static LAST_TARGET: AtomicIsize = AtomicIsize::new(0);
 static IDLE_HOVERED: AtomicBool = AtomicBool::new(false);
 
+/// True while the Buddy agent overlay is visible. The overlay and this HUD are
+/// separate always-on-top windows that can otherwise both draw on screen at
+/// once and collide. `overlay::apply_result` is the sole place any overlay
+/// presentation change actually reaches the real window, and it is the sole
+/// caller of `set_overlay_suppressed` - that single choke point is what makes
+/// "at most one of the two is visible" a guarantee rather than two toggles
+/// that merely happen to be called together.
+static SUPPRESSED_BY_OVERLAY: AtomicBool = AtomicBool::new(false);
+
 /// What the HUD is currently telling the user. Every caption is derived from
 /// one of these; the chord itself is always rendered from
 /// `DICTATION_CHORD.label()`, never a hardcoded string.
@@ -316,7 +325,9 @@ pub fn show(app: &AppHandle, target: isize) {
         if let Some(window) = handle.get_webview_window(DICTATION_WINDOW) {
             place_window(&handle, &window, target, HudPhase::Listening);
             let _ = window.set_ignore_cursor_events(true);
-            let _ = window.show();
+            if !SUPPRESSED_BY_OVERLAY.load(Ordering::Relaxed) {
+                let _ = window.show();
+            }
         }
     });
 }
@@ -337,7 +348,9 @@ pub fn show_idle(app: &AppHandle) {
         if let Some(window) = handle.get_webview_window(DICTATION_WINDOW) {
             place_window(&handle, &window, LAST_TARGET.load(Ordering::Relaxed), HudPhase::Idle);
             let _ = window.set_ignore_cursor_events(false);
-            let _ = window.show();
+            if !SUPPRESSED_BY_OVERLAY.load(Ordering::Relaxed) {
+                let _ = window.show();
+            }
             let _ = window.emit("dictation-update", update);
         }
     });
@@ -404,8 +417,34 @@ pub fn publish(app: &AppHandle, mut update: HudUpdate) {
         if let Some(window) = handle.get_webview_window(DICTATION_WINDOW) {
             place_window(&handle, &window, target, phase);
             let _ = window.set_ignore_cursor_events(phase != HudPhase::Idle);
-            let _ = window.show();
+            if !SUPPRESSED_BY_OVERLAY.load(Ordering::Relaxed) {
+                let _ = window.show();
+            }
         }
+    });
+}
+
+/// Called from `overlay::apply_result` on every real presentation
+/// transition. Hides the pill the instant the Buddy overlay becomes visible,
+/// and restores it to whatever `LAST_UPDATE` says it should be showing the
+/// instant the overlay goes back to Hidden - not forced on, since dictation
+/// may not be running at all. No-ops if the HUD window was never built (the
+/// user never armed dictation), so summoning the overlay never creates one.
+pub fn set_overlay_suppressed(app: &AppHandle, suppressed: bool) {
+    SUPPRESSED_BY_OVERLAY.store(suppressed, Ordering::Relaxed);
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let Some(window) = handle.get_webview_window(DICTATION_WINDOW) else {
+            return;
+        };
+        if suppressed {
+            let _ = window.hide();
+            return;
+        }
+        let update = last_update();
+        place_window(&handle, &window, LAST_TARGET.load(Ordering::Relaxed), update.phase);
+        let _ = window.set_ignore_cursor_events(update.phase != HudPhase::Idle);
+        let _ = window.show();
     });
 }
 
