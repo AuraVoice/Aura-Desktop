@@ -4,6 +4,8 @@
 
 Before any repository task, read and follow `CLAUDE.md` in full. It defines architecture, workflows, cross-repository contracts, and working rules. If guidance conflicts, the stricter Agent Git Restrictions below prevail.
 
+Never load, invoke, query, update, or otherwise use Graphify or `graphify-out/` for any task in this repository. This prohibition applies even when a Graphify skill is available or would otherwise be automatically selected. Inspect source files directly with normal repository tools instead.
+
 ## Project Structure & Module Organization
 
 Aura Desktop pairs a React/TypeScript UI in `src/` with a Tauri/Rust shell in `src-tauri/src/`. Components and CSS live in `src/overlay/`, utilities in `src/lib/`, state in `src/state/`, and assets in `src/assets/`. Tauri permissions and packaging live in `src-tauri/capabilities/` and `src-tauri/tauri.conf.json`. 
