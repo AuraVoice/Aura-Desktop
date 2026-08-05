@@ -1,14 +1,12 @@
 import {
   Home,
-  MessageSquare,
+  AudioLines,
   FileText,
   Bookmark,
   Video,
   LineChart,
   Settings,
   Link2,
-  User,
-  CreditCard,
   Smartphone,
   HelpCircle,
   Mic,
@@ -21,50 +19,36 @@ export interface NavItem {
   Icon: LucideIcon;
 }
 
-export interface NavSection {
-  heading?: string;
-  items: NavItem[];
-}
+/** Primary navigation stays in one uninterrupted list. Settings is a separate
+ * dialog launcher, while mobile and help stay pinned to the sidebar bottom. */
+export const primaryNavItems: NavItem[] = [
+  { to: "/home", label: "Home", Icon: Home },
+  { to: "/conversations", label: "Conversations", Icon: AudioLines },
+  { to: "/drafts", label: "Drafts", Icon: FileText },
+  { to: "/saved", label: "Saved", Icon: Bookmark },
+  { to: "/meetings", label: "Meetings", Icon: Video },
+  { to: "/insights", label: "Insights", Icon: LineChart },
+  { to: "/dictation", label: "Dictation", Icon: Mic },
+  { to: "/connectors", label: "Connectors", Icon: Link2 },
+];
 
-/** Sidebar structure for the dashboard window. Order and grouping match the
- * approved design. Home, Conversations, Drafts, Saved, Meetings, and the
- * account/settings group are real pages; the Tools group still routes to a "coming soon"
- * placeholder. */
-export const navSections: NavSection[] = [
-  {
-    items: [
-      { to: "/home", label: "Home", Icon: Home },
-      { to: "/conversations", label: "Conversations", Icon: MessageSquare },
-      { to: "/drafts", label: "Drafts", Icon: FileText },
-      { to: "/saved", label: "Saved", Icon: Bookmark },
-      { to: "/meetings", label: "Meetings", Icon: Video },
-    ],
-  },
-  {
-    heading: "Tools",
-    items: [
-      { to: "/insights", label: "Insights", Icon: LineChart },
-    ],
-  },
-  {
-    heading: "Settings",
-    items: [
-      { to: "/general", label: "General", Icon: Settings },
-      { to: "/dictation", label: "Dictation", Icon: Mic },
-      { to: "/connectors", label: "Connectors", Icon: Link2 },
-      { to: "/account", label: "Account", Icon: User },
-      { to: "/billing", label: "Billing", Icon: CreditCard },
-    ],
-  },
-  {
-    items: [
-      { to: "/mobile", label: "Get the mobile app", Icon: Smartphone },
-      { to: "/help", label: "Help", Icon: HelpCircle },
-    ],
-  },
+export const settingsNavItem: NavItem = {
+  to: "/general",
+  label: "Settings",
+  Icon: Settings,
+};
+
+export const footerNavItems: NavItem[] = [
+  { to: "/mobile", label: "Get the mobile app", Icon: Smartphone },
+  { to: "/help", label: "Help", Icon: HelpCircle },
+];
+
+export const navSections = [
+  { items: primaryNavItems },
+  { items: footerNavItems },
 ];
 
 /** Flat lookup of route -> label, for the top-bar title. */
 export const navTitles: Record<string, string> = Object.fromEntries(
-  navSections.flatMap((section) => section.items.map((item) => [item.to, item.label])),
+  [...primaryNavItems, ...footerNavItems].map((item) => [item.to, item.label]),
 );

@@ -1,56 +1,62 @@
-import { NavLink } from "react-router-dom";
-import { PanelLeft, PanelLeftClose } from "lucide-react";
+import { NavLink, useLocation } from "react-router-dom";
 import iconUrl from "../assets/icons/Aura-Icon.png";
-import { navSections } from "./navConfig";
+import {
+  footerNavItems,
+  primaryNavItems,
+  settingsNavItem,
+  type NavItem,
+} from "./navConfig";
+
+const SETTINGS_ROUTES = new Set(["/general", "/system", "/account", "/billing", "/privacy"]);
 
 interface SidebarProps {
   collapsed: boolean;
-  onToggle: () => void;
 }
 
-export function Sidebar({ collapsed, onToggle }: SidebarProps) {
+export function Sidebar({ collapsed }: SidebarProps) {
+  const location = useLocation();
+  const settingsActive = SETTINGS_ROUTES.has(location.pathname);
+  const SettingsIcon = settingsNavItem.Icon;
+
   return (
     <aside className={`db-sidebar${collapsed ? " db-sidebar-collapsed" : ""}`}>
       <div className="db-sidebar-top">
-        <img src={iconUrl} className="db-logo" alt="" />
-        {!collapsed && <span className="db-wordmark">Aura</span>}
+        <div className="db-sidebar-brand">
+          <img src={iconUrl} className="db-logo" alt="" />
+          <span className="db-wordmark">Aura</span>
+        </div>
       </div>
 
       <nav className="db-nav">
-        {navSections.map((section, index) => (
-          <div className="db-nav-section" key={section.heading ?? `section-${index}`}>
-            {section.heading && !collapsed && (
-              <div className="db-nav-heading">{section.heading}</div>
-            )}
-            {section.items.map(({ to, label, Icon }) => (
-              <NavLink
-                key={to}
-                to={to}
-                className={({ isActive }) =>
-                  `db-nav-item${isActive ? " db-nav-item-active" : ""}`
-                }
-                title={collapsed ? label : undefined}
-              >
-                <Icon size={20} className="db-nav-icon" aria-hidden />
-                {!collapsed && <span className="db-nav-label">{label}</span>}
-              </NavLink>
-            ))}
-          </div>
-        ))}
+        {primaryNavItems.map((item) => <SidebarLink key={item.to} item={item} collapsed={collapsed} />)}
       </nav>
 
       <div className="db-sidebar-foot">
-        <button
-          type="button"
-          className="db-collapse"
-          onClick={onToggle}
-          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+        <NavLink
+          to={settingsNavItem.to}
+          className={`db-nav-item${settingsActive ? " db-nav-item-active" : ""}`}
+          title={collapsed ? settingsNavItem.label : undefined}
+          aria-current={settingsActive ? "page" : undefined}
         >
-          {collapsed ? <PanelLeft size={18} /> : <PanelLeftClose size={18} />}
-          {!collapsed && <span className="db-collapse-label">Collapse</span>}
-        </button>
+          <SettingsIcon size={20} className="db-nav-icon" aria-hidden />
+          <span className="db-nav-label">{settingsNavItem.label}</span>
+        </NavLink>
+        {footerNavItems.map((item) => <SidebarLink key={item.to} item={item} collapsed={collapsed} />)}
       </div>
     </aside>
+  );
+}
+
+function SidebarLink({ item, collapsed }: { item: NavItem; collapsed: boolean }) {
+  const { to, label, Icon } = item;
+  return (
+    <NavLink
+      to={to}
+      className={({ isActive }) => `db-nav-item${isActive ? " db-nav-item-active" : ""}`}
+      title={collapsed ? label : undefined}
+    >
+      <Icon size={20} className="db-nav-icon" aria-hidden />
+      <span className="db-nav-label">{label}</span>
+    </NavLink>
   );
 }

@@ -23,6 +23,7 @@ vi.mock("react-router-dom", () => ({
   Route: ({ element }: { element: React.ReactNode }) => <>{element}</>,
   Routes: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   useLocation: () => ({ pathname: "/home" }),
+  useNavigate: () => vi.fn(),
 }));
 vi.mock("./pages/HomePage", () => ({ HomePage: () => <div>home</div> }));
 vi.mock("./pages/ConversationsPage", () => ({ ConversationsPage: () => <div>conversations</div> }));

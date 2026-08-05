@@ -32,7 +32,7 @@ export function RefreshIndicator({
     );
   }
   if (cachedAt != null) {
-    return <span className="db-refresh db-refresh-muted">Updated {relativeTime(new Date(cachedAt).toISOString())}</span>;
+    return <span className="db-refresh db-refresh-muted">Updated {relativeTime(new Date(cachedAt).toISOString(), true)}</span>;
   }
   return null;
 }

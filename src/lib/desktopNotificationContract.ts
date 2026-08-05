@@ -17,6 +17,13 @@ export const BODY_MAX = 300;
 export const ID_MAX = 160;
 export const DEDUP_KEY_MAX = 200;
 
+// NOTE: nothing emits `suggestion`, `announcement`, or `milestone` yet - no
+// local producer and no backend outbox event uses them. They exist so the
+// Settings > System > Notifications toggles have something concrete to gate,
+// and so a backend can start sending them without a client release. Widening
+// this list is backward compatible at schemaVersion 1: unknown types were
+// already dropped by parseNotification, so accepting three more only lets
+// through events that previously fell on the floor.
 export const NOTIFICATION_TYPES = [
   "meeting_ready",
   "meeting_needs_attention",
@@ -24,6 +31,9 @@ export const NOTIFICATION_TYPES = [
   "update_ready",
   "auth_required",
   "generic",
+  "suggestion",
+  "announcement",
+  "milestone",
 ] as const;
 export type DesktopNotificationType = (typeof NOTIFICATION_TYPES)[number];
 

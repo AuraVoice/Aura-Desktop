@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { GlassSurface } from "../overlay/GlassSurface";
 import type { NotchEdge } from "../overlay/notchEdge";
 import { useDictationLevels } from "./useDictationLevels";
+import { useDictationSounds } from "./useDictationSounds";
 // This window renders DictationHud, not App, so it loads none of App's CSS.
 // The glass tokens have to be pulled in explicitly or the surface falls back
 // to raw chrome on a transparent background.
@@ -12,7 +13,7 @@ import "../overlay/GlassSurface.css";
 import "./DictationHud.css";
 
 /// Mirrors HudPhase in src-tauri/src/dictation/hud.rs.
-type DictationPhase =
+export type DictationPhase =
   | "idle"
   | "listening"
   | "transcribing"
@@ -98,6 +99,7 @@ export function DictationHud() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useDictationLevels(canvasRef, update.phase === "listening", true);
+  useDictationSounds(update.phase);
 
   useEffect(() => {
     let live = true;

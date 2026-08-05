@@ -11,8 +11,19 @@ export interface GeneralSettings {
   calendarOverlay: boolean;
   sensitiveNotificationPreviews: boolean;
   reduceMotion: boolean;
+  alwaysShowBar: boolean;
+  showInTaskbar: boolean;
+  dictationSounds: boolean;
+  muteOthersWhileDictating: boolean;
+  notifySuggestions: boolean;
+  notifyAnnouncements: boolean;
+  notifyMilestones: boolean;
 }
 
+// Launch-at-login is deliberately absent: autostart.rs owns it in a different
+// store (settings.json / autostart_disabled) and the tray checkbox reads the
+// real registry state rather than the intent. A second copy here would drift
+// the first time a registry write failed.
 export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   dailyCatchUp: true,
   dailyBriefing: true,
@@ -20,6 +31,13 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   calendarOverlay: true,
   sensitiveNotificationPreviews: true,
   reduceMotion: false,
+  alwaysShowBar: false,
+  showInTaskbar: true,
+  dictationSounds: true,
+  muteOthersWhileDictating: false,
+  notifySuggestions: true,
+  notifyAnnouncements: true,
+  notifyMilestones: true,
 };
 
 function mergeSettings(saved: GeneralSettings | null | undefined): GeneralSettings {

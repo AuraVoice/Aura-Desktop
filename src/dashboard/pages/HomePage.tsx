@@ -53,24 +53,34 @@ function activeStreak(values: string[]): number {
   return result;
 }
 
+/// Per-card icon color. Each stat gets its own muted hue and a matching idle
+/// animation in dashboard.css, so the four cards read apart at a glance
+/// instead of being one wall of teal chips. Reduce motion stills all of them
+/// via the existing `.db-reduce-motion` rule.
+type CardTone = "ember" | "violet" | "cyan" | "slate";
+
 function AnalyticsCard({
   Icon,
   label,
   value,
   sub,
   accent = false,
+  tone,
 }: {
   Icon: LucideIcon;
   label: string;
   value: string;
   sub: string;
   accent?: boolean;
+  tone?: CardTone;
 }) {
   return (
     <div className={`db-card${accent ? " db-card-accent" : ""}`}>
       <div className="db-card-head">
         <span className="db-card-label">{label}</span>
-        <span className="db-card-icon"><Icon size={18} aria-hidden /></span>
+        <span className={`db-card-icon${tone ? ` is-${tone}` : ""}`}>
+          <Icon size={18} aria-hidden />
+        </span>
       </div>
       <div className="db-card-value">{value}</div>
       <div className="db-card-sub">{sub}</div>
@@ -396,6 +406,7 @@ export function HomePage() {
             value={`${streak} day${streak === 1 ? "" : "s"}`}
             sub="Consecutive days with Aura"
             accent
+            tone="ember"
           />
           <DataView
             state={stats}
@@ -411,18 +422,21 @@ export function HomePage() {
                   label="Conversations this week"
                   value={count(s.sessionsThisWeek)}
                   sub="Last 7 days"
+                  tone="violet"
                 />
                 <AnalyticsCard
                   Icon={Timer}
                   label="Last conversation"
                   value={duration(s.lastSessionSeconds)}
                   sub="Voice time"
+                  tone="cyan"
                 />
                 <AnalyticsCard
                   Icon={Clock}
                   label="Last used"
                   value={relativeTime(s.lastUsedAt)}
                   sub="Desktop voice session"
+                  tone="slate"
                 />
               </>
             )}

@@ -3,18 +3,18 @@
 
 const DASH = "—";
 
-export function relativeTime(iso: string | null): string {
+export function relativeTime(iso: string | null, compact = false): string {
   if (!iso) return DASH;
   const then = new Date(iso).getTime();
   if (Number.isNaN(then)) return DASH;
   const diffMs = Date.now() - then;
   const mins = Math.round(diffMs / 60000);
   if (mins < 1) return "just now";
-  if (mins < 60) return `${mins} minute${mins === 1 ? "" : "s"} ago`;
+  if (mins < 60) return compact ? `${mins}m ago` : `${mins} minute${mins === 1 ? "" : "s"} ago`;
   const hours = Math.round(mins / 60);
-  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  if (hours < 24) return compact ? `${hours}h ago` : `${hours} hour${hours === 1 ? "" : "s"} ago`;
   const days = Math.round(hours / 24);
-  if (days < 7) return `${days} day${days === 1 ? "" : "s"} ago`;
+  if (days < 7) return compact ? `${days}d ago` : `${days} day${days === 1 ? "" : "s"} ago`;
   return new Date(iso).toLocaleDateString();
 }
 

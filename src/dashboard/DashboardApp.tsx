@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactElement } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
   HashRouter,
@@ -6,12 +6,15 @@ import {
   Route,
   Routes,
   useLocation,
+  useNavigate,
 } from "react-router-dom";
 import type { User } from "firebase/auth";
 import { Store } from "@tauri-apps/plugin-store";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
+import { DashboardTitleBar } from "./DashboardTitleBar";
+import { SettingsDialog, settingsRoutes } from "./SettingsDialog";
 import { HomePage } from "./pages/HomePage";
 import { ConversationsPage } from "./pages/ConversationsPage";
 import { SavedPage } from "./pages/SavedPage";
@@ -52,29 +55,45 @@ export const dashboardPages: Record<string, ReactElement> = {
   "/help": <HelpPage />,
 };
 
-export function DashboardShell({ user }: { user: User | null }) {
-  const [collapsed, setCollapsed] = useState(false);
+export function DashboardShell({ user, collapsed }: { user: User | null; collapsed: boolean }) {
   const generalSettings = useGeneralSettings();
   const location = useLocation();
-  const title = navTitles[location.pathname] ?? "Home";
+  const navigate = useNavigate();
+  const contentRef = useRef<HTMLDivElement>(null);
+  const lastMainPathRef = useRef("/home");
+  const settingsOpen = settingsRoutes.has(location.pathname);
+  if (!settingsOpen && dashboardPages[location.pathname]) {
+    lastMainPathRef.current = location.pathname;
+  }
+  const mainPath = settingsOpen ? lastMainPathRef.current : location.pathname;
+  const title = navTitles[mainPath] ?? "Home";
   const notifications = useDashboardNotifications(user?.uid ?? null);
 
   const routes = navSections.flatMap((section) => section.items);
+  const closeSettings = useCallback(() => {
+    navigate(lastMainPathRef.current);
+  }, [navigate]);
+
+  useLayoutEffect(() => {
+    if (!contentRef.current) return;
+    contentRef.current.scrollTop = 0;
+    contentRef.current.scrollLeft = 0;
+  }, [mainPath]);
 
   return (
     <div className={`db-app${collapsed ? " db-app-collapsed" : ""}${
       generalSettings.reduceMotion ? " db-reduce-motion" : ""
     }`}>
       <DashboardRouteListener />
-      <Sidebar collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} />
+      <Sidebar collapsed={collapsed} />
       <div className="db-main">
         <TopBar
           title={location.pathname === "/insights" ? "" : title}
           user={user}
           notifications={notifications}
         />
-        <div className="db-content">
-          <Routes>
+        <div className="db-content" ref={contentRef}>
+          <Routes location={mainPath}>
             <Route path="/" element={<Navigate to="/home" replace />} />
             {routes.map(({ to, label }) => (
               <Route
@@ -87,6 +106,7 @@ export function DashboardShell({ user }: { user: User | null }) {
           </Routes>
         </div>
       </div>
+      {settingsOpen && <SettingsDialog path={location.pathname} onClose={closeSettings} />}
     </div>
   );
 }
@@ -118,6 +138,7 @@ function DashboardRouteListener() {
 export function DashboardApp() {
   const user = useDashboardUser();
   const [onboarded, setOnboarded] = useState<boolean | null>(null);
+  const [collapsed, setCollapsed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -135,21 +156,27 @@ export function DashboardApp() {
     };
   }, []);
 
-  // Hold the initial render until the seen flag resolves, so a returning user
-  // never flashes the onboarding shell before the app.
-  if (onboarded === null) return null;
-
   const showApp = user !== null && onboarded;
 
   return (
-    <ErrorBoundary>
-      {showApp ? (
-        <HashRouter>
-          <DashboardShell user={user} />
-        </HashRouter>
-      ) : (
-        <DashboardOnboarding onComplete={() => setOnboarded(true)} />
-      )}
-    </ErrorBoundary>
+    <div className="db-window">
+      <DashboardTitleBar
+        collapsed={collapsed}
+        onToggle={showApp ? () => setCollapsed((current) => !current) : undefined}
+      />
+      <div className="db-window-content">
+        {onboarded !== null && (
+          <ErrorBoundary>
+            {showApp ? (
+              <HashRouter>
+                <DashboardShell user={user} collapsed={collapsed} />
+              </HashRouter>
+            ) : (
+              <DashboardOnboarding onComplete={() => setOnboarded(true)} />
+            )}
+          </ErrorBoundary>
+        )}
+      </div>
+    </div>
   );
 }

@@ -169,6 +169,12 @@ pub struct OverlayState {
     applying_bounds: bool,
     pre_pointing: Option<(OverlayPresentation, PanelVariant)>,
     pointing_generation: u64,
+    // "Show the Aura bar at all times" (Settings > System). Not a presentation
+    // of its own: it only changes what a dismiss resolves to, Bar instead of
+    // Hidden. Mirrored from the dashboard store, so it is false until the
+    // frontend pushes it - a fresh process must not flash a bar before the
+    // preference is known.
+    always_show_bar: bool,
 }
 
 impl Default for OverlayState {
@@ -188,6 +194,7 @@ impl Default for OverlayState {
             applying_bounds: false,
             pre_pointing: None,
             pointing_generation: 0,
+            always_show_bar: false,
         }
     }
 }
@@ -621,6 +628,14 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
     let panel_variant = state.panel_variant;
     let slot_height = state.slot_height;
     let notch_edge = state.notch_edge;
+    // Mutual exclusivity with the dictation HUD normally means "overlay visible
+    // -> suppress the HUD". A bar the user pinned via "show the bar at all
+    // times" is visible permanently, so treating it as suppressing would leave
+    // dictation with no UI at all, forever. A RESTING pinned bar therefore does
+    // not suppress; a bar shown for a live call still does.
+    let suppresses_hud = !(state.always_show_bar
+        && presentation == OverlayPresentation::Bar
+        && !state.voice_active);
     // A "fresh show" is a real presentation/variant transition (summon from
     // hidden, setup<->bar). A slot-height-only change (opening/closing the kebab
     // menu or a card) or an edge re-dock is NOT one - it must not re-steal OS
@@ -670,7 +685,7 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
         state.applied_notch_edge = Some(notch_edge);
     }
     emit_overlay_changed(app);
-    crate::dictation::set_overlay_visible(app, true);
+    crate::dictation::set_overlay_visible(app, suppresses_hud);
     crate::dictation::refresh_hud_placement(app);
     info!(
         "overlay::apply: presentation={presentation:?} variant={panel_variant:?} applied in {:?}",
@@ -892,6 +907,17 @@ pub fn summon_onboarding_panel(app: &AppHandle) -> Result<(), String> {
     apply_result(app)
 }
 
+/// What a dismiss settles on. Normally Hidden; with "show the bar at all
+/// times" on it is the Bar instead. Gated on Companion so a signed-out or
+/// mid-onboarding user never gets a pinned bar over the setup panel.
+fn resting_presentation(state: &OverlayState) -> OverlayPresentation {
+    if state.always_show_bar && state.panel_variant == PanelVariant::Companion {
+        OverlayPresentation::Bar
+    } else {
+        OverlayPresentation::Hidden
+    }
+}
+
 pub fn dismiss_bar(app: &AppHandle) {
     if let Some(window) = main_window(app) {
         if let Err(e) = window.emit("end-voice-session", ()) {
@@ -900,8 +926,33 @@ pub fn dismiss_bar(app: &AppHandle) {
     }
     if let Some(handle) = state_handle(app) {
         let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
-        state.presentation = OverlayPresentation::Hidden;
+        let resting = resting_presentation(&state);
+        state.presentation = resting;
         state.pre_pointing = None;
+    }
+    apply(app);
+}
+
+/// Mirrors the dashboard store's `alwaysShowBar` into overlay state. Pushed on
+/// dashboard load and on every change. Only moves the window when it is
+/// currently at rest: flipping the preference must never yank a live call's
+/// pill or an open panel out from under the user.
+pub fn set_always_show_bar(app: &AppHandle, enabled: bool) {
+    if let Some(handle) = state_handle(app) {
+        let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        if state.always_show_bar == enabled {
+            return;
+        }
+        state.always_show_bar = enabled;
+        let at_rest = matches!(
+            state.presentation,
+            OverlayPresentation::Hidden | OverlayPresentation::Bar
+        ) && !state.voice_active;
+        if !at_rest {
+            return;
+        }
+        let resting = resting_presentation(&state);
+        state.presentation = resting;
     }
     apply(app);
 }
@@ -932,11 +983,19 @@ pub fn set_voice_active(app: &AppHandle, active: bool) {
     let Some(handle) = state_handle(app) else {
         return;
     };
-    handle
-        .0
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .voice_active = active;
+    let pinned_bar = {
+        let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        state.voice_active = active;
+        state.always_show_bar && state.presentation == OverlayPresentation::Bar
+    };
+    // A pinned bar does not change presentation when a call starts or ends, so
+    // apply_result's `unchanged` early-out never re-evaluates HUD suppression
+    // for it. Push it from here for that case only: the HUD is allowed while
+    // the pinned bar is resting, suppressed while it carries a live call.
+    // Every other presentation is still driven solely by apply_result.
+    if pinned_bar {
+        crate::dictation::set_overlay_visible(app, active);
+    }
 }
 
 pub fn set_panel_variant(app: &AppHandle, variant: PanelVariant) {
@@ -948,7 +1007,8 @@ pub fn set_panel_variant(app: &AppHandle, variant: PanelVariant) {
         // visible. If setup was open while sign-in completed, hide it so the
         // signed-in resting state is tray-only.
         if changed && state.presentation != OverlayPresentation::Pointing {
-            state.presentation = OverlayPresentation::Hidden;
+            let resting = resting_presentation(&state);
+            state.presentation = resting;
         }
     }
     apply(app);

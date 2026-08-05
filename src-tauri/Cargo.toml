@@ -1,6 +1,6 @@
 [package]
 name = "aura-desktop"
-version = "0.7.21"
+version = "0.7.22"
 description = "Aura Desktop companion app"
 authors = ["Aura"]
 edition = "2021"
@@ -85,6 +85,10 @@ windows = { version = "0.61", features = [
     "Win32_Graphics_Dxgi_Common",
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D11",
+    # "Mute other apps while dictating" (audio_ducking.rs): the WASAPI session
+    # API - IAudioSessionManager2, IAudioSessionControl2, ISimpleAudioVolume -
+    # is the same mechanism the Windows volume mixer uses for per-app mute.
+    "Win32_Media_Audio",
 ] }
 # Meeting capture: WASAPI loopback+mic (wasapi), FLAC container encode
 # (flacenc, pure Rust, no C deps - the deliberate codec choice over Opus,

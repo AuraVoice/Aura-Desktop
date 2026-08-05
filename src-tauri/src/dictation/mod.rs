@@ -828,6 +828,10 @@ mod platform {
         let app_key = crate::system_control::process_stem_for_window(target);
         hud::show(app, target);
         hud::publish(app, HudUpdate::new(HudPhase::Listening));
+        // Fire-and-forget onto the ducking worker thread; it reads the user's
+        // preference itself and no-ops when off. Never inline: enumerating
+        // audio sessions would add COM latency to the top of every hold.
+        crate::audio_ducking::mute_others(app);
 
         let Some(active_capture) = capture.as_mut() else {
             let shutting_down = drain_until_release(rx);
@@ -1338,6 +1342,10 @@ mod platform {
         // would hold their last spike for the whole caption linger.
         hud::publish_level(app, 0.0);
         hud::publish(app, update);
+        // Same "one place every terminal path funnels through" argument as the
+        // level reset above: unmuting here means an error or an aborted hold
+        // gives the user their audio back exactly like a clean insert does.
+        crate::audio_ducking::restore(app);
         let handle = app.clone();
         tauri::async_runtime::spawn(async move {
             tokio::time::sleep(linger).await;

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Archive, MessageSquare } from "lucide-react";
+import { Archive, AudioLines } from "lucide-react";
 import {
   getHistorySessions,
   getSessionDetail,
@@ -24,7 +24,7 @@ function sessionToCard(session: RawHistorySession): CardModel {
   const turns = session.num_of_turns > 0 ? `${session.num_of_turns} turns` : "Voice";
   return {
     id: session.session_id,
-    badge: { Icon: MessageSquare, label: turns },
+    badge: { Icon: AudioLines, label: turns },
     title: deriveSessionTitle(session.summary),
     meta: shortDateTime(session.started_at),
   };
@@ -85,7 +85,7 @@ export function ConversationsPage() {
           onOpen={setSelected}
           empty={
             <EmptyState
-              Icon={MessageSquare}
+              Icon={AudioLines}
               heading="No conversations in this range"
               copy="Press Ctrl twice to start one, or widen the range above."
             />

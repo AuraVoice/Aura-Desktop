@@ -248,6 +248,17 @@ export function OverlayRoot() {
     );
   }, [unreadCount]);
 
+  // "Show the Aura bar at all times". Pushed from here rather than from the
+  // Settings page, because the overlay always runs while the dashboard window
+  // may never be opened at all - a user who enabled this and then restarted
+  // would otherwise get no bar until they next visited Settings.
+  const alwaysShowBar = generalSettings.alwaysShowBar;
+  useEffect(() => {
+    invoke("set_always_show_bar", { enabled: alwaysShowBar }).catch((err) =>
+      logError("OverlayRoot: set_always_show_bar", err),
+    );
+  }, [alwaysShowBar]);
+
   // Tray "Notifications" item: Rust summons the bar, then hands off here to
   // fill the below-bar slot with the inbox.
   useEffect(() => {

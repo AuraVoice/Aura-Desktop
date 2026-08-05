@@ -23,6 +23,7 @@ import { load, type Store } from "@tauri-apps/plugin-store";
 import { trackEvent } from "./analytics";
 import {
   type DesktopNotification,
+  type DesktopNotificationType,
   isExpired,
   parseNotification,
   SCHEMA_VERSION,
@@ -30,7 +31,7 @@ import {
 } from "./desktopNotificationContract";
 import { logError } from "./log";
 import { notifications as copy } from "./notificationCopy";
-import { loadGeneralSettings } from "./generalSettings";
+import { loadGeneralSettings, type GeneralSettings } from "./generalSettings";
 
 const STORE_FILE = "desktop-notifications.json";
 const INBOX_KEY = "inbox"; // Record<notificationId, StoredNotification>
@@ -213,6 +214,26 @@ function toastCopyFor(
   return { title, body };
 }
 
+/** Settings key gating each opt-out category, or null when the type is
+ *  operational and cannot be switched off. */
+const CATEGORY_SETTING: Partial<Record<DesktopNotificationType, keyof GeneralSettings>> = {
+  suggestion: "notifySuggestions",
+  announcement: "notifyAnnouncements",
+  milestone: "notifyMilestones",
+};
+
+async function categoryEnabled(type: DesktopNotificationType): Promise<boolean> {
+  const key = CATEGORY_SETTING[type];
+  if (!key) return true;
+  try {
+    return (await loadGeneralSettings())[key];
+  } catch (err) {
+    // Fail open: a settings read failure must not swallow a notification.
+    logError("desktopNotifications: category preference", err);
+    return true;
+  }
+}
+
 function shouldToast(
   notification: DesktopNotification,
   ctx: ToastContext,
@@ -261,6 +282,9 @@ async function maybeToast(
         action: notification.action,
         title,
         body,
+        // Settings > System > Sound. Silencing drops only the chime; the toast
+        // still appears and still lands in Action Center.
+        silent: !settings.dictationSounds,
       });
     } catch (invokeErr) {
       logError("desktopNotifications: actionable toast, using plugin fallback", invokeErr);
@@ -290,6 +314,12 @@ export async function ingest(
 
   const nowMs = Date.now();
   if (isExpired(parsed, nowMs)) return { notification: null, isNew: false };
+
+  // Dropped before the inbox, not just before the toast: a category the user
+  // switched off should leave no trace, the same as never having been sent.
+  // Only the three opt-out categories are gated - meeting, update, and auth
+  // events are operational and always get through.
+  if (!(await categoryEnabled(parsed.type))) return { notification: null, isNew: false };
 
   return serializeMutation(async () => {
     try {

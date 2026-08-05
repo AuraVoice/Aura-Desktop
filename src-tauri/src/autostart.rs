@@ -50,7 +50,12 @@ pub fn apply_startup_policy(app: &AppHandle) {
 /// Tray toggle: flips the persisted intent, applies it, and resyncs the
 /// checkbox from the real resulting state.
 pub fn toggle(app: &AppHandle) {
-    let enable = user_opted_out(app);
+    set(app, user_opted_out(app));
+}
+
+/// Records the user's intent and applies it. Shared by the tray toggle and the
+/// Settings row so both write the same single source of truth.
+pub fn set(app: &AppHandle, enable: bool) {
     match app.store(SETTINGS_STORE) {
         Ok(store) => store.set(AUTOSTART_DISABLED_KEY, serde_json::json!(!enable)),
         Err(e) => {
@@ -91,4 +96,19 @@ fn apply(app: &AppHandle, enable: bool) {
         }
     }
     tray::sync_autostart_item(app, is_enabled(app));
+}
+
+/// Settings row: reports the REAL launch-at-login state, same as the tray
+/// checkbox, so a failed registry write can never display as enabled.
+#[tauri::command]
+pub fn autostart_enabled(app: AppHandle) -> bool {
+    is_enabled(&app)
+}
+
+/// Settings row write. The caller re-reads `autostart_enabled` afterwards
+/// rather than trusting the requested value.
+#[tauri::command]
+pub fn set_autostart_enabled(app: AppHandle, enabled: bool) -> bool {
+    set(&app, enabled);
+    is_enabled(&app)
 }

@@ -1,3 +1,4 @@
+mod audio_ducking;
 mod auth_cache;
 mod autostart;
 mod connector_oauth;
@@ -61,6 +62,13 @@ fn set_panel_variant(app: AppHandle, variant: PanelVariant) {
 #[tauri::command]
 fn set_slot_height(app: AppHandle, height: Option<f64>) {
     overlay::set_slot_height(&app, height);
+}
+
+/// "Show the Aura bar at all times". Pushed from the dashboard's Settings page
+/// on load and on every change; overlay.rs decides what "hidden" resolves to.
+#[tauri::command]
+fn set_always_show_bar(app: AppHandle, enabled: bool) {
+    overlay::set_always_show_bar(&app, enabled);
 }
 
 #[tauri::command]
@@ -329,7 +337,11 @@ pub fn run() {
             dictation::trace_commands::dictation_pause_trace_uploads,
             uia::capture_structured_context,
             toast::show_actionable_toast,
-            toast::take_pending_toast_activation
+            toast::take_pending_toast_activation,
+            autostart::autostart_enabled,
+            autostart::set_autostart_enabled,
+            set_always_show_bar,
+            dashboard::set_dashboard_in_taskbar
         ])
         .setup(|app| {
             logging::install_panic_hook();
@@ -412,6 +424,11 @@ pub fn run() {
             if !cfg!(debug_assertions) {
                 autostart::apply_startup_policy(app.handle());
             }
+
+            // Repairs a previous run that was killed between muting other apps
+            // for a dictation and unmuting them again. Cheap no-op when the
+            // recorded list is empty, which is the normal case.
+            audio_ducking::restore_stale_on_start(app.handle());
 
             tray::build(app.handle())?;
 

@@ -6,12 +6,12 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import {
+  AudioLines,
   Bot,
   Check,
   Clock3,
   FileText,
   Info,
-  MessageSquare,
   Monitor,
   MousePointer2,
   Save,
@@ -122,9 +122,17 @@ function longestStreak(dates: string[]): number {
 }
 
 function durationSeconds(value: string): number {
-  const match = value.match(/(?:(\d+):)?(\d+):(\d+)/);
-  if (!match) return 0;
-  return Number(match[1] ?? 0) * 3600 + Number(match[2]) * 60 + Number(match[3]);
+  const clock = value.trim().match(/^(?:(\d+):)?(\d+):(\d+)$/);
+  if (clock) {
+    return Number(clock[1] ?? 0) * 3600 + Number(clock[2]) * 60 + Number(clock[3]);
+  }
+  const human = value.trim().match(/^(?:(\d+)h\s*)?(?:(\d+)m\s*)?(?:(\d+)s)?$/i);
+  if (!human || !human.slice(1).some(Boolean)) return 0;
+  return (
+    Number(human[1] ?? 0) * 3600 +
+    Number(human[2] ?? 0) * 60 +
+    Number(human[3] ?? 0)
+  );
 }
 
 function formatDuration(seconds: number): string {
@@ -428,12 +436,12 @@ export function InsightsPage() {
         ["Screen frames", heatmapTooltip.day.details.screenFrames],
       ].filter(([, value]) => Number(value) > 0)
     : [];
-  const tooltipRoot = document.querySelector(".db-app");
+  const tooltipRoot = typeof document === "undefined" ? null : document.querySelector(".db-app");
 
   const usageRows: UsageRow[] = metrics
     ? [
         {
-          Icon: MessageSquare,
+          Icon: AudioLines,
           label: "conversations",
           value: metrics.conversations,
           displayValue: `${metrics.conversations} conversations`,
@@ -468,7 +476,7 @@ export function InsightsPage() {
   const voiceRows: UsageRow[] = metrics
     ? [
         {
-          Icon: MessageSquare,
+          Icon: AudioLines,
           label: "conversations",
           value: metrics.conversations,
           displayValue: `${metrics.conversations} conversations`,

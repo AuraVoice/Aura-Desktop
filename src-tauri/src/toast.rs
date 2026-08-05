@@ -48,10 +48,11 @@ pub async fn show_actionable_toast(
     action: Option<String>,
     title: String,
     body: String,
+    silent: bool,
 ) -> Result<(), String> {
     #[cfg(windows)]
     {
-        use tauri_winrt_notification::Toast;
+        use tauri_winrt_notification::{Sound, Toast};
 
         let activation = ToastActivation {
             notification_id,
@@ -64,6 +65,9 @@ pub async fn show_actionable_toast(
         Toast::new(&app.config().identifier)
             .title(&title)
             .text1(&body)
+            // Settings > System > Sound. `None` silences the toast; the toast
+            // itself still appears in Action Center, only the chime is dropped.
+            .sound(if silent { None } else { Some(Sound::Default) })
             .on_activated(move |_arg| {
                 let payload = activation.clone();
                 let app = handle.clone();
@@ -79,7 +83,7 @@ pub async fn show_actionable_toast(
     }
     #[cfg(not(windows))]
     {
-        let _ = (app, notification_id, action, title, body);
+        let _ = (app, notification_id, action, title, body, silent);
         Err("actionable toasts are Windows-only".into())
     }
 }
