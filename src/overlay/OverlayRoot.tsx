@@ -66,6 +66,7 @@ export function OverlayRoot() {
   const [presentation, setPresentation] = useState<OverlayPresentation>("hidden");
   const [notchEdge, setNotchEdge] = useState<NotchEdge>("top");
   const [chatOpen, setChatOpen] = useState(false);
+  const [chatHistoryOpen, setChatHistoryOpen] = useState(false);
   const [chatFocusNonce, setChatFocusNonce] = useState(0);
   // Signed in is the whole gate. /chat needs a Firebase token, so a signed-out
   // composer could not send anything anyway. What keeps the cold lane safe is
@@ -86,6 +87,7 @@ export function OverlayRoot() {
   const screenCapture = useChatScreenCapture(visibleChatOpen);
   const chat = useChatSession({
     enabled: chatEnabled,
+    uid: user?.uid ?? null,
     room: voice.room,
     resolveAttachments: screenCapture.resolveForSend,
   });
@@ -95,6 +97,7 @@ export function OverlayRoot() {
   // never opens a composer that could not send anything.
   useEffect(() => {
     setChatOpen(false);
+    setChatHistoryOpen(false);
     invoke("set_chat_enabled", { enabled: user !== null }).catch((err) =>
       logError("OverlayRoot: set chat hotkey", err),
     );
@@ -217,7 +220,10 @@ export function OverlayRoot() {
   const [chatSlotHeight, setChatSlotHeight] = useState(INITIAL_CHAT_SLOT_HEIGHT);
 
   useEffect(() => {
-    if (!visibleChatOpen) setChatSlotHeight(INITIAL_CHAT_SLOT_HEIGHT);
+    if (!visibleChatOpen) {
+      setChatHistoryOpen(false);
+      setChatSlotHeight(INITIAL_CHAT_SLOT_HEIGHT);
+    }
   }, [visibleChatOpen]);
 
   useEffect(() => {
@@ -331,6 +337,7 @@ export function OverlayRoot() {
     let unlisten: (() => void) | undefined;
     listen("chat-requested", () => {
       setChatOpen(true);
+      setChatHistoryOpen(false);
       // Pressing the hotkey with the slot already open is a no-op for
       // setChatOpen, so the nonce is what tells ChatSlot to take the caret back
       // after the user clicked into another app.
@@ -438,6 +445,10 @@ export function OverlayRoot() {
       if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopPropagation();
+      if (visibleChatOpen && chatHistoryOpen) {
+        setChatHistoryOpen(false);
+        return;
+      }
       setChatOpen(false);
       void endSession();
       invoke("dismiss_bar").catch((err) =>
@@ -446,7 +457,7 @@ export function OverlayRoot() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [user, endSession]);
+  }, [user, endSession, visibleChatOpen, chatHistoryOpen]);
 
   if (presentation === "pointing") {
     return <PointingOverlay />;
@@ -490,8 +501,15 @@ export function OverlayRoot() {
           messages={chat.messages}
           focusNonce={chatFocusNonce}
           screen={screenCapture.state}
-          onClose={() => setChatOpen(false)}
-          onHistory={() => {}}
+          onClose={() => {
+            setChatHistoryOpen(false);
+            setChatOpen(false);
+          }}
+          historyOpen={chatHistoryOpen}
+          onHistoryOpenChange={setChatHistoryOpen}
+          history={chat.history}
+          hasOlderMessages={chat.hasOlderMessages}
+          onLoadOlder={chat.loadOlderMessages}
           onSend={chat.send}
           onRetry={chat.retry}
           onClarification={chat.submitClarification}

@@ -477,6 +477,7 @@ pub fn note_capture(app: &AppHandle) {
 /// person, so account B must never inherit a recording account A armed, and
 /// the JS stop must not be the only line of defense.
 pub fn session_changed(app: &AppHandle, signed_in: bool, uid: Option<String>) {
+    let session_uid = if signed_in { uid.clone() } else { None };
     let transition = {
         let Some(handle) = handle(app) else {
             return;
@@ -498,6 +499,11 @@ pub fn session_changed(app: &AppHandle, signed_in: bool, uid: Option<String>) {
         // the next one, and the chat buffer is plaintext in memory.
         crate::screenshot::clear_chat_capture(app);
     }
+    // The local chat transcript is per-account. This runs on EVERY transition,
+    // not only `revoked`, so a fresh sign-in that follows a crash (no sign-out
+    // ever ran) still drops the previous account's cached messages before the
+    // overlay can paint them.
+    crate::chat_cache::retain_only_for_session(app, session_uid);
 }
 
 /// Voice lifecycle hook - called from the `set_voice_active` command and from

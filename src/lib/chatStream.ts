@@ -24,11 +24,27 @@ export type ChatStreamFrame =
       options: string[];
       multi_select: boolean;
     }
+  | { type: "tool_start"; id: string; tool: string; label: string; detail: string }
+  | { type: "tool_end"; id: string; tool: string; ok: boolean }
+  | { type: "thinking_start" }
+  | { type: "thinking_delta"; delta: string }
+  | { type: "thinking_end" }
   | { type: "chat_limit_reached"; message: string }
   | { type: "error"; message: string }
   | { type: "done"; metadata: ChatDoneMetadata }
   | { type: "terminator" }
   | { type: "degraded"; message: string };
+
+/** Which frame types this build can parse.
+ *
+ * Sent to the backend, which emits the v2-only frames (tool_start / tool_end and
+ * the thinking trio) ONLY when it sees this. That gate is what makes the rollout
+ * safe in both directions: an older client never receives a frame it would turn
+ * into a `degraded` error bubble, and a newer client talking to an older backend
+ * simply never sees the new frames and falls back to `tool_status`.
+ *
+ * Bump this only together with the parser below. */
+export const CHAT_CONTRACT_VERSION = 2;
 
 /** A non-2xx response from /chat. Distinct from a transport failure so the
  * caller can say what actually went wrong instead of blaming the connection.
@@ -109,6 +125,32 @@ function parseFrame(rawFrame: string): ChatStreamFrame {
             multi_select: frame.multi_select,
           }
         : degraded("Aura received a malformed clarification. Please reply in the composer instead.");
+    case "tool_start":
+      return typeof frame.id === "string"
+        && typeof frame.tool === "string"
+        && typeof frame.label === "string"
+        ? {
+            type: "tool_start",
+            id: frame.id,
+            tool: frame.tool,
+            label: frame.label,
+            // Optional by design: most tools are never allowed to echo an
+            // argument, so an absent detail is the normal case, not a defect.
+            detail: typeof frame.detail === "string" ? frame.detail : "",
+          }
+        : degraded("Aura received a malformed tool update. The answer may be incomplete.");
+    case "tool_end":
+      return typeof frame.id === "string" && typeof frame.tool === "string"
+        ? { type: "tool_end", id: frame.id, tool: frame.tool, ok: frame.ok !== false }
+        : degraded("Aura received a malformed tool update. The answer may be incomplete.");
+    case "thinking_start":
+      return { type: "thinking_start" };
+    case "thinking_delta":
+      return typeof frame.delta === "string"
+        ? { type: "thinking_delta", delta: frame.delta }
+        : degraded("Aura received a malformed thinking update. The answer may be incomplete.");
+    case "thinking_end":
+      return { type: "thinking_end" };
     case "chat_limit_reached":
       return typeof frame.message === "string"
         ? { type: "chat_limit_reached", message: frame.message }
@@ -147,6 +189,7 @@ export async function streamChat({
       session_id: sessionId,
       client_message_id: clientMessageId,
       surface: "desktop",
+      contract_version: CHAT_CONTRACT_VERSION,
       // Omitted entirely when there is nothing to attach, so the text-only
       // request stays byte-identical to what shipped before screen context.
       ...(attachments && attachments.length > 0 ? { attachments } : {}),

@@ -1,17 +1,46 @@
-/* The card sizes itself to its content and ChatSlot reports that measured height
-   to set_slot_height. align-self must NOT be stretch: a stretched card silently
-   absorbs any window/card disagreement as empty glass under the composer, which
-   is the bug this replaced. */
-.glass-surface.chat-slot {
+/* The frame keeps the active chat at its measured size while the history sheet
+   temporarily reserves 40% of the monitor. It must not stretch when closed: a
+   stretched card silently absorbs window disagreement as empty glass. */
+.chat-slot-frame {
+  position: relative;
   align-self: start;
   justify-self: stretch;
   width: 380px;
   max-width: 100%;
+  min-height: 0;
+}
+
+.chat-slot-frame.history-open {
+  min-height: var(--chat-history-sheet-height);
+}
+
+.glass-surface.chat-slot-surface {
+  width: 100%;
   /* No max-height against the window: clamping the card to a window that has not
      grown yet would make it measure its own clamped height and never grow. The
      card's real cap is .chat-slot-body's max-height. */
   height: auto;
   border-radius: var(--db-radius, 28px);
+}
+
+.chat-slot-frame.history-open > .chat-slot-surface {
+  position: absolute;
+  z-index: 0;
+  left: 0;
+}
+
+.notch-column-top .chat-slot-frame.history-open > .chat-slot-surface {
+  top: 0;
+}
+
+.notch-column-bottom .chat-slot-frame.history-open > .chat-slot-surface {
+  bottom: 0;
+}
+
+.notch-column-left .chat-slot-frame.history-open > .chat-slot-surface,
+.notch-column-right .chat-slot-frame.history-open > .chat-slot-surface {
+  top: 50%;
+  transform: translateY(-50%);
 }
 
 .chat-slot-inner {
@@ -36,13 +65,32 @@
 .chat-slot-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 8px;
   padding: 2px 8px;
 }
 
-.bar-icon-button.chat-slot-history {
+.bar-icon-button.chat-history-toggle {
+  position: absolute;
+  z-index: 3;
+  top: 2px;
+  left: 8px;
+  border-color: transparent;
+  border-radius: 0;
+  background: transparent;
   color: var(--db-text-dim, var(--glass-icon-idle));
+}
+
+.bar-icon-button.chat-history-toggle:hover,
+.bar-icon-button.chat-history-toggle.bar-icon-button-active {
+  border-color: transparent;
+  background: transparent;
+}
+
+.chat-slot-frame.history-open > .chat-history-toggle {
+  position: fixed;
+  top: 2px;
+  left: calc(var(--chat-history-sheet-left) + 8px);
 }
 
 .bar-icon-button.chat-slot-close {
@@ -75,6 +123,177 @@
 
 .chat-slot-body::-webkit-scrollbar {
   display: none;
+}
+
+/* The sheet is a sibling of the active chat, so the transcript and draft stay
+   mounted underneath it. The native slot grows to this exact monitor-derived
+   height before the sheet pulls down from the top edge. */
+.glass-surface.chat-history-sheet {
+  position: fixed;
+  z-index: 2;
+  top: 0;
+  left: var(--chat-history-sheet-left);
+  width: var(--chat-history-sheet-width);
+  height: var(--chat-history-sheet-height);
+  border-radius: var(--db-radius, 28px);
+  box-shadow: 0 22px 54px rgba(0, 0, 0, 0.48);
+  transform-origin: top center;
+  animation: chat-history-sheet-unfurl 520ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  will-change: clip-path, transform;
+}
+
+.glass-surface.chat-history-sheet::before {
+  content: "";
+  position: absolute;
+  z-index: 2;
+  top: 40px;
+  right: 12px;
+  left: 12px;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+  pointer-events: none;
+}
+
+.bar-icon-button.chat-history-sheet-close {
+  position: absolute;
+  z-index: 3;
+  top: 2px;
+  right: 8px;
+  color: var(--db-text-mute, var(--glass-text-dim));
+}
+
+.chat-history-sheet-inner {
+  width: 100%;
+  height: 100%;
+}
+
+.chat-history-scroll {
+  box-sizing: border-box;
+  height: 100%;
+  min-height: 0;
+  margin: 0 5px 0 8px;
+  padding: 46px 7px 8px 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(88, 218, 202, 0.52) transparent;
+}
+
+.chat-history-scroll::-webkit-scrollbar {
+  width: 8px;
+}
+
+.chat-history-scroll::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.chat-history-scroll::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: linear-gradient(rgba(88, 218, 202, 0.72), rgba(88, 218, 202, 0.34)) padding-box;
+}
+
+.chat-history-scroll::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(rgba(88, 218, 202, 0.92), rgba(88, 218, 202, 0.52)) padding-box;
+}
+
+.chat-history-list {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.chat-history-row {
+  display: flex;
+  align-items: stretch;
+  flex-direction: column;
+  gap: 5px;
+  width: 100%;
+  padding: 10px 11px;
+  border: 1px solid transparent;
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.035);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, transform 140ms ease;
+}
+
+.chat-history-row:hover:not(:disabled) {
+  border-color: rgba(88, 218, 202, 0.18);
+  background: rgba(255, 255, 255, 0.075);
+  transform: translateY(-1px);
+}
+
+.chat-history-row:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.chat-history-failure {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 4px 10px 8px;
+}
+
+.chat-history-preview {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 13px/1.35 var(--font-body);
+}
+
+.chat-history-meta {
+  color: var(--db-text-mute, var(--glass-text-dim));
+  font: 10.5px/1.2 var(--font-body);
+}
+
+.chat-history-empty {
+  margin: 10px 10px 6px;
+  font-size: 12px;
+  opacity: 0.55;
+}
+
+.chat-history-more {
+  align-self: center;
+  margin: 4px 0;
+  padding: 5px 12px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.chat-history-more:hover {
+  background: rgba(255, 255, 255, 0.13);
+}
+
+@keyframes chat-history-sheet-unfurl {
+  0% {
+    clip-path: inset(0 0 100% 0);
+    transform: scaleY(0.99);
+  }
+  100% {
+    clip-path: inset(0 0 0 0);
+    transform: scaleY(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .glass-surface.chat-history-sheet {
+    animation: none;
+  }
+
+  .chat-history-row {
+    transition: none;
+  }
 }
 
 .chat-message {
@@ -284,11 +503,63 @@
   cursor: default;
 }
 
-/* Queued and failed turns read as pending, so they sit back visually until the
-   send actually lands. */
+/* Queued, in-flight and failed turns read as pending, so they sit back visually
+   until the send actually lands. */
 .chat-message-queued .chat-message-bubble,
+.chat-message-sending .chat-message-bubble,
 .chat-message-failed .chat-message-bubble {
   opacity: 0.55;
+}
+
+/* Shown in the assistant bubble from the moment the turn opens until the first
+   token. Without it the bubble is empty and undecorated: the markdown caret
+   below can only attach to a :last-child that does not exist yet, so the user
+   got no signal at all across the whole time to first token. */
+.chat-thinking {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--db-text-mute);
+}
+
+.chat-thinking-dots {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.chat-thinking-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: chat-thinking-pulse 1.2s ease-in-out infinite;
+}
+
+.chat-thinking-dots i:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.chat-thinking-dots i:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes chat-thinking-pulse {
+  0%, 60%, 100% {
+    opacity: 0.25;
+  }
+  30% {
+    opacity: 1;
+  }
+}
+
+/* The overlay sits on top of whatever the user is working in, so a perpetual
+   animation there is more intrusive than in a normal window. */
+@media (prefers-reduced-motion: reduce) {
+  .chat-thinking-dots i {
+    animation: none;
+    opacity: 0.6;
+  }
 }
 
 .chat-message-caret {

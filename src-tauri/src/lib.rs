@@ -1,6 +1,7 @@
 mod audio_ducking;
 mod auth_cache;
 mod autostart;
+mod chat_cache;
 mod connector_oauth;
 mod dashboard;
 mod dictation;
@@ -322,6 +323,9 @@ pub fn run() {
             entitlement::cache_entitlement,
             entitlement::cached_entitlement,
             entitlement::clear_entitlement_cache,
+            chat_cache::chat_cache_replace,
+            chat_cache::chat_cache_load,
+            chat_cache::chat_cache_clear,
             saved_images::cache_saved_image,
             saved_images::read_saved_image,
             saved_images::prune_saved_images,
