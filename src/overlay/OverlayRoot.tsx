@@ -501,6 +501,7 @@ export function OverlayRoot() {
           messages={chat.messages}
           focusNonce={chatFocusNonce}
           screen={screenCapture.state}
+          onNewConversation={chat.newConversation}
           onClose={() => {
             setChatHistoryOpen(false);
             setChatOpen(false);

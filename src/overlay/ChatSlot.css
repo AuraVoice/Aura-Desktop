@@ -97,6 +97,10 @@
   color: var(--db-text-mute, var(--glass-text-dim));
 }
 
+.bar-icon-button.chat-slot-new {
+  color: var(--db-text-mute, var(--glass-text-dim));
+}
+
 .chat-slot-body {
   display: flex;
   flex-direction: column;
@@ -436,13 +440,58 @@
   font-size: 11.5px;
 }
 
-.chat-markdown pre {
+/* Wraps every fenced block so the copy button has a positioning context that
+   does NOT scroll with the code: the button is a sibling of the scroll port,
+   not a child of it, or a long line would carry it off to the right. */
+.chat-code-block {
+  position: relative;
   margin: 7px 0;
-  padding: 9px 11px;
+}
+
+.chat-markdown pre {
+  margin: 0;
+  /* Right padding keeps a long first line from running under the button. */
+  padding: 9px 34px 9px 11px;
   border-radius: 10px;
   background: rgba(0, 0, 0, 0.2);
   overflow-x: auto;
   scrollbar-width: none;
+}
+
+.chat-code-copy {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.08);
+  /* Fallbacks matter here: dashboard.css (where the --db-* tokens live) is only
+     loaded by DashboardApp, so in the overlay these resolve to the glass set. */
+  color: var(--db-text-mute, var(--glass-text-dim));
+  opacity: 0;
+  cursor: pointer;
+}
+
+/* Revealed on hover, and on keyboard focus so it is still reachable without a
+   pointer. At rest it stays out of a transcript that is already dense. */
+.chat-code-block:hover .chat-code-copy,
+.chat-code-copy:focus-visible {
+  opacity: 1;
+}
+
+.chat-code-copy:hover {
+  color: var(--db-text, var(--glass-text-bright));
+}
+
+.chat-code-copy.is-copied {
+  opacity: 1;
+  color: var(--db-teal, var(--glass-accent));
 }
 
 .chat-markdown pre::-webkit-scrollbar {
@@ -798,4 +847,136 @@
 .chat-slot-send svg {
   width: 16px;
   height: 16px;
+}
+
+/* ── Activity rail ─────────────────────────────────────────────────────────
+   One row per tool the model ran, rendered ABOVE the answer (see displayOrder
+   in ChatSlot.tsx). Full width and unbubbled on purpose: these are steps, not
+   messages, and giving them assistant bubbles would read as Aura saying them. */
+.chat-activity {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 0 2px;
+  color: var(--db-text-mute);
+  font: 11px/1.35 var(--font-body);
+}
+
+.chat-activity-icon {
+  flex: 0 0 auto;
+  opacity: 0.75;
+}
+
+.chat-activity-label {
+  flex: 0 0 auto;
+}
+
+/* The only user-visible tool argument (web_surf's query). Truncates rather than
+   wrapping so a long query can never push the rail into a second line and make
+   the transcript jump while the tool is still running. */
+.chat-activity-detail {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.72;
+  font-style: italic;
+}
+
+.chat-activity.is-running .chat-activity-label {
+  color: var(--db-text, var(--glass-text-bright));
+}
+
+.chat-activity-spinner {
+  flex: 0 0 auto;
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  opacity: 0.7;
+  animation: chat-activity-spin 700ms linear infinite;
+}
+
+.chat-activity-failed {
+  flex: 0 0 auto;
+  color: var(--db-danger, #ff9f9f);
+}
+
+.chat-activity.is-failed .chat-activity-icon {
+  opacity: 0.5;
+}
+
+@keyframes chat-activity-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ── Reasoning block ───────────────────────────────────────────────────────
+   Only present on turns where the model actually chose to think: adaptive
+   thinking skips it entirely for simple questions, so this is not a fixture
+   that appears empty on every turn. */
+.chat-reasoning {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 2px;
+}
+
+.chat-reasoning-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--db-text-mute);
+  font: 11px/1.35 var(--font-body);
+  cursor: pointer;
+}
+
+.chat-reasoning-toggle:hover {
+  color: var(--db-text, var(--glass-text-bright));
+}
+
+.chat-reasoning-chevron {
+  flex: 0 0 auto;
+  transition: transform 140ms ease;
+}
+
+.chat-reasoning.is-open .chat-reasoning-chevron {
+  transform: rotate(90deg);
+}
+
+/* Bounded and scrollable: a long reasoning pass would otherwise push the answer
+   off the card entirely, and the card reports its measured height to the native
+   window, so an unbounded block here resizes the whole overlay. Scrollbar hidden
+   to match the rest of the app (see the app-wide rule in dashboard.css). */
+.chat-reasoning-body {
+  max-height: 150px;
+  padding: 0 0 0 16px;
+  overflow-y: auto;
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  margin-left: 5px;
+  color: var(--db-text-mute);
+  font: 11px/1.5 var(--font-body);
+  white-space: pre-wrap;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.chat-reasoning-body::-webkit-scrollbar {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-activity-spinner {
+    animation-duration: 2s;
+  }
+  .chat-reasoning-chevron {
+    transition: none;
+  }
 }

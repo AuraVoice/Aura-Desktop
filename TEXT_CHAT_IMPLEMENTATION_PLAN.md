@@ -25,6 +25,9 @@ deployment, an installed-app pass, or manual Windows behavior unless stated.
 - [x] Phase 2 source: cold-lane SSE chat, all documented stream frames, visible degraded
   states, limits, retries, clarification choices, one-slot priority, two-step Escape,
   upright side layout, and client-owned conversation ids are implemented.
+- [x] Phase 2 follow-up desktop source: history switching, explicit new chat with
+  cache-race protection, code-block copying, persistent tool activity, and summarized
+  reasoning display are implemented.
 - [ ] Phase 2 runtime gate: verify a real typed turn makes zero LiveKit calls and that
   Left Ctrl double-tap still starts voice immediately afterward.
 - [x] Phase 3 local desktop and backend source: correlated live text events, FIFO queue,

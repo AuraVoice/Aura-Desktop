@@ -283,8 +283,9 @@ export function useChatSession({ enabled, uid, room, resolveAttachments }: UseCh
   const messagesRef = useRef(messages);
   const resolveAttachmentsRef = useRef(resolveAttachments);
   const uidRef = useRef(uid);
-  // The conversation the server knows we are looking at, as opposed to the local
-  // id minted for a not-yet-sent session. Null until one is adopted.
+  // The conversation refreshes must stay pinned to. A newly-created empty thread
+  // is pinned before the server knows it so focus refresh cannot restore the old
+  // conversation underneath it. Null only before startup adopts a target.
   const serverConversationRef = useRef<string | null>(null);
   // Bumped on every explicit conversation switch. A hydration that finishes after
   // a newer selection started sees a stale generation and commits nothing, so a
@@ -684,13 +685,19 @@ export function useChatSession({ enabled, uid, room, resolveAttachments }: UseCh
   useEffect(() => {
     if (!enabled || !uid) return;
     const controller = new AbortController();
+    const startupSelection = selectionRef.current;
     let cancelled = false;
     let attempts = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
 
     const paintCache = async () => {
       const cached = await loadCachedConversation(uid, null, CACHE_PAINT_LIMIT);
-      if (cancelled || !cached || cached.messages.length === 0) return;
+      if (
+        cancelled
+        || selectionRef.current !== startupSelection
+        || !cached
+        || cached.messages.length === 0
+      ) return;
       conversationIdRef.current = cached.conversation_id;
       setChatConversationId(cached.conversation_id);
       // Only ever a first paint: anything already on screen is fresher.
@@ -1269,6 +1276,30 @@ export function useChatSession({ enabled, uid, room, resolveAttachments }: UseCh
     })();
   }, [olderCursor]);
 
+  const newConversation = useCallback((): boolean => {
+    if (
+      !enabledRef.current
+      || roomRef.current
+      || activeRequestRef.current
+      || livePendingRef.current.size > 0
+    ) return false;
+
+    selectionRef.current += 1;
+    selectionControllerRef.current?.abort();
+    selectionControllerRef.current = null;
+    const conversationId = crypto.randomUUID();
+    conversationIdRef.current = conversationId;
+    serverConversationRef.current = conversationId;
+    setChatConversationId(conversationId);
+    setMessages([]);
+    setSending(false);
+    setLimitReached(false);
+    setOlderCursor(null);
+    setConversationLoading(false);
+    setConversationError(null);
+    return true;
+  }, []);
+
   return {
     messages,
     sending: lane === "cold" && sending,
@@ -1278,6 +1309,7 @@ export function useChatSession({ enabled, uid, room, resolveAttachments }: UseCh
     retry,
     submitClarification,
     noteVoiceSessionStarted,
+    newConversation,
     hasOlderMessages: olderCursor !== null,
     loadOlderMessages,
     history: {
