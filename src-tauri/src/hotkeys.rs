@@ -8,6 +8,11 @@ pub fn summon_shortcut() -> Shortcut {
     Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyB)
 }
 
+/// Summons the notch with the text chat slot open below it.
+pub fn chat_shortcut() -> Shortcut {
+    Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::Space)
+}
+
 /// Opens (or focuses) the in-app dashboard window. Ctrl+Alt+D is free;
 /// Ctrl+Shift+D is the sign-out shortcut, a different modifier set.
 pub fn open_dashboard_shortcut() -> Shortcut {
@@ -23,6 +28,11 @@ pub fn sign_out_shortcut() -> Shortcut {
 /// Arms/disarms screen-sight for the current voice session.
 pub fn screen_sight_shortcut() -> Shortcut {
     Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyS)
+}
+
+/// Mutes/unmutes Aura's spoken output. Text and captions keep flowing.
+pub fn output_mute_shortcut() -> Shortcut {
+    Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyM)
 }
 
 /// Arms or disarms Guide Mode for the pinned cursor monitor.
@@ -61,6 +71,10 @@ mod tests {
 pub fn handle(app: &AppHandle, shortcut: &Shortcut) {
     if shortcut == &summon_shortcut() {
         overlay::hotkey_pressed(app);
+    } else if shortcut == &chat_shortcut() {
+        if let Err(e) = overlay::summon_chat(app) {
+            log::error!("hotkeys: summon chat failed: {e}");
+        }
     } else if shortcut == &open_dashboard_shortcut() {
         if let Err(e) = dashboard::open_dashboard_window(app) {
             log::error!("hotkeys: open dashboard failed: {e}");
@@ -74,5 +88,9 @@ pub fn handle(app: &AppHandle, shortcut: &Shortcut) {
         security::toggle_screen_sight(app);
     } else if shortcut == &guide_mode_shortcut() {
         guide::toggle(app);
+    } else if shortcut == &output_mute_shortcut() {
+        // React owns this bit (it persists it, publishes it to the worker, and
+        // mutes the live audio elements), so Rust only forwards the press.
+        overlay::request_output_mute_toggle(app);
     }
 }

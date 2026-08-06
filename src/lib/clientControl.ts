@@ -43,3 +43,28 @@ export async function publishGuideMode(room: Room, control: GuideModeControl): P
     topic: "client_events",
   });
 }
+
+export interface OutputModeControl {
+  mode: "voice" | "text";
+  generation: number;
+}
+
+export function encodeOutputMode(control: OutputModeControl): Uint8Array {
+  if (!Number.isSafeInteger(control.generation) || control.generation < 0) {
+    throw new Error("output.mode generation must be a non-negative safe integer");
+  }
+  return new TextEncoder().encode(
+    JSON.stringify({
+      type: "output.mode",
+      mode: control.mode,
+      generation: control.generation,
+    }),
+  );
+}
+
+export async function publishOutputMode(room: Room, control: OutputModeControl): Promise<void> {
+  await room.localParticipant.publishData(encodeOutputMode(control), {
+    reliable: true,
+    topic: "client_events",
+  });
+}

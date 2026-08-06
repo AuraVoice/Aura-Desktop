@@ -35,6 +35,9 @@ interface NotchBarProps {
   dragHandlers?: NotchDragHandlers;
   guideArmed?: boolean;
   guideActive?: boolean;
+  outputMuted?: boolean;
+  /** Muted on this device, but the worker never confirmed it stopped speaking. */
+  outputMuteUnconfirmed?: boolean;
   menuOpen?: boolean;
   onMenuToggle?: () => void;
 }
@@ -45,6 +48,8 @@ export function NotchBar({
   dragHandlers,
   guideArmed = false,
   guideActive = false,
+  outputMuted = false,
+  outputMuteUnconfirmed = false,
   menuOpen = false,
   onMenuToggle,
 }: NotchBarProps) {
@@ -86,6 +91,23 @@ export function NotchBar({
                     : "Guide Mode is starting"
                 }
                 title={guideActive ? "Guide Mode active" : "Guide Mode starting"}
+              />
+            )}
+            {outputMuted && (
+              <span
+                className={`notch-mute-indicator${
+                  outputMuteUnconfirmed ? " is-unconfirmed" : ""
+                }`}
+                aria-label={
+                  outputMuteUnconfirmed
+                    ? "Aura is muted on this device only"
+                    : "Aura's voice is muted"
+                }
+                title={
+                  outputMuteUnconfirmed
+                    ? "Muted on this device only. Ctrl+Alt+M"
+                    : "Voice muted. Ctrl+Alt+M"
+                }
               />
             )}
           </div>

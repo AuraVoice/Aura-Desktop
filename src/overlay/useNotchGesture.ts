@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { logError, logInfo } from "../lib/log";
+import { outputMuted } from "../lib/outputMode";
 import type { VoiceBarState } from "./useVoiceBar";
 
 interface AuraTogglePayload {
@@ -123,7 +124,15 @@ export function useNotchGesture(
         // Unlike the old flow, there is no separate activateSession() step: the coordinator
         // owns the microphone (Realtime now, LiveKit at handover), so summon_bar below only
         // has to make the notch visible.
-        void currentVoice.startBridgedSession();
+        // Output mute skips the bridge entirely: the Realtime leg is audio-only
+        // and plays through its own element, so bridging a muted call would buy
+        // latency the user cannot hear (lib/outputMode.ts). The token also
+        // refuses `bridged` in text mode, so this only avoids the wasted mint.
+        if (outputMuted()) {
+          void currentVoice.startSession();
+        } else {
+          void currentVoice.startBridgedSession();
+        }
         void (async () => {
           try {
             await invoke("summon_bar");

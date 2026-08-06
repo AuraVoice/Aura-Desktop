@@ -81,6 +81,18 @@
   height: 100%;
 }
 
+/* The chat card is the one card sized by its own content rather than stretched
+   to its cell, so it needs an anchor per edge: flush against the notch on top and
+   bottom, and centred beside it on left/right, where bar_size floors the window at
+   NOTCH_MAIN (184px) and a short card would otherwise be stretched to fill it. */
+.notch-column-bottom > .chat-slot {
+  align-self: end;
+}
+.notch-column-left > .chat-slot,
+.notch-column-right > .chat-slot {
+  align-self: center;
+}
+
 /* Each card's own CSS animates it sliding down from under a top bar. On the
    other three edges only the direction changes: swap the animation-name and
    keep each card's own duration/easing. All three cards share the same
@@ -315,6 +327,28 @@
     box-shadow: 0 0 13px rgba(239, 68, 68, 1);
     opacity: 1;
   }
+}
+
+/* Output mute (Ctrl+Alt+M). Sits on the opposite side from the Guide dot so the
+   two never collide, and stays a calm slate while the worker has confirmed it
+   is silent at the source. Amber means muted on this device only: the reply is
+   still being synthesized, just not played. */
+.notch-mute-indicator {
+  position: absolute;
+  left: 13px;
+  top: 50%;
+  width: 9px;
+  height: 9px;
+  transform: translateY(-50%);
+  border-radius: 50%;
+  pointer-events: none;
+  background: #94a3b8;
+  box-shadow: 0 0 8px rgba(148, 163, 184, 0.75);
+}
+
+.notch-mute-indicator.is-unconfirmed {
+  background: #f59e0b;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.8);
 }
 
 .notch-visualizer {

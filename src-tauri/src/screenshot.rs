@@ -1,5 +1,6 @@
 use std::io::Cursor;
 use std::path::Path;
+use std::sync::Mutex;
 use std::time::Instant;
 
 use image::codecs::jpeg::JpegEncoder;
@@ -185,6 +186,167 @@ pub async fn capture_turn_screen_with_geometry(
     frame.stages.turn_context_id = turn_context_id.unwrap_or_default();
     emit_capture_stages(&app, &frame.stages);
     Ok(frame.into_response())
+}
+
+// ── Chat screen context ─────────────────────────────────────────────────────
+//
+// The text chat's frame is captured the instant the hotkey fires, from the
+// monitor of the app the user was actually in, and parked in memory until they
+// either send it or drop it. Two rules make this different from every other
+// capture path in this file:
+//
+//   - It is NEVER persisted. The other paths write through screenshot_store
+//     because the user explicitly asked for that frame; this one is taken
+//     speculatively, before the user has typed a word, and most of them are
+//     thrown away unsent. A speculative frame has no business on disk.
+//   - It is captured BEFORE the overlay takes foreground (see
+//     overlay::summon_chat). Afterwards the foreground window is our own notch
+//     and the cursor is parked on the composer, so neither is a usable answer
+//     to "which screen was the user reading".
+
+/// Header in front of the JPEG in `take_chat_capture`'s response: two u32s and
+/// one i64, little-endian, read by a `DataView` in chatScreenCapture.ts.
+const CHAT_CAPTURE_HEADER_LEN: usize = 4 + 4 + 8;
+
+struct PendingChatCapture {
+    jpeg: Vec<u8>,
+    width_px: u32,
+    height_px: u32,
+    captured_at_ms: i64,
+}
+
+#[derive(Default)]
+struct ChatCaptureState {
+    pending: Option<PendingChatCapture>,
+    /// A point on the monitor the user was working on when chat was summoned.
+    /// Kept so a re-arm later in the session captures the same screen rather
+    /// than whichever monitor the overlay happens to sit on.
+    source_point: Option<(i32, i32)>,
+}
+
+#[derive(Default)]
+pub struct ChatCaptureHandle(Mutex<ChatCaptureState>);
+
+fn chat_state(app: &AppHandle) -> Option<tauri::State<'_, ChatCaptureHandle>> {
+    app.try_state::<ChatCaptureHandle>()
+}
+
+/// Captures the given monitor point into the pending buffer. Every failure is
+/// non-fatal and leaves the buffer empty: chat still works without a picture,
+/// and the frontend shows no chip rather than a broken one.
+async fn capture_into_pending(app: AppHandle, point: (i32, i32)) {
+    let ticket = match crate::security::authorize(&app, crate::security::Operation::CaptureChatScreen)
+    {
+        Ok(ticket) => ticket,
+        Err(e) => {
+            info!("screenshot: chat capture not authorized ({e})");
+            return;
+        }
+    };
+
+    let (x, y) = point;
+    let frame = match tauri::async_runtime::spawn_blocking(move || capture_frame(x, y)).await {
+        Ok(Ok(frame)) => frame,
+        Ok(Err(e)) => {
+            warn!("screenshot: chat capture failed: {e}");
+            return;
+        }
+        Err(e) => {
+            warn!("screenshot: chat capture thread failed: {e}");
+            return;
+        }
+    };
+    // A sign-out that landed during the capture drops the frame, exactly as the
+    // voice paths do - an account switch must never hand B a picture taken
+    // under A.
+    if let Err(e) = crate::security::recheck(&app, crate::security::Operation::CaptureChatScreen, &ticket)
+    {
+        info!("screenshot: chat capture dropped after capture ({e})");
+        return;
+    }
+
+    if let Some(handle) = chat_state(&app) {
+        let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        state.pending = Some(PendingChatCapture {
+            width_px: frame.stages.jpeg_width_px,
+            height_px: frame.stages.jpeg_height_px,
+            jpeg: frame.jpeg_bytes,
+            captured_at_ms: crate::meeting::now_ms(),
+        });
+        state.source_point = Some(point);
+    }
+}
+
+/// Called from `overlay::summon_chat` while the user's own app is still the
+/// foreground window. Returns immediately; the capture completes on its own
+/// while the user is still reading the slot and typing.
+pub fn arm_chat_capture(app: &AppHandle, point: (i32, i32)) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(capture_into_pending(app, point));
+}
+
+/// Drops any pending frame. Called when the user removes the chip, closes the
+/// slot, sends the message, or signs out.
+pub fn clear_chat_capture(app: &AppHandle) {
+    if let Some(handle) = chat_state(app) {
+        let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        state.pending = None;
+    }
+}
+
+/// The pending frame, as the `CHAT_CAPTURE_HEADER_LEN`-byte header followed by
+/// the JPEG bytes. An empty response means nothing is pending. Raw bytes rather
+/// than a serialized struct: Tauri encodes a `Vec<u8>` field as a JSON array of
+/// numbers, which would turn a 200 KB frame into roughly 700 KB of text.
+#[tauri::command]
+pub fn take_chat_capture(app: AppHandle) -> Response {
+    let Some(handle) = chat_state(&app) else {
+        return Response::new(Vec::new());
+    };
+    let state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(pending) = state.pending.as_ref() else {
+        return Response::new(Vec::new());
+    };
+    let mut payload = Vec::with_capacity(CHAT_CAPTURE_HEADER_LEN + pending.jpeg.len());
+    payload.extend_from_slice(&pending.width_px.to_le_bytes());
+    payload.extend_from_slice(&pending.height_px.to_le_bytes());
+    payload.extend_from_slice(&pending.captured_at_ms.to_le_bytes());
+    payload.extend_from_slice(&pending.jpeg);
+    Response::new(payload)
+}
+
+/// Re-captures the screen the chat was summoned over. Used when the user
+/// re-arms the toggle, and when the pending frame has gone stale under the
+/// composer. Awaits the capture so the caller can `take_chat_capture` straight
+/// after and be sure it is looking at the new frame.
+#[tauri::command]
+pub async fn refresh_chat_capture(app: AppHandle) -> Result<(), String> {
+    let point = {
+        let Some(handle) = chat_state(&app) else {
+            return Err("chat capture state unavailable".to_string());
+        };
+        let state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        state.source_point
+    };
+    // No remembered point means chat was opened without going through the
+    // hotkey, so the cursor's monitor is the only signal available.
+    let point = match point {
+        Some(point) => point,
+        None => {
+            let window = app
+                .get_webview_window("main")
+                .ok_or_else(|| "main window not found".to_string())?;
+            let cursor = window.cursor_position().map_err(|e| e.to_string())?;
+            (cursor.x as i32, cursor.y as i32)
+        }
+    };
+    capture_into_pending(app, point).await;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn discard_chat_capture(app: AppHandle) {
+    clear_chat_capture(&app);
 }
 
 /// Publishes the stage timings for one capture. Failing to emit telemetry must

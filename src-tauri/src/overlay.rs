@@ -883,6 +883,47 @@ pub fn summon_bar(app: &AppHandle) -> Result<(), String> {
     apply_result(app)
 }
 
+/// Shows the Bar and asks the frontend to open the chat slot below it.
+/// Chat is the one notch surface with a text input, so unlike summon_bar it
+/// does take foreground: without it the webview focuses the composer and shows
+/// a caret while the keystrokes still go to whatever app the user came from.
+/// It uses the no-Alt-tap variant, so the dismiss double-tap is never trapped
+/// in keyboard menu mode (see apply()) - the hotkey press that got us here is
+/// what grants the foreground permission.
+pub fn summon_chat(app: &AppHandle) -> Result<(), String> {
+    // Read the user's own foreground window BEFORE anything below can steal it,
+    // so the chat's screen context comes from the app they were working in
+    // rather than from the notch (see screenshot::arm_chat_capture).
+    let source_point = win_focus::foreground_window_center(app);
+
+    summon_bar(app)?;
+
+    let Some(window) = main_window(app) else {
+        return Err("main window unavailable".to_string());
+    };
+    if let Some(point) = source_point {
+        crate::screenshot::arm_chat_capture(app, point);
+    }
+    win_focus::raise_for_hotkey(app, &window);
+    window
+        .emit("chat-requested", ())
+        .map_err(|e| format!("failed to emit chat event: {e}"))?;
+    Ok(())
+}
+
+/// Forwards the output-mute hotkey to the frontend, which owns the bit.
+/// Deliberately changes nothing native: no presentation change and no
+/// force_foreground (the Alt tap it injects traps the next Ctrl double-tap, see
+/// apply()). React briefly shows the notch itself when the bar is hidden, using
+/// the existing summon_bar/dismiss_bar commands.
+pub fn request_output_mute_toggle(app: &AppHandle) {
+    if let Some(window) = main_window(app) {
+        if let Err(e) = window.emit("output-mute-toggle-requested", ()) {
+            error!("overlay::request_output_mute_toggle: failed to emit: {e}");
+        }
+    }
+}
+
 /// Shows the window as a panel-sized surface for the post-sign-in onboarding
 /// tail (hotkey tour + live demo). Sign-in flips the variant to Companion and
 /// hides the window (set_panel_variant); the tail calls this to re-reveal it.

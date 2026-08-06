@@ -15,6 +15,7 @@ export interface GeneralSettings {
   showInTaskbar: boolean;
   dictationSounds: boolean;
   muteOthersWhileDictating: boolean;
+  textOutputMuted: boolean;
   notifySuggestions: boolean;
   notifyAnnouncements: boolean;
   notifyMilestones: boolean;
@@ -35,6 +36,7 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   showInTaskbar: true,
   dictationSounds: true,
   muteOthersWhileDictating: false,
+  textOutputMuted: false,
   notifySuggestions: true,
   notifyAnnouncements: true,
   notifyMilestones: true,

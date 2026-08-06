@@ -1,5 +1,7 @@
 import { authFetch } from "./api";
+import { chatConversationId, postTextHandoff } from "./chatConversation";
 import { advertiseManifest } from "./desktopCapabilities";
+import { outputMuted } from "./outputMode";
 import { voiceCapReachedCode } from "./voiceErrorCopy";
 
 export interface VoiceTokenResponse {
@@ -54,9 +56,30 @@ export async function fetchVoiceToken(
   // Bridge mode: the Realtime leg is already talking, so the token stamps
   // `bridged=1` and the worker HOLDs for a handover instead of greeting.
   const bridgedParam = bridged ? "&bridged=1" : "";
-  const response = await authFetch(
-    `/voice/token?surface=desktop&manifest=${manifestParam}${modeParam}${bridgedParam}`,
-  );
+  // Cross-lane continuity: the same client-owned conversation id the cold text
+  // lane sends as /chat's session_id. The worker reads it out of the token's
+  // participant metadata and loads the matching text digest before it greets,
+  // so the handoff has to be stored before the caller connects with this token,
+  // not just eventually. Both are backend round trips, so running them together
+  // costs max(), not sum(), and a failed handoff never fails the call.
+  // Output mute rides the token, not a published control: a mute published
+  // after connect loses the race against the worker's first speech, and the
+  // worker reads this before it builds the agent (voice/output_mode.py). A text
+  // token also refuses the Realtime bridge server-side, since that leg plays
+  // through its own audio element rather than a LiveKit track.
+  const outputParam = outputMuted() ? "&output=text" : "";
+  const conversationId = chatConversationId();
+  const conversationParam = conversationId
+    ? `&conversation_id=${encodeURIComponent(conversationId)}`
+    : "";
+  const [, tokenResult] = await Promise.allSettled([
+    postTextHandoff(),
+    authFetch(
+      `/voice/token?surface=desktop&manifest=${manifestParam}${modeParam}${bridgedParam}${outputParam}${conversationParam}`,
+    ),
+  ]);
+  if (tokenResult.status === "rejected") throw tokenResult.reason;
+  const response = tokenResult.value;
   if (response.status === 402) {
     const capError = await parseCapDenial(response);
     if (capError) throw capError;

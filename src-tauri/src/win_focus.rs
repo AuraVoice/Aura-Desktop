@@ -8,11 +8,13 @@ use tauri::{AppHandle, WebviewWindow};
 #[cfg(target_os = "windows")]
 use tauri::Manager;
 #[cfg(target_os = "windows")]
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, RECT};
 #[cfg(target_os = "windows")]
-use windows::Win32::UI::Input::KeyboardAndMouse::{SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VK_MENU};
+use windows::Win32::UI::Input::KeyboardAndMouse::{SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_MENU, VK_NONAME};
 #[cfg(target_os = "windows")]
-use windows::Win32::UI::WindowsAndMessaging::{BringWindowToTop, SetForegroundWindow};
+use windows::Win32::UI::WindowsAndMessaging::{
+    BringWindowToTop, GetForegroundWindow, GetWindowRect, SetForegroundWindow,
+};
 
 /// Monotonically increasing "which `force_foreground` call is the latest"
 /// counter. Deliberately its own `.manage()`-ed newtype, NOT a field on
@@ -65,8 +67,33 @@ impl Default for ForegroundGeneration {
 /// before touching any Win32 API, bailing out otherwise.
 #[cfg(target_os = "windows")]
 pub fn force_foreground(app: &AppHandle, window: &WebviewWindow) {
+    raise(app, window, VK_MENU);
+}
+
+/// Same raise, tapping a key no application can see instead of Alt.
+///
+/// The first attempt at this skipped the synthetic tap entirely, on the theory
+/// that a registered global hotkey already grants the process
+/// foreground-activation permission. Windows disagreed - the log said
+/// "OS denied foreground focus" on the very first chat summon, and the composer
+/// showed a caret that swallowed every keystroke. So the tap stays; only the
+/// key changes.
+///
+/// `VK_NONAME` (0xFC) is reserved: no application maps an accelerator to it and
+/// neither of our own low-level hooks matches it (dictation's Ctrl+Win chord,
+/// voice_toggle_key's Left Ctrl). It counts as the process's last input event,
+/// which is all `SetForegroundWindow` checks for, without pushing the
+/// newly-foreground window into the keyboard menu mode that `VK_MENU` causes -
+/// the mode that swallows the next Left Ctrl double-tap (see overlay::apply).
+#[cfg(target_os = "windows")]
+pub fn raise_for_hotkey(app: &AppHandle, window: &WebviewWindow) {
+    raise(app, window, VK_NONAME);
+}
+
+#[cfg(target_os = "windows")]
+fn raise(app: &AppHandle, window: &WebviewWindow, tap: VIRTUAL_KEY) {
     let Ok(hwnd) = window.hwnd() else {
-        error!("win_focus::force_foreground: failed to get HWND");
+        error!("win_focus::raise: failed to get HWND");
         return;
     };
     // HWND wraps a raw pointer and so isn't Send, but it's an opaque handle
@@ -90,21 +117,27 @@ pub fn force_foreground(app: &AppHandle, window: &WebviewWindow) {
         if let Some(gen_state) = app.try_state::<ForegroundGeneration>() {
             if gen_state.0.load(Ordering::Relaxed) != my_generation {
                 info!(
-                    "win_focus::force_foreground: superseded by a newer call before running (generation {my_generation}); skipping"
+                    "win_focus::raise: superseded by a newer call before running (generation {my_generation}); skipping"
                 );
                 return;
             }
         }
         let hwnd = HWND(raw as *mut core::ffi::c_void);
-        if !try_set_foreground(hwnd) {
-            warn!("win_focus::force_foreground: OS denied foreground focus; Esc is inactive until the panel is clicked");
+        if try_set_foreground(hwnd, tap) {
+            // Logged on success too: "did the overlay actually get the
+            // keyboard" is otherwise only answerable by trying to type.
+            info!("win_focus::raise: foreground granted");
+        } else if tap == VK_MENU {
+            warn!("win_focus::raise: OS denied foreground focus; Esc is inactive until the panel is clicked");
+        } else {
+            warn!("win_focus::raise: OS denied foreground focus; typing goes to the previous app until the overlay is clicked");
         }
     });
 }
 
 #[cfg(target_os = "windows")]
-fn try_set_foreground(hwnd: HWND) -> bool {
-    tap_alt_key();
+fn try_set_foreground(hwnd: HWND, tap: VIRTUAL_KEY) -> bool {
+    tap_key(tap);
     unsafe {
         let _ = BringWindowToTop(hwnd);
         SetForegroundWindow(hwnd).as_bool()
@@ -120,18 +153,63 @@ fn try_set_foreground(hwnd: HWND) -> bool {
 #[cfg(target_os = "windows")]
 pub fn set_foreground_raw(hwnd_raw: isize) -> bool {
     let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
-    try_set_foreground(hwnd)
+    // Keeps the Alt tap: this targets someone else's window, and menu mode in
+    // whatever app we are focusing is not ours to worry about.
+    try_set_foreground(hwnd, VK_MENU)
 }
 
-/// Synthesizes an Alt key-down immediately followed by a key-up. Never
-/// forwarded anywhere as a real keystroke - `SendInput` only makes it count
-/// as "the last input event", which is all `SetForegroundWindow` checks for.
+/// Centre point of the window the user is currently working in, for picking
+/// which monitor to capture. `None` when that window is our own (or there is
+/// no foreground window at all), so a caller never mistakes the overlay for
+/// the user's screen.
+///
+/// MUST be called BEFORE the overlay takes foreground. Afterwards the answer is
+/// always our own window, and the cursor is no better: it is normally parked on
+/// whatever the user just clicked in the overlay.
 #[cfg(target_os = "windows")]
-fn tap_alt_key() {
+pub fn foreground_window_center(app: &AppHandle) -> Option<(i32, i32)> {
+    let own_hwnd = app
+        .get_webview_window("main")
+        .and_then(|window| window.hwnd().ok())
+        .map(|hwnd| hwnd.0 as isize);
+
+    let foreground = unsafe { GetForegroundWindow() };
+    if foreground.0.is_null() {
+        return None;
+    }
+    if Some(foreground.0 as isize) == own_hwnd {
+        return None;
+    }
+
+    let mut rect = RECT::default();
+    if unsafe { GetWindowRect(foreground, &mut rect) }.is_err() {
+        return None;
+    }
+    if rect.right <= rect.left || rect.bottom <= rect.top {
+        return None;
+    }
+    Some((
+        rect.left + (rect.right - rect.left) / 2,
+        rect.top + (rect.bottom - rect.top) / 2,
+    ))
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn foreground_window_center(_app: &AppHandle) -> Option<(i32, i32)> {
+    None
+}
+
+/// Synthesizes a key-down immediately followed by a key-up. Never forwarded
+/// anywhere as a real keystroke - `SendInput` only makes it count as "the last
+/// input event", which is all `SetForegroundWindow` checks for. Which key it is
+/// still matters, though: see `raise_for_hotkey` on why Alt is the wrong one
+/// for the notch.
+#[cfg(target_os = "windows")]
+fn tap_key(key: VIRTUAL_KEY) {
     let mut key_down = INPUT::default();
     key_down.r#type = INPUT_KEYBOARD;
     key_down.Anonymous.ki = KEYBDINPUT {
-        wVk: VK_MENU,
+        wVk: key,
         wScan: 0,
         dwFlags: Default::default(),
         time: 0,
@@ -141,7 +219,7 @@ fn tap_alt_key() {
     let mut key_up = INPUT::default();
     key_up.r#type = INPUT_KEYBOARD;
     key_up.Anonymous.ki = KEYBDINPUT {
-        wVk: VK_MENU,
+        wVk: key,
         wScan: 0,
         dwFlags: KEYEVENTF_KEYUP,
         time: 0,
@@ -165,4 +243,10 @@ pub fn force_foreground(_app: &AppHandle, window: &WebviewWindow) {
     if let Err(e) = window.set_focus() {
         error!("win_focus::force_foreground: failed to focus window: {e}");
     }
+}
+
+/// No Alt tap exists to skip here, so this is the same direct focus call.
+#[cfg(not(target_os = "windows"))]
+pub fn raise_for_hotkey(app: &AppHandle, window: &WebviewWindow) {
+    force_foreground(app, window);
 }
