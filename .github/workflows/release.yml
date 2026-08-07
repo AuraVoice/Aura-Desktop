@@ -5,6 +5,11 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+    inputs:
+      full_build:
+        description: "Also bundle and sign, without publishing. Off by default, since the smoke test already proves signing in three minutes."
+        type: boolean
+        default: false
 
 jobs:
   release:
@@ -149,19 +154,16 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Verify signing certificate profile is reachable
-        shell: pwsh
-        run: |
-          $profileId = "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/Aura/providers/Microsoft.CodeSigning/codeSigningAccounts/aura-signing/certificateProfiles/aura-desktop-public"
-          $profileStatus = az resource show --ids $profileId --query "properties.status" -o tsv
-          if ($LASTEXITCODE -ne 0) {
-            throw "Could not read the signing certificate profile. Check AZURE_SUBSCRIPTION_ID and that the service principal holds the Artifact Signing Certificate Profile Signer role on $profileId."
-          }
-          if ($profileStatus -ne "Active") {
-            throw "Signing certificate profile aura-desktop-public is '$profileStatus', not Active."
-          }
-          Write-Host "Signing certificate profile aura-desktop-public is Active."
-
+      # This is the preflight for everything Azure. It signs a throwaway copy of
+      # a real PE seconds after sign-in, which proves the credential, the RBAC,
+      # the certificate profile, the dlib and signtool in one go, and does it in
+      # ten seconds rather than after a twenty minute build. It replaced a
+      # separate az read of the certificate profile, which proved strictly less
+      # (a real signature covers everything that read covered) and could fail on
+      # its own when the service principal held the signer role but no ARM read.
+      #
+      # It also warms the token cache: the access token it leaves behind is good
+      # for about an hour, so bundling is covered even if a later refresh fails.
       - name: Smoke test the signing command
         shell: pwsh
         env:
@@ -186,14 +188,14 @@ jobs:
           }
           Write-Host "Azure signing works. The bundler's sign command should now succeed."
 
-      # Nothing here has to finish inside the assertion window. The sign command
-      # mints its own OIDC token and re-signs in immediately before every
-      # signature it makes, so the exe, the MSI and the NSIS installer each get
-      # a credential seconds old no matter how long the Rust build took.
-      # AZURE_CLIENT_ID and AZURE_TENANT_ID are what tell it to do that; without
-      # them it leaves the existing session alone.
+      # Off by default. A plain workflow_dispatch now stops above, at the smoke
+      # test, which is a three minute preflight over the credential and tooling.
+      # This step rehearses the other half, bundling and the WiX and NSIS
+      # packaging, and only that half, so it is worth its twenty minutes before
+      # a risky release and is pure duplicate work otherwise. Tagging runs the
+      # same build anyway through tauri-action below.
       - name: Build and sign without publishing (dry run)
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' && inputs.full_build
         shell: pwsh
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -227,7 +229,11 @@ jobs:
           releaseDraft: true
           prerelease: false
 
+      # Only meaningful after something actually bundled. Without this guard a
+      # plain preflight dispatch would fail here with "No NSIS installer was
+      # generated", which reads like a build failure when nothing built at all.
       - name: Verify release artifacts
+        if: startsWith(github.ref, 'refs/tags/') || inputs.full_build
         shell: pwsh
         run: |
           # Scoped to the two published installers rather than every .exe under

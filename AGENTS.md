@@ -28,6 +28,15 @@ There is no automated unit or end-to-end suite. Before submitting, run `npx tsc 
 
 Repairing an EXISTING test IS allowed and expected: a stale fake, a drifted import, or an assertion that no longer matches shipped behaviour is a broken verification path, not new test surface. Fixing a fake's signature, re-pointing an assertion at a renamed mechanism, or adding a helper an existing test needs to keep working is repair. A new case, file, or fixture is not.
 
+## Releasing
+
+Releases are cut by tag and built by `.github/workflows/release.yml`, which signs every artifact with Azure Artifact Signing and publishes a GitHub Release with the updater `.sig` files. See the Releasing section of `CLAUDE.md` for the full step flow and the signing contract. The parts that break releases:
+
+- Bump the version in **all three** of `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`. A mismatch fails the run in about twenty seconds.
+- `workflow_dispatch` is a three minute preflight over credentials and tooling, no build. Add `-f full_build=true` to rehearse bundling too.
+- The Azure credential is a GitHub OIDC client assertion alive for exactly **five minutes**, not a refresh token. Never insert a slow step between `Sign in to Azure` and `Smoke test the signing command`, never remove `Update-AzureSigningLogin` from `scripts/sign-windows-artifact.ps1`, and always carry `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` in the `env:` of any step that can trigger a signature.
+- signtool reports credential expiry as a generic `SignerSign() failed` (`0x80004005`), the same code a wrong region endpoint gives. Read the inner exception, not the exit code.
+
 ## Agent Git Restrictions
 
 Codex must never stage, commit, or push changes, nor publish them to GitHub or any other platform unless asked to. 

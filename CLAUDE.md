@@ -87,6 +87,46 @@ Fast, silent checks - fine to run directly, no need to ask:
 | `cd src-tauri && cargo check` | Rust compiles, no binary produced. If `cargo` isn't on PATH in the shell, use `& "$env:USERPROFILE\.cargo\bin\cargo.exe"`. Use PowerShell, not Bash - Git Bash's `link.exe` shadows MSVC's. |
 | `npx tsc --noEmit` | TypeScript type-checks |
 
+### Releasing
+
+Releases are cut by tag. `.github/workflows/release.yml` builds, signs every artifact with Azure Artifact Signing, and publishes a GitHub Release carrying the updater `.sig` files. `workflow_dispatch` is a three minute preflight (credential + tooling only, no build); add `-f full_build=true` to also rehearse bundling.
+
+```
+tag vX.Y.Z pushed
+  │
+  ├─ version guard        3 files must agree with the tag        fails in ~20s
+  ├─ npm ci
+  ├─ updater key check    signs a probe, then verify-updater-key.mjs
+  │                       confirms the pubkey in tauri.conf.json matches
+  ├─ install client tools MSI + dlib/signtool discovery, ~30s, NO Azure needed
+  ├─ azure/login          OIDC assertion, alive for exactly 5 MINUTES
+  ├─ smoke test  ◄────────signs a throwaway PE ~20s later. Proves credential,
+  │                       RBAC, cert profile, dlib and signtool in 10 seconds,
+  │                       AND caches an access token good for ~1 hour
+  ├─ tauri-action         ~12 min build, then every signature calls
+  │                       scripts/sign-windows-artifact.ps1, which mints a
+  │                       FRESH OIDC assertion per batch (150s stamp)
+  ├─ verify artifacts     Authenticode on the NSIS exe and the MSI, .sig present
+  └─ publish              flips the draft to latest
+```
+
+To ship:
+
+1. Bump the version in **all three** of `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`. They must be identical or the run dies on the guard (this is what killed v0.8.1).
+2. Commit, then ask the user to push `main`.
+3. `git tag vX.Y.Z && git push origin vX.Y.Z`, then `gh run watch --exit-status`.
+4. On failure, `Show what the sign command actually said` dumps the real signtool error, and the tag is one line to undo: `git push --delete origin vX.Y.Z; git tag -d vX.Y.Z`.
+
+**The signing credential lives five minutes, and that is load bearing.** `azure/login` with GitHub OIDC hands back a client assertion valid for exactly five minutes, not a refresh token, and the Azure CLI replays that same string on every later request. `AADSTS700024: Client assertion is not within its valid time range` is what that looks like, and signtool wraps it in a generic `SignerSign() failed` (`0x80004005`), which is also what a wrong region endpoint produces. Read the inner exception, not the exit code. Three rules protect this:
+
+- **Never put a slow step between `Sign in to Azure` and `Smoke test the signing command`.** A fourteen minute dlib sweep sitting there is what broke the whole 0.8.x series. The client tools install is above sign-in for exactly this reason and must stay there.
+- **Never remove `Update-AzureSigningLogin` from `scripts/sign-windows-artifact.ps1`.** `tauri.conf.json`'s `signCommand` routes the exe, the WiX extension dlls, the MSI and the NSIS installer through that one script, which makes it the only place a live credential can be guaranteed. It mints a fresh assertion from `ACTIONS_ID_TOKEN_REQUEST_URL`, re-runs `az login`, and exchanges it for a codesigning token, with a 150 second stamp so back to back artifacts do not each pay for a sign-in.
+- **Any step that can trigger a signature needs `AZURE_CLIENT_ID` and `AZURE_TENANT_ID` in its `env:`.** Without them the refresh silently no-ops and the run falls back to the cached token alone.
+
+Do not "simplify" this by arranging build steps around the five minute window. That was tried (split compile, second sign-in, separate cache warm) and it works only until the next step gets slower. The refresh belongs at the choke point.
+
+Signing config lives in the Entra app registration (federated credential subject `repo:AuraVoice/Aura-Desktop:environment:production`, audience `api://AzureADTokenExchange`) and the `production` GitHub environment, which holds `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. There is no `AZURE_CLIENT_SECRET` and the workflow does not want one. When signing breaks, query the live resource with `az` rather than reading the portal or the config that is supposed to describe it.
+
 ### Adding a new Tauri command
 
 1. Write it in the relevant `src-tauri/src/*.rs` module with `#[tauri::command]`.
