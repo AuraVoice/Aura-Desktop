@@ -129,7 +129,10 @@ fn build_url(config: &SessionConfig) -> String {
         // Dictation is typed into someone else's text box, so it should read
         // like written text rather than a transcript dump.
         query.append_pair("punctuate", "true");
+        query.append_pair("dictation", "true");
         query.append_pair("smart_format", "true");
+        // Stable low-cardinality label for Deepgram usage and billing reports.
+        query.append_pair("tag", "aura-desktop-dictation");
         // Do not hold interim results back for extra context. This is a
         // latency knob for exactly this kind of interactive use.
         query.append_pair("no_delay", "true");
