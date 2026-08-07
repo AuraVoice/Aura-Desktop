@@ -19,6 +19,11 @@ import {
   type TraceSettings,
   type TraceSummary,
 } from "../../lib/dictationTraces";
+import {
+  loadDictationConsent,
+  setDictationConsent,
+} from "../../lib/dictationConsent";
+import { dictationConsent as consentCopy } from "../../lib/copy";
 import { SettingsPageLayout, SettingsSection } from "../components/SettingsPageLayout";
 import { useDashboardUser } from "../useDashboardUser";
 
@@ -215,8 +220,10 @@ function TraceCard({
 }
 
 export function DictationPage() {
-  // Sharing needs an account; local capture deliberately does not.
+  // Dictation now needs an account too, not just sharing: transcription runs
+  // against a service, and the credential for it is minted per session.
   const signedIn = useDashboardUser() !== null;
+  const [onlineAccepted, setOnlineAccepted] = useState<boolean | null>(null);
   const [settings, setSettings] = useState<TraceSettings | null>(null);
   const [summary, setSummary] = useState<TraceSummary | null>(null);
   const [traces, setTraces] = useState<TraceRecord[]>([]);
@@ -254,6 +261,38 @@ export function DictationPage() {
       active = false;
     };
   }, [refresh]);
+
+  useEffect(() => {
+    let active = true;
+    loadDictationConsent()
+      .then((state) => {
+        if (active) setOnlineAccepted(state.accepted);
+      })
+      .catch((err) => {
+        logError("DictationPage: load consent", err);
+        // Unknown, not "on". This section says whether audio leaves the
+        // machine, so it must never claim consent it could not read.
+        if (active) setOnlineAccepted(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  async function updateOnlineConsent(accepted: boolean) {
+    setBusy("consent");
+    setMessage(null);
+    setError(null);
+    try {
+      const state = await setDictationConsent(accepted);
+      setOnlineAccepted(state.accepted);
+    } catch (err) {
+      logError("DictationPage: set consent", err);
+      setError("That setting could not be saved on this device.");
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function update(patch: Partial<TraceSettings>) {
     if (!settings) return;
@@ -334,7 +373,8 @@ export function DictationPage() {
     }
   }
 
-  const intro = "Dictation runs entirely on this PC. Nothing here is ever uploaded.";
+  const intro =
+    "Hold the dictation keys, speak, and the words are typed where you were. Your speech is transcribed online while you hold them; everything else on this page stays on this PC unless you say otherwise.";
 
   if (!loaded || !settings) {
     return (
@@ -346,6 +386,46 @@ export function DictationPage() {
 
   return (
     <SettingsPageLayout title="Dictation" description={intro}>
+      <SettingsSection
+        title={consentCopy.settingsHeading}
+        description={consentCopy.body}
+      >
+        <div className="db-panel db-settings-panel">
+          <ToggleRow
+            label={
+              onlineAccepted
+                ? consentCopy.enabledLabel
+                : consentCopy.disabledLabel
+            }
+            description={consentCopy.detail}
+            checked={onlineAccepted === true}
+            disabled={busy === "consent" || onlineAccepted === null}
+            onChange={(value) => void updateOnlineConsent(value)}
+          />
+          {onlineAccepted === false && (
+            <p className="db-trace-note">{consentCopy.offNotice}</p>
+          )}
+          {onlineAccepted === null && (
+            <p className="db-trace-note">
+              This setting could not be read on this device, so dictation will
+              ask again the next time you use it.
+            </p>
+          )}
+          {onlineAccepted === true && !signedIn && (
+            <p className="db-trace-note">
+              Sign in to dictate. Transcription runs against your account, so the
+              keys will not type anything while you are signed out.
+            </p>
+          )}
+        </div>
+
+        <p className="db-trace-privacy">
+          <ShieldCheck size={14} />
+          Audio is streamed only while you are holding the keys, and is not kept
+          after the words come back. Nothing is sent between dictations.
+        </p>
+      </SettingsSection>
+
       <SettingsSection
         title="Improve recognition"
         description="Let Aura learn from the words you correct, without any of it leaving this PC."
@@ -417,8 +497,8 @@ export function DictationPage() {
           )}
           {settings.enabled && !signedIn && (
             <p className="db-trace-note">
-              Sign in to share. Dictation itself works signed out, but a recording
-              has to belong to an account before it can be sent anywhere.
+              Sign in to share. A recording has to belong to an account before it
+              can be sent anywhere.
             </p>
           )}
           {settings.sharingEnabled && summary && (

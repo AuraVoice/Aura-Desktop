@@ -5,8 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "predownload:dictation": "node scripts/predownload-dictation-model.mjs",
-    "build": "npm run predownload:dictation && tsc && vite build",
+    "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "tauri": "tauri"

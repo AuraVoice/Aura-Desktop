@@ -154,7 +154,7 @@ pub fn claim(
         schema_version: super::record::TRACE_SCHEMA_VERSION,
         recorded_at_ms: record.recorded_at_ms,
         model_id: record.model_id.clone(),
-        sherpa_version: super::super::stt::SHERPA_VERSION.to_string(),
+        sherpa_version: super::super::asr::deepgram::RECOGNIZER_API_VERSION.to_string(),
         app_version,
         duration_ms: record.audio_ms,
         audio_sha256: digest,

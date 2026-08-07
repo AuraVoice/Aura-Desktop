@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { GlassSurface } from "../overlay/GlassSurface";
+import { dictationConsent } from "../lib/copy";
 import type { NotchEdge } from "../overlay/notchEdge";
 import { useDictationLevels } from "./useDictationLevels";
 import { useDictationSounds } from "./useDictationSounds";
@@ -19,7 +20,8 @@ export type DictationPhase =
   | "transcribing"
   | "inserted"
   | "error"
-  | "pending";
+  | "pending"
+  | "consent";
 
 interface DictationUpdate {
   phase: DictationPhase;
@@ -86,14 +88,58 @@ function DictationLauncher({ hotkey, edge }: DictationLauncherProps) {
   );
 }
 
+/// The one-time online-dictation prompt. The only surface in the HUD with
+/// buttons, and the only phase Rust lets receive clicks besides the resting
+/// pill. Nothing has been captured at this point: Rust checks consent before it
+/// opens the microphone, so declining costs the user nothing and accepting does
+/// not retroactively send anything.
+function DictationConsent() {
+  const [busy, setBusy] = useState(false);
+
+  const answer = (accepted: boolean) => {
+    setBusy(true);
+    void invoke("dictation_set_consent", { accepted }).catch(() => {
+      // A consent write that failed must not look like it succeeded: leave the
+      // prompt up so the next press asks again rather than silently streaming.
+      setBusy(false);
+    });
+  };
+
+  return (
+    <GlassSurface className="dictation-consent" draggable={false}>
+      <p className="dictation-consent__heading">{dictationConsent.heading}</p>
+      <p className="dictation-consent__body">{dictationConsent.body}</p>
+      <div className="dictation-consent__actions">
+        <button
+          type="button"
+          className="dictation-consent__decline"
+          onClick={() => answer(false)}
+          disabled={busy}
+        >
+          {dictationConsent.decline}
+        </button>
+        <button
+          type="button"
+          className="dictation-consent__accept"
+          onClick={() => answer(true)}
+          disabled={busy}
+        >
+          {dictationConsent.accept}
+        </button>
+      </div>
+    </GlassSurface>
+  );
+}
+
 /// The dictation HUD window: a persistent passive pill between holds, then the
 /// same pill enlarged while the hotkey is held. The pill has no click action;
 /// only the keyboard hook can start capture and recognition.
 ///
-/// It is deliberately wordless. The partial transcript is not shown, because
-/// the words are already landing in the app being typed into, and a second copy
-/// on screen is just something to read instead of the real thing. The one
-/// exception is a failure, which has nowhere else to go.
+/// It is wordless until there are words. The partial transcript appears once
+/// the recognizer has produced one, because recognition is now a round trip and
+/// a silent sliver gives the user no way to tell "still listening" from
+/// "nothing is happening". Rust widens the window on the same signal, so the
+/// caption and its surface arrive together.
 export function DictationHud() {
   const [update, setUpdate] = useState<DictationUpdate>(IDLE);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -130,6 +176,10 @@ export function DictationHud() {
     return <DictationLauncher hotkey={update.chordLabel} edge={update.edge} />;
   }
 
+  if (update.phase === "consent") {
+    return <DictationConsent />;
+  }
+
   // Held text: the only place the transcript is shown, because the user has to
   // know both that something is waiting and what it says. Rust has already
   // resized the window to the taller pill for this phase.
@@ -154,6 +204,23 @@ export function DictationHud() {
         <span className="dictation-message__dot" aria-hidden="true" />
         <p className="dictation-message__text">
           {update.message ?? "Nothing was typed."}
+        </p>
+      </GlassSurface>
+    );
+  }
+
+  // The live partial. Revisable by definition, so it is styled as provisional
+  // and is never what gets typed: the inserted text comes from Rust's final
+  // transcript, which this window never sees until the "inserted" phase.
+  if (
+    (update.phase === "listening" || update.phase === "transcribing") &&
+    update.text
+  ) {
+    return (
+      <GlassSurface className="dictation-message is-partial" draggable={false}>
+        <span className="dictation-message__dot" aria-hidden="true" />
+        <p className="dictation-message__text" aria-live="polite">
+          {update.text}
         </p>
       </GlassSurface>
     );
