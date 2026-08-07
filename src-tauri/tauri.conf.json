@@ -36,6 +36,19 @@
     "createUpdaterArtifacts": true,
     "resources": ["resources/dictation/*"],
     "windows": {
+      "signCommand": {
+        "cmd": "powershell.exe",
+        "args": [
+          "-NoLogo",
+          "-NoProfile",
+          "-NonInteractive",
+          "-ExecutionPolicy",
+          "Bypass",
+          "-File",
+          "../scripts/sign-windows-artifact.ps1",
+          "%1"
+        ]
+      },
       "webviewInstallMode": {
         "type": "embedBootstrapper"
       }
@@ -55,7 +68,7 @@
       }
     },
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFGQ0QzMThFNjYzRkVDRUQKUldUdDdEOW1qakhOSDcwS0hKRXFoTSt5Ymt0WTZyaGNVdjRSVG15OUNEMmMvWnE3eWo0QzdEQW8K",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ2MDhFODc3MjNCNjMxNzkKUldSNU1iWWpkK2dJMXJIUWxmYllGcGdYSGpBbFlmWlhxcUVXVjA2VEFVd3krdnJYZlFNUEpyZk8K",
       "endpoints": [
         "https://github.com/AuraVoice/Aura-Desktop/releases/latest/download/latest.json"
       ]
