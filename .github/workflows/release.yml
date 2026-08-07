@@ -179,7 +179,48 @@ jobs:
           }
           Write-Host "Azure signing works. The bundler's sign command should now succeed."
 
-      - name: Build and sign without publishing (dry run)
+      # The GitHub OIDC token that azure/login exchanges is a client assertion
+      # valid for only five minutes, and the Azure CLI keeps re-presenting that
+      # same assertion rather than a refresh token. Signing happens inside the
+      # bundle phase, twelve minutes into the Rust build, so by the time
+      # signtool asked for a token the assertion was long dead:
+      #   AADSTS700024: Client assertion is not within its valid time range.
+      # Compiling and bundling are therefore split, with a fresh sign-in in
+      # between, so signing always runs within a few seconds of a valid
+      # assertion. --no-bundle skips the bundle phase, so this step needs no
+      # Azure credentials at all.
+      - name: Compile the app without bundling
+        shell: pwsh
+        run: npm.cmd run tauri build -- --no-bundle
+
+      - name: Refresh the Azure sign-in before signing
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Bundling signs several artifacts in turn (the exe, then the MSI, then
+      # the NSIS installer) and can itself run past the five minute assertion
+      # window. Signing once here exchanges the fresh assertion for an access
+      # token, which is good for about an hour and is cached in the Azure CLI's
+      # own token store on disk. Every later signtool call shells out to the
+      # same CLI and reuses it, so the assertion only has to be alive for this
+      # one signature rather than for the whole bundle phase.
+      - name: Warm the signing token cache
+        shell: pwsh
+        run: |
+          $sample = Join-Path $env:RUNNER_TEMP "signing-token-warm.exe"
+          Copy-Item -LiteralPath (Get-Command node).Source -Destination $sample -Force
+
+          & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/sign-windows-artifact.ps1 $sample
+          if ($LASTEXITCODE -ne 0) {
+            throw "Signing failed immediately after a fresh Azure sign-in. The signtool error above is the real cause."
+          }
+
+      # Cargo is already up to date from the step above, so this goes almost
+      # straight to patching, signing and bundling.
+      - name: Bundle and sign without publishing (dry run)
         if: github.event_name == 'workflow_dispatch'
         shell: pwsh
         env:
