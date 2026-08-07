@@ -34,7 +34,6 @@
     "active": true,
     "targets": "all",
     "createUpdaterArtifacts": true,
-    "resources": ["resources/dictation/*"],
     "windows": {
       "signCommand": {
         "cmd": "powershell.exe",
