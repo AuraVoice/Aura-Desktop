@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 jobs:
   release:
@@ -16,6 +17,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Verify release tag matches app versions
+        if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
         run: |
           $tagVersion = "${{ github.ref_name }}" -replace '^v', ''
@@ -61,12 +63,33 @@ jobs:
             throw "The updater private key or password is invalid."
           }
 
+          # A valid key is not necessarily THIS build's key. The pubkey is
+          # compiled into the shipped app, so a mismatch here ships updates that
+          # every installed client rejects.
+          node scripts/verify-updater-key.mjs "$probePath.sig"
+          if ($LASTEXITCODE -ne 0) {
+            throw "The updater signing key does not match the pubkey in tauri.conf.json."
+          }
+
       - name: Sign in to Azure
         uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify signing certificate profile is reachable
+        shell: pwsh
+        run: |
+          $profileId = "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/Aura/providers/Microsoft.CodeSigning/codeSigningAccounts/aura-signing/certificateProfiles/aura-desktop-public"
+          $profileStatus = az resource show --ids $profileId --query "properties.status" -o tsv
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not read the signing certificate profile. Check AZURE_SUBSCRIPTION_ID and that the service principal holds the Artifact Signing Certificate Profile Signer role on $profileId."
+          }
+          if ($profileStatus -ne "Active") {
+            throw "Signing certificate profile aura-desktop-public is '$profileStatus', not Active."
+          }
+          Write-Host "Signing certificate profile aura-desktop-public is Active."
 
       - name: Install Artifact Signing client tools
         shell: pwsh
@@ -78,10 +101,21 @@ jobs:
             throw "Artifact Signing client tools installation failed with exit code $($installer.ExitCode)."
           }
 
-          $dlibPath = Join-Path $env:LOCALAPPDATA "Microsoft\MicrosoftArtifactSigningClientTools\Azure.CodeSigning.Dlib.dll"
-          if (-not (Test-Path -LiteralPath $dlibPath -PathType Leaf)) {
-            throw "Artifact Signing dlib was not found at $dlibPath."
+          $searchRoots = @(
+            (Join-Path $env:LOCALAPPDATA "Microsoft")
+            "$env:ProgramFiles"
+            "${env:ProgramFiles(x86)}"
+          ) | Where-Object { $_ -and (Test-Path -LiteralPath $_ -PathType Container) }
+
+          $dlib = $searchRoots |
+            ForEach-Object { Get-ChildItem -LiteralPath $_ -Filter Azure.CodeSigning.Dlib.dll -Recurse -File -ErrorAction SilentlyContinue } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $dlib) {
+            throw "Artifact Signing dlib (Azure.CodeSigning.Dlib.dll) was not found under: $($searchRoots -join '; ')."
           }
+          $dlibPath = $dlib.FullName
+          Write-Host "Using Artifact Signing dlib: $dlibPath"
 
           $signTool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Filter signtool.exe -Recurse |
             Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
@@ -113,7 +147,16 @@ jobs:
           "AURA_SIGNING_SIGNTOOL_PATH=$($signTool.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "AURA_SIGNING_DLIB_PATH=$dlibPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      - name: Build and sign without publishing (dry run)
+        if: github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm.cmd run tauri build
+
       - uses: tauri-apps/tauri-action@v0
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -127,13 +170,20 @@ jobs:
       - name: Verify release artifacts
         shell: pwsh
         run: |
+          # Scoped to the two published installers rather than every .exe under
+          # the bundle tree: dictation ships native DLLs and a large model as
+          # resources, and a recursive sweep would demand a .sig for files that
+          # were never updater artifacts.
           $bundlePath = Join-Path $PWD "src-tauri\target\release\bundle"
-          $artifacts = @(Get-ChildItem -LiteralPath $bundlePath -Recurse -File | Where-Object {
-            $_.Extension -in @('.exe', '.msi')
-          })
-          if ($artifacts.Count -eq 0) {
-            throw "No Windows .exe or .msi artifacts were generated under $bundlePath."
+          $nsisArtifacts = @(Get-ChildItem -Path (Join-Path $bundlePath "nsis\*.exe") -File -ErrorAction SilentlyContinue)
+          $msiArtifacts = @(Get-ChildItem -Path (Join-Path $bundlePath "msi\*.msi") -File -ErrorAction SilentlyContinue)
+          if ($nsisArtifacts.Count -eq 0) {
+            throw "No NSIS installer was generated under $bundlePath\nsis."
           }
+          if ($msiArtifacts.Count -eq 0) {
+            throw "No MSI installer was generated under $bundlePath\msi."
+          }
+          $artifacts = $nsisArtifacts + $msiArtifacts
 
           foreach ($artifact in $artifacts) {
             & $env:AURA_SIGNING_SIGNTOOL_PATH verify /pa /v $artifact.FullName
@@ -151,6 +201,7 @@ jobs:
           }
 
       - name: Publish verified release
+        if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
