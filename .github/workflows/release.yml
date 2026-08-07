@@ -146,6 +146,29 @@ jobs:
           "AURA_SIGNING_METADATA_PATH=$metadataPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "AURA_SIGNING_SIGNTOOL_PATH=$($signTool.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "AURA_SIGNING_DLIB_PATH=$dlibPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "AURA_SIGNING_LOG_PATH=$(Join-Path $env:RUNNER_TEMP 'aura-signing.log')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Smoke test the signing command
+        shell: pwsh
+        env:
+          AURA_SIGNING_METADATA_PATH: ${{ env.AURA_SIGNING_METADATA_PATH }}
+          AURA_SIGNING_SIGNTOOL_PATH: ${{ env.AURA_SIGNING_SIGNTOOL_PATH }}
+          AURA_SIGNING_DLIB_PATH: ${{ env.AURA_SIGNING_DLIB_PATH }}
+        run: |
+          # Tauri runs the sign command with its output captured and reports
+          # only "failed to run powershell.exe", so the real error is invisible
+          # and costs a full 12 minute build to reach. Running the same script
+          # here, on a throwaway copy of a real PE, surfaces the actual signtool
+          # error in the log in seconds and proves Azure signing works before
+          # anything expensive starts.
+          $sample = Join-Path $env:RUNNER_TEMP "signing-smoke-test.exe"
+          Copy-Item -LiteralPath (Get-Command node).Source -Destination $sample -Force
+
+          & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/sign-windows-artifact.ps1 $sample
+          if ($LASTEXITCODE -ne 0) {
+            throw "Azure signing failed on a sample binary. The signtool error above is the one Tauri hides during bundling."
+          }
+          Write-Host "Azure signing works. The bundler's sign command should now succeed."
 
       - name: Build and sign without publishing (dry run)
         if: github.event_name == 'workflow_dispatch'
@@ -154,6 +177,17 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm.cmd run tauri build
+
+      - name: Show what the sign command actually said
+        if: failure()
+        shell: pwsh
+        run: |
+          if ($env:AURA_SIGNING_LOG_PATH -and (Test-Path -LiteralPath $env:AURA_SIGNING_LOG_PATH)) {
+            Write-Host "----- sign command log -----"
+            Get-Content -LiteralPath $env:AURA_SIGNING_LOG_PATH
+          } else {
+            Write-Host "No sign command log was written, so the failure happened before signing started."
+          }
 
       - uses: tauri-apps/tauri-action@v0
         if: startsWith(github.ref, 'refs/tags/')
