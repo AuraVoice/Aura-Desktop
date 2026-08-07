@@ -7,8 +7,10 @@ on:
 
 jobs:
   release:
+    environment: production
     permissions:
       contents: write
+      id-token: write
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -39,6 +41,78 @@ jobs:
 
       - run: npm ci
 
+      - name: Validate updater signing key
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY)) {
+            throw "TAURI_SIGNING_PRIVATE_KEY is missing from the production environment."
+          }
+          if ([string]::IsNullOrWhiteSpace($env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD)) {
+            throw "TAURI_SIGNING_PRIVATE_KEY_PASSWORD is missing from the production environment."
+          }
+
+          $probePath = Join-Path $env:RUNNER_TEMP "aura-updater-key-probe.txt"
+          Set-Content -LiteralPath $probePath -Value "Aura updater signing key validation" -Encoding utf8
+          npm.cmd run tauri signer sign -- $probePath
+          if ($LASTEXITCODE -ne 0) {
+            throw "The updater private key or password is invalid."
+          }
+
+      - name: Sign in to Azure
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Artifact Signing client tools
+        shell: pwsh
+        run: |
+          $installerPath = Join-Path $env:RUNNER_TEMP "ArtifactSigningClientTools.msi"
+          Invoke-WebRequest -Uri "https://download.microsoft.com/download/70ad2c3b-761f-4aa9-a9de-e7405aa2b4c1/ArtifactSigningClientTools.msi" -OutFile $installerPath
+          $installer = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @('/i', "`"$installerPath`"", '/quiet', '/norestart')
+          if ($installer.ExitCode -ne 0) {
+            throw "Artifact Signing client tools installation failed with exit code $($installer.ExitCode)."
+          }
+
+          $dlibPath = Join-Path $env:LOCALAPPDATA "Microsoft\MicrosoftArtifactSigningClientTools\Azure.CodeSigning.Dlib.dll"
+          if (-not (Test-Path -LiteralPath $dlibPath -PathType Leaf)) {
+            throw "Artifact Signing dlib was not found at $dlibPath."
+          }
+
+          $signTool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Filter signtool.exe -Recurse |
+            Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+          if (-not $signTool) {
+            throw "A 64-bit SignTool installation was not found."
+          }
+
+          $metadataPath = Join-Path $env:RUNNER_TEMP "aura-signing-metadata.json"
+          [ordered]@{
+            Endpoint = "https://eus.codesigning.azure.net/"
+            CodeSigningAccountName = "aura-signing"
+            CertificateProfileName = "aura-desktop-public"
+            ExcludeCredentials = @(
+              "EnvironmentCredential"
+              "WorkloadIdentityCredential"
+              "ManagedIdentityCredential"
+              "SharedTokenCacheCredential"
+              "VisualStudioCredential"
+              "VisualStudioCodeCredential"
+              "AzurePowerShellCredential"
+              "AzureDeveloperCliCredential"
+              "InteractiveBrowserCredential"
+            )
+          } | ConvertTo-Json | Set-Content -LiteralPath $metadataPath -Encoding utf8
+
+          "AURA_SIGNING_METADATA_PATH=$metadataPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "AURA_SIGNING_SIGNTOOL_PATH=$($signTool.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "AURA_SIGNING_DLIB_PATH=$dlibPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -47,5 +121,37 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Aura Desktop v__VERSION__"
-          releaseDraft: false
+          releaseDraft: true
           prerelease: false
+
+      - name: Verify release artifacts
+        shell: pwsh
+        run: |
+          $bundlePath = Join-Path $PWD "src-tauri\target\release\bundle"
+          $artifacts = @(Get-ChildItem -LiteralPath $bundlePath -Recurse -File | Where-Object {
+            $_.Extension -in @('.exe', '.msi')
+          })
+          if ($artifacts.Count -eq 0) {
+            throw "No Windows .exe or .msi artifacts were generated under $bundlePath."
+          }
+
+          foreach ($artifact in $artifacts) {
+            & $env:AURA_SIGNING_SIGNTOOL_PATH verify /pa /v $artifact.FullName
+            if ($LASTEXITCODE -ne 0) {
+              throw "Authenticode verification failed for $($artifact.FullName)."
+            }
+
+            $updaterSignaturePath = "$($artifact.FullName).sig"
+            if (-not (Test-Path -LiteralPath $updaterSignaturePath -PathType Leaf)) {
+              throw "Tauri updater signature was not generated for $($artifact.FullName)."
+            }
+
+            Write-Host "Verified signed release artifact: $($artifact.FullName)"
+            Write-Host "Verified updater signature: $updaterSignaturePath"
+          }
+
+      - name: Publish verified release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${{ github.ref_name }}" --draft=false --latest

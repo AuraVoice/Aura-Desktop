@@ -36,6 +36,10 @@ import { useGuideMode, type GuidePoint } from "./useGuideMode";
 import { useGeneralSettings } from "../state/useGeneralSettings";
 import { useEntitlement } from "../state/useEntitlement";
 import { KebabMenu } from "./KebabMenu";
+import { ChatSlot, INITIAL_CHAT_SLOT_HEIGHT } from "./ChatSlot";
+import { useChatScreenCapture } from "./useChatScreenCapture";
+import { useChatSession } from "./useChatSession";
+import { useOutputMode } from "./useOutputMode";
 
 // Fixed heights remain for fixed-content surfaces. DraftCard reports its own
 // measured content height so a short reply stays compact and a long one grows.
@@ -61,7 +65,43 @@ export function OverlayRoot() {
   const generalSettings = useGeneralSettings();
   const [presentation, setPresentation] = useState<OverlayPresentation>("hidden");
   const [notchEdge, setNotchEdge] = useState<NotchEdge>("top");
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatHistoryOpen, setChatHistoryOpen] = useState(false);
+  const [chatFocusNonce, setChatFocusNonce] = useState(0);
+  // Signed in is the whole gate. /chat needs a Firebase token, so a signed-out
+  // composer could not send anything anyway. What keeps the cold lane safe is
+  // the server-enforced surface allowlist that hard-excludes send_email and
+  // every other write tool for surface="desktop", not anything decided here.
+  const chatEnabled = user !== null;
   const voice = useVoiceBar();
+  // Ctrl+Alt+M. Mounted here rather than inside useVoiceBar because the mode
+  // outlives any one call: it persists, and it rides the next token.
+  // desiredActive is the "the user wants a call" bit, which is what the
+  // transient notch show must never hide out from under.
+  const outputMode = useOutputMode({
+    room: voice.room,
+    presentation,
+    callLive: voice.desiredActive,
+  });
+  const visibleChatOpen = chatEnabled && chatOpen;
+  const screenCapture = useChatScreenCapture(visibleChatOpen);
+  const chat = useChatSession({
+    enabled: chatEnabled,
+    uid: user?.uid ?? null,
+    room: voice.room,
+    resolveAttachments: screenCapture.resolveForSend,
+  });
+  const previousVoiceActiveRef = useRef(false);
+
+  // Ctrl+Alt+Space is registered only while signed in, so a signed-out machine
+  // never opens a composer that could not send anything.
+  useEffect(() => {
+    setChatOpen(false);
+    setChatHistoryOpen(false);
+    invoke("set_chat_enabled", { enabled: user !== null }).catch((err) =>
+      logError("OverlayRoot: set chat hotkey", err),
+    );
+  }, [user]);
   const handleGuidePoint = useCallback(
     async (geometry: ScreenFrameGeometry, point: GuidePoint) => {
       const target = screenPointFor(geometry, point.x, point.y);
@@ -84,7 +124,11 @@ export function OverlayRoot() {
     onPoint: handleGuidePoint,
   });
   const guideVoiceEpochRef = useRef<number | null>(null);
-  const startGuideVoice = voice.startBridgedSession;
+  // Same rule as the notch gesture: a muted call never opens the audio-only
+  // Realtime leg, so Guide's voice start goes straight to the cold path.
+  const startGuideVoiceBridged = voice.startBridgedSession;
+  const startGuideVoiceCold = voice.startSession;
+  const startGuideVoice = outputMode.muted ? startGuideVoiceCold : startGuideVoiceBridged;
   useEffect(() => {
     if (!guide.armed) {
       guideVoiceEpochRef.current = null;
@@ -125,7 +169,7 @@ export function OverlayRoot() {
     user !== null,
     voice,
     presentation === "pointing" || tail.status === "active",
-    overlayVisible,
+    overlayVisible && !visibleChatOpen,
   );
   const updateReady = useUpdateReady();
   const entitlement = useEntitlement({
@@ -171,6 +215,16 @@ export function OverlayRoot() {
   const resetDraftCard = draftCard.reset;
   const showDraftCard = user !== null && draftCard.phase !== "idle";
   const [draftCardHeight, setDraftCardHeight] = useState(INITIAL_DRAFT_SLOT_HEIGHT);
+  // Reported by ChatSlot from its measured transcript, same contract as the
+  // draft card: the window is only ever as tall as what is actually rendered.
+  const [chatSlotHeight, setChatSlotHeight] = useState(INITIAL_CHAT_SLOT_HEIGHT);
+
+  useEffect(() => {
+    if (!visibleChatOpen) {
+      setChatHistoryOpen(false);
+      setChatSlotHeight(INITIAL_CHAT_SLOT_HEIGHT);
+    }
+  }, [visibleChatOpen]);
 
   useEffect(() => {
     if (!showDraftCard) {
@@ -198,9 +252,11 @@ export function OverlayRoot() {
     enabled: generalSettings.dailyCatchUp,
   });
 
-  // Slot priority (CLAUDE.md): draft > agenda > kebab menu > meeting note >
-  // daily catch-up. Only draft, the inbox (opened via kebab/tray, so it sits
-  // at the kebab-menu tier), and the daily catch-up are mounted today.
+  // Slot priority (CLAUDE.md): chat > draft > agenda > kebab menu > meeting
+  // note > daily catch-up. Only chat, draft, the inbox (opened via kebab/tray,
+  // so it sits at the kebab-menu tier), and the daily catch-up are mounted
+  // today. Chat outranks everything below it because the user is mid-sentence
+  // in it: an arriving draft card must never take the slot out from under them.
   const showMenu = user !== null && menuOpen && !showDraftCard;
   const showInbox = user !== null && inboxOpen && !showDraftCard && !showMenu;
   const showCallbackCard =
@@ -214,12 +270,13 @@ export function OverlayRoot() {
       : showCallbackCard
         ? CALLBACK_CARD_HEIGHT
         : null;
+  const appliedSlotHeight = visibleChatOpen ? chatSlotHeight : slotHeight;
 
   useEffect(() => {
-    invoke("set_slot_height", { height: slotHeight }).catch((err) =>
+    invoke("set_slot_height", { height: appliedSlotHeight }).catch((err) =>
       logError("OverlayRoot: set_slot_height", err),
     );
-  }, [slotHeight]);
+  }, [appliedSlotHeight]);
 
   // The subtitle used to be the only place notices surfaced. With it gone,
   // route the two that matter - an actionable voice error, or the voice shortcut
@@ -273,11 +330,32 @@ export function OverlayRoot() {
     return () => unlisten?.();
   }, []);
 
+  // The native chat hotkey shows the Bar first, then this event opens the chat
+  // slot below it; ChatSlot focuses its own composer on mount.
+  useEffect(() => {
+    if (!chatEnabled) return;
+    let unlisten: (() => void) | undefined;
+    listen("chat-requested", () => {
+      setChatOpen(true);
+      setChatHistoryOpen(false);
+      // Pressing the hotkey with the slot already open is a no-op for
+      // setChatOpen, so the nonce is what tells ChatSlot to take the caret back
+      // after the user clicked into another app.
+      setChatFocusNonce((current) => current + 1);
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch((err) => logError("OverlayRoot: listen chat-requested", err));
+    return () => unlisten?.();
+  }, [chatEnabled]);
+
   const resetCallbackCard = callbackCard.reset;
   useEffect(() => {
     if (!user) {
       resetDraftCard();
       resetCallbackCard();
+      setChatOpen(false);
       setInboxOpen(false);
       setMenuOpen(false);
       if (guide.armed) guide.stop();
@@ -304,6 +382,7 @@ export function OverlayRoot() {
     listen<OverlaySnapshot>("overlay-changed", (event) => {
       setPresentation(event.payload.presentation);
       setNotchEdge(event.payload.notchEdge);
+      if (event.payload.presentation === "hidden") setChatOpen(false);
     })
       .then((fn) => {
         unlisten = fn;
@@ -335,6 +414,14 @@ export function OverlayRoot() {
 
   const startSession = voice.startSession;
   useEffect(() => {
+    const started = voice.desiredActive && !previousVoiceActiveRef.current;
+    previousVoiceActiveRef.current = voice.desiredActive;
+    if (started && visibleChatOpen && chat.messages.length > 0) {
+      chat.noteVoiceSessionStarted();
+    }
+  }, [chat.messages.length, chat.noteVoiceSessionStarted, visibleChatOpen, voice.desiredActive]);
+
+  useEffect(() => {
     let unlisten: (() => void) | undefined;
     listen("start-voice-requested", async () => {
       if (!user || voice.desiredActive) return;
@@ -358,6 +445,11 @@ export function OverlayRoot() {
       if (event.key !== "Escape") return;
       event.preventDefault();
       event.stopPropagation();
+      if (visibleChatOpen && chatHistoryOpen) {
+        setChatHistoryOpen(false);
+        return;
+      }
+      setChatOpen(false);
       void endSession();
       invoke("dismiss_bar").catch((err) =>
         logError("OverlayRoot: dismiss_bar on Escape", err),
@@ -365,7 +457,7 @@ export function OverlayRoot() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [user, endSession]);
+  }, [user, endSession, visibleChatOpen, chatHistoryOpen]);
 
   if (presentation === "pointing") {
     return <PointingOverlay />;
@@ -401,18 +493,42 @@ export function OverlayRoot() {
   return (
     <div
       className={`notch-column notch-column-${notchEdge}${
-        slotHeight !== null ? " notch-column-with-draft" : ""
+        appliedSlotHeight !== null ? " notch-column-with-draft" : ""
       }`}
     >
-      {showDraftCard && <DraftCard card={draftCard} onHeightChange={setDraftCardHeight} />}
-      {showInbox && (
+      {visibleChatOpen && (
+        <ChatSlot
+          messages={chat.messages}
+          focusNonce={chatFocusNonce}
+          screen={screenCapture.state}
+          onNewConversation={chat.newConversation}
+          onClose={() => {
+            setChatHistoryOpen(false);
+            setChatOpen(false);
+          }}
+          historyOpen={chatHistoryOpen}
+          onHistoryOpenChange={setChatHistoryOpen}
+          history={chat.history}
+          hasOlderMessages={chat.hasOlderMessages}
+          onLoadOlder={chat.loadOlderMessages}
+          onSend={chat.send}
+          onRetry={chat.retry}
+          onClarification={chat.submitClarification}
+          sending={chat.sending}
+          limitReached={chat.limitReached}
+          lane={chat.lane}
+          onHeightChange={setChatSlotHeight}
+        />
+      )}
+      {!visibleChatOpen && showDraftCard && <DraftCard card={draftCard} onHeightChange={setDraftCardHeight} />}
+      {!visibleChatOpen && showInbox && (
         <NotificationInboxCard
           notifications={notifications}
           onClose={() => setInboxOpen(false)}
           onAction={handleNotificationAction}
         />
       )}
-      {showMenu && (
+      {!visibleChatOpen && showMenu && (
         <KebabMenu
           voiceStatus={voice.status}
           entitlement={entitlement}
@@ -441,7 +557,7 @@ export function OverlayRoot() {
           onClose={() => setMenuOpen(false)}
         />
       )}
-      {showCallbackCard && <CallbackCard card={callbackCard} />}
+      {!visibleChatOpen && showCallbackCard && <CallbackCard card={callbackCard} />}
       <NotchBar
         key={presentation}
         voice={voice}
@@ -449,6 +565,8 @@ export function OverlayRoot() {
         dragHandlers={notchMove.dragHandlers}
         guideArmed={guide.armed}
         guideActive={guide.active}
+        outputMuted={outputMode.muted}
+        outputMuteUnconfirmed={outputMode.ackState === "unconfirmed"}
         menuOpen={menuOpen}
         onMenuToggle={() => {
           setInboxOpen(false);

@@ -1,6 +1,7 @@
 mod audio_ducking;
 mod auth_cache;
 mod autostart;
+mod chat_cache;
 mod connector_oauth;
 mod dashboard;
 mod dictation;
@@ -64,6 +65,26 @@ fn set_slot_height(app: AppHandle, height: Option<f64>) {
     overlay::set_slot_height(&app, height);
 }
 
+#[tauri::command]
+fn set_chat_enabled(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let manager = app.global_shortcut();
+    if enabled {
+        if manager.is_registered(hotkeys::chat_shortcut()) {
+            return Ok(());
+        }
+        manager
+            .register(hotkeys::chat_shortcut())
+            .map_err(|e| format!("failed to register chat hotkey: {e}"))
+    } else {
+        if !manager.is_registered(hotkeys::chat_shortcut()) {
+            return Ok(());
+        }
+        manager
+            .unregister(hotkeys::chat_shortcut())
+            .map_err(|e| format!("failed to unregister chat hotkey: {e}"))
+    }
+}
+
 /// "Show the Aura bar at all times". Pushed from the dashboard's Settings page
 /// on load and on every change; overlay.rs decides what "hidden" resolves to.
 #[tauri::command]
@@ -93,6 +114,11 @@ fn summon(app: AppHandle) {
 #[tauri::command]
 fn summon_bar(app: AppHandle) -> Result<(), String> {
     overlay::summon_bar(&app)
+}
+
+#[tauri::command]
+fn summon_chat(app: AppHandle) -> Result<(), String> {
+    overlay::summon_chat(&app)
 }
 
 /// Shows the panel-sized onboarding surface for the post-sign-in tail (hotkey
@@ -249,17 +275,20 @@ pub fn run() {
         .manage(meeting::MeetingCaptureHandle::default())
         .manage(meeting::JoinWatchHandle::default())
         .manage(toast::PendingToastActivation::default())
+        .manage(screenshot::ChatCaptureHandle::default())
         .invoke_handler(tauri::generate_handler![
             current_overlay_state,
             esc_pressed,
             set_voice_active,
             set_panel_variant,
             set_slot_height,
+            set_chat_enabled,
             tray::set_tray_unread,
             set_onboarding_step,
             set_session_cached,
             summon,
             summon_bar,
+            summon_chat,
             summon_onboarding_panel,
             open_dashboard_window,
             open_dashboard_route,
@@ -288,9 +317,15 @@ pub fn run() {
             logging::read_recent_log_lines,
             screenshot::capture_cursor_display_with_geometry,
             screenshot::capture_turn_screen_with_geometry,
+            screenshot::take_chat_capture,
+            screenshot::refresh_chat_capture,
+            screenshot::discard_chat_capture,
             entitlement::cache_entitlement,
             entitlement::cached_entitlement,
             entitlement::clear_entitlement_cache,
+            chat_cache::chat_cache_replace,
+            chat_cache::chat_cache_load,
+            chat_cache::chat_cache_clear,
             saved_images::cache_saved_image,
             saved_images::read_saved_image,
             saved_images::prune_saved_images,
@@ -403,6 +438,7 @@ pub fn run() {
                 ("sign-out", hotkeys::sign_out_shortcut()),
                 ("screen-sight", hotkeys::screen_sight_shortcut()),
                 ("guide-mode", hotkeys::guide_mode_shortcut()),
+                ("output-mute", hotkeys::output_mute_shortcut()),
             ] {
                 if let Err(e) = app.global_shortcut().register(shortcut) {
                     error!("hotkeys: failed to register {name} ({e}) - another process holds it; continuing without it");

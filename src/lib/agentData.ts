@@ -46,11 +46,19 @@ export interface DataParticipantLike {
 export type KnownAgentEventType =
   | "element.point"
   | "screen_save.created"
+  | "assistant.text.delta"
+  | "assistant.text.done"
+  | "text_input.accepted"
+  | "text_input.started"
+  | "text_input.failed"
   | "draft.generating"
   | "draft.created"
   | "draft.updated"
   | "draft.failed"
   | "session.error"
+  // Confirms the worker actually suppressed its own audio. Without it a mute
+  // silently degrades to client-side-only and the user keeps paying for TTS.
+  | "output.mode_ack"
   | "guide.step"
   | "guide.mode_ack"
   | "guide.frame_ack"
@@ -103,6 +111,7 @@ const FIELD_CAPS: Record<string, number> = {
   collection_name: 300,
   title: 300,
   draft_id: 128,
+  client_message_id: 128,
   channel: 64,
   length: 64,
   mode: 64,
@@ -130,11 +139,17 @@ const FIELD_CAPS: Record<string, number> = {
 const KNOWN_TYPES: ReadonlySet<string> = new Set([
   "element.point",
   "screen_save.created",
+  "assistant.text.delta",
+  "assistant.text.done",
+  "text_input.accepted",
+  "text_input.started",
+  "text_input.failed",
   "draft.generating",
   "draft.created",
   "draft.updated",
   "draft.failed",
   "session.error",
+  "output.mode_ack",
   "guide.step",
   "guide.mode_ack",
   "guide.frame_ack",
@@ -173,6 +188,40 @@ function payloadWithinLimits(type: KnownAgentEventType, payload: Record<string, 
     const { x, y } = payload;
     if (typeof x !== "number" || !Number.isFinite(x)) return false;
     if (typeof y !== "number" || !Number.isFinite(y)) return false;
+  }
+  if (
+    type === "assistant.text.delta" ||
+    type === "assistant.text.done" ||
+    type === "text_input.accepted" ||
+    type === "text_input.started" ||
+    type === "text_input.failed"
+  ) {
+    if (
+      typeof payload.client_message_id !== "string" ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+        payload.client_message_id,
+      )
+    ) {
+      return false;
+    }
+  }
+  if (type === "assistant.text.delta" || type === "assistant.text.done") {
+    return typeof payload.text === "string";
+  }
+  if (type === "text_input.accepted") {
+    return Number.isSafeInteger(payload.queue_position) && (payload.queue_position as number) >= 0;
+  }
+  if (type === "text_input.failed") {
+    return typeof payload.reason === "string" && payload.reason.trim().length > 0;
+  }
+  if (type === "output.mode_ack") {
+    return (
+      (payload.mode === "voice" || payload.mode === "text") &&
+      Number.isSafeInteger(payload.generation) &&
+      (payload.generation as number) >= 0 &&
+      typeof payload.applied === "boolean" &&
+      (payload.reason == null || typeof payload.reason === "string")
+    );
   }
   if (type === "guide.step") return validateGuideStep(payload);
   if (type === "guide.mode_ack") {

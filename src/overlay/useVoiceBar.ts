@@ -9,6 +9,7 @@ import { trackEvent } from "../lib/analytics";
 import { micCaptureFailedCode, voiceCapReachedCode, voiceErrorMessageForCode } from "../lib/voiceErrorCopy";
 import { shouldArmInitialAgentSilenceWatchdog } from "./voiceSessionTiming";
 import { startRealtimeLeg } from "../lib/realtime";
+import { outputMuted, subscribeOutputMode } from "../lib/outputMode";
 import { BridgeCoordinator } from "./bridgeCoordinator";
 
 export type VoiceSessionStatus =
@@ -142,6 +143,22 @@ export function useVoiceBar() {
   const pendingBridgeControlsRef = useRef<Record<string, unknown>[]>([]);
   const realtimeAudioElRef = useRef<HTMLAudioElement | null>(null);
   const liveKitAudioElRef = useRef<HTMLAudioElement | null>(null);
+  // Output mute's local half (lib/outputMode.ts). The worker stops synthesizing
+  // from the next turn, which is what saves the TTS latency and spend, but the
+  // sentence already in flight was handed to its audio sink before the mode
+  // changed. Silencing playback here is what makes "mute" mean "quiet now".
+  // Three surfaces, because the bridge does not use LiveKit tracks: subscribed
+  // agent tracks, the Realtime leg's element, and the bridge's LiveKit element.
+  const agentAudioTracksRef = useRef<Set<RemoteTrack>>(new Set());
+
+  const applyOutputMuteToTrack = (track: RemoteTrack, muted: boolean): void => {
+    try {
+      const remoteAudio = track as RemoteTrack & { setVolume?: (volume: number) => void };
+      remoteAudio.setVolume?.(muted ? 0 : 1);
+    } catch (err) {
+      logError("useVoiceBar: applyOutputMuteToTrack", err);
+    }
+  };
 
   const ensureAudioEl = (ref: React.MutableRefObject<HTMLAudioElement | null>): HTMLAudioElement => {
     if (!ref.current) {
@@ -149,8 +166,21 @@ export function useVoiceBar() {
       el.autoplay = true;
       ref.current = el;
     }
+    ref.current.muted = outputMuted();
     return ref.current;
   };
+
+  useEffect(
+    () =>
+      subscribeOutputMode((muted) => {
+        for (const track of agentAudioTracksRef.current) {
+          applyOutputMuteToTrack(track, muted);
+        }
+        if (realtimeAudioElRef.current) realtimeAudioElRef.current.muted = muted;
+        if (liveKitAudioElRef.current) liveKitAudioElRef.current.muted = muted;
+      }),
+    [],
+  );
 
   const teardownBridge = useCallback(() => {
     bridgeRef.current?.teardown();
@@ -358,6 +388,7 @@ export function useVoiceBar() {
       connectResolvedAtRef.current = null;
       agentJoinMsRef.current = null;
 
+    agentAudioTracksRef.current.clear();
     const newRoom = new Room();
     roomRef.current = newRoom;
     setRoom(newRoom);
@@ -489,6 +520,10 @@ export function useVoiceBar() {
         // attached to a media element. Without this, the agent's voice
         // arrives over the wire and is silently discarded.
         if (track.kind === Track.Kind.Audio) {
+          // A future track is born at the current output mode, before it is ever
+          // attached, so a track that arrives while muted never plays a word.
+          agentAudioTracksRef.current.add(track);
+          applyOutputMuteToTrack(track, outputMuted());
           // In bridge mode the LiveKit agent joins in HOLD; its audio must stay muted
           // until handover_applied, so route it to the coordinator's muted sink instead
           // of attaching (and becoming audible) here. bridgedRef flips true before the
@@ -512,6 +547,7 @@ export function useVoiceBar() {
     newRoom.on(RoomEvent.TrackUnsubscribed, (track) => {
       try {
         if (track.kind === Track.Kind.Audio) {
+          agentAudioTracksRef.current.delete(track);
           track.detach();
         }
       } catch (err) {
