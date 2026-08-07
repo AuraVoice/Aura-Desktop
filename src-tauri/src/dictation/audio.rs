@@ -7,7 +7,10 @@
 //! so two channels of a 60-minute meeting stay aligned; here it would inject
 //! zeros into the middle of a word while the decoder is mid-utterance. There is
 //! only one channel, and its only consumer is a streaming recognizer that does
-//! its own timing, so raw packets are handed straight through.
+//! its own timing, so raw packets are handed straight through. The recognizer
+//! is now the cloud provider in `asr/`, which changes nothing here: the format
+//! and the packet cadence are the same, and `to_i16` below is the only extra
+//! step between this file and the socket.
 //!
 //! The client opens only once the FULL chord is down, never on the first key.
 //! An earlier revision opened it on the first key to hide the 50-300ms WASAPI
@@ -20,8 +23,9 @@
 //!
 //! Overlap with meeting capture is expected and accepted: meeting/audio.rs
 //! opens the same default capture device, and shared mode lets both clients
-//! run, so dictating while a meeting is armed puts those words in the local
-//! decoder AND in that meeting's encrypted segment. That is a stated decision,
+//! run, so dictating while a meeting is armed puts those words through the
+//! dictation recognizer AND into that meeting's encrypted segment. That is a
+//! stated decision,
 //! not an accident: refusing to dictate during a meeting would be a worse
 //! surprise than the duplicate, and the meeting copy is already encrypted at
 //! rest under the user's own key.
@@ -33,7 +37,7 @@ use std::time::Duration;
 
 use wasapi::{DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat};
 
-use super::stt::SAMPLE_RATE;
+use super::asr::SAMPLE_RATE;
 
 /// 30ms device buffer. Small enough that a release feels immediate, large
 /// enough that a descheduled worker thread does not drop packets.
@@ -128,6 +132,19 @@ impl Drop for Capture {
     }
 }
 
+/// WASAPI hands us f32 because that is what the shared-mode engine mixes in;
+/// the transcription provider wants `linear16`, which is signed 16-bit
+/// little-endian. Saturating rather than wrapping on purpose: a sample that
+/// clipped past 1.0 (a loud plosive into a hot mic) must come out as the
+/// loudest representable value, not wrap around to the opposite sign, which
+/// would inject a click the recognizer has to work around.
+pub fn to_i16(samples: &[f32]) -> Vec<i16> {
+    samples
+        .iter()
+        .map(|sample| (sample.clamp(-1.0, 1.0) * i16::MAX as f32) as i16)
+        .collect()
+}
+
 fn rms(samples: &[f32]) -> f64 {
     if samples.is_empty() {
         return 0.0;
@@ -175,3 +192,35 @@ pub fn level(samples: &[f32]) -> f32 {
 /// otherwise grow an unbounded buffer forever. Mirrors MAX_CAPTURE in
 /// meeting/audio.rs, scaled to a single utterance.
 pub const MAX_HOLD: Duration = Duration::from_secs(120);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn full_scale_and_silence_convert_as_expected() {
+        assert_eq!(to_i16(&[0.0]), vec![0]);
+        assert_eq!(to_i16(&[1.0]), vec![i16::MAX]);
+        assert_eq!(to_i16(&[-1.0]), vec![-i16::MAX]);
+    }
+
+    #[test]
+    fn a_clipped_sample_saturates_instead_of_wrapping() {
+        // A plosive into a hot mic can exceed full scale. Wrapping would flip
+        // the sign and inject a click into the audio the recognizer sees.
+        assert_eq!(to_i16(&[1.9]), vec![i16::MAX]);
+        assert_eq!(to_i16(&[-4.2]), vec![-i16::MAX]);
+    }
+
+    #[test]
+    fn an_empty_drain_converts_to_nothing() {
+        assert!(to_i16(&[]).is_empty());
+    }
+
+    #[test]
+    fn silence_detection_is_unchanged_by_the_cloud_switch() {
+        assert!(is_silence(&[]));
+        assert!(is_silence(&[0.0001; 128]));
+        assert!(!is_silence(&[0.2; 128]));
+    }
+}

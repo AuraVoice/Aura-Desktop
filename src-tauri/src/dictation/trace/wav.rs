@@ -12,7 +12,7 @@
 
 #![cfg(windows)]
 
-use super::super::stt::SAMPLE_RATE;
+use super::super::asr::SAMPLE_RATE;
 
 const BITS_PER_SAMPLE: u16 = 16;
 const CHANNELS: u16 = 1;

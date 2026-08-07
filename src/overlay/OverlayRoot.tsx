@@ -15,6 +15,7 @@ import { useDraftCard } from "./useDraftCard";
 import { useUpdateReady } from "./useUpdateReady";
 import { useMeetings } from "./useMeetings";
 import { useMeetingArm } from "./useMeetingArm";
+import { useDictationCredential } from "./useDictationCredential";
 import { useDictationUpload } from "./useDictationUpload";
 import { useMeetingCapture } from "./useMeetingCapture";
 import { useCallbackCard } from "./useCallbackCard";
@@ -203,6 +204,10 @@ export function OverlayRoot() {
   // dashboard because the overlay is always running and the dashboard is not;
   // it idles on one cheap read per minute when there is nothing to send.
   useDictationUpload(user?.uid ?? null);
+  // Keeps the dictation chord's transcription credential warm. Unrelated to
+  // the trace queue above beyond sharing a uid: this one is required for
+  // dictation to work at all, that one is an opt-in background courtesy.
+  useDictationCredential(user?.uid ?? null);
   const meetingArm = useMeetingArm(user?.uid ?? null);
   const meetingCapture = useMeetingCapture({
     uid: user?.uid ?? null,

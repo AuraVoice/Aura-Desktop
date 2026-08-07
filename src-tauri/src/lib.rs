@@ -349,6 +349,10 @@ pub fn run() {
             meeting::debug_force_join,
             voice_toggle_key::voice_toggle_key_status,
             dictation::dictation_status,
+            dictation::dictation_consent_state,
+            dictation::dictation_set_consent,
+            dictation::dictation_set_credential,
+            dictation::dictation_clear_credential,
             dictation::dictation_hud_state,
             dictation::dictation_set_hud_hovered,
             dictation::dictation_vocabulary,
@@ -396,8 +400,9 @@ pub fn run() {
             // the hook thread to unhook when the process exits.
             // Started BEFORE the keyboard listener so the hook's first chord
             // edge already has a worker to signal. Owns the "aura-dictation"
-            // thread: the on-device recognizer, WASAPI capture, and the
-            // SendInput burst all live there, never on the message pump.
+            // thread: WASAPI capture, the wait on the transcription socket,
+            // and the SendInput burst all live there, never on the message
+            // pump.
             app.manage(dictation::start(app.handle().clone()));
 
             // Opt-in training-trace capture. Started unconditionally because

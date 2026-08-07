@@ -37,9 +37,11 @@ tauri-plugin-http = "2.5.9"
 tauri-plugin-autostart = "2.5.1"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-notification = "2"
-# Only for time::sleep in updater.rs's re-check loop - tauri already pulls
-# tokio in, this just makes it directly usable.
-tokio = { version = "1", features = ["time"] }
+# time::sleep in updater.rs's re-check loop, plus rt/sync/macros for the
+# dictation ASR socket task (dictation/asr/deepgram.rs), which runs on tauri's
+# own async runtime and talks to the blocking dictation worker over channels.
+# tauri already pulls tokio in, this just makes it directly usable.
+tokio = { version = "1", features = ["time", "rt", "sync", "macros", "io-util"] }
 # Log redaction rules (redact.rs) - already in the dependency tree
 # transitively, this just makes it a direct dependency.
 regex = "1"
@@ -107,12 +109,27 @@ aes-gcm = "0.10"
 # their bytes. rustls-tls keeps it off any native OpenSSL. Windows-only: the
 # cache commands no-op on other platforms.
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
-# Local dictation's speech recognition (dictation/stt.rs) loads the prebuilt
-# CPU-only sherpa-onnx C API at runtime rather than linking it, so the build
-# needs no cmake and no C++ toolchain, and the GPU provider DLLs are absent by
-# construction. The library and the model are fetched at build time by
-# scripts/predownload-dictation-model.mjs and bundled as Tauri resources.
-libloading = "0.9"
+# Dictation's cloud speech recognition (dictation/asr/deepgram.rs): one
+# WebSocket per hold to Deepgram's streaming endpoint. rustls, never native
+# OpenSSL, and deliberately the same rustls 0.23 / tokio-rustls 0.26 pair
+# reqwest and sentry already resolve to, so the binary carries ONE TLS stack.
+# futures-util is only for the sink/stream split on that socket.
+# Pinned to 0.28, not 0.30: 0.30 moves to the digest 0.11 / rand 0.10 trait
+# generation, which would put a SECOND crypto stack in the binary alongside the
+# one aes-gcm and sha2 already use. 0.28 adds only an extra root-cert data
+# crate.
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+# The TLS config for that socket is built BY HAND rather than left to
+# tokio-tungstenite's default. Its default calls rustls' ClientConfig::builder(),
+# which resolves the crypto provider from the process, and this tree contains
+# BOTH ring and aws-lc-rs (via sentry/reqwest and tauri respectively). With two
+# providers and no process-level default installed, that call panics at runtime
+# rather than failing to compile - it would have shipped and only shown up on
+# the first dictation in an installed build. Naming ring explicitly makes the
+# choice a compile-time fact. webpki-roots is already in the tree.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
 # Actionable Windows toasts (toast.rs): the notification plugin cannot route a
 # toast click on Windows (its action API is mobile-only), this crate can via
 # the in-process Activated handler.

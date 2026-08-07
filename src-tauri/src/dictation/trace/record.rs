@@ -99,9 +99,14 @@ pub struct EditOp {
     pub word_index: usize,
 }
 
-/// One decoded token and when it starts, straight from sherpa-onnx's result.
-/// Present only when the model reports timestamps; Nemotron does, but the C API
-/// documents the field as optional so it is treated as such.
+/// One decoded token and when it starts.
+///
+/// ALWAYS EMPTY since dictation moved to the cloud recognizer. The on-device
+/// decoder handed these back for free alongside a result it had already
+/// computed; asking a provider for word timings would mean transmitting and
+/// storing more speech-derived data than the transcript itself, on a path whose
+/// whole point is to send as little as possible. The type and the wire field
+/// are kept so traces recorded by the previous build still deserialize.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TokenTiming {

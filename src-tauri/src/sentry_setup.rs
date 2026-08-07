@@ -48,11 +48,12 @@ const DICTATION_MODULE: &str = "aura_desktop_lib::dictation";
 ///
 /// This is LOAD BEARING, not defense in depth. `..Default::default()` above
 /// means `default_integrations: true`, which installs Sentry's panic capture,
-/// and v1 runs the on-device decoder in this same process. A panic anywhere in
-/// that code path would ship a report whose message, frames or locals can carry
-/// transcript text off the machine, which is exactly what the feature promises
-/// never happens. The message check catches the `capture_message` path, the
-/// frame check catches the panic path.
+/// and dictation handles transcripts in this same process: the partial and the
+/// final both pass through the worker thread and the HUD publish path. A panic
+/// anywhere in that code path would ship a report whose message, frames or
+/// locals can carry transcript text off the machine, which is exactly what the
+/// feature promises never happens. The message check catches the
+/// `capture_message` path, the frame check catches the panic path.
 fn mentions_dictation(event: &sentry::protocol::Event<'static>) -> bool {
     if event
         .message
