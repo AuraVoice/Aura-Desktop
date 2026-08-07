@@ -214,3 +214,84 @@ body,
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+/* The live partial. Dimmer than a settled caption on purpose: these words are
+   still revisable, and they are not what will be typed. */
+.dictation-message.is-partial .dictation-message__dot {
+  background: #7fd1a8;
+  animation: dictation-hold-pulse 1.2s ease-in-out infinite;
+}
+
+.dictation-message.is-partial .dictation-message__text {
+  color: var(--glass-text);
+  /* One line while speaking: the surface is a fixed height and the tail of the
+     sentence is the part the user is checking. */
+  -webkit-line-clamp: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dictation-message.is-partial .dictation-message__dot {
+    animation: none;
+  }
+}
+
+/* The one-time online-dictation prompt. The only clickable HUD surface besides
+   the resting pill, so it is the only one with real buttons. */
+.dictation-consent {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+}
+
+.dictation-consent__heading {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--glass-text-bright);
+}
+
+.dictation-consent__body {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--glass-text);
+}
+
+.dictation-consent__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: auto;
+}
+
+.dictation-consent__accept,
+.dictation-consent__decline {
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 14px;
+  border-radius: 8px;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+
+.dictation-consent__accept:disabled,
+.dictation-consent__decline:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.dictation-consent__accept {
+  background: var(--glass-text-bright);
+  color: #10131a;
+  font-weight: 600;
+}
+
+.dictation-consent__decline {
+  background: transparent;
+  border-color: var(--glass-border, rgba(255, 255, 255, 0.18));
+  color: var(--glass-text);
+}

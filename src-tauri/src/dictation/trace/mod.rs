@@ -1,6 +1,9 @@
-//! Opt-in, fully local training-trace capture for the on-device recognizer.
+//! Opt-in, fully local training-trace capture.
 //!
-//! One trace is one utterance: the audio, what Nemotron decoded, what was
+//! Local is still the right word even though recognition is not: nothing here
+//! is written or sent anywhere unless the user separately turns on sharing.
+//!
+//! One trace is one utterance: the audio, what the recognizer returned, what was
 //! actually typed, and then - by watching the real text field for up to nine
 //! minutes - what the user turned it into. That last part is the only signal in
 //! the product that says the model was wrong about a specific sound, and it is
@@ -410,7 +413,7 @@ fn capture(app: &AppHandle, settings: &TraceSettings, utterance: Utterance) -> O
     let record = TraceRecord {
         trace_id: trace_id.clone(),
         recorded_at_ms: store::now_ms(),
-        model_id: super::stt::MODEL_ID.to_string(),
+        model_id: super::asr::deepgram::RECOGNIZER_ID.to_string(),
         app: app_name,
         field_id: anchor.identity.field_id.clone(),
         role: anchor.identity.role.clone(),

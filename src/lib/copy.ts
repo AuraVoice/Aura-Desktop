@@ -20,6 +20,33 @@ export const consent = {
   quit: "Quit",
 } as const;
 
+/** Online dictation disclosure and consent.
+ *
+ * Dictation used to transcribe entirely on this PC, so there was nothing to
+ * disclose. It now streams the microphone to a transcription service while the
+ * chord is held, which is a different promise to the user, so it is stated
+ * plainly and asked for once before any audio is captured.
+ *
+ * ONE source of truth on purpose: the HUD prompt and Settings > Dictation both
+ * render these strings, so the thing the user agreed to and the thing Settings
+ * says they agreed to cannot drift apart. */
+export const dictationConsent = {
+  heading: "Dictation now transcribes online",
+  body: "While you hold the keys, your speech is sent to our transcription provider and turned into text. Audio is not kept after the words come back, and nothing is transcribed unless you are holding the keys.",
+  /** Shown in Settings under the toggle, where there is room for the rest. */
+  detail:
+    "Your saved dictation words are sent with each request so they are recognised correctly. Sharing recordings to improve recognition stays separate and off unless you turn it on. Dictation needs you to be signed in and online.",
+  accept: "Turn on",
+  decline: "Not now",
+  settingsHeading: "Online dictation",
+  enabledLabel: "Online dictation is on",
+  disabledLabel: "Online dictation is off",
+  turnOff: "Turn off",
+  turnOn: "Turn on",
+  /** The consequence of turning it off, stated where the user turns it off. */
+  offNotice: "The dictation keys will not transcribe until this is back on.",
+} as const;
+
 export const onboarding = {
   welcome: {
     heading: "Meet Buddy, your AI friend on this PC.",

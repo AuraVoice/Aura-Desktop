@@ -1,21 +1,37 @@
-//! Local hold-to-talk dictation.
+﻿//! Hold-to-talk dictation.
 //!
 //! Hold the chord (`chord::DICTATION_CHORD`, "Ctrl + Win" by default), speak,
 //! release, and the words are typed into whatever application had focus before
-//! the keys went down. Completely separate from the screen-aware voice buddy:
-//! no LiveKit, no OpenAI, no backend call, no clipboard, no analytics, and no
-//! speech-bearing crash report. Transcription runs entirely on-device against a
-//! model that ships with the installer.
+//! the keys went down. Still completely separate from the screen-aware voice
+//! buddy: no LiveKit, no OpenAI, no voice bar, no overlay presentation, no
+//! clipboard, no analytics, and no speech-bearing crash report. It shares
+//! nothing with that system but the microphone device.
 //!
-//! WHY THERE IS NO `security::Operation` FOR THIS, and why that is correct:
-//! every operation in security.rs requires a signed-in session and most also
-//! require a live voice call (security.rs:181-244). Dictation is the one
-//! feature that has to work signed out, offline, on first launch, before any
-//! account exists. Gating it would break exactly the case it exists for. Do not
-//! "harden" this by adding an Operation variant. The privacy posture is upheld
-//! by the data path instead: audio never leaves this process, the transcript
-//! never touches disk unencrypted, nothing here is logged at any level, and
-//! sentry_setup.rs drops any event that originates in this module.
+//! Transcription is a streaming cloud recognizer behind the `asr` provider
+//! boundary, one socket per hold. It used to be an on-device model bundled
+//! into the installer; that model was 650MB of resources for accuracy that was
+//! not good enough, and it is gone.
+//!
+//! WHAT THAT CHANGED, and it is not small. The old module header argued that
+//! dictation must work "signed out, offline, on first launch, before any
+//! account exists", which is why there is no `security::Operation` here. Half
+//! of that is now impossible: a cloud recognizer needs a credential, and the
+//! credential needs an account. Signed out or offline, the chord shows a
+//! compact HUD error and types nothing. That is a deliberate, accepted
+//! regression, not an oversight, and it is why `DictationStatus::reason` now
+//! carries a sign-in prompt.
+//!
+//! There is still no `security::Operation`: every operation in security.rs
+//! also requires a LIVE VOICE CALL (security.rs:181-244), which dictation
+//! neither has nor wants. The credential check in `run_utterance` is the gate.
+//!
+//! The privacy posture is now upheld by four things rather than by locality:
+//! one-time explicit consent before any audio is captured (`consent`), a
+//! short-lived scoped credential that never touches disk (`credential`), a
+//! provider configured not to retain audio, and the logging discipline below.
+//! The transcript still never touches disk unencrypted, nothing here is logged
+//! at any level, and sentry_setup.rs drops any event originating in this
+//! module.
 //!
 //! Logging discipline (copied from meeting/audio.rs): counts, durations, byte
 //! sizes and outcomes only. Never a transcript, a partial, a hotword, or a
@@ -26,13 +42,17 @@
 pub mod chord;
 
 #[cfg(windows)]
+mod asr;
+#[cfg(windows)]
 mod audio;
+#[cfg(windows)]
+mod consent;
+#[cfg(windows)]
+mod credential;
 #[cfg(windows)]
 mod hud;
 #[cfg(windows)]
 mod insert;
-#[cfg(windows)]
-mod stt;
 #[cfg(windows)]
 pub mod trace;
 #[cfg(windows)]
@@ -45,14 +65,18 @@ pub use chord::DICTATION_CHORD;
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DictationStatus {
-    /// The on-device recognizer loaded and a hold will actually transcribe.
+    /// A hold would actually transcribe right now: consented, signed in, and
+    /// the worker is running. Not a promise that the network is up, which
+    /// cannot be known until a socket is opened.
     pub available: bool,
     /// Rendered verbatim in every user-facing surface.
     pub chord_label: &'static str,
     /// Why it is unavailable, when it is.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    /// Tier 0 contextual biasing is usable in this install.
+    /// Tier 0 contextual biasing is usable in this install. True since the
+    /// switch to the cloud recognizer, which accepts key term prompting; the
+    /// on-device decoder this replaced could not.
     pub biasing_available: bool,
 }
 
@@ -72,21 +96,21 @@ pub use platform::{is_capturing, is_holding_text, signal, start, DictationHandle
 
 #[cfg(windows)]
 mod platform {
-    use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};
     use std::sync::{Arc, Mutex, OnceLock};
     use std::time::{Duration, Instant};
 
     use log::{error, info, warn};
-    use tauri::path::BaseDirectory;
-    use tauri::{AppHandle, Manager};
+    use tauri::AppHandle;
 
+    use super::asr::{self, AsrError, AsrEvent, SessionConfig};
     use super::audio::{self, Capture};
     use super::chord::ChordSignal;
+    use super::consent;
+    use super::credential;
     use super::hud::{self, HudPhase, HudUpdate};
     use super::insert::{self, InsertOutcome};
-    use super::stt::{Recognizer, Stream, MODEL_ID, STREAMING_CHUNK_SAMPLES};
     use super::trace;
     use super::vocab;
     use super::{DictationStatus, DICTATION_CHORD};
@@ -99,15 +123,19 @@ mod platform {
     /// on screen before the HUD hides itself.
     const CAPTION_LINGER: Duration = Duration::from_millis(2200);
     const FAILURE_LINGER: Duration = Duration::from_millis(4000);
-    /// How long a hold that ended before the model finished loading keeps
-    /// waiting for the in-flight load. Only paid on a cold hold when the user
-    /// out-typed the loader; the buffered audio
-    /// is decoded the moment the recognizer lands, so a short first utterance on
-    /// a slow machine is transcribed instead of thrown away.
-    const LOAD_GRACE: Duration = Duration::from_secs(30);
-    /// A successfully used recognizer remains warm for one minute, then is
-    /// destroyed on this worker thread so its model memory can be reclaimed.
-    const MODEL_IDLE: Duration = Duration::from_secs(60);
+    /// How long the one-time consent pill stays up. Much longer than a failure
+    /// caption because it is asking a question rather than reporting an
+    /// outcome, and the user has to read it before answering. It auto-dismisses
+    /// rather than sticking: an unanswered prompt should not become permanent
+    /// furniture on someone's screen.
+    const CONSENT_LINGER: Duration = Duration::from_millis(15_000);
+    /// How long the finalized utterance may take to come back after the chord
+    /// is up and the audio tail has been flushed. The provider has all the
+    /// audio by this point, so this is a round trip and a decode of the last
+    /// segment, not a transcription of the whole utterance. Generous enough to
+    /// survive a slow link, short enough that a wedged socket does not leave
+    /// the user staring at a HUD.
+    const FINAL_TIMEOUT: Duration = Duration::from_millis(2500);
     /// Budget for draining the packet WASAPI still holds when the chord comes
     /// up. Without it a user who releases the instant they stop speaking loses
     /// the last word.
@@ -126,9 +154,6 @@ mod platform {
     /// cross-process property read, and it is skipped outright whenever the UIA
     /// worker is busy with a voice turn.
     const PROBE_TICK: Duration = Duration::from_millis(250);
-    /// Named so logging.rs's panic hook can recognize it and refuse to format
-    /// a panic payload raised there.
-    pub const MODEL_THREAD: &str = "aura-dictation-model";
 
     enum Message {
         Chord(ChordSignal),
@@ -175,6 +200,13 @@ mod platform {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .clone()
+        }
+
+        /// Recomputes availability. Called after anything that could have
+        /// changed the answer: a credential arriving or being cleared, or
+        /// consent being given or withdrawn.
+        pub fn refresh(&self, app: &AppHandle) {
+            refresh_status(app, &self.status);
         }
     }
 
@@ -233,8 +265,10 @@ mod platform {
             };
         }
 
+        // Replaced by `refresh_status` as soon as the worker thread is up,
+        // which is immediate: there is no model to load any more.
         let status = Arc::new(Mutex::new(DictationStatus::unavailable(
-            "the on-device recognizer is still loading",
+            "Dictation is still starting up.",
         )));
         let worker_status = status.clone();
         let worker = std::thread::Builder::new()
@@ -257,157 +291,9 @@ mod platform {
         }
     }
 
-    /// Where the predownload script put the shared library and the model.
-    fn resource_dir(app: &AppHandle) -> Result<PathBuf, String> {
-        app.path()
-            .resolve("resources/dictation", BaseDirectory::Resource)
-            .map_err(|e| format!("could not resolve the dictation resources: {e}"))
-    }
-
-    /// The model, and whether a background load is in flight.
-    ///
-    /// Nothing is loaded at app startup. A user who never dictates never
-    /// carries the recognizer's working set; the first time the chord is
-    /// actually reached for, the load runs on its own one-shot thread while the
-    /// worker is already capturing audio, so the first hold is not clipped
-    /// either.
-    #[derive(Default)]
-    struct ModelState {
-        recognizer: Option<Recognizer>,
-        loading: Option<Receiver<Result<Recognizer, String>>>,
-        load_started_at: Option<Instant>,
-        unload_at: Option<Instant>,
-        /// A load that failed is not retried for the rest of the session: it
-        /// fails for a structural reason (missing resources, bad DLL) that
-        /// retrying every hold would only turn into repeated stalls.
-        failed: bool,
-    }
-
-    impl ModelState {
-        fn begin_load(&mut self, app: &AppHandle, status: &Arc<Mutex<DictationStatus>>) {
-            if self.recognizer.is_some() || self.loading.is_some() || self.failed {
-                return;
-            }
-            let dir = match resource_dir(app) {
-                Ok(dir) => dir,
-                Err(e) => {
-                    self.failed = true;
-                    set_status(status, DictationStatus::unavailable(e));
-                    return;
-                }
-            };
-            let (tx, rx) = std::sync::mpsc::channel::<Result<Recognizer, String>>();
-            self.load_started_at = Some(Instant::now());
-            info!("dictation: model={MODEL_ID} phase=model_load state=started");
-            let spawned = std::thread::Builder::new()
-                .name(MODEL_THREAD.to_string())
-                .spawn(move || {
-                    let _ = tx.send(Recognizer::load(&dir));
-                });
-            match spawned {
-                Ok(_) => self.loading = Some(rx),
-                Err(e) => {
-                    self.load_started_at = None;
-                    self.failed = true;
-                    set_status(
-                        status,
-                        DictationStatus::unavailable(format!(
-                            "the model loader could not start: {e}"
-                        )),
-                    );
-                }
-            }
-        }
-
-        /// Collects a finished load without ever blocking the capture loop.
-        fn poll(&mut self, status: &Arc<Mutex<DictationStatus>>) {
-            let Some(rx) = self.loading.as_ref() else {
-                return;
-            };
-            match rx.try_recv() {
-                Ok(Ok(recognizer)) => {
-                    let load_ms = self
-                        .load_started_at
-                        .take()
-                        .map(|started| started.elapsed().as_millis())
-                        .unwrap_or(0);
-                    set_status(
-                        status,
-                        DictationStatus {
-                            available: true,
-                            chord_label: DICTATION_CHORD.label(),
-                            reason: None,
-                            biasing_available: recognizer.biasing_available(),
-                        },
-                    );
-                    info!(
-                        "dictation: model={MODEL_ID} phase=model_load state=ready load_ms={load_ms} biasing={}",
-                        recognizer.biasing_available(),
-                    );
-                    self.recognizer = Some(recognizer);
-                    self.unload_at = Some(Instant::now() + MODEL_IDLE);
-                    self.loading = None;
-                }
-                Ok(Err(e)) => {
-                    let load_ms = self
-                        .load_started_at
-                        .take()
-                        .map(|started| started.elapsed().as_millis())
-                        .unwrap_or(0);
-                    warn!("dictation: model={MODEL_ID} phase=model_load failure=model_load load_ms={load_ms}: {e}");
-                    set_status(status, DictationStatus::unavailable(e));
-                    self.failed = true;
-                    self.loading = None;
-                }
-                Err(TryRecvError::Empty) => {}
-                Err(TryRecvError::Disconnected) => {
-                    self.load_started_at = None;
-                    warn!("dictation: model={MODEL_ID} phase=model_load failure=loader_stopped");
-                    set_status(
-                        status,
-                        DictationStatus::unavailable("the model loader stopped unexpectedly"),
-                    );
-                    self.failed = true;
-                    self.loading = None;
-                }
-            }
-        }
-
-        fn ready(&self) -> Option<&Recognizer> {
-            self.recognizer.as_ref()
-        }
-
-        /// A load is still in flight, so "not ready" means "not yet" rather
-        /// than "not in this build". Only used to pick the HUD's wording.
-        fn loading(&self) -> bool {
-            self.loading.is_some()
-        }
-
-        fn mark_idle(&mut self) {
-            if self.recognizer.is_some() {
-                self.unload_at = Some(Instant::now() + MODEL_IDLE);
-            }
-        }
-
-        fn unload_deadline(&self) -> Option<Instant> {
-            self.unload_at.filter(|_| self.recognizer.is_some())
-        }
-
-        fn unload_if_due(&mut self) {
-            if self
-                .unload_deadline()
-                .is_some_and(|deadline| Instant::now() >= deadline)
-            {
-                info!("dictation: model={MODEL_ID} phase=model_unload idle_ms={}", MODEL_IDLE.as_millis());
-                self.recognizer = None;
-                self.unload_at = None;
-            }
-        }
-    }
-
     /// The dedicated worker. Everything expensive lives here and never on the
-    /// thread that pumps the native window's messages: WASAPI, decoding, and
-    /// the SendInput burst. The model load gets its own thread from here.
+    /// thread that pumps the native window's messages: WASAPI, the socket
+    /// handshake wait, and the SendInput burst.
     fn worker_thread(
         app: AppHandle,
         rx: Receiver<Message>,
@@ -418,29 +304,14 @@ mod platform {
             return;
         }
 
-        // Startup does a file presence probe and nothing more. "available" here
-        // means the bundled runtime and model are installed, not that they are
-        // loaded; a later load failure replaces this with the real error.
-        match resource_dir(&app).and_then(|dir| super::stt::resources_present(&dir)) {
-            Ok(()) => {
-                set_status(
-                    &status,
-                    DictationStatus {
-                        available: true,
-                        chord_label: DICTATION_CHORD.label(),
-                        reason: None,
-                        biasing_available: false,
-                    },
-                );
-                info!("dictation: ready, chord={}", DICTATION_CHORD.label());
-            }
-            Err(e) => {
-                warn!("dictation: resources unavailable: {e}");
-                set_status(&status, DictationStatus::unavailable(e));
-            }
-        }
+        // There is nothing to probe at startup any more: no bundled runtime, no
+        // model files, no load. What decides availability now is whether the
+        // user has consented and whether a credential has arrived from the
+        // webview, and both can change at any moment, so it is recomputed
+        // rather than latched here.
+        refresh_status(&app, &status);
+        info!("dictation: worker ready, chord={}", DICTATION_CHORD.label());
 
-        let mut model = ModelState::default();
         let mut capture: Option<Capture> = None;
         // A finished transcript with nowhere to go yet. Held HERE, in the loop
         // that also receives chord signals, so waiting for a text box can never
@@ -451,12 +322,13 @@ mod platform {
         // is dismissed, Escape is pressed, or a new hold supersedes it.
         let mut failed: Option<FailedUtterance> = None;
         loop {
+            // Nothing to expire in the background now that there is no model to
+            // unload, so the worker blocks indefinitely unless it is holding
+            // text and has to keep re-probing for a text box.
             let timeout = if pending.is_some() || failed.is_some() {
                 Some(PROBE_TICK)
             } else {
-                model
-                    .unload_deadline()
-                    .map(|deadline| deadline.saturating_duration_since(Instant::now()))
+                None
             };
             let received = if let Some(timeout) = timeout {
                 match rx.recv_timeout(timeout) {
@@ -482,8 +354,6 @@ mod platform {
                 {
                     discard_failed(failed.take().expect("failed utterance exists"), "dismissed");
                 }
-                model.poll(&status);
-                model.unload_if_due();
                 set_holding(pending.is_some() || failed.is_some());
                 continue;
             };
@@ -518,17 +388,17 @@ mod platform {
                     // Ctrl-drag through a file list is indistinguishable from a
                     // long deliberate Ctrl hold. Nothing expensive may hang off
                     // it: not the microphone (a device handle would light the
-                    // Windows "in use" indicator) and not the model either,
-                    // whose 130 to 200MB working set would otherwise stay
-                    // resident for the whole session after a stray drag by a
-                    // user who never dictates.
+                    // Windows "in use" indicator) and not a transcription
+                    // socket either, which is billed from the moment it opens
+                    // and would be opened over and over by a user who never
+                    // dictates.
                     //
-                    // Both the device and the model start only once the FULL
-                    // chord is down (`handle_arm`). The WASAPI cold start hides
-                    // behind the 200 to 400ms a human takes before their first
-                    // phoneme, and a model load that outruns a short first
-                    // utterance is covered by LOAD_GRACE in `run_utterance`
-                    // rather than by warming ahead of a guess.
+                    // Both the device and the socket start only once the FULL
+                    // chord is down (`handle_arm`). The WASAPI cold start and
+                    // the TLS handshake both hide behind the 200 to 400ms a
+                    // human takes before their first phoneme, and audio sent
+                    // before the handshake completes is buffered rather than
+                    // dropped, so nothing needs warming ahead of a guess.
                 }
                 Message::Chord(ChordSignal::Cancel) | Message::Chord(ChordSignal::Release) => {
                     // Either an abandoned prewarm, or a release with no matching
@@ -538,16 +408,7 @@ mod platform {
                 Message::Chord(ChordSignal::Arm) => {
                     let mut held = None;
                     let shutting_down =
-                        handle_arm(
-                            &app,
-                            &mut model,
-                            &mut capture,
-                            &rx,
-                            &status,
-                            &mut held,
-                            &mut failed,
-                        );
-                    model.mark_idle();
+                        handle_arm(&app, &mut capture, &rx, &status, &mut held, &mut failed);
                     if let Some(payload) = held {
                         pending = Some(PendingText::new(payload));
                     }
@@ -570,15 +431,14 @@ mod platform {
 
     /// A transcript waiting for somewhere to land.
     ///
-    /// `raw` and `tokens` ride along unused on the normal path: they exist so
-    /// that text which eventually lands in a text box the user clicked into is
-    /// as complete a training trace as text that landed immediately. Both are
-    /// empty when trace capture is off.
+    /// `raw` rides along unused on the normal path: it exists so that text
+    /// which eventually lands in a text box the user clicked into is as
+    /// complete a training trace as text that landed immediately. It is empty
+    /// when trace capture is off.
     struct PendingPayload {
         text: String,
         samples: Vec<f32>,
         raw: String,
-        tokens: Vec<(String, f32)>,
         app_hint: Option<String>,
     }
 
@@ -586,7 +446,6 @@ mod platform {
         text: String,
         samples: Vec<f32>,
         raw: String,
-        tokens: Vec<(String, f32)>,
         app_hint: Option<String>,
         expires_at: Instant,
         /// The HUD generation of the hold that produced it, so the closing
@@ -600,7 +459,6 @@ mod platform {
                 text: payload.text,
                 samples: payload.samples,
                 raw: payload.raw,
-                tokens: payload.tokens,
                 app_hint: payload.app_hint,
                 expires_at: Instant::now() + PENDING_WINDOW,
                 generation: HUD_GENERATION.load(Ordering::SeqCst),
@@ -615,11 +473,18 @@ mod platform {
     /// write - happens on that worker, so all this costs the dictation thread
     /// is building a struct and a channel send. The samples are moved, never
     /// copied.
+    ///
+    /// Per-token timings are no longer captured. The on-device decoder exposed
+    /// them for free alongside the result it had already computed; asking the
+    /// cloud provider for word timings would mean requesting, receiving and
+    /// storing MORE speech-derived data than the transcript itself, on a
+    /// path whose whole point is to send as little as possible. The trace
+    /// still carries the audio, the raw transcript, the corrected text and
+    /// where it landed, which is what the correction pass actually learns from.
     fn hand_to_trace(
         app: &AppHandle,
         raw: &str,
         inserted: &str,
-        tokens: Vec<(String, f32)>,
         samples: Vec<f32>,
         app_hint: Option<String>,
     ) {
@@ -631,10 +496,7 @@ mod platform {
             raw_transcript: raw.to_string(),
             inserted_text: inserted.to_string(),
             locally_corrected: raw != inserted,
-            tokens: tokens
-                .into_iter()
-                .map(|(token, at_seconds)| trace::record::TokenTiming { token, at_seconds })
-                .collect(),
+            tokens: Vec::new(),
             samples,
             app_hint,
         });
@@ -655,7 +517,7 @@ mod platform {
         message: &'static str,
     ) {
         warn!(
-            "dictation: model={MODEL_ID} phase=failure failure={category} frames={}",
+            "dictation: phase=failure failure={category} frames={}",
             samples.len()
         );
         finish_with(
@@ -712,7 +574,6 @@ mod platform {
                             app,
                             &held.raw,
                             &held.text,
-                            std::mem::take(&mut held.tokens),
                             std::mem::take(&mut held.samples),
                             held.app_hint.clone(),
                         );
@@ -761,7 +622,6 @@ mod platform {
     /// the process is shutting down.
     fn handle_arm(
         app: &AppHandle,
-        model: &mut ModelState,
         capture: &mut Option<Capture>,
         rx: &Receiver<Message>,
         status: &Arc<Mutex<DictationStatus>>,
@@ -772,14 +632,12 @@ mod platform {
             *capture = open_capture();
         }
         CHORD_ACTIVE.store(true, Ordering::Relaxed);
-        let cold = model.ready().is_none();
-        model.begin_load(app, status);
         // A panic inside one utterance must not take dictation down for the
         // rest of the session. The hook in logging.rs additionally refuses to
         // format a panic raised on this thread, so no payload that might carry
         // transcript text reaches the plaintext log.
         let shutting_down = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            run_utterance(app, model, capture, rx, status, held, failed, cold)
+            run_utterance(app, capture, rx, status, held, failed)
         }))
         .unwrap_or_else(|_| {
             error!("dictation: an utterance panicked, the worker is continuing");
@@ -790,8 +648,12 @@ mod platform {
             );
             false
         });
+        // The device goes back either way. The transcription socket does too:
+        // the session is owned inside `run_utterance` and dropping it closes a
+        // stream that is billed for as long as it stays open.
         *capture = None;
         CHORD_ACTIVE.store(false, Ordering::Relaxed);
+        refresh_status(app, status);
         shutting_down
     }
 
@@ -809,23 +671,89 @@ mod platform {
         *status.lock().unwrap_or_else(|e| e.into_inner()) = next;
     }
 
+    /// Recomputes what the UI should say about dictation right now.
+    ///
+    /// Availability is no longer a property of the install, so it cannot be
+    /// decided once at startup: it depends on consent (persisted, revocable
+    /// from Settings) and on a credential the webview pushes down and lets
+    /// expire. Both change while the app is running, so every caller that
+    /// might have observed a change calls this rather than latching a value.
+    pub(super) fn refresh_status(app: &AppHandle, status: &Arc<Mutex<DictationStatus>>) {
+        let next = if !consent::is_accepted(app) {
+            DictationStatus::unavailable(
+                "Turn on online dictation to use the dictation chord.",
+            )
+        } else if !credential::is_present() {
+            DictationStatus::unavailable("Sign in to use dictation.")
+        } else {
+            DictationStatus {
+                available: true,
+                chord_label: DICTATION_CHORD.label(),
+                reason: None,
+                // Key term prompting is a real biasing mechanism, unlike the
+                // on-device decoder this replaced.
+                biasing_available: true,
+            }
+        };
+        set_status(status, next);
+    }
+
     /// One hold, start to finish. Returns true when the process is shutting
     /// down and the worker loop should exit.
+    ///
+    /// The order of the first three steps is load bearing: consent is checked
+    /// before the HUD, the HUD before the microphone, and the microphone
+    /// before the socket. A user who has not consented never has a microphone
+    /// opened on their behalf, and nobody's audio is streamed to a provider by
+    /// a code path that got as far as capturing it "just in case".
     fn run_utterance(
         app: &AppHandle,
-        model: &mut ModelState,
         capture: &mut Option<Capture>,
         rx: &Receiver<Message>,
         status: &Arc<Mutex<DictationStatus>>,
         held: &mut Option<PendingPayload>,
         failed: &mut Option<FailedUtterance>,
-        cold: bool,
     ) -> bool {
         let generation = HUD_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
         // Snapshot the target BEFORE the HUD exists on screen, so nothing this
         // module does can change what "the app the user was in" means.
         let target = insert::foreground_window();
         let app_key = crate::system_control::process_stem_for_window(target);
+
+        // Preflight 1: consent. No microphone is opened, no HUD "listening"
+        // state is entered, and no byte of audio exists at this point.
+        if !consent::is_accepted(app) {
+            let shutting_down = drain_until_release(rx);
+            hud::show(app, target);
+            info!("dictation: phase=preflight blocked=consent_required");
+            finish_with(
+                app,
+                generation,
+                HudUpdate::new(HudPhase::Consent),
+                CONSENT_LINGER,
+            );
+            refresh_status(app, status);
+            return shutting_down;
+        }
+
+        // Preflight 2: the credential. Checked before the device so a signed
+        // out user never lights the Windows microphone indicator for an
+        // utterance that was never going to be transcribed.
+        let Some(token) = credential::usable() else {
+            let shutting_down = drain_until_release(rx);
+            hud::show(app, target);
+            hold_failure(
+                app,
+                generation,
+                failed,
+                Vec::new(),
+                AsrError::NotAuthenticated.category(),
+                AsrError::NotAuthenticated.hud_message(),
+            );
+            refresh_status(app, status);
+            return shutting_down;
+        };
+
         hud::show(app, target);
         hud::publish(app, HudUpdate::new(HudPhase::Listening));
         // Fire-and-forget onto the ducking worker thread; it reads the user's
@@ -861,174 +789,62 @@ mod platform {
         }
 
         let vocabulary = vocab::load_vocab(app).unwrap_or_default();
+        let corrections = vocab::load_corrections(app).unwrap_or_default();
+        // Tier 0: the user's own vocabulary and their confirmed corrections go
+        // INTO recognition for this utterance. Read before the socket opens
+        // because they are part of the handshake.
+        let keyterms = vocab::keyterms_for(
+            &vocabulary,
+            &corrections,
+            app_key.as_deref(),
+            asr::deepgram::MAX_KEYTERMS,
+        );
+        let keyterm_count = keyterms.len();
+
+        // Opens without blocking: the handshake runs on the async runtime and
+        // audio sent before it lands is buffered, not dropped. A handshake
+        // failure arrives as a session event a moment later.
+        let mut session = match asr::provider().start(SessionConfig {
+            sample_rate: asr::SAMPLE_RATE,
+            keyterms,
+            credential: token,
+        }) {
+            Ok(session) => session,
+            Err(error) => {
+                let shutting_down = drain_until_release(rx);
+                hold_failure(
+                    app,
+                    generation,
+                    failed,
+                    Vec::new(),
+                    error.category(),
+                    error.hud_message(),
+                );
+                return shutting_down;
+            }
+        };
 
         let started_at = Instant::now();
-        info!("dictation: model={MODEL_ID} phase=capture cold={cold}");
-        let mut last_partial = Instant::now();
+        info!("dictation: phase=capture keyterms={keyterm_count}");
+        let mut last_partial_publish = Instant::now();
         let mut last_level = Instant::now();
         let mut captured_frames = 0usize;
         let mut heard_speech = false;
         let mut shutting_down = false;
         let mut capped = false;
-        let mut released = false;
         let mut utterance: Vec<f32> = Vec::new();
-        let mut fed_samples = 0usize;
-        let mut decode_time = Duration::ZERO;
+        // The most recent revisable transcript. Reaches the HUD and NOTHING
+        // else: the inserted text comes from `await_final` below, never from
+        // this string. That separation is the whole reason a dropped
+        // connection cannot type half a sentence.
+        let mut displayed_partial = String::new();
+        let mut partial_dirty = false;
+        // When the chord actually came up, so the "key up to text on screen"
+        // budget is measured from the release rather than from this line.
+        // Always set before the loop exits.
+        let released_at: Option<Instant>;
 
-        // Phase 1: warm-up. Only runs while a cold model load is in flight.
-        // `model` is borrowed mutably here and only here.
-        //
-        // Releasing the chord in here does NOT end the utterance. On a slow
-        // machine the very first dictation ("send it today") can be over before
-        // the recognizer lands, and bailing out at that point would discard
-        // every buffered sample and tell the user dictation is unavailable, for
-        // the one hold most likely to be their first ever. So a release only
-        // stops the capture and starts the LOAD_GRACE clock; the loop keeps
-        // polling the loader and the buffered audio is decoded on arrival.
-        let mut released_at: Option<Instant> = None;
-        let mut capture_stopped = false;
-        while model.ready().is_none() && !model.failed {
-            // Signals are read only until the hold ends. Anything the user does
-            // DURING the grace period (giving up and pressing the chord again,
-            // most likely, since the HUD is still saying "getting ready") stays
-            // queued for the worker loop to handle in order once this utterance
-            // finishes, instead of being consumed here and dropped on the floor.
-            if released_at.is_none() {
-                match poll_signal(rx) {
-                    Signal::Shutdown => {
-                        shutting_down = true;
-                        released = true;
-                        released_at = Some(Instant::now());
-                        active_capture.stop();
-                        capture_stopped = true;
-                        break;
-                    }
-                    Signal::Ended => {
-                        released = true;
-                        released_at = Some(Instant::now());
-                    }
-                    Signal::None => {}
-                }
-            }
-            let samples = if capture_stopped {
-                std::thread::sleep(Duration::from_millis(20));
-                Vec::new()
-            } else {
-                match active_capture.drain() {
-                    Ok(samples) => samples,
-                    Err(_) => {
-                        let shutting_down =
-                            shutting_down || (!released && drain_until_release(rx));
-                        hold_failure(
-                            app,
-                            generation,
-                            failed,
-                            utterance,
-                            "capture_read",
-                            "The microphone stopped responding. Nothing was typed.",
-                        );
-                        return shutting_down;
-                    }
-                }
-            };
-            if !samples.is_empty() {
-                captured_frames += samples.len();
-                if !audio::is_silence(&samples) {
-                    heard_speech = true;
-                }
-                utterance.extend_from_slice(&samples);
-            }
-            if !capture_stopped
-                && released_at.is_some_and(|released_at| released_at.elapsed() >= TAIL_DRAIN)
-            {
-                active_capture.stop();
-                capture_stopped = true;
-            }
-            // The waveform runs from the very first drain, so the mic is
-            // visibly working while the model is still loading. That is the
-            // stretch where the old HUD looked most broken.
-            if last_level.elapsed() >= LEVEL_EVERY {
-                last_level = Instant::now();
-                hud::publish_level(app, audio::level(&samples));
-            }
-            // Always polled before any exit below, so a load that finished
-            // during this iteration is collected rather than abandoned.
-            model.poll(status);
-            if last_partial.elapsed() >= PARTIAL_EVERY {
-                last_partial = Instant::now();
-                hud::publish(
-                    app,
-                    HudUpdate::new(HudPhase::Listening)
-                        .with_message("Getting the on-device model ready"),
-                );
-            }
-            match released_at {
-                Some(at) => {
-                    if at.elapsed() >= LOAD_GRACE {
-                        break;
-                    }
-                }
-                None => {
-                    if started_at.elapsed() >= audio::MAX_HOLD {
-                        capped = true;
-                        released = true;
-                        released_at = Some(Instant::now());
-                        break;
-                    }
-                }
-            }
-        }
-
-        let still_loading = model.loading();
-        let Some(recognizer) = model.ready() else {
-            let shutting_down = shutting_down || (!released && drain_until_release(rx));
-            // A load that is STILL running only ran out of grace, which is a
-            // "try again in a second", not the permanent "this build has no
-            // recognizer" that a failed or missing install means.
-            let message = if still_loading {
-                "The on-device model is still starting. Try that again in a moment."
-            } else {
-                "On-device dictation is not available in this build."
-            };
-            hold_failure(
-                app,
-                generation,
-                failed,
-                utterance,
-                if still_loading { "model_load_timeout" } else { "model_load" },
-                message,
-            );
-            return shutting_down;
-        };
-
-        if cold {
-            info!(
-                "dictation: model={MODEL_ID} phase=model_load state=utterance_ready cold_wait_ms={}",
-                started_at.elapsed().as_millis()
-            );
-        }
-
-        let stream = match recognizer.start_stream() {
-            Ok(stream) => stream,
-            Err(e) => {
-                warn!("dictation: stream refused: {e}");
-                let shutting_down = shutting_down || (!released && drain_until_release(rx));
-                hold_failure(
-                    app,
-                    generation,
-                    failed,
-                    utterance,
-                    "stream_create",
-                    "The recognizer could not start. Nothing was typed.",
-                );
-                return shutting_down;
-            }
-        };
-        decode_time += feed_full_chunks(&stream, &utterance, &mut fed_samples);
-
-        // Phase 2: the normal streaming loop, skipped entirely when the hold
-        // already ended while the model was loading.
-        while !released {
+        loop {
             match poll_signal(rx) {
                 Signal::Shutdown => {
                     shutting_down = true;
@@ -1045,8 +861,8 @@ mod platform {
             let samples = match active_capture.drain() {
                 Ok(samples) => samples,
                 Err(_) => {
-                    let shutting_down = shutting_down || (!released && drain_until_release(rx));
-                    drop(stream);
+                    session.cancel();
+                    let shutting_down = shutting_down || drain_until_release(rx);
                     hold_failure(
                         app,
                         generation,
@@ -1063,8 +879,62 @@ mod platform {
                 if !audio::is_silence(&samples) {
                     heard_speech = true;
                 }
+                if session.send_pcm(&audio::to_i16(&samples)).is_err() {
+                    session.cancel();
+                    let shutting_down = shutting_down || drain_until_release(rx);
+                    hold_failure(
+                        app,
+                        generation,
+                        failed,
+                        utterance,
+                        AsrError::Network.category(),
+                        AsrError::Network.hud_message(),
+                    );
+                    return shutting_down;
+                }
+                // Kept for the opt-in training trace only. The provider already
+                // has this audio; nothing downstream re-transcribes it.
                 utterance.extend_from_slice(&samples);
-                decode_time += feed_full_chunks(&stream, &utterance, &mut fed_samples);
+            }
+
+            // Non-blocking, so a quiet network costs this loop nothing.
+            let mut mid_hold_failure = None;
+            while let Some(event) = session.poll() {
+                match event {
+                    AsrEvent::Partial(text) => {
+                        displayed_partial = text;
+                        partial_dirty = true;
+                    }
+                    // A final before the chord is up means the provider ended
+                    // the stream on its own. Treated as a failure rather than
+                    // typed: the user is still speaking, so whatever arrived
+                    // is not the utterance they are in the middle of.
+                    AsrEvent::Final(_) => {
+                        mid_hold_failure = Some(AsrError::Provider);
+                    }
+                    AsrEvent::Failed(error) => {
+                        mid_hold_failure = Some(error);
+                    }
+                }
+            }
+            if let Some(error) = mid_hold_failure {
+                session.cancel();
+                let shutting_down = shutting_down || drain_until_release(rx);
+                if matches!(error, AsrError::Rejected) {
+                    // The token the webview gave us was refused. Drop it so the
+                    // next press re-mints instead of replaying a bad credential.
+                    credential::clear();
+                }
+                hold_failure(
+                    app,
+                    generation,
+                    failed,
+                    utterance,
+                    error.category(),
+                    error.hud_message(),
+                );
+                refresh_status(app, status);
+                return shutting_down;
             }
 
             // An empty drain publishes 0.0 rather than being skipped: flat bars
@@ -1075,11 +945,12 @@ mod platform {
                 hud::publish_level(app, audio::level(&samples));
             }
 
-            if last_partial.elapsed() >= PARTIAL_EVERY {
-                last_partial = Instant::now();
+            if partial_dirty && last_partial_publish.elapsed() >= PARTIAL_EVERY {
+                last_partial_publish = Instant::now();
+                partial_dirty = false;
                 hud::publish(
                     app,
-                    HudUpdate::new(HudPhase::Listening).with_text(stream.text()),
+                    HudUpdate::new(HudPhase::Listening).with_text(displayed_partial.clone()),
                 );
             }
 
@@ -1091,16 +962,17 @@ mod platform {
         }
 
         // The chord came up, but WASAPI still holds the packet that carried the
-        // last word. Drain the tail before closing the stream, or a user who
-        // releases the instant they stop speaking loses it.
+        // last word. Drain the tail and send it BEFORE finalizing, or a user who
+        // releases the instant they stop speaking loses it. This is the whole
+        // reason `Finalize` is not sent the moment the keys come up.
         let tail_deadline = Instant::now() + TAIL_DRAIN;
         let finalization_started_at = released_at.unwrap_or_else(Instant::now);
         let mut empty_drains = 0u8;
-        while !capture_stopped && empty_drains < 2 && Instant::now() < tail_deadline {
+        while empty_drains < 2 && Instant::now() < tail_deadline {
             let samples = match active_capture.drain() {
                 Ok(samples) => samples,
                 Err(_) => {
-                    drop(stream);
+                    session.cancel();
                     hold_failure(
                         app,
                         generation,
@@ -1121,79 +993,85 @@ mod platform {
             if !audio::is_silence(&samples) {
                 heard_speech = true;
             }
+            let _ = session.send_pcm(&audio::to_i16(&samples));
             utterance.extend_from_slice(&samples);
-            decode_time += feed_full_chunks(&stream, &utterance, &mut fed_samples);
         }
+        // Release the device now. The rest of this function is waiting on the
+        // network, and the Windows microphone indicator must not stay lit
+        // through it.
+        active_capture.stop();
 
         hud::publish(
             app,
-            HudUpdate::new(HudPhase::Transcribing).with_text(stream.text()),
+            HudUpdate::new(HudPhase::Transcribing).with_text(displayed_partial.clone()),
         );
-        let finish_time = match stream.finish(&utterance[fed_samples..]) {
-            Ok(duration) => duration,
-            Err(e) => {
-                warn!("dictation: model={MODEL_ID} phase=finalize failure=finalization_timeout: {e}");
-                drop(stream);
+
+        // The utterance was silent. Nothing to finalize, and no reason to pay
+        // for a round trip: close the stream and say nothing was typed.
+        if !heard_speech {
+            session.cancel();
+            info!(
+                "dictation: nothing to insert (frames={captured_frames} hold_ms={})",
+                started_at.elapsed().as_millis()
+            );
+            finish_with(app, generation, HudUpdate::new(HudPhase::Idle), CAPTION_LINGER);
+            return shutting_down;
+        }
+
+        if let Err(error) = session.finish() {
+            session.cancel();
+            hold_failure(
+                app,
+                generation,
+                failed,
+                utterance,
+                error.category(),
+                error.hud_message(),
+            );
+            return shutting_down;
+        }
+
+        let decoded = match session.await_final(Instant::now() + FINAL_TIMEOUT) {
+            Ok(text) => text,
+            Err(error) => {
+                session.cancel();
+                if matches!(error, AsrError::Rejected) {
+                    credential::clear();
+                }
                 hold_failure(
                     app,
                     generation,
                     failed,
                     utterance,
-                    "finalization_timeout",
-                    "On-device transcription timed out. Nothing was typed.",
+                    error.category(),
+                    error.hud_message(),
                 );
+                refresh_status(app, status);
                 return shutting_down;
             }
         };
-        decode_time += finish_time;
-        let decoded = stream.text();
-        // Opt-in, default off. Read ONCE here so every later decision in this
-        // utterance agrees about whether it is being traced, even if the user
-        // toggles the setting while the words are being typed.
-        let tracing = trace::wants_anchor(app);
-        // Token timings have to be taken before the stream is dropped, and are
-        // not worth fetching for an utterance nobody is tracing.
-        let tokens = if tracing {
-            stream.tokens()
-        } else {
-            Vec::new()
-        };
-        drop(stream);
+        // Closes the socket immediately. An open stream is billed, and this one
+        // has nothing left to say.
+        drop(session);
 
         let hold_ms = started_at.elapsed().as_millis();
-        let audio_ms = captured_frames as f64 * 1000.0 / super::stt::SAMPLE_RATE as f64;
+        let audio_ms = captured_frames as f64 * 1000.0 / asr::SAMPLE_RATE as f64;
         let finalization_ms = finalization_started_at.elapsed().as_millis();
-        let realtime_factor = if audio_ms > 0.0 {
-            decode_time.as_secs_f64() / (audio_ms / 1000.0)
-        } else {
-            0.0
-        };
         info!(
-            "dictation: model={MODEL_ID} phase=finalize cold={cold} audio_ms={audio_ms:.0} finalization_ms={finalization_ms} decode_ms={} realtime_factor={realtime_factor:.3}",
-            decode_time.as_millis()
+            "dictation: phase=finalize audio_ms={audio_ms:.0} finalization_ms={finalization_ms} hold_ms={hold_ms}"
         );
-        if !cold && finalization_ms > 1000 {
+        if finalization_ms > 1200 {
             warn!(
-                "dictation: model={MODEL_ID} phase=finalize target_miss=warm_keyup_p95_candidate finalization_ms={finalization_ms}"
-            );
-        }
-        if realtime_factor >= 0.8 {
-            warn!(
-                "dictation: model={MODEL_ID} phase=decode target_miss=realtime_factor realtime_factor={realtime_factor:.3}"
+                "dictation: phase=finalize target_miss=keyup_to_insert finalization_ms={finalization_ms}"
             );
         }
         if capped {
-            warn!("dictation: hold hit the {}s cap, finalizing the bounded utterance", audio::MAX_HOLD.as_secs());
+            warn!(
+                "dictation: hold hit the {}s cap, finalizing the bounded utterance",
+                audio::MAX_HOLD.as_secs()
+            );
         }
 
-        // The silence guard suppresses an empty insert and nothing else. It is
-        // never used for endpointing and never trims leading audio, which would
-        // eat the first phoneme.
-        if !heard_speech {
-            info!("dictation: nothing to insert (frames={captured_frames} hold_ms={hold_ms})");
-            finish_with(app, generation, HudUpdate::new(HudPhase::Idle), CAPTION_LINGER);
-            return shutting_down;
-        }
         if decoded.trim().is_empty() {
             hold_failure(
                 app,
@@ -1201,14 +1079,20 @@ mod platform {
                 failed,
                 utterance,
                 "empty_result",
-                "No final transcription was produced. Nothing was typed.",
+                "No transcription was produced. Nothing was typed.",
             );
             return shutting_down;
         }
 
-        let corrections = vocab::load_corrections(app).unwrap_or_default();
+        // Tier 1 still runs on the final text, after recognition. Biasing gets
+        // the term into the decode; this fixes what biasing did not catch.
         let final_text =
             vocab::apply_corrections(&decoded, &corrections, &vocabulary, app_key.as_deref());
+
+        // Opt-in, default off. Read ONCE here so every later decision in this
+        // utterance agrees about whether it is being traced, even if the user
+        // toggles the setting while the words are being typed.
+        let tracing = trace::wants_anchor(app);
 
         // Asked here, at the last possible moment, because this is the only
         // point at which "where would these keystrokes go" has its final
@@ -1219,7 +1103,7 @@ mod platform {
         let probe = crate::uia::probe_focus(app, tracing);
         let outcome = insert::insert_text(&final_text, target, probe.verdict);
         info!(
-            "dictation: model={MODEL_ID} phase=insert hold_ms={hold_ms} frames={captured_frames} chars={} role={} \
+            "dictation: phase=insert hold_ms={hold_ms} frames={captured_frames} chars={} role={} \
              verdict={:?} outcome={outcome:?}",
             final_text.chars().count(),
             probe.role,
@@ -1241,7 +1125,6 @@ mod platform {
                 text: final_text,
                 samples: utterance,
                 raw: decoded,
-                tokens,
                 app_hint: app_key,
             });
             return shutting_down;
@@ -1256,7 +1139,6 @@ mod platform {
                 app,
                 &decoded,
                 &final_text,
-                tokens,
                 std::mem::take(&mut utterance),
                 app_key,
             );
@@ -1299,20 +1181,6 @@ mod platform {
         };
         finish_with(app, generation, update, linger);
         shutting_down
-    }
-
-    fn feed_full_chunks(
-        stream: &Stream<'_>,
-        utterance: &[f32],
-        fed_samples: &mut usize,
-    ) -> Duration {
-        let mut decode_time = Duration::ZERO;
-        while utterance.len().saturating_sub(*fed_samples) >= STREAMING_CHUNK_SAMPLES {
-            let end = *fed_samples + STREAMING_CHUNK_SAMPLES;
-            decode_time += stream.accept(&utterance[*fed_samples..end]);
-            *fed_samples = end;
-        }
-        decode_time
     }
 
     /// Consumes signals until the hold ends, for the failure paths that have
@@ -1376,6 +1244,10 @@ mod stub {
         }
     }
 
+    impl DictationHandle {
+        pub fn refresh(&self, _app: &AppHandle) {}
+    }
+
     pub fn signal(_chord_signal: ChordSignal) {}
 
     pub fn start(_app: AppHandle) -> DictationHandle {
@@ -1388,6 +1260,105 @@ mod stub {
 #[tauri::command]
 pub fn dictation_status(state: tauri::State<'_, DictationHandle>) -> DictationStatus {
     state.status()
+}
+
+/// The online-dictation consent state, for the HUD prompt and the Settings
+/// page. Both surfaces read the same value so they can never disagree.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConsentState {
+    pub accepted: bool,
+}
+
+#[tauri::command]
+pub async fn dictation_consent_state(app: tauri::AppHandle) -> Result<ConsentState, String> {
+    #[cfg(windows)]
+    {
+        Ok(ConsentState {
+            accepted: consent::is_accepted(&app),
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+        Ok(ConsentState { accepted: false })
+    }
+}
+
+/// Records or withdraws consent for online dictation.
+///
+/// Deliberately WITHOUT a `security::Operation`, for the same reason as the
+/// rest of this module: every operation in security.rs also requires a live
+/// voice call. This is a local privacy preference for a local feature, and the
+/// nothing it unlocks is reachable without a credential anyway.
+#[tauri::command]
+pub async fn dictation_set_consent(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DictationHandle>,
+    accepted: bool,
+) -> Result<ConsentState, String> {
+    #[cfg(windows)]
+    {
+        let accepted = consent::set_accepted(&app, accepted)?;
+        state.refresh(&app);
+        // Take the prompt off screen the moment it is answered, rather than
+        // leaving the user looking at a question they have already resolved.
+        hud::publish(&app, hud::HudUpdate::new(hud::HudPhase::Idle));
+        Ok(ConsentState { accepted })
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (app, state, accepted);
+        Err(NOT_SUPPORTED.to_string())
+    }
+}
+
+/// Hands Rust the short-lived transcription credential the webview minted.
+///
+/// The permanent provider key is never in this process; see `credential.rs`.
+/// `ttlSeconds` comes from the provider's own grant response, not from a
+/// number the client picked.
+#[tauri::command]
+pub async fn dictation_set_credential(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DictationHandle>,
+    access_token: String,
+    ttl_seconds: u64,
+) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        if access_token.trim().is_empty() {
+            return Err("the dictation credential is empty".to_string());
+        }
+        credential::set(access_token, std::time::Duration::from_secs(ttl_seconds));
+        state.refresh(&app);
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (app, state, access_token, ttl_seconds);
+        Err(NOT_SUPPORTED.to_string())
+    }
+}
+
+/// Drops the credential. Called on sign-out, and whenever the webview decides
+/// the session it was minted for is no longer valid.
+#[tauri::command]
+pub async fn dictation_clear_credential(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DictationHandle>,
+) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        credential::clear();
+        state.refresh(&app);
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (app, state);
+        Ok(())
+    }
 }
 
 /// The HUD's current state. The persistent window calls this once on mount so

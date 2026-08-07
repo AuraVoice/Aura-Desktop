@@ -14,7 +14,7 @@
 use flacenc::component::BitRepr;
 use flacenc::error::Verify;
 
-use super::super::stt::SAMPLE_RATE;
+use super::super::asr::SAMPLE_RATE;
 
 const CHANNELS: usize = 1;
 const BITS_PER_SAMPLE: usize = 16;

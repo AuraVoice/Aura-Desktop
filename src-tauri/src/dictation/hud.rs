@@ -8,7 +8,9 @@
 //! dropping the target into keyboard menu mode. And
 //! `OverlayPresentation::Bar` is already in use whenever a voice session is
 //! live, so the two surfaces would fight over `applied_presentation`. Dictation
-//! also has to work signed out, which the overlay's React root does not.
+//! also has to be able to RENDER signed out, because the signed-out case is now
+//! something it has to explain rather than something it supports, and the
+//! overlay's React root cannot do that.
 //!
 //! It reuses overlay.rs's edge anchoring. The user docked their notch somewhere
 //! on purpose; dictation appears there too.
@@ -41,14 +43,18 @@ const HOVER_SIDE_HEIGHT: f64 = 46.0;
 const HOVER_TOP_WIDTH: f64 = 164.0;
 const HOVER_TOP_HEIGHT: f64 = 63.0;
 
-/// The message pill. The active pill is wordless by design, but a blocked or
-/// misdirected insert has to say so somewhere, and this window is the only
-/// surface dictation owns. Used ONLY for `Error` and `Pending`, so the normal
-/// path never grows past the pill. `Pending` is taller because it carries the
-/// held transcript as well as the explanation.
+/// The message pill. Used by `Error`, `Pending`, and by `Listening` and
+/// `Transcribing` once they actually have a partial transcript to show; the
+/// active pill stays wordless while there are no words. `Pending` is taller
+/// because it carries the held transcript as well as the explanation.
 const MESSAGE_WIDTH: f64 = 340.0;
 const MESSAGE_HEIGHT: f64 = 44.0;
 const PENDING_HEIGHT: f64 = 78.0;
+/// The one-time online-dictation consent prompt. Wider and taller than any
+/// other state because it is the only one that has to carry a disclosure the
+/// user is expected to read and two buttons they have to be able to hit.
+const CONSENT_WIDTH: f64 = 396.0;
+const CONSENT_HEIGHT: f64 = 132.0;
 
 /// The window the current hold is typing into, remembered so a later phase
 /// change can re-place the HUD on the right display without the worker having
@@ -80,6 +86,20 @@ pub enum HudPhase {
     /// one does. The only phase that shows the transcript on screen, and it
     /// earns that: the user has to know something is waiting, and what.
     Pending,
+    /// The chord was pressed before the user agreed to online dictation. No
+    /// microphone was opened and no audio exists; this asks, and nothing else
+    /// happens until it is answered. The second interactive phase after Idle.
+    Consent,
+}
+
+/// Whether the HUD should receive mouse input in this phase.
+///
+/// Almost every phase is a passive caption that must not steal clicks from the
+/// window underneath, which is the whole point of a dictation HUD. The two
+/// exceptions both need a click to do their job: the resting pill's hover
+/// affordance, and the consent prompt's buttons.
+fn accepts_clicks(phase: HudPhase) -> bool {
+    matches!(phase, HudPhase::Idle | HudPhase::Consent)
 }
 
 #[derive(Clone, Serialize)]
@@ -230,8 +250,17 @@ fn resting_size(_edge: NotchEdge) -> LogicalSize<f64> {
 
 /// The HUD's footprint for one phase. Idle is the compact persistent pill;
 /// active phases enlarge it while keeping the same vertical silhouette.
-fn surface_size(edge: NotchEdge, phase: HudPhase) -> LogicalSize<f64> {
+///
+/// `has_caption` is why this takes more than a phase. The listening surface is
+/// a wordless sliver right up until the recognizer actually has words, and
+/// then it has to be wide enough to read. Sizing on the phase alone would mean
+/// either a caption-width window sitting empty through every silent moment, or
+/// a 12px sliver trying to hold a sentence.
+fn surface_size(edge: NotchEdge, phase: HudPhase, has_caption: bool) -> LogicalSize<f64> {
     match phase {
+        HudPhase::Listening | HudPhase::Transcribing if has_caption => {
+            LogicalSize::new(MESSAGE_WIDTH, MESSAGE_HEIGHT)
+        }
         HudPhase::Idle if IDLE_HOVERED.load(Ordering::Relaxed) => match edge {
             NotchEdge::Top | NotchEdge::Bottom => {
                 LogicalSize::new(HOVER_TOP_WIDTH, HOVER_TOP_HEIGHT)
@@ -243,6 +272,7 @@ fn surface_size(edge: NotchEdge, phase: HudPhase) -> LogicalSize<f64> {
         HudPhase::Idle => resting_size(edge),
         HudPhase::Error => LogicalSize::new(MESSAGE_WIDTH, MESSAGE_HEIGHT),
         HudPhase::Pending => LogicalSize::new(MESSAGE_WIDTH, PENDING_HEIGHT),
+        HudPhase::Consent => LogicalSize::new(CONSENT_WIDTH, CONSENT_HEIGHT),
         _ => LogicalSize::new(ACTIVE_WIDTH, ACTIVE_HEIGHT),
     }
 }
@@ -281,9 +311,9 @@ fn voice_notch_shares_display(
 /// the user can re-dock the notch between two holds, and an "already applied"
 /// cache that outlives one failed resize is exactly the desync that froze the
 /// sibling app's overlay (see CLAUDE.md).
-fn place_window(app: &AppHandle, window: &tauri::WebviewWindow, target: isize, phase: HudPhase) {
+fn place_window(app: &AppHandle, window: &tauri::WebviewWindow, target: isize, phase: HudPhase, has_caption: bool) {
     let edge = overlay::snapshot(app).notch_edge;
-    let size = surface_size(edge, phase);
+    let size = surface_size(edge, phase, has_caption);
     let monitor = target_center(target)
         .and_then(|(x, y)| window.monitor_from_point(x, y).ok().flatten())
         .or_else(|| window.primary_monitor().ok().flatten());
@@ -323,7 +353,7 @@ pub fn show(app: &AppHandle, target: isize) {
             return;
         }
         if let Some(window) = handle.get_webview_window(DICTATION_WINDOW) {
-            place_window(&handle, &window, target, HudPhase::Listening);
+            place_window(&handle, &window, target, HudPhase::Listening, false);
             let _ = window.set_ignore_cursor_events(true);
             if !SUPPRESSED_BY_OVERLAY.load(Ordering::Relaxed) {
                 let _ = window.show();
@@ -333,7 +363,8 @@ pub fn show(app: &AppHandle, target: isize) {
 }
 
 /// Creates and shows the passive resting pill without starting capture or
-/// loading the recognizer. The keyboard hook remains the only source of Arm.
+/// opening a transcription socket. The keyboard hook remains the only source
+/// of Arm.
 pub fn show_idle(app: &AppHandle) {
     IDLE_HOVERED.store(false, Ordering::Relaxed);
     let mut update = HudUpdate::new(HudPhase::Idle);
@@ -346,7 +377,7 @@ pub fn show_idle(app: &AppHandle) {
             return;
         }
         if let Some(window) = handle.get_webview_window(DICTATION_WINDOW) {
-            place_window(&handle, &window, LAST_TARGET.load(Ordering::Relaxed), HudPhase::Idle);
+            place_window(&handle, &window, LAST_TARGET.load(Ordering::Relaxed), HudPhase::Idle, false);
             let _ = window.set_ignore_cursor_events(false);
             if !SUPPRESSED_BY_OVERLAY.load(Ordering::Relaxed) {
                 let _ = window.show();
@@ -369,7 +400,7 @@ pub fn set_hovered(app: &AppHandle, hovered: bool) {
             return;
         }
         if let Some(window) = handle.get_webview_window(DICTATION_WINDOW) {
-            place_window(&handle, &window, target, HudPhase::Idle);
+            place_window(&handle, &window, target, HudPhase::Idle, false);
         }
     });
 }
@@ -380,12 +411,13 @@ pub fn refresh_placement(app: &AppHandle) {
     let mut update = last_update();
     update.edge = overlay::snapshot(app).notch_edge.as_stored();
     let phase = update.phase;
+    let has_caption = !update.text.is_empty();
     *LAST_UPDATE.lock().unwrap_or_else(|e| e.into_inner()) = Some(update.clone());
     let target = LAST_TARGET.load(Ordering::Relaxed);
     let _ = app.run_on_main_thread(move || {
         if let Some(window) = handle.get_webview_window(DICTATION_WINDOW) {
-            place_window(&handle, &window, target, phase);
-            let _ = window.set_ignore_cursor_events(phase != HudPhase::Idle);
+            place_window(&handle, &window, target, phase, has_caption);
+            let _ = window.set_ignore_cursor_events(!accepts_clicks(phase));
             let _ = window.emit("dictation-update", update);
         }
     });
@@ -407,6 +439,9 @@ pub fn publish(app: &AppHandle, mut update: HudUpdate) {
     IDLE_HOVERED.store(false, Ordering::Relaxed);
     update.edge = overlay::snapshot(app).notch_edge.as_stored();
     let phase = update.phase;
+    // Drives the resize below, so the listening surface widens the moment
+    // there are words and stays a sliver while there are not.
+    let has_caption = !update.text.is_empty();
     *LAST_UPDATE.lock().unwrap_or_else(|e| e.into_inner()) = Some(update.clone());
     if let Some(window) = app.get_webview_window(DICTATION_WINDOW) {
         let _ = window.emit("dictation-update", update);
@@ -415,8 +450,8 @@ pub fn publish(app: &AppHandle, mut update: HudUpdate) {
     let target = LAST_TARGET.load(Ordering::Relaxed);
     let _ = app.run_on_main_thread(move || {
         if let Some(window) = handle.get_webview_window(DICTATION_WINDOW) {
-            place_window(&handle, &window, target, phase);
-            let _ = window.set_ignore_cursor_events(phase != HudPhase::Idle);
+            place_window(&handle, &window, target, phase, has_caption);
+            let _ = window.set_ignore_cursor_events(!accepts_clicks(phase));
             if !SUPPRESSED_BY_OVERLAY.load(Ordering::Relaxed) {
                 let _ = window.show();
             }
@@ -442,8 +477,8 @@ pub fn set_overlay_suppressed(app: &AppHandle, suppressed: bool) {
             return;
         }
         let update = last_update();
-        place_window(&handle, &window, LAST_TARGET.load(Ordering::Relaxed), update.phase);
-        let _ = window.set_ignore_cursor_events(update.phase != HudPhase::Idle);
+        place_window(&handle, &window, LAST_TARGET.load(Ordering::Relaxed), update.phase, !update.text.is_empty());
+        let _ = window.set_ignore_cursor_events(!accepts_clicks(update.phase));
         let _ = window.show();
     });
 }

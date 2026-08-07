@@ -1,7 +1,11 @@
-//! Personalization storage and the post-decode correction pass.
+//! Personalization storage, contextual biasing, and the post-decode
+//! correction pass.
 //!
-//! Contextual biasing is unavailable for the selected Nemotron greedy decoder.
-//! Vocabulary terms remain local and feed the post-decode correction pass.
+//! Tier 0 (contextual biasing) is real again. The on-device Nemotron decoder
+//! this replaced could not accept hotwords at all, so the vocabulary was
+//! post-decode only. The cloud recognizer supports key term prompting, so
+//! `keyterms_for` now sends the same user-owned phrases INTO recognition,
+//! where they can fix a word rather than patch it up afterwards.
 //!
 //! Tier 1 (post-decode corrections): phrase-anchored replacements that only
 //! apply once the same correction has been confirmed at least
@@ -269,6 +273,63 @@ pub fn record_correction(
     Ok(1)
 }
 
+/// The biasing terms for one utterance, in priority order, capped at `limit`.
+///
+/// Three sources, deliberately in this order:
+///   1. the phrases the user saved for the app they are typing into,
+///   2. their global phrases,
+///   3. the REPLACEMENT side of corrections they have confirmed often enough
+///      to be applied post-decode.
+///
+/// (3) is the interesting one. A correction the user has made three times is
+/// direct evidence of a word the recognizer keeps getting wrong, which is
+/// exactly what a biasing hint is for. Feeding it forward means the next
+/// utterance has a chance of being right the first time instead of being
+/// fixed after the fact. The `heard` side is never sent - that is the wrong
+/// word, and biasing toward it would entrench the mistake.
+///
+/// Common words are excluded throughout. Biasing toward "the" is at best
+/// wasted budget and at worst actively harmful.
+pub fn keyterms_for(
+    vocab: &VocabStore,
+    corrections: &CorrectionStore,
+    app_key: Option<&str>,
+    limit: usize,
+) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    let push = |phrase: &str, out: &mut Vec<String>, seen: &mut Vec<String>| {
+        let trimmed = phrase.trim();
+        if trimmed.is_empty() || is_common_word(trimmed) {
+            return;
+        }
+        let folded = trimmed.to_ascii_lowercase();
+        if seen.contains(&folded) {
+            return;
+        }
+        seen.push(folded);
+        out.push(trimmed.to_string());
+    };
+
+    if let Some(key) = app_key {
+        if let Some(app_phrases) = vocab.apps.get(&key.to_ascii_lowercase()) {
+            for phrase in app_phrases {
+                push(phrase, &mut out, &mut seen);
+            }
+        }
+    }
+    for phrase in &vocab.global {
+        push(phrase, &mut out, &mut seen);
+    }
+    for entry in &corrections.entries {
+        if entry.count >= MIN_CORRECTION_COUNT {
+            push(&entry.replacement, &mut out, &mut seen);
+        }
+    }
+    out.truncate(limit);
+    out
+}
+
 /// The tier 1 pass, run on the final text only. Deliberately cheap (well under
 /// 5ms for realistic store sizes) because it sits between the decoder flush and
 /// the keystrokes the user is waiting on.
@@ -463,5 +524,118 @@ fn dpapi_unprotect(data: &[u8]) -> Result<Vec<u8>, String> {
         let bytes = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
         let _ = LocalFree(Some(HLOCAL(output.pbData as *mut core::ffi::c_void)));
         Ok(bytes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn vocab(global: &[&str], app: &[(&str, &[&str])]) -> VocabStore {
+        VocabStore {
+            global: global.iter().map(|s| s.to_string()).collect(),
+            apps: app
+                .iter()
+                .map(|(key, phrases)| {
+                    (
+                        key.to_string(),
+                        phrases.iter().map(|s| s.to_string()).collect(),
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    fn corrections(entries: &[(&str, &str, u32)]) -> CorrectionStore {
+        CorrectionStore {
+            entries: entries
+                .iter()
+                .map(|(heard, replacement, count)| CorrectionEntry {
+                    heard: heard.to_string(),
+                    replacement: replacement.to_string(),
+                    count: *count,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn the_focused_apps_phrases_come_before_the_global_ones() {
+        let store = vocab(&["Aura"], &[("slack", &["Buddy"])]);
+        let terms = keyterms_for(&store, &CorrectionStore::default(), Some("slack"), 50);
+        assert_eq!(terms, vec!["Buddy".to_string(), "Aura".to_string()]);
+    }
+
+    #[test]
+    fn another_apps_phrases_are_not_sent() {
+        let store = vocab(&["Aura"], &[("slack", &["Buddy"])]);
+        let terms = keyterms_for(&store, &CorrectionStore::default(), Some("notepad"), 50);
+        assert_eq!(terms, vec!["Aura".to_string()]);
+    }
+
+    #[test]
+    fn a_confirmed_correction_biases_toward_the_replacement_never_the_misheard_word() {
+        let store = vocab(&[], &[]);
+        let terms = keyterms_for(
+            &store,
+            &corrections(&[("or a", "Aura", MIN_CORRECTION_COUNT)]),
+            None,
+            50,
+        );
+        assert_eq!(terms, vec!["Aura".to_string()]);
+        assert!(
+            !terms.iter().any(|term| term == "or a"),
+            "biasing toward the misheard form would entrench the mistake"
+        );
+    }
+
+    #[test]
+    fn corrections_below_the_confirmation_threshold_are_not_biased() {
+        let store = vocab(&[], &[]);
+        let terms = keyterms_for(
+            &store,
+            &corrections(&[("or a", "Aura", MIN_CORRECTION_COUNT - 1)]),
+            None,
+            50,
+        );
+        assert!(terms.is_empty());
+    }
+
+    #[test]
+    fn duplicates_are_collapsed_case_insensitively() {
+        let store = vocab(&["Aura", "aura", "AURA"], &[("slack", &["aura"])]);
+        let terms = keyterms_for(
+            &store,
+            &corrections(&[("or a", "Aura", MIN_CORRECTION_COUNT)]),
+            Some("slack"),
+            50,
+        );
+        assert_eq!(terms.len(), 1);
+    }
+
+    #[test]
+    fn common_words_are_never_biased() {
+        let store = vocab(&["the", "Aura", "and"], &[]);
+        let terms = keyterms_for(&store, &CorrectionStore::default(), None, 50);
+        assert_eq!(terms, vec!["Aura".to_string()]);
+    }
+
+    #[test]
+    fn the_list_is_capped_and_keeps_the_highest_priority_terms() {
+        let global: Vec<String> = (0..80).map(|i| format!("term{i}")).collect();
+        let store = VocabStore {
+            global,
+            apps: Default::default(),
+        };
+        let terms = keyterms_for(&store, &CorrectionStore::default(), None, 50);
+        assert_eq!(terms.len(), 50);
+        assert_eq!(terms[0], "term0");
+    }
+
+    #[test]
+    fn blank_and_whitespace_phrases_are_dropped() {
+        let store = vocab(&["  ", "", "Aura"], &[]);
+        let terms = keyterms_for(&store, &CorrectionStore::default(), None, 50);
+        assert_eq!(terms, vec!["Aura".to_string()]);
     }
 }
