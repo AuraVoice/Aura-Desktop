@@ -35,3 +35,9 @@ graphify-out/
 
 # Internal business strategy - this repo is public, keep it local only.
 /GROWTH_PLAN.md
+
+# Internal incident log. Same reason: this repo is public, and the log names
+# failures, credentials handling and infrastructure in more detail than a
+# public repo should carry. CLAUDE.md still points at it for anyone working in
+# a local checkout, where the file is present.
+/lessons-learnt.txt
