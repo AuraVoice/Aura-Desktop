@@ -71,26 +71,11 @@ jobs:
             throw "The updater signing key does not match the pubkey in tauri.conf.json."
           }
 
-      - name: Sign in to Azure
-        uses: azure/login@v3
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      - name: Verify signing certificate profile is reachable
-        shell: pwsh
-        run: |
-          $profileId = "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/Aura/providers/Microsoft.CodeSigning/codeSigningAccounts/aura-signing/certificateProfiles/aura-desktop-public"
-          $profileStatus = az resource show --ids $profileId --query "properties.status" -o tsv
-          if ($LASTEXITCODE -ne 0) {
-            throw "Could not read the signing certificate profile. Check AZURE_SUBSCRIPTION_ID and that the service principal holds the Artifact Signing Certificate Profile Signer role on $profileId."
-          }
-          if ($profileStatus -ne "Active") {
-            throw "Signing certificate profile aura-desktop-public is '$profileStatus', not Active."
-          }
-          Write-Host "Signing certificate profile aura-desktop-public is Active."
-
+      # Installing the client tools needs no Azure credentials, so it runs
+      # before sign-in on purpose. Everything between sign-in and the first
+      # signature burns the five minute OIDC assertion window, and this step
+      # sitting inside it, taking fourteen minutes back when it swept all of
+      # Program Files, is what killed the release before this one.
       - name: Install Artifact Signing client tools
         shell: pwsh
         run: |
@@ -157,12 +142,34 @@ jobs:
           "AURA_SIGNING_DLIB_PATH=$dlibPath" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "AURA_SIGNING_LOG_PATH=$(Join-Path $env:RUNNER_TEMP 'aura-signing.log')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      - name: Sign in to Azure
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify signing certificate profile is reachable
+        shell: pwsh
+        run: |
+          $profileId = "/subscriptions/${{ secrets.AZURE_SUBSCRIPTION_ID }}/resourceGroups/Aura/providers/Microsoft.CodeSigning/codeSigningAccounts/aura-signing/certificateProfiles/aura-desktop-public"
+          $profileStatus = az resource show --ids $profileId --query "properties.status" -o tsv
+          if ($LASTEXITCODE -ne 0) {
+            throw "Could not read the signing certificate profile. Check AZURE_SUBSCRIPTION_ID and that the service principal holds the Artifact Signing Certificate Profile Signer role on $profileId."
+          }
+          if ($profileStatus -ne "Active") {
+            throw "Signing certificate profile aura-desktop-public is '$profileStatus', not Active."
+          }
+          Write-Host "Signing certificate profile aura-desktop-public is Active."
+
       - name: Smoke test the signing command
         shell: pwsh
         env:
           AURA_SIGNING_METADATA_PATH: ${{ env.AURA_SIGNING_METADATA_PATH }}
           AURA_SIGNING_SIGNTOOL_PATH: ${{ env.AURA_SIGNING_SIGNTOOL_PATH }}
           AURA_SIGNING_DLIB_PATH: ${{ env.AURA_SIGNING_DLIB_PATH }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         run: |
           # Tauri runs the sign command with its output captured and reports
           # only "failed to run powershell.exe", so the real error is invisible
@@ -179,53 +186,20 @@ jobs:
           }
           Write-Host "Azure signing works. The bundler's sign command should now succeed."
 
-      # The GitHub OIDC token that azure/login exchanges is a client assertion
-      # valid for only five minutes, and the Azure CLI keeps re-presenting that
-      # same assertion rather than a refresh token. Signing happens inside the
-      # bundle phase, twelve minutes into the Rust build, so by the time
-      # signtool asked for a token the assertion was long dead:
-      #   AADSTS700024: Client assertion is not within its valid time range.
-      # Compiling and bundling are therefore split, with a fresh sign-in in
-      # between, so signing always runs within a few seconds of a valid
-      # assertion. --no-bundle skips the bundle phase, so this step needs no
-      # Azure credentials at all.
-      - name: Compile the app without bundling
-        shell: pwsh
-        run: npm.cmd run tauri build -- --no-bundle
-
-      - name: Refresh the Azure sign-in before signing
-        uses: azure/login@v3
-        with:
-          client-id: ${{ secrets.AZURE_CLIENT_ID }}
-          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
-          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-
-      # Bundling signs several artifacts in turn (the exe, then the MSI, then
-      # the NSIS installer) and can itself run past the five minute assertion
-      # window. Signing once here exchanges the fresh assertion for an access
-      # token, which is good for about an hour and is cached in the Azure CLI's
-      # own token store on disk. Every later signtool call shells out to the
-      # same CLI and reuses it, so the assertion only has to be alive for this
-      # one signature rather than for the whole bundle phase.
-      - name: Warm the signing token cache
-        shell: pwsh
-        run: |
-          $sample = Join-Path $env:RUNNER_TEMP "signing-token-warm.exe"
-          Copy-Item -LiteralPath (Get-Command node).Source -Destination $sample -Force
-
-          & powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/sign-windows-artifact.ps1 $sample
-          if ($LASTEXITCODE -ne 0) {
-            throw "Signing failed immediately after a fresh Azure sign-in. The signtool error above is the real cause."
-          }
-
-      # Cargo is already up to date from the step above, so this goes almost
-      # straight to patching, signing and bundling.
-      - name: Bundle and sign without publishing (dry run)
+      # Nothing here has to finish inside the assertion window. The sign command
+      # mints its own OIDC token and re-signs in immediately before every
+      # signature it makes, so the exe, the MSI and the NSIS installer each get
+      # a credential seconds old no matter how long the Rust build took.
+      # AZURE_CLIENT_ID and AZURE_TENANT_ID are what tell it to do that; without
+      # them it leaves the existing session alone.
+      - name: Build and sign without publishing (dry run)
         if: github.event_name == 'workflow_dispatch'
         shell: pwsh
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         run: npm.cmd run tauri build
 
       - name: Show what the sign command actually said
@@ -245,6 +219,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Aura Desktop v__VERSION__"

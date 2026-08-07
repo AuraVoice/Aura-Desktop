@@ -24,6 +24,80 @@ function Write-SigningLog {
     }
 }
 
+# Every Windows signature, the exe then the NSIS installer then the MSI, is
+# spawned through this one script, which makes it the only place that can
+# guarantee a live credential at the moment signing happens. azure/login does
+# not hand back a refresh token: it hands back the GitHub OIDC assertion, good
+# for five minutes, and the Azure CLI replays that same string forever after.
+# Bundling reaches signtool long past that, which is the AADSTS700024 failure.
+# Minting a fresh assertion here means build length, step order and artifact
+# count stop mattering at all.
+function Update-AzureSigningLogin {
+    if (-not ($env:ACTIONS_ID_TOKEN_REQUEST_URL -and $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN -and
+              $env:AZURE_CLIENT_ID -and $env:AZURE_TENANT_ID)) {
+        Write-SigningLog "sign-windows-artifact: login refresh skipped, not running under GitHub Actions"
+        return
+    }
+
+    $tempRoot = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }
+    $stampPath = Join-Path $tempRoot "aura-signing-login.stamp"
+    if (Test-Path -LiteralPath $stampPath -PathType Leaf) {
+        $ageSeconds = [int]((Get-Date) - (Get-Item -LiteralPath $stampPath).LastWriteTime).TotalSeconds
+        # Artifacts signed back to back do not each need their own sign-in, and
+        # skipping it also keeps two of these from writing ~/.azure at once.
+        if ($ageSeconds -lt 150) {
+            Write-SigningLog "sign-windows-artifact: reusing a sign-in from ${ageSeconds}s ago, still inside the five minute window"
+            return
+        }
+    }
+
+    $azPath = (Get-Command az.cmd -ErrorAction SilentlyContinue).Source
+    if (-not $azPath) {
+        $azPath = "C:\Program Files\Microsoft SDKs\Azure\CLI2\wbin\az.cmd"
+    }
+
+    # az.cmd writes progress to stderr even on success, and "Stop" turns each of
+    # those lines into a terminating error, so the preference is relaxed for the
+    # calls themselves exactly as Invoke-SignTool does below.
+    $previousPreference = $ErrorActionPreference
+    try {
+        # Windows PowerShell 5.1 does not reliably negotiate TLS 1.2 on its own,
+        # and this script always runs under powershell.exe, never pwsh.
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        $tokenUri = "$($env:ACTIONS_ID_TOKEN_REQUEST_URL)&audience=api%3A%2F%2FAzureADTokenExchange"
+        $response = Invoke-RestMethod -Method Get -Uri $tokenUri -Headers @{
+            Authorization = "Bearer $($env:ACTIONS_ID_TOKEN_REQUEST_TOKEN)"
+        }
+        if (-not $response.value) {
+            throw "The GitHub OIDC endpoint returned no token value."
+        }
+
+        $ErrorActionPreference = "Continue"
+        & $azPath login --service-principal --username $env:AZURE_CLIENT_ID --tenant $env:AZURE_TENANT_ID `
+            --federated-token $response.value --output none --only-show-errors 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "az login with a fresh federated token failed with exit code $LASTEXITCODE."
+        }
+
+        # Exchanging the assertion now, rather than letting signtool do it later,
+        # puts an access token good for about an hour in the CLI's own cache. The
+        # assertion may die a second from now and this signature still succeeds.
+        & $azPath account get-access-token --resource https://codesigning.azure.net --output none --only-show-errors 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not exchange the fresh assertion for a signing access token (exit code $LASTEXITCODE)."
+        }
+
+        Set-Content -LiteralPath $stampPath -Value (Get-Date).ToString("o") -Encoding utf8
+        Write-SigningLog "sign-windows-artifact: refreshed the Azure sign-in with a newly minted OIDC assertion"
+    } catch {
+        # Deliberately not fatal. A sign-in from an earlier step may still be
+        # usable, and signtool's own error says more about why than this would.
+        Write-SigningLog "sign-windows-artifact: could not refresh the Azure sign-in ($($_.Exception.Message)). Continuing with the existing session."
+    } finally {
+        $ErrorActionPreference = $previousPreference
+    }
+}
+
 Write-SigningLog "sign-windows-artifact: cwd=$($PWD.Path)"
 Write-SigningLog "sign-windows-artifact: artifact=$ArtifactPath"
 Write-SigningLog "sign-windows-artifact: signtool=$SignToolPath"
@@ -63,6 +137,8 @@ function Invoke-SignTool {
     }
     return $exitCode
 }
+
+Update-AzureSigningLogin
 
 $signExitCode = Invoke-SignTool @(
     "sign",
