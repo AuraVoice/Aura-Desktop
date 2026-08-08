@@ -36,7 +36,7 @@ pub const DICTATION_WINDOW: &str = "dictation";
 /// dictation is active.
 const RESTING_WIDTH: f64 = 8.0;
 const RESTING_HEIGHT: f64 = 40.0;
-const ACTIVE_WIDTH: f64 = 12.0;
+const ACTIVE_WIDTH: f64 = 24.0;
 const ACTIVE_HEIGHT: f64 = 65.0;
 const HOVER_SIDE_WIDTH: f64 = 196.0;
 const HOVER_SIDE_HEIGHT: f64 = 46.0;

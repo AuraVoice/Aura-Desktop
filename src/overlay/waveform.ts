@@ -81,19 +81,27 @@ export function easeHeights(
   targets: Float32Array,
   maxHalfHeight: number,
   staticFrame = false,
+  smoothingFactor = SMOOTHING_FACTOR,
 ) {
-  for (let index = 0; index < BAR_COUNT; index += 1) {
+  for (let index = 0; index < heights.length; index += 1) {
     const target = clamp(targets[index], 1, maxHalfHeight);
-    heights[index] += (target - heights[index]) * (staticFrame ? 1 : SMOOTHING_FACTOR);
+    heights[index] += (target - heights[index]) * (staticFrame ? 1 : smoothingFactor);
   }
 }
 
 /// The resting silhouette a static frame draws.
 export function staticTargets(maxHalfHeight: number, into: Float32Array) {
-  for (let index = 0; index < BAR_COUNT; index += 1) {
-    into[index] = ICON_BASELINE[index] * maxHalfHeight * 0.82;
+  for (let index = 0; index < into.length; index += 1) {
+    into[index] = ICON_BASELINE[index % BAR_COUNT] * maxHalfHeight * 0.82;
   }
   return into;
+}
+
+interface PaintBarsOptions {
+  gapScale?: number;
+  edgeInsetBars?: number;
+  minBarWidth?: number;
+  maxBarWidth?: number;
 }
 
 /// Thin bars kept as a compact cluster centered in the notch, not spread edge
@@ -103,12 +111,21 @@ export function paintBars(
   heights: Float32Array,
   width: number,
   height: number,
+  options: PaintBarsOptions = {},
 ) {
   const centerY = height / 2;
-  const barWidth = clamp(width / 60, 2.5, 3);
-  const gap = barWidth * 1.2;
-  const clusterWidth = BAR_COUNT * barWidth + (BAR_COUNT - 1) * gap;
-  const startX = (width - clusterWidth) / 2;
+  const count = heights.length;
+  const gapScale = options.gapScale ?? 1.2;
+  const edgeInsetBars = options.edgeInsetBars ?? 0;
+  const barWidth = clamp(
+    width / Math.max(1, count + (count - 1) * gapScale + edgeInsetBars * 2),
+    options.minBarWidth ?? 2.5,
+    options.maxBarWidth ?? 3,
+  );
+  const gap = barWidth * gapScale;
+  const edgeInset = edgeInsetBars * barWidth;
+  const clusterWidth = count * barWidth + (count - 1) * gap;
+  const startX = edgeInset + Math.max(0, (width - edgeInset * 2 - clusterWidth) / 2);
   const gradient = context.createLinearGradient(0, 0, 0, height);
   gradient.addColorStop(0, "rgba(104, 221, 205, 0.48)");
   gradient.addColorStop(0.5, "rgba(151, 240, 225, 0.96)");
@@ -117,7 +134,7 @@ export function paintBars(
   context.shadowColor = "rgba(86, 214, 196, 0.38)";
   context.shadowBlur = 7;
 
-  for (let index = 0; index < BAR_COUNT; index += 1) {
+  for (let index = 0; index < count; index += 1) {
     const x = startX + index * (barWidth + gap);
     const halfHeight = heights[index];
     context.beginPath();

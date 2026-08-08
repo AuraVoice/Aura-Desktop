@@ -298,6 +298,7 @@ pub fn run() {
             guide::commit_guide_frame,
             guide::ack_guide_response,
             updater::install_update,
+            updater::check_for_update,
             updater::pending_update_version,
             updater::just_updated_version,
             logging::read_recent_log_lines,

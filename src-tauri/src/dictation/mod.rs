@@ -994,19 +994,20 @@ mod platform {
         // through it.
         active_capture.stop();
 
-        hud::publish(app, HudUpdate::new(HudPhase::Transcribing));
-
         // The utterance was silent. Nothing to finalize, and no reason to pay
-        // for a round trip: close the stream and say nothing was typed.
+        // for a round trip or show a failure: releasing without speaking is a
+        // neutral cancel.
         if !heard_speech {
             session.cancel();
             info!(
                 "dictation: nothing to insert (frames={captured_frames} hold_ms={})",
                 started_at.elapsed().as_millis()
             );
-            finish_with(app, generation, HudUpdate::new(HudPhase::Idle), CAPTION_LINGER);
+            finish_with(app, generation, HudUpdate::new(HudPhase::Idle), Duration::ZERO);
             return shutting_down;
         }
+
+        hud::publish(app, HudUpdate::new(HudPhase::Transcribing));
 
         if let Err(error) = session.finish() {
             session.cancel();
@@ -1063,14 +1064,10 @@ mod platform {
         }
 
         if decoded.trim().is_empty() {
-            hold_failure(
-                app,
-                generation,
-                failed,
-                utterance,
-                "empty_result",
-                "No transcription was produced. Nothing was typed.",
+            info!(
+                "dictation: empty transcription result (frames={captured_frames} hold_ms={hold_ms})"
             );
+            finish_with(app, generation, HudUpdate::new(HudPhase::Idle), Duration::ZERO);
             return shutting_down;
         }
 

@@ -1,6 +1,9 @@
-import { useEffect, useRef, type ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import { NavLink } from "react-router-dom";
+import { getVersion } from "@tauri-apps/api/app";
+import { invoke } from "@tauri-apps/api/core";
 import {
+  CloudCheck,
   CreditCard,
   Monitor,
   SlidersHorizontal,
@@ -40,9 +43,21 @@ const SETTINGS_PAGES: Record<string, ReactElement> = {
 
 export const settingsRoutes = new Set(Object.keys(SETTINGS_PAGES));
 
+interface ManualUpdateCheckResult {
+  status: "up_to_date" | "installing" | "deferred";
+  version: string | null;
+}
+
 export function SettingsDialog({ path, onClose }: { path: string; onClose: () => void }) {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const restoreRef = useRef<HTMLElement | null>(null);
+  const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [version, setVersion] = useState("");
+  const [updateStatus, setUpdateStatus] = useState<"idle" | "checking" | "up_to_date" | "installing" | "deferred" | "error">("idle");
+  const [showUpdateHint, setShowUpdateHint] = useState(false);
+  const versionLabel = version ? `Aura v${version}` : "Aura";
+  const updateHint = updateStatus === "idle" ? "Check for updates" : updateStatusLabel(updateStatus);
+  const updateHintVisible = showUpdateHint || updateStatus !== "idle";
 
   useEffect(() => {
     restoreRef.current = document.activeElement as HTMLElement | null;
@@ -53,9 +68,40 @@ export function SettingsDialog({ path, onClose }: { path: string; onClose: () =>
     panelRef.current?.focus();
     return () => {
       document.removeEventListener("keydown", onKeyDown);
+      if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
       restoreRef.current?.focus?.();
     };
   }, [onClose]);
+
+  useEffect(() => {
+    getVersion()
+      .then(setVersion)
+      .catch(() => {
+        setVersion("");
+      });
+  }, []);
+
+  async function checkForUpdate() {
+    if (updateStatus === "checking" || updateStatus === "installing") return;
+    if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
+    setShowUpdateHint(true);
+    setUpdateStatus("checking");
+    try {
+      const result = await invoke<ManualUpdateCheckResult>("check_for_update");
+      showUpdateStatus(result.status);
+    } catch {
+      showUpdateStatus("error");
+    }
+  }
+
+  function showUpdateStatus(status: "up_to_date" | "installing" | "deferred" | "error") {
+    setUpdateStatus(status);
+    setShowUpdateHint(true);
+    statusTimerRef.current = setTimeout(() => {
+      setShowUpdateHint(false);
+      setUpdateStatus("idle");
+    }, 3000);
+  }
 
   return (
     <div className="db-settings-scrim" onClick={onClose}>
@@ -71,6 +117,33 @@ export function SettingsDialog({ path, onClose }: { path: string; onClose: () =>
         <aside className="db-settings-dialog-sidebar">
           <SettingsGroup heading="Settings" items={SETTINGS_ITEMS} />
           <SettingsGroup heading="Account" items={ACCOUNT_ITEMS} />
+          <div className="db-settings-version">
+            <div className="db-settings-version-row">
+              <span>{versionLabel}</span>
+              <div
+                className="db-settings-update-wrap"
+                onMouseEnter={() => setShowUpdateHint(true)}
+                onMouseLeave={() => {
+                  if (updateStatus === "idle") setShowUpdateHint(false);
+                }}
+              >
+                {updateHintVisible && (
+                  <span className="db-settings-update-hint" role="status">
+                    {updateHint}
+                  </span>
+                )}
+                <button
+                  type="button"
+                  className="db-settings-update-btn"
+                  aria-label="Check for updates"
+                  onClick={checkForUpdate}
+                  disabled={updateStatus === "checking" || updateStatus === "installing"}
+                >
+                  <CloudCheck size={22} aria-hidden />
+                </button>
+              </div>
+            </div>
+          </div>
         </aside>
         <main className="db-settings-dialog-content">
           {SETTINGS_PAGES[path] ?? SETTINGS_PAGES["/general"]}
@@ -86,6 +159,23 @@ export function SettingsDialog({ path, onClose }: { path: string; onClose: () =>
       </div>
     </div>
   );
+}
+
+function updateStatusLabel(status: "checking" | "up_to_date" | "installing" | "deferred" | "error" | "idle") {
+  switch (status) {
+    case "checking":
+      return "Checking for updates...";
+    case "up_to_date":
+      return "Up-to-date";
+    case "installing":
+      return "Installing update...";
+    case "deferred":
+      return "Finish voice or meeting, then try again.";
+    case "error":
+      return "Update check failed.";
+    default:
+      return "";
+  }
 }
 
 function SettingsGroup({ heading, items }: { heading: string; items: SettingsItem[] }) {

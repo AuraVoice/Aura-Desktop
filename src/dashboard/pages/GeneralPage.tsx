@@ -365,7 +365,7 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
         <>
           <SettingsSection
             title="Improvement preferences"
-            description="Optional preferences stored on this device. Sample uploads are not active yet."
+            description="Control optional data sharing for voice and screen-aware improvements."
           >
             <div className="db-panel db-settings-panel">
               <ToggleRow
