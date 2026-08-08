@@ -154,6 +154,9 @@ mod platform {
     /// cross-process property read, and it is skipped outright whenever the UIA
     /// worker is busy with a voice turn.
     const PROBE_TICK: Duration = Duration::from_millis(250);
+    const SIGN_IN_REASON: &str = "Sign in to use dictation.";
+    const UNAVAILABLE_REASON: &str = "Dictation is temporarily unavailable. Try again shortly.";
+    const UNAVAILABLE_HUD: &str = "Dictation is temporarily unavailable. Nothing was typed.";
 
     enum Message {
         Chord(ChordSignal),
@@ -684,7 +687,11 @@ mod platform {
                 "Turn on online dictation to use the dictation chord.",
             )
         } else if !credential::is_present() {
-            DictationStatus::unavailable("Sign in to use dictation.")
+            DictationStatus::unavailable(if crate::security::current_uid(app).is_some() {
+                UNAVAILABLE_REASON
+            } else {
+                SIGN_IN_REASON
+            })
         } else {
             DictationStatus {
                 available: true,
@@ -740,6 +747,7 @@ mod platform {
         // out user never lights the Windows microphone indicator for an
         // utterance that was never going to be transcribed.
         let Some(token) = credential::usable() else {
+            let signed_in = crate::security::current_uid(app).is_some();
             let shutting_down = drain_until_release(rx);
             hud::show(app, target);
             hold_failure(
@@ -747,8 +755,16 @@ mod platform {
                 generation,
                 failed,
                 Vec::new(),
-                AsrError::NotAuthenticated.category(),
-                AsrError::NotAuthenticated.hud_message(),
+                if signed_in {
+                    "unavailable"
+                } else {
+                    AsrError::NotAuthenticated.category()
+                },
+                if signed_in {
+                    UNAVAILABLE_HUD
+                } else {
+                    AsrError::NotAuthenticated.hud_message()
+                },
             );
             refresh_status(app, status);
             return shutting_down;
@@ -1209,11 +1225,21 @@ mod platform {
         // the waveform has to be told the hold is over. Without it the bars
         // would hold their last spike for the whole caption linger.
         hud::publish_level(app, 0.0);
+        let phase = update.phase;
         hud::publish(app, update);
         // Same "one place every terminal path funnels through" argument as the
         // level reset above: unmuting here means an error or an aborted hold
         // gives the user their audio back exactly like a clean insert does.
         crate::audio_ducking::restore(app);
+        // Every other phase is a status the user reads and forgets, so timing
+        // out to the resting pill is right. Consent is a QUESTION, and nothing
+        // here cancels or extends the timer, so a user still reading the
+        // disclosure watched it vanish mid-sentence with no way to answer.
+        // It leaves on its own terms instead: dictation_set_consent publishes
+        // Idle the moment either button is pressed.
+        if phase == HudPhase::Consent {
+            return;
+        }
         let handle = app.clone();
         tauri::async_runtime::spawn(async move {
             tokio::time::sleep(linger).await;
@@ -1258,7 +1284,11 @@ mod stub {
 }
 
 #[tauri::command]
-pub fn dictation_status(state: tauri::State<'_, DictationHandle>) -> DictationStatus {
+pub fn dictation_status(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DictationHandle>,
+) -> DictationStatus {
+    state.refresh(&app);
     state.status()
 }
 
@@ -1299,6 +1329,7 @@ pub async fn dictation_set_consent(
 ) -> Result<ConsentState, String> {
     #[cfg(windows)]
     {
+        log::info!("dictation: consent answered accepted={accepted}");
         let accepted = consent::set_accepted(&app, accepted)?;
         state.refresh(&app);
         // Take the prompt off screen the moment it is answered, rather than

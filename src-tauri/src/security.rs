@@ -200,8 +200,8 @@ impl SecurityState {
             }
             // Text chat is its own surface: it normally runs with no call at
             // all, so a voice requirement would deny every chat capture. The
-            // authorizing gesture is the user opening chat and leaving the
-            // screen toggle on, with the frame shown to them before it is sent.
+            // authorizing gesture is the user turning the chat's screen
+            // attachment on, with the frame shown before it is sent.
             // Guide still excludes it, same as the other capture modes.
             Operation::CaptureChatScreen => {
                 if self.guide_armed {

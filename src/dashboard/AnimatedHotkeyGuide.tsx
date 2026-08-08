@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { hotkeyHints } from "../lib/copy";
 import { logError } from "../lib/log";
+import { useHotkeyBindings } from "../state/useHotkeyBindings";
 
 const ROTATE_MS = 4200;
 
 interface VoiceToggleKeyStatus {
   available: boolean;
   keyLabel: string;
+  keys: string[];
+  gesture: "doubleTap" | "press";
   reason?: string;
 }
 
@@ -19,6 +21,7 @@ interface GuideItem {
 }
 
 export function AnimatedHotkeyGuide({ onTryVoice }: { onTryVoice: () => void }) {
+  const { bindings } = useHotkeyBindings();
   const [index, setIndex] = useState(0);
   const [paused, setPaused] = useState(false);
   const [voiceStatus, setVoiceStatus] = useState<VoiceToggleKeyStatus | null>(null);
@@ -30,38 +33,39 @@ export function AnimatedHotkeyGuide({ onTryVoice }: { onTryVoice: () => void }) 
   }, []);
 
   const items = useMemo<GuideItem[]>(() => {
-    const voiceKey = voiceStatus?.keyLabel || "Left Ctrl";
-    return [
+    const voiceKeys = voiceStatus?.gesture === "press"
+      ? voiceStatus.keys
+      : [`Double tap ${voiceStatus?.keyLabel || "Left Ctrl"}`];
+    const dashboard = bindings.find((binding) => binding.id === "dashboard");
+    const screenSight = bindings.find((binding) => binding.id === "screenSight");
+    const guide = bindings.find((binding) => binding.id === "guide");
+    const items: GuideItem[] = [
       {
-        keys: [`Double tap ${voiceKey}`],
-        action: "Double-tap to talk.",
+        keys: voiceKeys,
+        action: voiceStatus?.gesture === "press" ? "Press your trigger to talk." : "Double-tap to talk.",
         detail: voiceStatus?.available === false
           ? voiceStatus.reason || "This shortcut is unavailable on this device."
-          : "Double-tap, then talk naturally.",
+          : voiceStatus?.gesture === "press" ? "Press the keys together, then talk naturally." : "Double-tap, then talk naturally.",
         available: voiceStatus?.available,
       },
-      {
-        keys: [...hotkeyHints.summon.keys],
-        action: "Bring Aura back instantly.",
-        detail: "Bring the companion forward from any app.",
-      },
-      {
-        keys: [...hotkeyHints.dashboard.keys],
+    ];
+    if (dashboard) items.push({
+        keys: dashboard.keys,
         action: "Your workspace is one shortcut away.",
         detail: "Return to this dashboard from anywhere.",
-      },
-      {
-        keys: [...hotkeyHints.screenSight.keys],
+      });
+    if (screenSight) items.push({
+        keys: screenSight.keys,
         action: "Show Aura what you are working on.",
-        detail: "Share your current screen only when you choose.",
-      },
-      {
-        keys: ["Ctrl", "Alt", "G"],
+        detail: "Let Buddy see your screen during voice only after you turn on Screen Sight.",
+      });
+    if (guide) items.push({
+        keys: guide.keys,
         action: "Get guidance while your screen changes.",
         detail: "Let Aura follow meaningful screen changes while you work.",
-      },
-    ];
-  }, [voiceStatus]);
+      });
+    return items;
+  }, [bindings, voiceStatus]);
 
   useEffect(() => {
     if (paused) return;
@@ -86,7 +90,7 @@ export function AnimatedHotkeyGuide({ onTryVoice }: { onTryVoice: () => void }) 
           {item.keys.map((key, keyIndex) => (
             <span key={`${key}:${keyIndex}`}>
               {keyIndex > 0 && <span className="db-hero-key-separator">
-                {index === 0 ? "then" : "+"}
+                {index === 0 && voiceStatus?.gesture === "doubleTap" ? "then" : "+"}
               </span>}
               <kbd style={{ animationDelay: `${keyIndex * 220}ms` }}>{key}</kbd>
             </span>

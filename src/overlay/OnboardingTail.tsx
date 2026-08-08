@@ -8,10 +8,12 @@ import {
 } from "../lib/acquisitionAnalytics";
 import { HotkeyTourStep } from "./HotkeyTourStep";
 import { AgentDemoStep } from "./AgentDemoStep";
+import { ProfileSetupStep } from "./ProfileSetupStep";
+import { PrivacySetupStep } from "./PrivacySetupStep";
 import type { VoiceBarState } from "./useVoiceBar";
 import "./OnboardingFlow.css";
 
-type TailStep = "hotkeyTour" | "agentDemo";
+type TailStep = "profile" | "hotkeyTour" | "privacy" | "agentDemo";
 
 interface VoiceToggleKeyStatus {
   available: boolean;
@@ -24,6 +26,9 @@ interface OverlaySnapshot {
 }
 
 interface OnboardingTailProps {
+  uid: string;
+  needsProfile: boolean;
+  onProfileComplete: () => void;
   /** OverlayRoot's hoisted voice instance, reused for the live demo. */
   voice: VoiceBarState;
   /** Marks first-run complete once the user lands in the dashboard. */
@@ -33,8 +38,15 @@ interface OnboardingTailProps {
 /** The post-sign-in tail: hotkey tour, then a live agent demo, then a handoff
  * to the dashboard. Rendered by OverlayRoot in a panel-sized surface once the
  * user signs in mid first-run (OnboardingFlow itself only mounts signed-out). */
-export function OnboardingTail({ voice, onComplete }: OnboardingTailProps) {
-  const [step, setStep] = useState<TailStep>("hotkeyTour");
+export function OnboardingTail({
+  uid,
+  needsProfile,
+  onProfileComplete,
+  voice,
+  onComplete,
+}: OnboardingTailProps) {
+  const initialStepRef = useRef<TailStep>(needsProfile ? "profile" : "hotkeyTour");
+  const [step, setStep] = useState<TailStep>(initialStepRef.current);
   const [keyLabel, setKeyLabel] = useState<string | undefined>();
   const completedRef = useRef(false);
 
@@ -62,7 +74,8 @@ export function OnboardingTail({ voice, onComplete }: OnboardingTailProps) {
 
   // Mirror the step to Rust for parity, same as OnboardingFlow.
   useEffect(() => {
-    invoke("set_onboarding_step", { step }).catch((err) =>
+    const nativeStep = step === "profile" ? "whereHeard" : step === "privacy" ? "link" : step;
+    invoke("set_onboarding_step", { step: nativeStep }).catch((err) =>
       logError("OnboardingTail: set_onboarding_step", err),
     );
   }, [step]);
@@ -89,13 +102,48 @@ export function OnboardingTail({ voice, onComplete }: OnboardingTailProps) {
     onComplete();
   }
 
+  async function goBack() {
+    if (step === "agentDemo") {
+      if (voice.desiredActive) await voice.endSession().catch(() => {});
+      setStep("privacy");
+    } else if (step === "privacy") {
+      setStep("hotkeyTour");
+    } else if (step === "hotkeyTour" && needsProfile) {
+      setStep("profile");
+    }
+  }
+
   return (
     <div className="onboarding-flow">
+      {step !== initialStepRef.current && (
+        <div className="onboarding-topbar">
+          <button type="button" className="onboarding-back-button" aria-label="Back" onClick={() => void goBack()}>
+            <span aria-hidden="true">{"<"}</span>
+          </button>
+        </div>
+      )}
+      {step === "profile" && (
+        <ProfileSetupStep
+          uid={uid}
+          onContinue={() => {
+            onProfileComplete();
+            setStep("hotkeyTour");
+          }}
+        />
+      )}
       {step === "hotkeyTour" && (
         <HotkeyTourStep
           keyLabel={keyLabel}
           onContinue={() => {
             void trackOnboardingStepCompleted("hotkey_tour");
+            setStep("privacy");
+          }}
+        />
+      )}
+      {step === "privacy" && (
+        <PrivacySetupStep
+          onContinue={() => {
+            void trackOnboardingStepCompleted("privacy_setup");
             setStep("agentDemo");
           }}
         />

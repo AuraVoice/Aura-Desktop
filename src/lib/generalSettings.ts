@@ -3,6 +3,7 @@ import { overlayStorePath } from "./copy";
 import { logError } from "./log";
 
 export const GENERAL_SETTINGS_KEY = "dashboard_general_settings";
+export const IMPROVEMENT_CONSENT_VERSION = 1;
 
 export interface GeneralSettings {
   dailyCatchUp: boolean;
@@ -19,6 +20,9 @@ export interface GeneralSettings {
   notifySuggestions: boolean;
   notifyAnnouncements: boolean;
   notifyMilestones: boolean;
+  improveConversations: boolean;
+  improveActions: boolean;
+  improvementConsentVersion: number;
 }
 
 // Launch-at-login is deliberately absent: autostart.rs owns it in a different
@@ -40,6 +44,9 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   notifySuggestions: true,
   notifyAnnouncements: true,
   notifyMilestones: true,
+  improveConversations: false,
+  improveActions: false,
+  improvementConsentVersion: 0,
 };
 
 function mergeSettings(saved: GeneralSettings | null | undefined): GeneralSettings {

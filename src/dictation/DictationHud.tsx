@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { GlassSurface } from "../overlay/GlassSurface";
 import { dictationConsent } from "../lib/copy";
+import { logInfo } from "../lib/log";
 import type { NotchEdge } from "../overlay/notchEdge";
 import { useDictationLevels } from "./useDictationLevels";
 import { useDictationSounds } from "./useDictationSounds";
@@ -97,6 +98,9 @@ function DictationConsent() {
   const [busy, setBusy] = useState(false);
 
   const answer = (accepted: boolean) => {
+    // Logged before the invoke so a click that reaches React but dies at the
+    // bridge is distinguishable from one that never reached the DOM at all.
+    logInfo("DictationConsent: answered", `accepted=${accepted}`);
     setBusy(true);
     void invoke("dictation_set_consent", { accepted }).catch(() => {
       // A consent write that failed must not look like it succeeded: leave the
@@ -108,7 +112,7 @@ function DictationConsent() {
   return (
     <GlassSurface className="dictation-consent" draggable={false}>
       <p className="dictation-consent__heading">{dictationConsent.heading}</p>
-      <p className="dictation-consent__body">{dictationConsent.body}</p>
+      <p className="dictation-consent__body">{dictationConsent.hudBody}</p>
       <div className="dictation-consent__actions">
         <button
           type="button"
@@ -144,7 +148,11 @@ export function DictationHud() {
   const [update, setUpdate] = useState<DictationUpdate>(IDLE);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  useDictationLevels(canvasRef, update.phase === "listening", true);
+  useDictationLevels(
+    canvasRef,
+    update.phase === "listening",
+    update.edge === "left" || update.edge === "right",
+  );
   useDictationSounds(update.phase);
 
   useEffect(() => {

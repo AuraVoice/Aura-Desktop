@@ -1,13 +1,16 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { hotkeyHints } from "../../lib/copy";
 import {
   DEFAULT_GENERAL_SETTINGS,
+  IMPROVEMENT_CONSENT_VERSION,
   loadGeneralSettings,
   saveGeneralSettings,
   type GeneralSettings,
 } from "../../lib/generalSettings";
 import { logError } from "../../lib/log";
+import { resetHotkeyBindings } from "../../lib/hotkeys";
+import { useHotkeyBindings } from "../../state/useHotkeyBindings";
+import { ShortcutEditorDialog } from "../../overlay/ShortcutEditorDialog";
 import {
   SettingsPageLayout,
   SettingsSection,
@@ -49,15 +52,19 @@ const PAGE_COPY: Record<GeneralPageSection, { title: string; description: string
   },
   system: {
     title: "System",
-    description: "Control desktop behavior and review Aura's keyboard shortcuts.",
+    description: "Control desktop behavior and change Aura's keyboard shortcuts.",
   },
   privacy: {
     title: "Data and privacy",
-    description: "Choose what Aura may show in Windows notifications on this PC.",
+    description: "Control optional data sharing and what Aura may show outside the app.",
   },
 };
 
 export function GeneralPage({ section = "general" }: { section?: GeneralPageSection }) {
+  const { bindings: hotkeyBindings, voice: voiceHotkey } = useHotkeyBindings();
+  const [editingShortcut, setEditingShortcut] = useState<{ id: string; label: string } | null>(null);
+  const [resettingShortcuts, setResettingShortcuts] = useState(false);
+  const [shortcutResetError, setShortcutResetError] = useState<string | null>(null);
   const [settings, setSettings] = useState<GeneralSettings>(DEFAULT_GENERAL_SETTINGS);
   const [loaded, setLoaded] = useState(false);
   const [saveError, setSaveError] = useState(false);
@@ -102,6 +109,26 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
       await saveGeneralSettings(next);
     } catch (err) {
       logError("GeneralPage: save settings", err);
+      setSettings(previous);
+      setSaveError(true);
+    }
+  }
+
+  async function updateImprovementChoice(
+    key: "improveConversations" | "improveActions",
+    value: boolean,
+  ) {
+    const previous = settings;
+    const next = { ...settings, [key]: value };
+    next.improvementConsentVersion = next.improveConversations || next.improveActions
+      ? IMPROVEMENT_CONSENT_VERSION
+      : 0;
+    setSettings(next);
+    setSaveError(false);
+    try {
+      await saveGeneralSettings(next);
+    } catch (err) {
+      logError("GeneralPage: save improvement consent", err);
       setSettings(previous);
       setSaveError(true);
     }
@@ -187,8 +214,8 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
           >
             <div className="db-panel db-settings-panel">
               <ToggleRow
-                label="Launch Aura at startup"
-                description="Start Aura automatically when you sign in to Windows."
+                label="Open Aura when Windows starts"
+                description="Open the Aura dashboard automatically after you sign in to Windows."
                 checked={launchAtStartup}
                 onChange={(value) => void updateLaunchAtStartup(value)}
               />
@@ -261,40 +288,115 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
 
           <SettingsSection
             title="Keyboard shortcuts"
-            description="Use Aura from anywhere while it is running."
+            description="Use Aura from anywhere while it is running. Pick whatever keys suit you."
           >
             <div className="db-panel db-shortcut-list">
-              {Object.values(hotkeyHints).map((hint) => (
-                <div className="db-shortcut-row" key={hint.action}>
-                  <span>{hint.action}</span>
+              {voiceHotkey && (
+                <div className="db-shortcut-row">
+                  <span>Start or end voice</span>
                   <span className="db-shortcut-keys">
-                    {hint.keys.map((key) => <kbd key={key}>{key}</kbd>)}
+                    {voiceHotkey.keys.map((key, index) => <kbd key={`${key}:${index}`}>{key}</kbd>)}
+                    {voiceHotkey.gesture === "doubleTap" && <kbd>twice</kbd>}
                   </span>
+                  <button
+                    type="button"
+                    className="db-shortcut-change"
+                    onClick={() => setEditingShortcut({ id: "voice", label: "Start or end voice" })}
+                  >
+                    Change
+                  </button>
+                </div>
+              )}
+              {hotkeyBindings.map((binding) => (
+                <div className="db-shortcut-row" key={binding.id}>
+                  <span>{binding.label}</span>
+                  <span className="db-shortcut-keys">
+                    {binding.keys.map((key, index) => <kbd key={`${key}:${index}`}>{key}</kbd>)}
+                  </span>
+                  <button
+                    type="button"
+                    className="db-shortcut-change"
+                    onClick={() => setEditingShortcut({ id: binding.id, label: binding.label })}
+                  >
+                    Change
+                  </button>
                 </div>
               ))}
-              <div className="db-shortcut-row">
-                <span>toggle Guide Mode</span>
-                <span className="db-shortcut-keys"><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>G</kbd></span>
-              </div>
+            </div>
+            <div className="db-shortcut-footer">
+              <button
+                type="button"
+                className="db-shortcut-reset"
+                disabled={resettingShortcuts}
+                onClick={() => {
+                  setResettingShortcuts(true);
+                  setShortcutResetError(null);
+                  resetHotkeyBindings()
+                    .catch((err) => {
+                      logError("GeneralPage: reset shortcuts", err);
+                      setShortcutResetError(err instanceof Error ? err.message : String(err));
+                    })
+                    .finally(() => setResettingShortcuts(false));
+                }}
+              >
+                {resettingShortcuts ? "Resetting..." : "Reset to defaults"}
+              </button>
+              {shortcutResetError && <span className="db-shortcut-reset-error">{shortcutResetError}</span>}
             </div>
           </SettingsSection>
+
+          {editingShortcut && (
+            <ShortcutEditorDialog
+              id={editingShortcut.id}
+              label={editingShortcut.label}
+              bindings={hotkeyBindings}
+              voice={voiceHotkey}
+              // useHotkeyBindings already re-reads from the change events Rust
+              // emits on save, so there is nothing to push back up here.
+              onSavedBindings={() => {}}
+              onSavedVoice={() => {}}
+              onClose={() => setEditingShortcut(null)}
+            />
+          )}
         </>
       )}
 
       {section === "privacy" && (
-        <SettingsSection
-          title="Notification privacy"
-          description="Control what appears outside the Aura window."
-        >
-          <div className="db-panel db-settings-panel">
-            <ToggleRow
-              label="Detailed notification previews"
-              description="Show meeting titles and message details in Windows notifications."
-              checked={settings.sensitiveNotificationPreviews}
-              onChange={(value) => void update("sensitiveNotificationPreviews", value)}
-            />
-          </div>
-        </SettingsSection>
+        <>
+          <SettingsSection
+            title="Improvement preferences"
+            description="Optional preferences stored on this device. Sample uploads are not active yet."
+          >
+            <div className="db-panel db-settings-panel">
+              <ToggleRow
+                label="Conversation samples"
+                description="Save an opt-in preference for selected voice recordings and transcripts."
+                checked={settings.improveConversations}
+                onChange={(value) => void updateImprovementChoice("improveConversations", value)}
+              />
+              <ToggleRow
+                label="Action samples"
+                description="Save an opt-in preference for selected screen context, corrections, and outcomes."
+                checked={settings.improveActions}
+                onChange={(value) => void updateImprovementChoice("improveActions", value)}
+              />
+            </div>
+          </SettingsSection>
+
+          <SettingsSection
+            title="Notification privacy"
+            description="Control what appears outside the Aura window."
+          >
+            <div className="db-panel db-settings-panel">
+              <ToggleRow
+                label="Detailed notification previews"
+                description="Show meeting titles and message details in Windows notifications."
+                checked={settings.sensitiveNotificationPreviews}
+                onChange={(value) => void update("sensitiveNotificationPreviews", value)}
+              />
+            </div>
+          </SettingsSection>
+        </>
       )}
 
       {saveError && <p className="db-settings-error">That preference could not be saved. Your previous setting was restored.</p>}

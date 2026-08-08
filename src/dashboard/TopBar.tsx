@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { Bell, ChevronDown, LogOut, UserRound } from "lucide-react";
-import { signOut, type User as FirebaseUser } from "firebase/auth";
+import { type User as FirebaseUser } from "firebase/auth";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { auth } from "../lib/firebase";
 import { logError } from "../lib/log";
+import { signOutSession } from "../lib/signOutSession";
 import { NotificationsPanel } from "./NotificationsPanel";
 import type { DashboardNotificationsState } from "./useDashboardNotifications";
 import type { StoredNotification } from "../lib/desktopNotifications";
@@ -159,10 +159,7 @@ export function TopBar({ title, user, notifications }: TopBarProps) {
 
   function handleSignOut() {
     setOpen(false);
-    // The main window's AuthProvider observes this shared Firebase session and
-    // revokes native authorization when it goes null, so a plain signOut here
-    // is enough - no direct native call from the dashboard window.
-    signOut(auth).catch((err) => logError("TopBar: sign out", err));
+    signOutSession().catch((err) => logError("TopBar: sign out", err));
   }
 
   function selectNotification(row: StoredNotification) {

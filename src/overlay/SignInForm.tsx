@@ -14,7 +14,15 @@ import "./SignInForm.css";
 
 export type Mode = "pairing" | "email" | "google";
 
-export function SignInForm({ initialMode = "pairing" }: { initialMode?: Mode }) {
+export function SignInForm({
+  initialMode = "pairing",
+  pairingOnly = false,
+  showLegal = true,
+}: {
+  initialMode?: Mode;
+  pairingOnly?: boolean;
+  showLegal?: boolean;
+}) {
   const [mode, setMode] = useState<Mode>(initialMode);
   const [code, setCode] = useState("");
   const [email, setEmail] = useState("");
@@ -103,7 +111,10 @@ export function SignInForm({ initialMode = "pairing" }: { initialMode?: Mode }) 
     <div className="sign-in-form">
       {mode === "pairing" && (
         <form className="sign-in-fields" onSubmit={handlePairingSubmit}>
-          <p className="sign-in-prompt">{copy.pairingPrompt}</p>
+          <p className="sign-in-prompt">
+            {copy.pairingPrompt}{" "}
+            <strong className="sign-in-pairing-path">{copy.pairingPath}</strong>
+          </p>
           <input
             className="sign-in-code-input"
             value={code}
@@ -122,12 +133,16 @@ export function SignInForm({ initialMode = "pairing" }: { initialMode?: Mode }) 
             >
               {submitting ? copy.submitPairingBusy : copy.submitPairingIdle}
             </button>
-            <button type="button" className="sign-in-mode-toggle" onClick={() => switchMode("email")}>
-              {copy.switchToEmail}
-            </button>
-            <button type="button" className="sign-in-mode-toggle" onClick={() => switchMode("google")}>
-              {copy.switchToGoogle}
-            </button>
+            {!pairingOnly && (
+              <>
+                <button type="button" className="sign-in-mode-toggle" onClick={() => switchMode("email")}>
+                  {copy.switchToEmail}
+                </button>
+                <button type="button" className="sign-in-mode-toggle" onClick={() => switchMode("google")}>
+                  {copy.switchToGoogle}
+                </button>
+              </>
+            )}
           </div>
         </form>
       )}
@@ -245,6 +260,7 @@ export function SignInForm({ initialMode = "pairing" }: { initialMode?: Mode }) 
           )}
         </div>
       )}
+      {showLegal && (
       <div className="sign-in-legal">
         <button type="button" className="sign-in-legal-link" onClick={() => void openUrl(privacyUrl)}>
           {copy.privacyLabel}
@@ -254,6 +270,7 @@ export function SignInForm({ initialMode = "pairing" }: { initialMode?: Mode }) 
           {copy.termsLabel}
         </button>
       </div>
+      )}
     </div>
   );
 }

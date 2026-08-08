@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
-import { bar as barCopy, hotkeyHints } from "../lib/copy";
+import { bar as barCopy } from "../lib/copy";
+import { useHotkeyBindings } from "../state/useHotkeyBindings";
 import { HotkeyHint } from "./HotkeyHint";
 import { OnboardingFlow } from "./OnboardingFlow";
 import iconUrl from "../assets/icons/Aura-Icon.png";
@@ -8,6 +9,7 @@ import "./SetupPanel.css";
 
 export function SetupPanel() {
   const [version, setVersion] = useState("");
+  const { voice } = useHotkeyBindings();
 
   // A beta tester otherwise has no way to tell you which build they're
   // running without checking file properties manually.
@@ -25,8 +27,10 @@ export function SetupPanel() {
         <img src={iconUrl} alt="" className="setup-panel-icon" />
         <span className="setup-panel-title">{barCopy.title}</span>
         <span className="setup-panel-spacer" />
-        <HotkeyHint keys={hotkeyHints.summon.keys} action={hotkeyHints.summon.action} />
-        <HotkeyHint keys={hotkeyHints.voice.keys} action={hotkeyHints.voice.action} />
+        <HotkeyHint
+          keys={voice?.gesture === "press" ? voice.keys : [`${voice?.keyLabel || "Left Ctrl"} twice`]}
+          action="summon Buddy or end voice"
+        />
       </div>
       <div className="setup-panel-content">
         <OnboardingFlow />

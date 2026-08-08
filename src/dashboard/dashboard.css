@@ -1815,6 +1815,53 @@
 .db-shortcut-keys {
   display: flex;
   gap: 6px;
+  /* Pins the keys and the Change button together at the right edge; the row's
+     space-between would otherwise strand the keys in the middle. */
+  margin-left: auto;
+}
+.db-shortcut-change {
+  flex-shrink: 0;
+  padding: 7px 13px;
+  border: 1px solid var(--db-border);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--db-text, #34383d);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.db-shortcut-change:hover {
+  background: var(--db-hover, rgba(0, 0, 0, 0.04));
+}
+.db-shortcut-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+.db-shortcut-reset {
+  padding: 8px 14px;
+  border: 1px solid var(--db-border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--db-text-muted, #6b7078);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.db-shortcut-reset:hover:not(:disabled) {
+  color: var(--db-text, #34383d);
+  background: var(--db-hover, rgba(0, 0, 0, 0.04));
+}
+.db-shortcut-reset:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.db-shortcut-reset-error {
+  color: #a43d38;
+  font-size: 12px;
 }
 .db-shortcut-keys kbd {
   min-width: 34px;

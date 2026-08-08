@@ -130,7 +130,7 @@ describe("OverlayRoot meeting background services", () => {
     });
   });
 
-  it("renders the onboarding tail instead of the notch while first-run is active", () => {
+  it("leaves onboarding to the dashboard while first-run is active", () => {
     mocks.useMeetings.mockReturnValue({ events: [] });
     mocks.useMeetingArm.mockReturnValue({ isArmed: vi.fn(() => false), revision: 0 });
     mocks.useMeetingCapture.mockReturnValue({});
@@ -141,8 +141,8 @@ describe("OverlayRoot meeting background services", () => {
     });
 
     const text = JSON.stringify(renderer!.toJSON());
-    expect(text).toContain("tail");
-    expect(text).not.toContain("notch");
+    expect(text).not.toContain("tail");
+    expect(text).toContain("notch");
   });
 
   it("keeps Guide Mode out of the card slot so drafts remain conversationally available", () => {

@@ -4,6 +4,7 @@ import { aliasAnonymousToUser, setPersonProperties } from "./analytics";
 import {
   desktopAnonIdKey,
   desktopAnonAliasedUidKey,
+  desktopOnboardingSeenKey,
   desktopProfileSyncedKey,
   desktopRoleKey,
   desktopWhereHeardKey,
@@ -98,12 +99,16 @@ export async function syncProfileOnSignIn(uid: string): Promise<void> {
   const whereHeard = await store.get<StoredAnswer>(desktopWhereHeardKey);
   const role = await store.get<StoredAnswer>(desktopRoleKey);
 
-  // A user who onboarded before this feature existed has no answers to sync.
-  // Mark done so we don't re-read the store on every future launch.
+  // A user who finished onboarding before this feature existed has no answers
+  // to sync. A new user has not reached the profile screen yet, so leave the
+  // guard open for that screen to save and sync the answers after sign-in.
   if (!whereHeard && !role) {
-    await store.set(desktopProfileSyncedKey, true).catch((err) =>
-      logError("profile: mark synced (no answers)", err),
-    );
+    const onboardingSeen = await store.get<boolean>(desktopOnboardingSeenKey);
+    if (onboardingSeen) {
+      await store.set(desktopProfileSyncedKey, true).catch((err) =>
+        logError("profile: mark synced (no answers)", err),
+      );
+    }
     return;
   }
 

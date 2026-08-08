@@ -8,7 +8,7 @@ import { logError, logInfo } from "../lib/log";
 import { trackEvent } from "../lib/analytics";
 import { micCaptureFailedCode, voiceCapReachedCode, voiceErrorMessageForCode } from "../lib/voiceErrorCopy";
 import { shouldArmInitialAgentSilenceWatchdog } from "./voiceSessionTiming";
-import { startRealtimeLeg } from "../lib/realtime";
+import { startRealtimeLeg, type RealtimeActivity } from "../lib/realtime";
 import { outputMuted, subscribeOutputMode } from "../lib/outputMode";
 import { BridgeCoordinator } from "./bridgeCoordinator";
 
@@ -108,6 +108,8 @@ export function useVoiceBar() {
   const desiredActiveRef = useRef(false);
   const sessionGenerationRef = useRef(0);
   const [desiredActive, setDesiredActive] = useState(false);
+  const [realtimeActivity, setRealtimeActivity] = useState<RealtimeActivity | null>(null);
+  const [realtimeVisualizerTrack, setRealtimeVisualizerTrack] = useState<MediaStreamTrack | null>(null);
   // The in-flight (or settled) prepareSession promise - activateSession awaits
   // it so the gesture hook can run prepare in parallel with the native summon.
   const preparePromiseRef = useRef<Promise<void> | null>(null);
@@ -188,6 +190,8 @@ export function useVoiceBar() {
     bridgedRef.current = false;
     pendingAgentTrackRef.current = null;
     pendingBridgeControlsRef.current = [];
+    setRealtimeActivity(null);
+    setRealtimeVisualizerTrack(null);
   }, []);
 
   const clearWatchdogs = useCallback(() => {
@@ -793,6 +797,8 @@ export function useVoiceBar() {
       bridgeOutcomeRef.current = "cold";
       const controller = new AbortController();
       let sharedTrack: MediaStreamTrack | null = null;
+      let realtimeRemoteTrack: MediaStreamTrack | null = null;
+      let currentRealtimeActivity: RealtimeActivity = "listening";
       let realtimeTimeout: ReturnType<typeof setTimeout> | null = null;
       let fallbackStarted = false;
       const fallbackToColdPath = async (reason: unknown) => {
@@ -809,6 +815,8 @@ export function useVoiceBar() {
         sharedTrack?.stop();
         pendingAgentTrackRef.current = null;
         pendingBridgeControlsRef.current = [];
+        setRealtimeActivity(null);
+        setRealtimeVisualizerTrack(null);
         const detail = String(reason);
         bridgeOutcomeRef.current = detail.includes("timed out")
           ? "bridge_timeout"
@@ -852,10 +860,27 @@ export function useVoiceBar() {
         });
         sharedTrack = stream.getAudioTracks()[0] ?? null;
         if (!sharedTrack) throw new Error("no audio track from getUserMedia");
+        setRealtimeActivity("listening");
+        setRealtimeVisualizerTrack(sharedTrack);
         const realtimeStart = startRealtimeLeg({
           micTrack: sharedTrack,
           audioEl: ensureAudioEl(realtimeAudioElRef),
           signal: controller.signal,
+          onActivity: (activity) => {
+            currentRealtimeActivity = activity;
+            setRealtimeActivity(activity);
+            setRealtimeVisualizerTrack(
+              activity === "buddy_talking" && realtimeRemoteTrack
+                ? realtimeRemoteTrack
+                : sharedTrack,
+            );
+          },
+          onRemoteAudioTrack: (track) => {
+            realtimeRemoteTrack = track;
+            if (track && currentRealtimeActivity === "buddy_talking") {
+              setRealtimeVisualizerTrack(track);
+            }
+          },
         });
         const realtime = await Promise.race([
           realtimeStart,
@@ -881,6 +906,8 @@ export function useVoiceBar() {
             void fallbackToColdPath(reason);
           },
           onActive: () => {
+            setRealtimeActivity(null);
+            setRealtimeVisualizerTrack(null);
             markAssistantResponded();
             logInfo("useVoiceBar: bridge active", "LiveKit owns the conversation");
           },
@@ -984,6 +1011,8 @@ export function useVoiceBar() {
     showMicSettingsHint,
     isVoiceCapped,
     desiredActive,
+    realtimeActivity,
+    realtimeVisualizerTrack,
     startSession,
     startBridgedSession,
     prepareSession,

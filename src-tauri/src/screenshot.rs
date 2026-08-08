@@ -190,19 +190,15 @@ pub async fn capture_turn_screen_with_geometry(
 
 // ── Chat screen context ─────────────────────────────────────────────────────
 //
-// The text chat's frame is captured the instant the hotkey fires, from the
-// monitor of the app the user was actually in, and parked in memory until they
-// either send it or drop it. Two rules make this different from every other
-// capture path in this file:
+// The text chat remembers which monitor was active when its hotkey fired, but
+// captures no pixels until the user turns on the composer attachment. Two rules
+// make this different from every other capture path in this file:
 //
-//   - It is NEVER persisted. The other paths write through screenshot_store
-//     because the user explicitly asked for that frame; this one is taken
-//     speculatively, before the user has typed a word, and most of them are
-//     thrown away unsent. A speculative frame has no business on disk.
-//   - It is captured BEFORE the overlay takes foreground (see
-//     overlay::summon_chat). Afterwards the foreground window is our own notch
-//     and the cursor is parked on the composer, so neither is a usable answer
-//     to "which screen was the user reading".
+//   - It is NEVER persisted. The attachment is held only in memory until the
+//     user sends it, removes it, or closes chat.
+//   - The source monitor is remembered BEFORE the overlay takes foreground
+//     (see overlay::summon_chat), so a later opt-in capture still points at the
+//     app the user came from rather than whichever monitor holds the composer.
 
 /// Header in front of the JPEG in `take_chat_capture`'s response: two u32s and
 /// one i64, little-endian, read by a `DataView` in chatScreenCapture.ts.
@@ -278,11 +274,14 @@ async fn capture_into_pending(app: AppHandle, point: (i32, i32)) {
 }
 
 /// Called from `overlay::summon_chat` while the user's own app is still the
-/// foreground window. Returns immediately; the capture completes on its own
-/// while the user is still reading the slot and typing.
-pub fn arm_chat_capture(app: &AppHandle, point: (i32, i32)) {
-    let app = app.clone();
-    tauri::async_runtime::spawn(capture_into_pending(app, point));
+/// foreground window. Remembers only the source monitor; capture remains off
+/// until the user enables the attachment in the composer.
+pub fn prepare_chat_capture(app: &AppHandle, point: (i32, i32)) {
+    if let Some(handle) = chat_state(app) {
+        let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        state.pending = None;
+        state.source_point = Some(point);
+    }
 }
 
 /// Drops any pending frame. Called when the user removes the chip, closes the

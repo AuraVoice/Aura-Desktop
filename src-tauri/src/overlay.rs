@@ -22,6 +22,8 @@ const NOTCH_EDGE_KEY: &str = "notch_edge";
 // height above this base; the persisted center is the owl anchor.
 const COMPANION_WIDTH: f64 = 480.0;
 const COMPANION_HEIGHT: f64 = 400.0;
+const HOTKEY_TOUR_WIDTH: f64 = 720.0;
+const HOTKEY_TOUR_HEIGHT: f64 = 580.0;
 // The notch is a compact waveform-only pill (subtitle removed). It docks to any
 // of four screen edges; NOTCH_MAIN is its length ALONG that edge and NOTCH_CROSS
 // its thickness perpendicular to it. On Top/Bottom the pill is horizontal
@@ -541,6 +543,9 @@ fn size_for(state: &OverlayState) -> LogicalSize<f64> {
         (OverlayPresentation::Panel, PanelVariant::Setup) => {
             LogicalSize::new(SETUP_WIDTH, SETUP_HEIGHT)
         }
+        (OverlayPresentation::Panel, _) if state.onboarding_step == OnboardingStep::HotkeyTour => {
+            LogicalSize::new(HOTKEY_TOUR_WIDTH, HOTKEY_TOUR_HEIGHT)
+        }
         _ => LogicalSize::new(COMPANION_WIDTH, COMPANION_HEIGHT),
     }
 }
@@ -812,11 +817,6 @@ pub fn cancel_notch_move(app: &AppHandle) {
     apply(app);
 }
 
-/// Ctrl+Alt+B reveals and focuses the persistent companion/setup window.
-pub fn hotkey_pressed(app: &AppHandle) {
-    summon(app);
-}
-
 /// Tray "Open Buddy" / second-instance launch: reveal the correct persistent
 /// presentation, or just refocus it if it is already showing.
 pub fn summon(app: &AppHandle) {
@@ -893,7 +893,7 @@ pub fn summon_bar(app: &AppHandle) -> Result<(), String> {
 pub fn summon_chat(app: &AppHandle) -> Result<(), String> {
     // Read the user's own foreground window BEFORE anything below can steal it,
     // so the chat's screen context comes from the app they were working in
-    // rather than from the notch (see screenshot::arm_chat_capture).
+    // rather than from the notch (see screenshot::prepare_chat_capture).
     let source_point = win_focus::foreground_window_center(app);
 
     summon_bar(app)?;
@@ -902,7 +902,7 @@ pub fn summon_chat(app: &AppHandle) -> Result<(), String> {
         return Err("main window unavailable".to_string());
     };
     if let Some(point) = source_point {
-        crate::screenshot::arm_chat_capture(app, point);
+        crate::screenshot::prepare_chat_capture(app, point);
     }
     win_focus::raise_for_hotkey(app, &window);
     window
@@ -1076,6 +1076,7 @@ pub fn set_onboarding_step(app: &AppHandle, step: OnboardingStep) {
             .unwrap_or_else(|e| e.into_inner())
             .onboarding_step = step;
     }
+    apply(app);
 }
 
 /// Called from the main window's `WindowEvent::Moved` handler. Ignored while
@@ -1195,7 +1196,7 @@ pub fn point_at(
     // With no other call site for cancel_pointing anywhere in the app, that
     // left this fullscreen, click-through takeover with no way to ever end -
     // unclickable (by design, for the flight animation) and unrecoverable via
-    // any hotkey (hotkey_pressed's match has a bare `_ => {}` for Pointing).
+    // any shortcut while the pointing takeover owns the window.
     emit_overlay_changed(app);
 
     // Window-relative: the window now exactly covers the target monitor, so

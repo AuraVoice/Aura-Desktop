@@ -10,6 +10,8 @@ use crate::{autostart, dashboard, overlay, updater};
 const OPEN_BUDDY: &str = "open_buddy";
 const OPEN_DASHBOARD: &str = "open_dashboard";
 const OPEN_NOTIFICATIONS: &str = "open_notifications";
+const CAPTURE_NOW: &str = "capture_now";
+const SIGN_OUT: &str = "sign_out";
 const AUTOSTART: &str = "autostart";
 const VERSION: &str = "version";
 const UPDATE: &str = "update";
@@ -46,6 +48,12 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         MenuItem::with_id(app, OPEN_DASHBOARD, "Open Dashboard", true, None::<&str>)?;
     let notifications_item =
         MenuItem::with_id(app, OPEN_NOTIFICATIONS, "Notifications", true, None::<&str>)?;
+    // The notch pill carries no controls any more, so the two menu actions that
+    // had no other home moved here. Both are frontend concerns, so they follow
+    // the OPEN_NOTIFICATIONS shape: Rust only fires the intent.
+    let capture_now_item =
+        MenuItem::with_id(app, CAPTURE_NOW, "Capture now", true, None::<&str>)?;
+    let sign_out_item = MenuItem::with_id(app, SIGN_OUT, "Sign out", true, None::<&str>)?;
     // Checked from the real launch-at-login state, not the persisted intent -
     // build runs right after apply_startup_policy, and reality is what the
     // user needs to see if that policy application failed.
@@ -77,10 +85,12 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             &open_buddy,
             &open_dashboard,
             &notifications_item,
+            &capture_now_item,
             &autostart_item,
             &version_item,
             &update_item,
             &separator,
+            &sign_out_item,
             &quit,
         ],
     )?;
@@ -130,6 +140,21 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
                     error!("tray: failed to emit open-notifications-requested: {e}");
                 }
             }
+            // useMeetingCapture owns the arm state and the upload queue, so the
+            // capture itself has to start on the frontend. Summon first for the
+            // same reason OPEN_NOTIFICATIONS does: the recording indicator lives
+            // on the bar, and starting a capture with no visible surface would
+            // break the "capture is always visible" commitment.
+            CAPTURE_NOW => {
+                overlay::summon(app);
+                if let Err(e) = app.emit("capture-now-requested", ()) {
+                    error!("tray: failed to emit capture-now-requested: {e}");
+                }
+            }
+            // Same entry point Ctrl+Shift+D uses: it revokes the native command
+            // surface BEFORE asking the webview to sign out, so a stalled JS leg
+            // still leaves the sensitive commands locked.
+            SIGN_OUT => overlay::sign_out_requested(app),
             AUTOSTART => autostart::toggle(app),
             VERSION => {} // disabled label item, not clickable
             UPDATE => match updater::install_pending_update(app) {

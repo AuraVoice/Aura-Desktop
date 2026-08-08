@@ -1,42 +1,67 @@
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+
 use serde::Serialize;
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_store::StoreExt;
 
 const DOUBLE_TAP_MS: u32 = 400;
 
-#[allow(dead_code)]
-#[derive(Clone, Copy)]
-enum VoiceToggleKey {
-    LeftCtrl,
-    RightCtrl,
-    EitherCtrl,
-}
-
-// Change this one value to switch the physical key recognized by the hook.
-const VOICE_TOGGLE_KEY: VoiceToggleKey = VoiceToggleKey::LeftCtrl;
+// Win32 virtual key codes for the double-tappable keys, spelled out so this
+// predicate stays usable from targets that do not link the windows crate.
+// Alt is deliberately absent: a lone Alt tap drops the focused window into
+// Windows keyboard menu mode, the same failure as the 2026-07-16 notch lesson.
+const VK_LCONTROL_CODE: u32 = 0xA2;
+const VK_RCONTROL_CODE: u32 = 0xA3;
+const VK_LSHIFT_CODE: u32 = 0xA0;
+const VK_RSHIFT_CODE: u32 = 0xA1;
+const VOICE_KEY_STORE: &str = "hotkeys.json";
+const VOICE_KEY_SETTING: &str = "voiceToggleKey";
+static VOICE_TOGGLE_VK: AtomicU32 = AtomicU32::new(VK_LCONTROL_CODE);
+static TOGGLE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub fn configured_key_label() -> &'static str {
-    match VOICE_TOGGLE_KEY {
-        VoiceToggleKey::LeftCtrl => "Left Ctrl",
-        VoiceToggleKey::RightCtrl => "Right Ctrl",
-        VoiceToggleKey::EitherCtrl => "either Ctrl key",
+    match VOICE_TOGGLE_VK.load(Ordering::Relaxed) {
+        VK_RCONTROL_CODE => "Right Ctrl",
+        VK_LCONTROL_CODE => "Left Ctrl",
+        VK_LSHIFT_CODE => "Left Shift",
+        VK_RSHIFT_CODE => "Right Shift",
+        _ => "custom shortcut",
     }
 }
 
-// Win32 virtual key codes for the Ctrl keys, spelled out so this predicate
-// stays usable from targets that do not link the windows crate.
-const VK_LCONTROL_CODE: u32 = 0xA2;
-const VK_RCONTROL_CODE: u32 = 0xA3;
+/// The accelerator sentinel matching the key the hook is currently watching.
+/// Inverse of `vk_for_sentinel`.
+fn configured_key_accelerator() -> &'static str {
+    match VOICE_TOGGLE_VK.load(Ordering::Relaxed) {
+        VK_RCONTROL_CODE => "ControlRight",
+        VK_LSHIFT_CODE => "ShiftLeft",
+        VK_RSHIFT_CODE => "ShiftRight",
+        _ => "ControlLeft",
+    }
+}
+
+/// `Some(vk)` when the accelerator names a double-tappable key, `None` when it
+/// is a real modifier+key shortcut handled by the global-shortcut plugin.
+fn vk_for_sentinel(accelerator: &str) -> Option<u32> {
+    match accelerator {
+        "ControlLeft" => Some(VK_LCONTROL_CODE),
+        "ControlRight" => Some(VK_RCONTROL_CODE),
+        "ShiftLeft" => Some(VK_LSHIFT_CODE),
+        "ShiftRight" => Some(VK_RSHIFT_CODE),
+        _ => None,
+    }
+}
 
 /// True when `vk` is the key this listener treats as the voice toggle. The
 /// dictation chord derives its own voice-toggle suppression from this rather
 /// than hardcoding "Left Ctrl", so changing either constant keeps the two in
 /// agreement.
 pub fn is_voice_toggle_vk(vk: u32) -> bool {
-    match VOICE_TOGGLE_KEY {
-        VoiceToggleKey::LeftCtrl => vk == VK_LCONTROL_CODE,
-        VoiceToggleKey::RightCtrl => vk == VK_RCONTROL_CODE,
-        VoiceToggleKey::EitherCtrl => vk == VK_LCONTROL_CODE || vk == VK_RCONTROL_CODE,
-    }
+    vk == VOICE_TOGGLE_VK.load(Ordering::Relaxed)
+}
+
+pub fn use_default_toggle_key() {
+    VOICE_TOGGLE_VK.store(VK_LCONTROL_CODE, Ordering::Relaxed);
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -74,7 +99,10 @@ impl TapClassifier {
 #[serde(rename_all = "camelCase")]
 pub struct VoiceToggleKeyStatus {
     pub available: bool,
-    pub key_label: &'static str,
+    pub key_label: String,
+    pub accelerator: String,
+    pub keys: Vec<String>,
+    pub gesture: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
@@ -96,12 +124,95 @@ impl VoiceToggleKeyHandle {
 #[tauri::command]
 pub fn voice_toggle_key_status(
     state: tauri::State<'_, VoiceToggleKeyHandle>,
+    hotkeys: tauri::State<'_, crate::hotkeys::HotkeyState>,
 ) -> VoiceToggleKeyStatus {
-    state.status()
+    let mut status = state.status();
+    apply_current_binding(&mut status, &hotkeys);
+    status
 }
 
 pub fn start(app: AppHandle) -> VoiceToggleKeyHandle {
+    if let Ok(store) = app.store(VOICE_KEY_STORE) {
+        let saved = store.get(VOICE_KEY_SETTING).and_then(|value| value.as_str().map(str::to_string));
+        // A custom modifier+key shortcut parks the hook on vk 0, which no key
+        // ever reports, so the double-tap path can never fire alongside it.
+        let vk = match saved.as_deref() {
+            None => VK_LCONTROL_CODE,
+            Some(accelerator) => vk_for_sentinel(accelerator).unwrap_or(0),
+        };
+        VOICE_TOGGLE_VK.store(vk, Ordering::Relaxed);
+    }
     platform::start(app)
+}
+
+#[tauri::command]
+pub fn set_voice_toggle_key(
+    app: AppHandle,
+    state: tauri::State<'_, VoiceToggleKeyHandle>,
+    hotkeys: tauri::State<'_, crate::hotkeys::HotkeyState>,
+    key_code: String,
+) -> Result<VoiceToggleKeyStatus, String> {
+    let vk = vk_for_sentinel(&key_code).unwrap_or(0);
+    if let Err(err) = crate::hotkeys::set_voice_binding(&app, &hotkeys, &key_code) {
+        let mut status = state.status();
+        apply_current_binding(&mut status, &hotkeys);
+        let _ = app.emit("voice-toggle-key-changed", &status);
+        return Err(err);
+    }
+    VOICE_TOGGLE_VK.store(vk, Ordering::Relaxed);
+    let mut status = state.status();
+    apply_current_binding(&mut status, &hotkeys);
+    let _ = app.emit("voice-toggle-key-changed", &status);
+    Ok(status)
+}
+
+fn apply_current_binding(status: &mut VoiceToggleKeyStatus, hotkeys: &crate::hotkeys::HotkeyState) {
+    if let Some((accelerator, keys, registered)) = crate::hotkeys::voice_binding(hotkeys) {
+        status.available = registered;
+        status.reason = None;
+        status.key_label = keys.join(" + ");
+        status.accelerator = accelerator;
+        status.keys = keys;
+        status.gesture = "press".to_string();
+        if !registered {
+            status.reason = Some("That shortcut is currently held by Windows or another app.".to_string());
+        }
+    } else {
+        let label = configured_key_label().to_string();
+        status.accelerator = configured_key_accelerator().to_string();
+        status.keys = vec![label.clone()];
+        status.key_label = label;
+        status.gesture = "doubleTap".to_string();
+    }
+}
+
+/// Re-publishes the voice trigger status after something other than
+/// `set_voice_toggle_key` changed it (currently the reset command).
+pub fn emit_status_changed(app: &AppHandle) {
+    let Some(handle) = app.try_state::<VoiceToggleKeyHandle>() else { return };
+    let hotkeys = app.state::<crate::hotkeys::HotkeyState>();
+    let mut status = handle.status();
+    apply_current_binding(&mut status, &hotkeys);
+    let _ = app.emit("voice-toggle-key-changed", &status);
+}
+
+pub fn emit_toggle(app: &AppHandle) {
+    let sequence = TOGGLE_SEQUENCE.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+    let emitted_at_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    if let Some(window) = app.get_webview_window("main") {
+        if let Err(err) = window.emit(
+            "aura-toggle",
+            serde_json::json!({
+                "sequence": sequence,
+                "emittedAtMs": emitted_at_ms,
+            }),
+        ) {
+            log::error!("voice_toggle_key: failed to emit sequence={sequence}: {err}");
+        }
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -136,11 +247,11 @@ mod platform {
     use std::sync::mpsc;
 
     use log::{error, info};
-    use tauri::{AppHandle, Emitter, Manager};
+    use tauri::AppHandle;
     use tokio::sync::mpsc as tokio_mpsc;
     use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::Threading::GetCurrentThreadId;
-    use windows::Win32::UI::Input::KeyboardAndMouse::{VK_ESCAPE, VK_LCONTROL, VK_RCONTROL};
+    use windows::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE;
     use windows::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, DispatchMessageW, GetMessageW, PeekMessageW, SetWindowsHookExW,
         TranslateMessage, UnhookWindowsHookEx, HC_ACTION, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MSG,
@@ -150,8 +261,8 @@ mod platform {
     use crate::dictation::chord::{ChordState, DICTATION_CHORD};
 
     use super::{
-        configured_key_label, Tap, TapClassifier, VoiceToggleKey, VoiceToggleKeyHandle,
-        VoiceToggleKeyStatus, DOUBLE_TAP_MS, VOICE_TOGGLE_KEY,
+        configured_key_label, is_voice_toggle_vk, Tap, TapClassifier, VoiceToggleKeyHandle,
+        VoiceToggleKeyStatus, DOUBLE_TAP_MS,
     };
 
     thread_local! {
@@ -267,13 +378,7 @@ mod platform {
             // VOICE_TOGGLE_KEY on Left Ctrl) turns this off by itself.
             let dictation_engaged = DICTATION_CHORD.suppresses_voice_toggle()
                 && chord_outcome.is_some_and(|outcome| outcome.engaged);
-            let is_toggle_key = match VOICE_TOGGLE_KEY {
-                VoiceToggleKey::LeftCtrl => event.vkCode == VK_LCONTROL.0 as u32,
-                VoiceToggleKey::RightCtrl => event.vkCode == VK_RCONTROL.0 as u32,
-                VoiceToggleKey::EitherCtrl => {
-                    event.vkCode == VK_LCONTROL.0 as u32 || event.vkCode == VK_RCONTROL.0 as u32
-                }
-            };
+            let is_toggle_key = is_voice_toggle_vk(event.vkCode);
 
             let should_emit = TAP_STATE.with(|state| {
                 observe_physical_key_event(
@@ -361,7 +466,10 @@ mod platform {
                 return VoiceToggleKeyHandle {
                     status: VoiceToggleKeyStatus {
                         available: false,
-                        key_label: configured_key_label(),
+                        key_label: configured_key_label().to_string(),
+                        accelerator: String::new(),
+                        keys: Vec::new(),
+                        gesture: String::new(),
                         reason: Some(reason),
                     },
                     hook_thread_id: 0,
@@ -379,7 +487,6 @@ mod platform {
                 tauri::async_runtime::spawn(async move {
                     let started_at = std::time::Instant::now();
                     let mut classifier = TapClassifier::new(DOUBLE_TAP_MS);
-                    let mut sequence = 0_u64;
                     while event_rx.recv().await.is_some() {
                         let now_ms = started_at.elapsed().as_millis() as u32;
                         let previous_tap_ms = classifier.last_tap_ms;
@@ -399,34 +506,23 @@ mod platform {
                             }
                             continue;
                         }
-                        sequence = sequence.saturating_add(1);
                         let interval_ms = interval_ms.unwrap_or(0);
-                        let emitted_at_ms = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis() as u64;
                         info!(
-                            "voice_toggle_key: emitting toggle sequence={sequence} interval={interval_ms}ms"
+                            "voice_toggle_key: emitting toggle interval={interval_ms}ms"
                         );
-                        if let Some(window) = app.get_webview_window("main") {
-                            if let Err(err) = window.emit(
-                                "aura-toggle",
-                                serde_json::json!({
-                                    "sequence": sequence,
-                                    "emittedAtMs": emitted_at_ms,
-                                }),
-                            ) {
-                                error!(
-                                    "voice_toggle_key: failed to emit sequence={sequence}: {err}"
-                                );
-                            }
+                        if crate::hotkeys::intercept_voice_test(&app) {
+                            continue;
                         }
+                        super::emit_toggle(&app);
                     }
                 });
                 VoiceToggleKeyHandle {
                     status: VoiceToggleKeyStatus {
                         available: true,
-                        key_label: configured_key_label(),
+                        key_label: configured_key_label().to_string(),
+                        accelerator: String::new(),
+                        keys: Vec::new(),
+                        gesture: String::new(),
                         reason: None,
                     },
                     hook_thread_id,
@@ -439,7 +535,10 @@ mod platform {
                 VoiceToggleKeyHandle {
                     status: VoiceToggleKeyStatus {
                         available: false,
-                        key_label: configured_key_label(),
+                        key_label: configured_key_label().to_string(),
+                        accelerator: String::new(),
+                        keys: Vec::new(),
+                        gesture: String::new(),
                         reason: Some(reason),
                     },
                     hook_thread_id: 0,
@@ -453,7 +552,10 @@ mod platform {
                 VoiceToggleKeyHandle {
                     status: VoiceToggleKeyStatus {
                         available: false,
-                        key_label: configured_key_label(),
+                        key_label: configured_key_label().to_string(),
+                        accelerator: String::new(),
+                        keys: Vec::new(),
+                        gesture: String::new(),
                         reason: Some(reason),
                     },
                     hook_thread_id: 0,
@@ -558,7 +660,10 @@ mod platform {
         VoiceToggleKeyHandle {
             status: VoiceToggleKeyStatus {
                 available: false,
-                key_label: configured_key_label(),
+                key_label: configured_key_label().to_string(),
+                accelerator: String::new(),
+                keys: Vec::new(),
+                gesture: String::new(),
                 reason: Some("Voice key toggling is available on Windows only.".to_string()),
             },
         }

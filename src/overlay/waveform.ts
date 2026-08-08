@@ -96,7 +96,7 @@ export function staticTargets(maxHalfHeight: number, into: Float32Array) {
   return into;
 }
 
-/// Chunky bars kept as a compact cluster centered in the notch, not spread edge
+/// Thin bars kept as a compact cluster centered in the notch, not spread edge
 /// to edge.
 export function paintBars(
   context: CanvasRenderingContext2D,
@@ -105,8 +105,8 @@ export function paintBars(
   height: number,
 ) {
   const centerY = height / 2;
-  const barWidth = clamp(width / 46, 4, 6);
-  const gap = barWidth * 1.5;
+  const barWidth = clamp(width / 60, 2.5, 3);
+  const gap = barWidth * 1.2;
   const clusterWidth = BAR_COUNT * barWidth + (BAR_COUNT - 1) * gap;
   const startX = (width - clusterWidth) / 2;
   const gradient = context.createLinearGradient(0, 0, 0, height);

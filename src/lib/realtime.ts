@@ -23,10 +23,18 @@ export interface RealtimeLeg {
   close(): void;
 }
 
+export type RealtimeActivity =
+  | "listening"
+  | "user_talking"
+  | "thinking"
+  | "buddy_talking";
+
 export interface StartRealtimeLegOptions {
   micTrack: MediaStreamTrack;
   audioEl: HTMLAudioElement;
   signal: AbortSignal;
+  onActivity?: (activity: RealtimeActivity) => void;
+  onRemoteAudioTrack?: (track: MediaStreamTrack | null) => void;
 }
 
 // OpenAI's Realtime WebRTC entry point. The ephemeral secret (ek_...) authorizes
@@ -52,7 +60,7 @@ interface RealtimeSessionSecret {
 let realtimeLegSeq = 0;
 
 export async function startRealtimeLeg(opts: StartRealtimeLegOptions): Promise<RealtimeLeg> {
-  const { micTrack, audioEl, signal } = opts;
+  const { micTrack, audioEl, signal, onActivity, onRemoteAudioTrack } = opts;
 
   // TEMP (diagnostic): TTFT clock + per-invocation id.
   const legId = ++realtimeLegSeq;
@@ -92,6 +100,7 @@ export async function startRealtimeLeg(opts: StartRealtimeLegOptions): Promise<R
     } catch {
       /* ignore */
     }
+    onRemoteAudioTrack?.(null);
   };
 
   const turns: BridgeTurn[] = [];
@@ -102,6 +111,7 @@ export async function startRealtimeLeg(opts: StartRealtimeLegOptions): Promise<R
 
   pc.ontrack = (event) => {
     audioEl.srcObject = event.streams[0] ?? new MediaStream([event.track]);
+    onRemoteAudioTrack?.(event.track);
     void audioEl.play().catch((err) => logError("realtime: audioEl.play", err));
   };
 
@@ -129,16 +139,20 @@ export async function startRealtimeLeg(opts: StartRealtimeLegOptions): Promise<R
           break;
         case "input_audio_buffer.speech_started":
           userSpeaking = true;
+          onActivity?.("user_talking");
           break;
         case "input_audio_buffer.speech_stopped":
           userSpeaking = false;
+          onActivity?.("thinking");
           break;
         case "response.created":
           assistantResponding = true;
+          onActivity?.("thinking");
           break;
         // TEMP (diagnostic): first audio chunk from the model = true TTFT.
         case "response.audio.delta":
         case "response.output_audio.delta":
+          onActivity?.("buddy_talking");
           if (!firstAudioLogged) {
             firstAudioLogged = true;
             logInfo("realtime: TTFT", `legId=${legId} firstAudioMs=${since()}`);
@@ -146,6 +160,7 @@ export async function startRealtimeLeg(opts: StartRealtimeLegOptions): Promise<R
           break;
         case "response.done":
           assistantResponding = false;
+          onActivity?.("listening");
           break;
         default:
           break;
@@ -220,6 +235,7 @@ export async function startRealtimeLeg(opts: StartRealtimeLegOptions): Promise<R
   });
 
   signal.addEventListener("abort", onAbort);
+  onActivity?.("listening");
   logInfo(
     "realtime: leg connected",
     `legId=${legId} model=${session.model} voice=${session.voice ?? ""} connectMs=${since()}`,

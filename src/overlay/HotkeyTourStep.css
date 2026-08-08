@@ -1,0 +1,218 @@
+.onboarding-step.hotkey-tour-step {
+  width: 100%;
+  max-width: var(--onboarding-card-max, 460px);
+  align-items: stretch;
+  gap: 8px;
+  padding: 24px 28px 26px;
+  box-sizing: border-box;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  border-radius: 24px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.76), rgba(234, 246, 243, 0.56));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.92),
+    0 14px 36px rgba(63, 86, 78, 0.1);
+  backdrop-filter: blur(22px) saturate(1.18);
+  -webkit-backdrop-filter: blur(22px) saturate(1.18);
+  color: #17191d;
+}
+
+.hotkey-test-progress {
+  display: flex;
+  gap: 7px;
+  width: min(220px, 50%);
+  margin: 0 auto 14px;
+}
+
+.hotkey-test-progress span {
+  flex: 1;
+  height: 4px;
+  border-radius: 999px;
+  background: rgba(33, 43, 58, 0.12);
+}
+
+.hotkey-test-progress span.complete { background: rgba(47, 159, 145, 0.45); }
+.hotkey-test-progress span.active { background: #2f9f91; }
+
+.hotkey-test-question {
+  margin: 0;
+  font-size: clamp(20px, 2.2vw, 25px);
+  font-weight: 650;
+  line-height: 1.2;
+  text-align: center;
+}
+
+.hotkey-test-purpose {
+  width: 100%;
+  margin: 4px 0 16px;
+  color: #687180;
+  font-size: 15px;
+  line-height: 1.45;
+  text-align: center;
+}
+
+.hotkey-test-card {
+  width: 100%;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+.hotkey-test-stage {
+  display: flex;
+  align-items: center;
+  /* Centered, not space-between: with one key tile and one button, pushing them
+     to opposite edges is what made the card read as mostly empty. */
+  justify-content: center;
+  gap: 18px;
+  min-height: 108px;
+  padding: 18px 20px;
+  box-sizing: border-box;
+  border: 1px solid rgba(116, 133, 151, 0.2);
+  border-radius: 20px;
+  background: rgba(247, 249, 252, 0.86);
+}
+
+.hotkey-test-stage-keys { display: flex; align-items: center; }
+.hotkey-test-stage-group { display: flex; align-items: center; gap: 14px; }
+.hotkey-test-stage-plus { margin: 0 8px; color: #8b929c; font-size: 18px; }
+
+.hotkey-test-stage kbd {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 72px;
+  height: 72px;
+  border: 1px solid rgba(255, 255, 255, 0.92);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.8);
+  box-shadow: inset 0 1px 0 #fff, 0 4px 10px rgba(42, 54, 69, 0.14);
+  color: #60656c;
+  transition: color 150ms ease, background 150ms ease, transform 150ms ease;
+}
+
+.hotkey-test-stage kbd.active {
+  background: linear-gradient(145deg, #66b7ac, #2f9f91);
+  color: #fff;
+  transform: translateY(2px);
+}
+
+.hotkey-test-stage strong { font-size: 16px; font-weight: 600; }
+.hotkey-test-stage small { margin-top: 6px; font-size: 10px; opacity: 0.78; }
+
+.hotkey-test-change {
+  min-width: 104px;
+  min-height: 44px;
+  padding: 0 20px;
+  border: 1px solid rgba(116, 133, 151, 0.14);
+  border-radius: 15px;
+  background: rgba(255, 255, 255, 0.76);
+  box-shadow: 0 2px 7px rgba(45, 55, 70, 0.06);
+  color: #384255;
+  font: 650 15px var(--font-body);
+  cursor: pointer;
+}
+
+.hotkey-test-prompt {
+  margin: 14px 0 0;
+  color: #8b929c;
+  font-size: 14px;
+  text-align: center;
+  transition: color 200ms ease;
+}
+
+.hotkey-test-prompt.passed { color: #2f8f6f; font-weight: 600; }
+.hotkey-test-unavailable { margin: 12px 0 0; color: #a54640; font-size: 14px; text-align: center; }
+
+.hotkey-list {
+  margin: 0;
+  padding: 0;
+  border: 1px solid rgba(116, 133, 151, 0.2);
+  border-radius: 20px;
+  background: rgba(247, 249, 252, 0.86);
+  list-style: none;
+}
+
+.hotkey-list-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid rgba(116, 133, 151, 0.14);
+}
+
+.hotkey-list-row:last-child { border-bottom: 0; }
+
+.hotkey-list-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hotkey-list-keys { display: flex; flex-shrink: 0; gap: 4px; }
+
+.hotkey-list-keys kbd {
+  padding: 4px 9px;
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.85);
+  box-shadow: 0 1px 3px rgba(44, 55, 70, 0.12);
+  color: #4a525e;
+  font: 600 12px var(--font-body);
+  white-space: nowrap;
+}
+
+.hotkey-list-change {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  border: 1px solid rgba(116, 133, 151, 0.18);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.8);
+  color: #4a525e;
+  font: 600 12px var(--font-body);
+  cursor: pointer;
+}
+
+.hotkey-test-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.hotkey-test-continue {
+  min-width: 160px;
+  min-height: 46px;
+  border: 0;
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(102, 183, 172, 0.96), rgba(47, 159, 145, 0.94));
+  color: #fff;
+  font: 650 15px var(--font-body);
+  cursor: pointer;
+}
+
+.hotkey-test-skip {
+  padding: 6px 10px;
+  border: 0;
+  background: transparent;
+  color: #3f3a35;
+  font: 700 13px var(--font-body);
+  cursor: pointer;
+}
+
+.onboarding-flow .hotkey-test-skip::after { display: none; }
+.hotkey-test-skip:hover { color: #211e1b; }
+
+@media (max-width: 680px) {
+  .onboarding-step.hotkey-tour-step { width: calc(100% - 20px); padding: 18px; }
+  .hotkey-test-question { font-size: 20px; }
+  .hotkey-test-purpose { font-size: 14px; }
+  .hotkey-test-stage { min-height: 100px; padding: 16px; overflow-x: auto; }
+  .hotkey-test-stage kbd { width: 64px; height: 64px; }
+  .hotkey-list-row { flex-wrap: wrap; }
+  .hotkey-test-continue { min-width: 0; flex: 1; }
+}

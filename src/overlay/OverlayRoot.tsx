@@ -2,17 +2,13 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useAuth } from "../state/AuthProvider";
-import { signOut } from "firebase/auth";
-import { auth } from "../lib/firebase";
 import { logError } from "../lib/log";
 import { useVoiceBar } from "./useVoiceBar";
 import { useNotchGesture } from "./useNotchGesture";
 import { useOnboardingTail } from "./useOnboardingTail";
-import { OnboardingTail } from "./OnboardingTail";
-import { useTurnScreenCapture } from "./useTurnScreenCapture";
+import { useScreenSight } from "./useScreenSight";
 import { useSystemControl } from "./useSystemControl";
 import { useDraftCard } from "./useDraftCard";
-import { useUpdateReady } from "./useUpdateReady";
 import { useMeetings } from "./useMeetings";
 import { useMeetingArm } from "./useMeetingArm";
 import { useDictationCredential } from "./useDictationCredential";
@@ -36,7 +32,6 @@ import { screenPointFor, type ScreenFrameGeometry } from "../lib/screenFrame";
 import { useGuideMode, type GuidePoint } from "./useGuideMode";
 import { useGeneralSettings } from "../state/useGeneralSettings";
 import { useEntitlement } from "../state/useEntitlement";
-import { KebabMenu } from "./KebabMenu";
 import { ChatSlot, INITIAL_CHAT_SLOT_HEIGHT } from "./ChatSlot";
 import { useChatScreenCapture } from "./useChatScreenCapture";
 import { useChatSession } from "./useChatSession";
@@ -46,7 +41,6 @@ import { useOutputMode } from "./useOutputMode";
 // measured content height so a short reply stays compact and a long one grows.
 const NOTIFICATION_INBOX_CARD_HEIGHT = 300;
 const CALLBACK_CARD_HEIGHT = 180;
-const KEBAB_MENU_HEIGHT = 470;
 
 type OverlayPresentation =
   | "hidden"
@@ -75,6 +69,7 @@ export function OverlayRoot() {
   // every other write tool for surface="desktop", not anything decided here.
   const chatEnabled = user !== null;
   const voice = useVoiceBar();
+  useScreenSight(voice.room, voice.status);
   // Ctrl+Alt+M. Mounted here rather than inside useVoiceBar because the mode
   // outlives any one call: it persists, and it rides the next token.
   // desiredActive is the "the user wants a call" bit, which is what the
@@ -155,9 +150,9 @@ export function OverlayRoot() {
   // mid-onboarding); the notch itself is the drag handle.
   const notchMove = useNotchMove(presentation === "bar");
   const tail = useOnboardingTail(user !== null);
-  // Suppress the double-tap-Ctrl notch gesture while the first-run tail is up,
-  // so the live demo stays inside the onboarding panel (its own Start button
-  // drives the call) instead of jumping to the notch mid-tour.
+  // Suppress the double-tap-Ctrl notch gesture while dashboard-owned first-run
+  // onboarding is active. The native hotkey test consumes the gesture on its
+  // own screen; every other onboarding step keeps the hidden overlay dormant.
   // Dismiss keys off actual overlay visibility, not one hardcoded presentation
   // or the voice-session state: any on-screen call/notch surface (bar, the
   // minimized-call pill which reports as "companion", or the drag-mode moving
@@ -172,14 +167,13 @@ export function OverlayRoot() {
     presentation === "pointing" || tail.status === "active",
     overlayVisible && !visibleChatOpen,
   );
-  const updateReady = useUpdateReady();
-  const entitlement = useEntitlement({
+  // Kept for its cache side effects: it writes the fetched entitlement to the
+  // native cache (cache_entitlement) and clears it on sign-out. Nothing in the
+  // overlay renders it any more now that the kebab menu's plan row is gone.
+  useEntitlement({
     signedIn: user !== null,
     uid: user?.uid ?? null,
   });
-  // Kept for its capture side effects; its transient per-turn notice no longer
-  // has a UI home (the subtitle is gone) and is already logged in the hook.
-  useTurnScreenCapture(voice.room, guide.armed);
   // Desktop control: dispatches the agent's `desktop.run` messages to native
   // commands. Native side gates on a live voice session, so no extra guard here.
   useSystemControl(voice.room);
@@ -234,9 +228,7 @@ export function OverlayRoot() {
   useEffect(() => {
     if (!showDraftCard) {
       setDraftCardHeight(INITIAL_DRAFT_SLOT_HEIGHT);
-      return;
     }
-    setMenuOpen(false);
   }, [showDraftCard]);
 
   const notifications = useDesktopNotifications({
@@ -245,7 +237,6 @@ export function OverlayRoot() {
     appHidden: presentation !== "bar",
   });
   const [inboxOpen, setInboxOpen] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
   // useCallbackCard predates the companion->notch rename and still keys its
   // trigger off the old "companion" presentation; map today's "bar" onto it
   // rather than rewriting the (tested) hook.
@@ -257,21 +248,18 @@ export function OverlayRoot() {
     enabled: generalSettings.dailyCatchUp,
   });
 
-  // Slot priority (CLAUDE.md): chat > draft > agenda > kebab menu > meeting
-  // note > daily catch-up. Only chat, draft, the inbox (opened via kebab/tray,
-  // so it sits at the kebab-menu tier), and the daily catch-up are mounted
-  // today. Chat outranks everything below it because the user is mid-sentence
-  // in it: an arriving draft card must never take the slot out from under them.
-  const showMenu = user !== null && menuOpen && !showDraftCard;
-  const showInbox = user !== null && inboxOpen && !showDraftCard && !showMenu;
+  // Slot priority (CLAUDE.md): chat > draft > agenda > meeting note > daily
+  // catch-up. Only chat, draft, the inbox (opened from the tray), and the daily
+  // catch-up are mounted today. Chat outranks everything below it because the
+  // user is mid-sentence in it: an arriving draft card must never take the slot
+  // out from under them.
+  const showInbox = user !== null && inboxOpen && !showDraftCard;
   const showCallbackCard =
-    user !== null && callbackCard.visible && !showDraftCard && !showInbox && !showMenu;
+    user !== null && callbackCard.visible && !showDraftCard && !showInbox;
   const slotHeight = showDraftCard
     ? draftCardHeight
     : showInbox
       ? NOTIFICATION_INBOX_CARD_HEIGHT
-      : showMenu
-        ? KEBAB_MENU_HEIGHT
       : showCallbackCard
         ? CALLBACK_CARD_HEIGHT
         : null;
@@ -335,6 +323,20 @@ export function OverlayRoot() {
     return () => unlisten?.();
   }, []);
 
+  // Tray "Capture now" item. Same hand-off shape as the notifications item
+  // above: the capture itself is a JS concern (useMeetingCapture owns the arm
+  // state and the upload queue), so Rust only fires the intent.
+  const captureNow = meetingCapture.captureNow;
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen("capture-now-requested", () => captureNow())
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch((err) => logError("OverlayRoot: listen capture-now-requested", err));
+    return () => unlisten?.();
+  }, [captureNow]);
+
   // The native chat hotkey shows the Bar first, then this event opens the chat
   // slot below it; ChatSlot focuses its own composer on mount.
   useEffect(() => {
@@ -362,7 +364,6 @@ export function OverlayRoot() {
       resetCallbackCard();
       setChatOpen(false);
       setInboxOpen(false);
-      setMenuOpen(false);
       if (guide.armed) guide.stop();
       invoke("dismiss_bar").catch((err) =>
         logError("OverlayRoot: dismiss_bar after sign-out", err),
@@ -482,19 +483,6 @@ export function OverlayRoot() {
     );
   }
 
-  // Signed in, but still finishing first-run: the hotkey tour + live demo run
-  // here (OnboardingFlow only mounts signed-out), in a panel-sized surface,
-  // before the user lands in the dashboard.
-  if (tail.status === "active") {
-    return (
-      <div className="overlay-column">
-        <GlassSurface>
-          <OnboardingTail voice={voice} onComplete={tail.complete} />
-        </GlassSurface>
-      </div>
-    );
-  }
-
   return (
     <div
       className={`notch-column notch-column-${notchEdge}${
@@ -533,35 +521,6 @@ export function OverlayRoot() {
           onAction={handleNotificationAction}
         />
       )}
-      {!visibleChatOpen && showMenu && (
-        <KebabMenu
-          voiceStatus={voice.status}
-          entitlement={entitlement}
-          onCalendar={() => {
-            setMenuOpen(false);
-            void openDashboardWindow("/connectors");
-          }}
-          onCaptureNow={meetingCapture.captureNow}
-          capturing={meetingCapture.recording}
-          onNotifications={() => {
-            setMenuOpen(false);
-            setInboxOpen(true);
-          }}
-          unreadCount={notifications.unreadCount}
-          updateVersion={updateReady.version}
-          onUpdate={() => {
-            setMenuOpen(false);
-            void invoke("install_update").catch((err) =>
-              logError("OverlayRoot: install update", err),
-            );
-          }}
-          onSignOut={() => {
-            setMenuOpen(false);
-            void signOut(auth).catch((err) => logError("OverlayRoot: sign out", err));
-          }}
-          onClose={() => setMenuOpen(false)}
-        />
-      )}
       {!visibleChatOpen && showCallbackCard && <CallbackCard card={callbackCard} />}
       <NotchBar
         key={presentation}
@@ -570,13 +529,6 @@ export function OverlayRoot() {
         dragHandlers={notchMove.dragHandlers}
         guideArmed={guide.armed}
         guideActive={guide.active}
-        outputMuted={outputMode.muted}
-        outputMuteUnconfirmed={outputMode.ackState === "unconfirmed"}
-        menuOpen={menuOpen}
-        onMenuToggle={() => {
-          setInboxOpen(false);
-          setMenuOpen((open) => !open);
-        }}
       />
     </div>
   );

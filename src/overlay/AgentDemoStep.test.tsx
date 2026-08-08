@@ -14,7 +14,10 @@ function makeVoice(overrides: Partial<VoiceBarState>): VoiceBarState {
     showMicSettingsHint: false,
     isVoiceCapped: false,
     desiredActive: false,
+    realtimeActivity: null,
+    realtimeVisualizerTrack: null,
     startSession: vi.fn(() => Promise.resolve()),
+    startBridgedSession: vi.fn(() => Promise.resolve()),
     endSession: vi.fn(() => Promise.resolve()),
     toggleSession: vi.fn(),
     room: null,
@@ -46,7 +49,7 @@ describe("AgentDemoStep", () => {
       renderer = create(<AgentDemoStep voice={voice} onFinish={onFinish} />);
     });
     act(() => buttonByText(renderer!, copy.start)!.props.onClick());
-    expect(voice.startSession).toHaveBeenCalledTimes(1);
+    expect(voice.startBridgedSession).toHaveBeenCalledTimes(1);
   });
 
   it("ends the live session and hands off on finish", async () => {
