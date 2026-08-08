@@ -9,7 +9,11 @@ import {
   whereHeard as whereHeardCopy,
 } from "../lib/copy";
 import { setPersonProperties } from "../lib/analytics";
-import { syncProfileOnSignIn, type StoredAnswer } from "../lib/profile";
+import {
+  recordDesktopOnboardingEvent,
+  syncProfileOnSignIn,
+  type StoredAnswer,
+} from "../lib/profile";
 import { trackOnboardingStepCompleted } from "../lib/acquisitionAnalytics";
 import { logError } from "../lib/log";
 import "./ProfileSetupStep.css";
@@ -127,6 +131,11 @@ export function ProfileSetupStep({
       if (whereHeard.other?.trim()) properties.where_heard_other = whereHeard.other.trim();
       if (role.other?.trim()) properties.role_other = role.other.trim();
       setPersonProperties(properties, uid);
+      await recordDesktopOnboardingEvent(
+        "desktop_profile_answers_saved",
+        properties,
+        "profile_answers_saved",
+      );
 
       await Promise.all([
         trackOnboardingStepCompleted("where_heard"),

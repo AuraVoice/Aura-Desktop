@@ -111,19 +111,14 @@
 .onboarding-brand-mark {
   display: grid;
   place-items: center;
-  width: 72px;
-  height: 72px;
+  width: 120px;
+  height: 120px;
   margin-bottom: 2px;
-  border: 1px solid rgba(73, 62, 49, 0.1);
-  border-radius: 22px;
-  background: rgba(255, 255, 255, 0.72);
-  box-shadow: 0 14px 35px rgba(92, 72, 47, 0.12);
 }
 
 .onboarding-brand-icon {
-  width: 48px;
-  height: 48px;
-  border-radius: 14px;
+  width: 120px;
+  height: 120px;
 }
 
 .onboarding-step {

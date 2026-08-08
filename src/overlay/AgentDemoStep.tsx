@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { agentDemo as copy } from "../lib/copy";
+import { trackEvent } from "../lib/analytics";
+import { recordDesktopOnboardingEvent } from "../lib/profile";
 import { outputMuted } from "../lib/outputMode";
 import { useAudioLevels } from "./useAudioLevels";
 import type { VoiceBarState, VoiceSessionStatus } from "./useVoiceBar";
@@ -63,6 +65,12 @@ export function AgentDemoStep({ voice, onFinish }: AgentDemoStepProps) {
       if (now < endAt || cutoffStartedRef.current) return;
       cutoffStartedRef.current = true;
       setStartedAt(null);
+      trackEvent("desktop_agent_demo_timed_out");
+      void recordDesktopOnboardingEvent(
+        "desktop_agent_demo_timed_out",
+        {},
+        "agent_demo_timed_out",
+      );
       void voice.endSession().finally(() => setExpired(true));
     };
 
@@ -81,6 +89,14 @@ export function AgentDemoStep({ voice, onFinish }: AgentDemoStepProps) {
     setGraceSeconds(30);
     setInGracePeriod(false);
     setStartedAt(Date.now());
+    trackEvent("desktop_agent_demo_started", {
+      output_muted: outputMuted(),
+    });
+    void recordDesktopOnboardingEvent(
+      "desktop_agent_demo_started",
+      { output_muted: outputMuted() },
+      "agent_demo_started",
+    );
     if (outputMuted()) {
       await voice.startSession();
     } else {
@@ -88,9 +104,23 @@ export function AgentDemoStep({ voice, onFinish }: AgentDemoStepProps) {
     }
   }
 
-  async function finish() {
+  async function finish(reason: "finished" | "skipped") {
     setStartedAt(null);
     setInGracePeriod(false);
+    trackEvent("desktop_agent_demo_finished", {
+      reason,
+      voice_started: startedAt !== null,
+      voice_status: voice.status,
+    });
+    void recordDesktopOnboardingEvent(
+      "desktop_agent_demo_finished",
+      {
+        reason,
+        voice_started: startedAt !== null,
+        voice_status: voice.status,
+      },
+      `agent_demo_${reason}`,
+    );
     if (voice.desiredActive) {
       // endSession swallows/logs its own failures; never let a teardown error
       // trap the user in onboarding.
@@ -157,11 +187,11 @@ export function AgentDemoStep({ voice, onFinish }: AgentDemoStepProps) {
         </button>
       )}
       {(isLive || isConnecting) && (
-        <button type="button" className="onboarding-primary-button" onClick={() => void finish()}>
+        <button type="button" className="onboarding-primary-button" onClick={() => void finish("finished")}>
           {copy.finish}
         </button>
       )}
-      <button type="button" className="onboarding-link-button" onClick={() => void finish()}>
+      <button type="button" className="onboarding-link-button" onClick={() => void finish("skipped")}>
         {copy.skip}
       </button>
     </div>

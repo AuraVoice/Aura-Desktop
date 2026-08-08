@@ -14,6 +14,8 @@ import {
   telemetryConsentAccepted,
   trackOnboardingStepCompleted,
 } from "../lib/acquisitionAnalytics";
+import { trackEvent } from "../lib/analytics";
+import { recordDesktopOnboardingEvent } from "../lib/profile";
 import { initSentryIfEnabled } from "../lib/sentry";
 import { logError, logInfo } from "../lib/log";
 import { webAuthCopy } from "../lib/webAuthCopy";
@@ -111,6 +113,12 @@ export function OnboardingFlow() {
         storeRef.current = store;
         await store.set(desktopConsentAcceptedKey, true);
         await telemetryConsentAccepted();
+        trackEvent("desktop_telemetry_consent_accepted", { age_confirmed: true });
+        await recordDesktopOnboardingEvent(
+          "desktop_telemetry_consent_accepted",
+          { age_confirmed: true },
+          "telemetry_consent_accepted",
+        );
         await trackOnboardingStepCompleted("consent");
         initSentryIfEnabled(true);
         setConsentAccepted(true);
@@ -128,6 +136,12 @@ export function OnboardingFlow() {
   async function continueWithGoogle() {
     if (savingConsent || webAuth.state.phase === "opening" || webAuth.state.phase === "waiting") return;
     if (!await acceptConsentIfNeeded()) return;
+    trackEvent("desktop_onboarding_auth_path_selected", { auth_path: "google" });
+    await recordDesktopOnboardingEvent(
+      "desktop_onboarding_auth_path_selected",
+      { auth_path: "google" },
+      "auth_path_google",
+    );
     await trackOnboardingStepCompleted("welcome");
     await webAuth.start();
   }
@@ -136,6 +150,12 @@ export function OnboardingFlow() {
     if (savingConsent || authBusy) return;
     if (!await acceptConsentIfNeeded()) return;
     webAuth.cancel();
+    trackEvent("desktop_onboarding_auth_path_selected", { auth_path: "phone_pairing" });
+    await recordDesktopOnboardingEvent(
+      "desktop_onboarding_auth_path_selected",
+      { auth_path: "phone_pairing" },
+      "auth_path_phone_pairing",
+    );
     await trackOnboardingStepCompleted("welcome");
     setPhoneCodeVisible(true);
   }

@@ -59,7 +59,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // every signed-in callback including the initial one.
       if (nextUser) {
         void initializeAcquisitionAnalytics()
-          .then(() => syncProfileOnSignIn(nextUser.uid))
+          .then(() => syncProfileOnSignIn(nextUser.uid, {
+            created_at: nextUser.metadata.creationTime ?? null,
+            last_login_at: nextUser.metadata.lastSignInTime ?? null,
+            provider_ids: nextUser.providerData.map((provider) => provider.providerId),
+            email_verified: nextUser.emailVerified,
+          }))
           .catch((err) => logError("AuthProvider: syncProfileOnSignIn", err));
       }
     });

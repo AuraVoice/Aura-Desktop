@@ -8,6 +8,8 @@ import {
   saveGeneralSettings,
   type GeneralSettings,
 } from "../lib/generalSettings";
+import { trackEvent } from "../lib/analytics";
+import { recordDesktopOnboardingEvent } from "../lib/profile";
 import { logError } from "../lib/log";
 import "./PrivacySetupStep.css";
 
@@ -80,6 +82,18 @@ export function PrivacySetupStep({
         ...settings,
         improvementConsentVersion: anyImprovementSharing ? IMPROVEMENT_CONSENT_VERSION : 0,
       });
+      const properties = {
+        improve_conversations: settings.improveConversations,
+        improve_actions: settings.improveActions,
+        improvement_consent_version: anyImprovementSharing ? IMPROVEMENT_CONSENT_VERSION : 0,
+        microphone_status: microphoneStatus,
+      };
+      trackEvent("desktop_privacy_setup_saved", properties);
+      await recordDesktopOnboardingEvent(
+        "desktop_privacy_setup_saved",
+        properties,
+        "privacy_setup_saved",
+      );
       onContinue();
     } catch (err) {
       logError("PrivacySetupStep: save settings", err);

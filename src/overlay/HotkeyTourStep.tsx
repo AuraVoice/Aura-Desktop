@@ -8,6 +8,8 @@ import {
   type VoiceToggleKeyStatus,
 } from "../lib/hotkeys";
 import { ShortcutEditorDialog } from "./ShortcutEditorDialog";
+import { trackEvent } from "../lib/analytics";
+import { recordDesktopOnboardingEvent } from "../lib/profile";
 import { logError } from "../lib/log";
 import "./HotkeyTourStep.css";
 
@@ -87,6 +89,18 @@ export function HotkeyTourStep({ keyLabel, onContinue }: HotkeyTourStepProps) {
       try {
         const stopListening = await listen<string>("hotkey-test-pressed", (event) => {
           if (event.payload !== currentTestId) return;
+          trackEvent("desktop_hotkey_test_passed", {
+            hotkey_id: currentTestId,
+            screen,
+          });
+          void recordDesktopOnboardingEvent(
+            "desktop_hotkey_test_passed",
+            {
+              hotkey_id: currentTestId,
+              screen,
+            },
+            `hotkey_test_passed_${currentTestId}`,
+          );
           setPassed(true);
         });
         if (cancelled) {
@@ -235,6 +249,18 @@ export function HotkeyTourStep({ keyLabel, onContinue }: HotkeyTourStepProps) {
                 type="button"
                 className="hotkey-test-skip"
                 onClick={() => {
+                  trackEvent("desktop_hotkey_test_skipped", {
+                    hotkey_id: currentTestId,
+                    screen,
+                  });
+                  void recordDesktopOnboardingEvent(
+                    "desktop_hotkey_test_skipped",
+                    {
+                      hotkey_id: currentTestId,
+                      screen,
+                    },
+                    `hotkey_test_skipped_${currentTestId}`,
+                  );
                   setPassed(false);
                   setScreen(screen === "voice" ? "chat" : "list");
                 }}
@@ -271,7 +297,21 @@ export function HotkeyTourStep({ keyLabel, onContinue }: HotkeyTourStepProps) {
             </ul>
 
             <div className="hotkey-test-actions">
-              <button type="button" className="hotkey-test-continue" onClick={onContinue}>
+              <button
+                type="button"
+                className="hotkey-test-continue"
+                onClick={() => {
+                  trackEvent("desktop_hotkey_tour_completed", {
+                    binding_count: bindings.length,
+                  });
+                  void recordDesktopOnboardingEvent(
+                    "desktop_hotkey_tour_completed",
+                    { binding_count: bindings.length },
+                    "hotkey_tour_completed",
+                  );
+                  onContinue();
+                }}
+              >
                 Continue
               </button>
             </div>
