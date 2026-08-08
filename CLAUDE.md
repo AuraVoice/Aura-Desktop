@@ -12,12 +12,14 @@ Update that shared file when a change here alters a cross-repo contract (a `/dev
 
 ## Architecture
 
-One borderless, transparent, always-on-top window (label `"main"`) that resizes/repositions itself between presentations, rather than separate windows per screen:
+The runtime has three Tauri webview windows:
 
-- `hidden` / `panel` (`setup` or `bar` variant) / `pill` / `pointing` - see `src-tauri/src/overlay.rs` for the state machine and `src/overlay/OverlayRoot.tsx` for the matching React root.
-- Rust owns window geometry, the Left Ctrl double-tap listener, hotkeys (Ctrl+Shift+D immediate sign-out, Ctrl+Alt+G Guide Mode toggle), tray, and focus-forcing (`win_focus.rs`, needed because Windows denies `SetForegroundWindow` while another app owns focus). Force foreground ONLY for the Setup `Panel` (its sign-in fields need keyboard focus). Never force it for the notch/`Bar`: `win_focus` injects a lone Alt tap to win focus, which drops the newly-foreground window into Windows keyboard menu mode and swallows the next Left Ctrl double-tap until the user clicks away. The notch is always-on-top, so it shows without stealing focus - see the 2026-07-16 "fail to dismiss" lesson.
-- React owns all visual content and copy (`src/overlay/`), Firebase auth (`src/state/AuthProvider.tsx`), standard per-turn screen capture (`useTurnScreenCapture`), and continuous change-filtered Guide capture (`useGuideMode`).
-- The whole overlay is one continuous drag region (`data-tauri-drag-region="deep"` on `GlassSurface`) - real inputs/buttons/links block dragging on themselves automatically (Tauri's own rule), nothing else needs to opt in or out individually. Don't add a narrower `data-tauri-drag-region` (bare, no value) on an inner element unless you mean to shadow/restrict the outer region - a bare attribute closer to the click target short-circuits the walk and blocks the deep region from ever being reached.
+- `main` is the borderless, transparent, always-on-top companion overlay. It resizes/repositions itself between `hidden`, `panel`, `bar`, `companion`, `pointing`, and `movingnotch`; `panel` carries the `setup` or `companion` variant. See `src-tauri/src/overlay.rs` for the native state machine and `src/overlay/OverlayRoot.tsx` for the matching React root.
+- `dashboard` is the opaque, resizable app window built on demand by `src-tauri/src/dashboard.rs`, routed by `src/main.tsx` into `src/dashboard/DashboardApp`.
+- `dictation` is the separate transparent HUD built by `src-tauri/src/dictation/hud.rs`, routed by `src/main.tsx` into `src/dictation/DictationHud`. It shares the overlay notch edge, stays off the taskbar, and must not steal focus from the target app except for the consent prompt.
+- Rust owns window geometry, the configurable voice trigger (default Left Ctrl double-tap), global hotkeys (Ctrl+Alt+Space chat, Ctrl+Alt+D dashboard, Ctrl+Alt+S Screen Sight, Ctrl+Alt+G Guide Mode, Ctrl+Alt+M output mute, Ctrl+Shift+D sign-out), tray, and foreground handling (`win_focus.rs`, needed because Windows denies `SetForegroundWindow` while another app owns focus). Force foreground ONLY for the Setup `Panel` or the explicit chat summon path that uses `raise_for_hotkey`. Never force it for the resting notch/`Bar`: the notch is always-on-top, so it shows without stealing focus - see the 2026-07-16 "fail to dismiss" lesson.
+- React owns all visual content and copy (`src/dashboard/`, `src/overlay/`, `src/dictation/`), Firebase auth (`src/state/AuthProvider.tsx`), standard per-turn screen capture (`useTurnScreenCapture`), continuous change-filtered Guide capture (`useGuideMode`), and the LiveKit call.
+- The overlay drag surface is one continuous drag region (`data-tauri-drag-region="deep"` on `GlassSurface`) - real inputs/buttons/links block dragging on themselves automatically (Tauri's own rule), nothing else needs to opt in or out individually. Don't add a narrower `data-tauri-drag-region` (bare, no value) on an inner element unless you mean to shadow/restrict the outer region - a bare attribute closer to the click target short-circuits the walk and blocks the deep region from ever being reached. Clickable overlay elements must be real `<button>`s, inputs, or links, not `<div role="button">`.
 
 ## Optimistic "applied" caches
 
@@ -26,31 +28,6 @@ A cache that represents "this side effect already happened" (`OverlayState.appli
 ## Main-thread blocking (Tauri commands)
 
 A `#[tauri::command]` without `async` runs directly on the thread that pumps the native window's messages. Any real work in one of those (screen capture, file IO, network, image/audio encoding) freezes the window, and Windows eventually shows "(Not Responding)". Default new commands to `async fn`; push CPU-bound work into `tauri::async_runtime::spawn_blocking` rather than doing it inline. This exact bug shipped in `capture_cursor_display_with_geometry` (`screenshot.rs`) - synchronous DXGI capture + JPEG encode + base64 on the main thread, triggered on every spoken turn while screen-sight was armed.
-
-## Rendering the pill's 3D avatar (AvatarPill.tsx)
-
-Three rules, each one cost a full debugging cycle to find. Don't re-learn them.
-
-**DRACOLoader needs an explicit decoder path.**
-Never rely on `DRACOLoader`'s own default `import.meta.url`-based path resolution.
-Under Vite dev mode, once esbuild's dependency pre-bundler moves `DRACOLoader.js` into `node_modules/.vite/deps/`, that relative path resolves to nothing.
-The resulting 404 gets served as `index.html` by Vite's dev-server fallback, which then gets fed into the decoder's own Worker as JavaScript and throws there.
-`DRACOLoader` never routes a Worker parse error through `onError`, so `GLTFLoader.load()` just hangs forever with no error anywhere - not the terminal, not the app's log file, nowhere durable.
-Always call `dracoLoader.setDecoderPath({ js, wasm })` with the exact decoder files imported via Vite's `?url` suffix, exactly as `AvatarPill.tsx` does - this is correct in both dev and build, regardless of Vite's bundling decisions.
-
-**Frame the posed geometry, never the bind pose (T-pose).**
-A GLB's static bind pose is not what actually renders once an animation clip plays.
-The retargeted `Idle` clip on `buddy.glb` sits a full unit higher than its own bind pose despite reporting the same total height - a leftover artifact of the external Mixamo retargeting pass, not a scale bug (every `.scale` track is `(1,1,1)`).
-Before measuring or framing a camera around any animated model, evaluate the clip's first frame (`mixer.update(0)` + `scene.updateMatrixWorld(true)`, since neither the mixer nor a render has run yet) and take a real `THREE.Box3` of the *posed* result - never the raw loaded scene.
-Camera trigonometry that looks correct on paper will still fail if it's fitting the wrong target. That's not a math bug, it's a "what is actually on screen" bug, and no amount of re-deriving the angles fixes it.
-
-**Clickable overlay elements must be real `<button>`s, not `<div role="button">`.**
-`data-tauri-drag-region="deep"` makes the whole overlay surface draggable, and Tauri only auto-excludes real inputs/buttons/links from that region automatically - an ARIA-role div doesn't qualify.
-Clicks on a `<div role="button">` inside a drag region get swallowed as window-drag attempts instead of ever firing `onClick`.
-
-**When a render looks wrong, build a throwaway harness before touching camera numbers again.**
-`debug-avatar.html`/`src/debug/avatarDebug.ts` and `debug-pill.html`/`src/debug/pillDebug.ts` are standalone Vite pages that load the same model with the same loader/camera code, viewable directly in a normal browser tab (`npm run dev`, not `tauri dev`) with no LiveKit session or Tauri window needed per iteration.
-Two rounds of pure camera-math guesses made no visible difference precisely because they were guesses - drawing the model's real bounding box as a wireframe and comparing it against the frustum is what actually found the posed-vs-bind-pose mismatch above.
 
 ## The Google sign-in flow spans three independently-deployed repos
 
@@ -141,9 +118,9 @@ Signing config lives in the Entra app registration (federated credential subject
 
 ### Touching the overlay state machine
 
-Changes to `OverlayPresentation`/`PanelVariant` or their transitions live in `overlay.rs` (`set_presentation`, `size_for`, `position_for`) with a matching render branch in `OverlayRoot.tsx`. Respect the optimistic-cache rule above. `Pill` renders `AvatarPill.tsx` (a lazy-loaded three.js scene, not `GlassPill.tsx` - deleted) and is reached via the `minimize_to_pill` command, which only fires while a call is live.
-The Panel+Bar presentation can also grow downward for one below-bar slot: OverlayRoot resolves which surface wins it (priority draft > agenda > kebab menu > meeting note > daily catch-up) and drives the single `set_slot_height` command; `overlay.rs` tracks it as `slot_height` (with its `applied_slot_height` cache, same after-success rule), and the bar's top edge stays fixed while the window height changes.
-The per-card open commands this replaced (`set_draft_card_open`, `set_callback_card_open`) no longer exist; each surface's height constant lives in OverlayRoot and must agree with its CSS.
+Changes to `OverlayPresentation`/`PanelVariant` or their transitions live in `overlay.rs` (`set_presentation`, `size_for`, `position_for`) with a matching render branch in `OverlayRoot.tsx`. Respect the optimistic-cache rule above. The current presentations are `Hidden`, `Panel`, `Bar`, `Companion`, `Pointing`, and `MovingNotch`; the old `Pill`/`minimize_to_pill` command path is gone.
+The Bar and Companion presentations can grow a single notch slot: `OverlayRoot` resolves which surface wins it (currently chat > draft > inbox > daily catch-up) and drives the single `set_slot_height` command; `overlay.rs` tracks it as `slot_height` (with its `applied_slot_height` cache, same after-success rule). On top/bottom edges the bar grows inward from the edge; on left/right edges the card grows beside the vertical notch.
+The per-card open commands this replaced (`set_draft_card_open`, `set_callback_card_open`) no longer exist; each surface's height constant or measured height lives in OverlayRoot and must agree with its CSS.
 Meeting Notes (MEETING_NOTES_PLAN.md) adds `src-tauri/src/meeting/` (WASAPI capture, join detection, encrypted segment queue) plus `useMeetingArm`/`useMeetingCapture`/`useMeetingNotes` on the React side; capture is user-armed only, shows a persistent recording indicator, and gates the updater like `voice_active` does.
 
 ## Working style

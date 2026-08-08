@@ -1,6 +1,6 @@
 # Aura Desktop
 
-Tauri v2 (Rust) + React 19 (TypeScript) Windows companion app. It has two native windows: the opaque dashboard is the primary app surface, and the borderless transparent overlay remains the signed-in voice companion. It's a from-scratch rewrite of the sibling Flutter app (`../Aura`, "Buddy"), talking to the same backend (`juno-backend` on Cloud Run) and Firebase project (`juno-2ea45`).
+Tauri v2 (Rust) + React 19 (TypeScript) Windows companion app. It has three Tauri webview windows: the opaque dashboard is the primary app surface, the borderless transparent overlay is the signed-in voice and text companion, and the passive dictation HUD handles hold-to-talk feedback without stealing focus. It's a from-scratch rewrite of the sibling Flutter app (`../Aura`, "Buddy"), talking to the same backend (`juno-backend` on Cloud Run) and Firebase project (`juno-2ea45`).
 
 ## System overview
 
@@ -8,7 +8,7 @@ Tauri v2 (Rust) + React 19 (TypeScript) Windows companion app. It has two native
 flowchart LR
     subgraph Desktop["Aura Desktop (this repo)"]
         Rust["Rust shell\nwindows / hotkeys / tray\nsrc-tauri/src"]
-        React["React UI\nsrc/dashboard + src/overlay"]
+        React["React UI\nsrc/dashboard + src/overlay + src/dictation"]
         Rust <-->|"Tauri IPC\ncommands + events"| React
     end
 
@@ -27,13 +27,13 @@ flowchart LR
     React <-->|"mic audio,\nDataReceived events,\nstreamBytes(screen_frame)"| LiveKit
 ```
 
-Rust owns both windows: dashboard creation and focus, overlay geometry, global hotkeys, tray, and foreground handling. React owns the dashboard, overlay rendering, Firebase auth, and the LiveKit call. The dashboard has a read-only Firebase subscription. The hidden main webview keeps the `AuthProvider` side effects that synchronize auth state to Rust. They talk over Tauri IPC (`invoke` for React-to-Rust calls, `emit`/`listen` for cross-window and Rust events).
+Rust owns the window lifecycle: dashboard creation and focus, overlay geometry, dictation HUD placement, global hotkeys, tray, and foreground handling. React owns the dashboard, overlay rendering, dictation HUD rendering, Firebase auth, and the LiveKit call. The dashboard has a read-only Firebase subscription. The hidden main webview keeps the `AuthProvider` side effects that synchronize auth state to Rust. They talk over Tauri IPC (`invoke` for React-to-Rust calls, `emit`/`listen` for cross-window and Rust events).
 
 ## App windows
 
-`main` is the transparent, always-on-top overlay used only for signed-in companion interactions. `dashboard` is a decorated, resizable application window with a 720x520 minimum size. `src/main.tsx` routes each webview by its label.
+`main` is the transparent, always-on-top overlay used for setup, the docked voice/text notch, Companion presentation, pointing, and notch move mode. `dashboard` is an opaque, resizable application window with a 720x520 minimum size and frontend-owned chrome. `dictation` is a separate transparent, always-on-top HUD window for the dictation chord; it is no-activate except for the consent prompt so insertion keeps focus in the target app. `src/main.tsx` routes each webview by its label.
 
-Manual launch, a second instance, and signed-out overlay summons open or focus `dashboard`. First-run onboarding also runs there, guarded by `desktop_onboarding_seen`. A dashboard request to start a conversation emits `start-voice-requested` to `main`; the overlay summons its notch and starts its own `useVoiceBar` session. The dashboard's onboarding demo has a separate `useVoiceBar` instance by design.
+Manual launch, a second instance, and signed-out startup open or focus `dashboard`. First-run onboarding also runs there, guarded by `desktop_onboarding_seen`. A dashboard request to start a conversation emits `start-voice-requested` to `main`; the overlay summons its notch and starts its own `useVoiceBar` session. The dashboard's onboarding demo has a separate `useVoiceBar` instance by design. The dictation HUD is built on demand by `src-tauri/src/dictation/hud.rs`, shares the overlay notch edge, and is listed in `src-tauri/capabilities/default.json`.
 
 ## Dashboard data pages (Conversations / Drafts / Saved)
 
@@ -49,61 +49,84 @@ The UI is a data-driven fixed card shell (`src/dashboard/components/`: `Dashboar
 stateDiagram-v2
     [*] --> Hidden
 
-    Hidden --> Panel: Left Ctrl twice (starts voice and summons Buddy)
-    Hidden --> Panel: tray click / 2nd instance (summon)
-    Hidden --> Panel: call starts while hidden (set_voice_active true)
-    Panel --> Hidden: Left Ctrl twice again, or Esc\n(ends any live call)
+    Hidden --> Panel: summon while signed out or onboarding tail
+    Hidden --> Bar: signed-in voice shortcut / summon_bar / pinned bar
+    Bar --> Hidden: dismiss_bar, unless "always show bar" is enabled
+    Bar --> MovingNotch: begin_notch_move
+    MovingNotch --> Bar: commit_notch_move / cancel_notch_move
 
-    Panel --> Pointing: point_at (screen-sight "element.point")
-    Pointing --> Panel: cancel_pointing (after ~3.4s hold)
+    Bar --> Companion: Companion surface needs the larger avatar presentation
+    Companion --> Bar: return to docked notch
 
-    Panel --> Pill: VoiceBar minimize button, call still live (minimize_to_pill)
-    Pill --> Panel: click/tap the pill (pill_activated)
-    Pill --> Hidden: call ends while collapsed (set_voice_active false)
+    Bar --> Pointing: point_at (screen-sight or Guide target)
+    Companion --> Pointing: point_at
+    Pointing --> Bar: cancel_pointing restores prior presentation
+    Pointing --> Companion: cancel_pointing restores prior presentation
 ```
 
-`Panel` also carries a **variant**, `setup` or `bar`, driven by Firebase auth state (`AuthProvider.tsx` calls `set_panel_variant` on every `onAuthStateChanged`, and `lib.rs` pre-seeds it from the cached auth flag at cold start so the first `summon()` sizes the right panel immediately).
+`Panel` also carries a **variant**, `setup` or `companion`, driven by Firebase auth state (`AuthProvider.tsx` calls `set_panel_variant` on every `onAuthStateChanged`, and `lib.rs` pre-seeds it from the cached auth flag at cold start so the first `summon()` routes to the right surface immediately).
 
 ## IPC surface
 
-**Commands** (React calls Rust via `invoke("name", { args })`, snake_case params auto-map to camelCase JS args):
+**Selected commands** (React calls Rust via `invoke("name", { args })`, snake_case params auto-map to camelCase JS args). The full source of truth is the `tauri::generate_handler![...]` list in `src-tauri/src/lib.rs`.
 
 | Command | Args | Does |
 |---|---|---|
-| `current_overlay_state` | – | Returns `{ presentation, panelVariant }` |
-| `esc_pressed` | – | Collapses to Hidden, ends any live call |
-| `set_voice_active` | `active: bool` | Marks a call live/ended; may flip Hidden ↔ Panel/Pill |
-| `set_panel_variant` | `variant: "setup" \| "bar"` | Switches panel content + resizes |
-| `set_slot_height` | `height: number \| null` | Grows/shrinks the bar window for the single below-bar slot (Panel+Bar only; the bar's top edge stays fixed and the slot grows downward). OverlayRoot resolves which surface wins the slot (draft > agenda > menu > meeting note > catch-up) and passes the winner's height, or null to collapse |
+| `current_overlay_state` | - | Returns `{ presentation, panelVariant, notchEdge }` |
+| `esc_pressed` | - | JS keeps Escape behavior; native command is intentionally a no-op while the overlay owns close ordering |
+| `set_voice_active` | `active: bool` | Marks a call live/ended and updates HUD suppression for pinned-bar cases |
+| `set_panel_variant` | `variant: "setup" \| "companion"` | Updates future summon routing and hides setup after sign-in |
+| `set_slot_height` | `height: number \| null` | Grows/shrinks the bar window for the single notch slot. `OverlayRoot` resolves the mounted surface priority and passes its measured or fixed height |
+| `set_chat_enabled` | `enabled: bool` | Registers/unregisters the signed-in-only text chat shortcut |
+| `set_always_show_bar` | `enabled: bool` | Mirrors Settings > System so `dismiss_bar` resolves to `Bar` instead of `Hidden` when pinned |
 | `start_meeting_capture` | `meetingId, eventId` | Starts WASAPI mic+loopback capture for a claimed meeting (async; capture runs on dedicated threads) |
 | `stop_meeting_capture` | `reason` | Asks the capture engine to flush and finish |
-| `capture_status` | – | `{ active, meetingId, eventId, startedAtMs, paused }` |
-| `queue_snapshot` | – | The durable upload queue manifest (meetings + segments + upload flags) |
+| `capture_status` | - | `{ active, meetingId, eventId, startedAtMs, paused }` |
+| `queue_snapshot` | - | The durable upload queue manifest (meetings + segments + upload flags) |
 | `read_segment` | `meetingId, seq` | Decrypts one captured segment, returns raw FLAC bytes as an `ArrayBuffer` (the JS upload pump POSTs them to the backend) |
-| `mark_segment_uploaded` | `meetingId, seq` | Records a backend-acked segment upload in the manifest |
-| `mark_meeting_acked` | `meetingId` | Backend accepted /complete: deletes the meeting's local segment files + manifest entry |
+| `claim_next_upload_job` | `ownerUid` | Claims the next queued segment upload job |
+| `claim_next_completion_job` | `ownerUid` | Claims the next queued meeting completion job |
+| `resolve_upload_job` | `meetingId, seq, ownerUid` | Records a backend-acked segment upload in the manifest |
+| `resolve_completion_job` | `meetingId, ownerUid` | Backend accepted /complete: deletes the meeting's local segment files + manifest entry |
+| `fail_queue_job` | job identifiers + retry state | Releases or parks a failed meeting queue job |
+| `retry_capture_jobs` | `meetingId` | Requeues failed upload/completion work for one meeting |
 | `start_join_watch` | `eventId, windowStartMs, windowEndMs` | Arms Zoom/Teams join detection for one armed meeting's time window |
 | `stop_join_watch` | `eventId` | Disarms a watch |
 | `debug_force_join` | `eventId` | Dev builds only: emits `meeting-join-detected` without a detector |
-| `set_onboarding_step` | `step: "welcome" \| "getApp" \| "link"` | Tracks onboarding progress in Rust |
-| `pill_activated` | – | Pill → Panel |
-| `minimize_to_pill` | – | Panel → Pill, only while a call is live |
+| `set_onboarding_step` | `step: "welcome" \| "getApp" \| "whereHeard" \| "role" \| "link" \| "hotkeyTour" \| "agentDemo"` | Tracks onboarding progress in Rust |
 | `set_session_cached` | `hasSession: bool` | Persists the auth flag used for cold-start panel choice |
-| `summon` | – | Bring the panel to front, or open it |
+| `summon` | - | Routes signed-out users to setup and signed-in users to the docked bar |
+| `summon_bar` | - | Shows the signed-in docked notch without stealing focus |
+| `summon_chat` | - | Shows the notch, captures foreground context, focuses the chat slot, and emits `chat-requested` |
+| `summon_onboarding_panel` | - | Re-reveals the panel-sized post-sign-in onboarding tail |
+| `open_dashboard_window` | - | Opens or focuses the dashboard at `/home` |
+| `open_dashboard_route` | `route` | Opens or focuses the dashboard at a validated route, falling back to `/home` |
 | `point_at` | `targetX, targetY, monitorX, monitorY, monitorW, monitorH, label` | Fullscreen click-through takeover for PointerBuddy |
-| `cancel_pointing` | – | Ends the takeover, restores whatever was showing before |
-| `capture_cursor_display_with_geometry` | – | Captures the monitor under the cursor as JPEG; async, off the main thread; returns a raw `ArrayBuffer` (28-byte geometry header + JPEG bytes, no base64) |
+| `cancel_pointing` | - | Ends the takeover, restores whatever was showing before |
+| `set_notch_edge` | `edge` | Persists top/bottom/left/right docking |
+| `begin_notch_move` | - | Enters fullscreen cursor-live move mode |
+| `commit_notch_move` | `edge` | Persists the selected edge and restores the bar |
+| `cancel_notch_move` | - | Restores the bar without changing edge |
+| `capture_cursor_display_with_geometry` | - | Captures the monitor under the cursor as JPEG; async, off the main thread; returns a raw `ArrayBuffer` (28-byte geometry header + JPEG bytes, no base64) |
 
-**Events** (Rust emits, React listens with `listen("name", cb)`):
+**Selected events** (Rust emits, React listens with `listen("name", cb)`):
 
 | Event | Payload | Fired when |
 |---|---|---|
-| `overlay-changed` | `{ presentation, panelVariant }` | Any state change that goes through `apply()` |
-| `end-voice-session` | – | Rust collapses the overlay while a call is live |
-| `sign-out-requested` | – | Ctrl+Shift+D |
-| `screen-sight-hotkey` | – | Ctrl+Alt+S |
+| `overlay-changed` | `{ presentation, panelVariant, notchEdge }` | Any state change that goes through `apply()` |
+| `end-voice-session` | - | Rust asks React to end a live voice session |
+| `sign-out-requested` | - | Ctrl+Shift+D or tray sign-out |
+| `aura-toggle` | `{ sequence, emittedAtMs }` | The configured voice trigger fired |
+| `chat-requested` | - | Ctrl+Alt+Space or text-chat summon |
+| `output-mute-toggle-requested` | - | Ctrl+Alt+M |
+| `screen-sight-armed` | `{ armed }` | Screen Sight armed state changed |
+| `guide-armed` | payload | Guide Mode armed state changed |
 | `pointing-target` | `{ x, y, label }` (window-relative) | `point_at` |
-| `open-dashboard-requested` | – | Tray "Open Dashboard" click; `App.tsx` responds by minting a dashboard link and opening the browser |
+| `open-notifications-requested` | - | Tray "Notifications" click after Rust summons the bar |
+| `capture-now-requested` | - | Tray capture intent handed to `useMeetingCapture` |
+| `dashboard-navigate` | route | Existing dashboard window should navigate to a validated route |
+| `dictation-update` | `HudUpdate` | Dictation HUD phase/text/chord/edge changed |
+| `dictation-level` | number | Transient dictation waveform level |
 | `meeting-join-detected` | `{ eventId, app, windowTitle }` | The join detector matched an in-call Zoom/Teams window for an armed meeting |
 | `meeting-left` | `{ eventId }` | The matched meeting window disappeared for two consecutive polls |
 | `meeting-capture-state` | `{ active, meetingId, eventId, startedAtMs, paused, reason }` | Capture started/stopped/paused (reasons: started, stopped_by_user, meeting_left, max_duration, capture_failed, paused_lock, resumed) |
@@ -354,12 +377,12 @@ cd src-tauri && cargo check   # Rust compiles, no binary produced
 npx tsc --noEmit              # TypeScript type-checks
 ```
 
-CI (`.github/workflows/ci.yml`) runs those same two checks plus dependency audits (`npm audit --audit-level=high`, `cargo audit`) on every PR and push to `main`; `release.yml` builds and publishes tagged releases.
+CI (`.github/workflows/ci.yml`) runs those same two checks plus dependency audits (`npx audit-ci --config ./audit-ci.jsonc`, `cargo audit`) on every PR and push to `main`; `release.yml` builds and publishes tagged releases.
 
 
 Config worth knowing about:
-- `src-tauri/tauri.conf.json` - window geometry/decorations, updater endpoint.
-- `src-tauri/capabilities/default.json` - the IPC permission allowlist; `http:default` only allows fetches to `juno-backend` and PostHog's capture endpoint (`us.i.posthog.com`, used by `lib/analytics.ts`), nothing else can be fetched from the webview. The Google sign-in flow's browser leg goes through `opener:default` (`openUrl`, opens the system browser) instead, which isn't subject to this scope at all.
+- `src-tauri/tauri.conf.json` - the startup `main` overlay window, CSP, signing command, bundled updater artifacts, updater endpoint, and deep-link scheme.
+- `src-tauri/capabilities/default.json` - the IPC permission allowlist for `main`, `dashboard`, and `dictation`; `http:default` only allows fetches to `juno-backend`, PostHog's capture endpoint (`us.i.posthog.com`, used by `lib/analytics.ts`), and `api.openai.com`. The Google sign-in flow's browser leg goes through `opener:default` (`openUrl`, opens the system browser) instead, which isn't subject to this scope at all.
 - `src-tauri/.cargo/audit.toml` - `cargo audit` advisory ignores, each with a written justification and the condition for removing it.
 
 ## Project docs

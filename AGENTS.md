@@ -8,7 +8,7 @@ Never load, invoke, query, update, or otherwise use Graphify or `graphify-out/` 
 
 ## Project Structure & Module Organization
 
-Aura Desktop pairs a React/TypeScript UI in `src/` with a Tauri/Rust shell in `src-tauri/src/`. Components and CSS live in `src/overlay/`, utilities in `src/lib/`, state in `src/state/`, and assets in `src/assets/`. Tauri permissions and packaging live in `src-tauri/capabilities/` and `src-tauri/tauri.conf.json`. 
+Aura Desktop pairs a React/TypeScript UI in `src/` with a Tauri/Rust shell in `src-tauri/src/`. Dashboard code lives in `src/dashboard/`, companion overlay code in `src/overlay/`, dictation HUD code in `src/dictation/`, shared utilities in `src/lib/`, state in `src/state/`, theme code in `src/theme/`, and assets in `src/assets/`. Tauri permissions and packaging live in `src-tauri/capabilities/` and `src-tauri/tauri.conf.json`.
 
 ## Change Discipline
 
@@ -16,7 +16,7 @@ Keep edits surgical. Change only the lines needed for the requested behavior. Do
 
 ## Testing Guidelines
 
-There is no automated unit or end-to-end suite. Before submitting, run `npx tsc --noEmit` and `cargo check`; for dependency changes also run `npm audit --audit-level=high` and `cargo audit`. Exercise affected behavior in `npm run tauri dev`. Before tagged releases, complete `SMOKE_TEST.md`.
+The repo has existing Vitest and Rust test files, but the required routine checks are `npx tsc --noEmit` and `cargo check`; for dependency changes also run `npx audit-ci --config ./audit-ci.jsonc` and `cargo audit`. Exercise affected behavior in `npm run tauri dev`. Before tagged releases, complete `SMOKE_TEST.md`.
 
 **TEST FREEZE. YOU MUST NOT write any new test file, test function, test case, or fixture.** In force until Varun bumps the version or asks for tests in the current message. Nothing else lifts it: not a rule that "needs" a test, not a bug you just fixed, not a coverage gap you noticed. Never offer to add tests while it is in force.
 
@@ -44,5 +44,5 @@ Its role is limited to planning, modifying local code, and guiding the user.
 
 ## Security & Configuration
 
-Never expose secrets, signing keys, credentials, logs, or local `.env` files. New endpoints or Tauri APIs may require CSP updates in `src-tauri/tauri.conf.json` and permissions in `src-tauri/capabilities/default.json`.
+Never expose secrets, signing keys, credentials, logs, or local `.env` files. New endpoints or Tauri APIs may require CSP updates in `src-tauri/tauri.conf.json` and permissions in `src-tauri/capabilities/default.json`; the current webview HTTP allowlist is scoped to `juno-backend`, PostHog, and `api.openai.com`.
 
