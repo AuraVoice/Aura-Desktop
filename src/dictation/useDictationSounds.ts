@@ -22,9 +22,8 @@ const CUES: Partial<Record<DictationPhase, string>> = {
  * Short audio cues at the two ends of a dictation hold, gated on
  * Settings > System > Sound.
  *
- * Fires on the phase TRANSITION, never on the phase itself: Rust re-publishes
- * the same phase on every partial transcript, so keying off the value alone
- * would machine-gun the start cue for the whole hold.
+ * Fires on the phase TRANSITION, never on the phase itself, so repeated state
+ * publishes cannot machine-gun the start cue for the whole hold.
  */
 export function useDictationSounds(phase: DictationPhase) {
   const enabledRef = useRef(DEFAULT_GENERAL_SETTINGS.dictationSounds);

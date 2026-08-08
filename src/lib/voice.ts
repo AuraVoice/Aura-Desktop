@@ -11,7 +11,7 @@ export interface VoiceTokenResponse {
   realtime_bridge_enabled?: boolean;
 }
 
-export type VoiceSessionMode = "standard" | "guide";
+export type VoiceSessionMode = "standard" | "guide" | "onboarding";
 
 // The backend denies /voice/token with 402 + voiceCapReachedCode when a
 // free-tier user is over the daily voice cap (SUBSCRIPTION_PLAN.md section 6,
@@ -52,7 +52,7 @@ export async function fetchVoiceToken(
   // keeps working unchanged and the backend can start reading it whenever it
   // ships (forced release order, same class as the agentData.ts contract).
   const manifestParam = encodeURIComponent(JSON.stringify(advertiseManifest()));
-  const modeParam = mode === "guide" ? "&mode=guide" : "";
+  const modeParam = mode === "standard" ? "" : `&mode=${mode}`;
   // Bridge mode: the Realtime leg is already talking, so the token stamps
   // `bridged=1` and the worker HOLDs for a handover instead of greeting.
   const bridgedParam = bridged ? "&bridged=1" : "";

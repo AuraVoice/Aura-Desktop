@@ -296,6 +296,8 @@ export const signOut = {
 } as const;
 
 export const desktopOnboardingSeenKey = "desktop_onboarding_seen";
+export const desktopOnboardingSeenForUidKey = (uid: string) =>
+  `${desktopOnboardingSeenKey}_${encodeURIComponent(uid)}`;
 // Deliberately its own key, not folded into desktopOnboardingSeenKey above -
 // they gate different things (has the onboarding tour been shown vs. has the
 // user affirmatively accepted ToS/Privacy/telemetry), and lessons-learnt.txt
@@ -307,9 +309,15 @@ export const desktopConsentAcceptedKey = "desktop_consent_accepted";
 // reason as the two above - they gate independent concerns in the shared store.
 export const desktopWhereHeardKey = "desktop_where_heard";
 export const desktopRoleKey = "desktop_role";
+export const desktopWhereHeardForUidKey = (uid: string) =>
+  `${desktopWhereHeardKey}_${encodeURIComponent(uid)}`;
+export const desktopRoleForUidKey = (uid: string) =>
+  `${desktopRoleKey}_${encodeURIComponent(uid)}`;
 // Set once the post-sign-in profile sync (PostHog alias + $set, backend POST)
 // succeeds, so it never re-runs for a returning user.
 export const desktopProfileSyncedKey = "desktop_profile_synced";
+export const desktopProfileSyncedForUidKey = (uid: string) =>
+  `${desktopProfileSyncedKey}_${encodeURIComponent(uid)}`;
 // Per-install anonymous id used as the PostHog distinct_id for pre-sign-in
 // attribution capture, then aliased to the real uid on sign-in. Deliberately
 // NOT the literal "anonymous" - aliasing that would chain-merge every signed-out

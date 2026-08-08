@@ -91,7 +91,7 @@ function DashboardTail({
  * first-run is finished (or was already done), so the parent can show the app. */
 export function DashboardOnboarding({ onComplete }: { onComplete: () => void }) {
   const user = useDashboardUser();
-  const tail = useOnboardingTail(user !== null);
+  const tail = useOnboardingTail(user?.uid ?? null);
 
   useEffect(() => {
     if (user && tail.status === "done") onComplete();

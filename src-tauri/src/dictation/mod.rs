@@ -115,10 +115,6 @@ mod platform {
     use super::vocab;
     use super::{DictationStatus, DICTATION_CHORD};
 
-    /// How often a partial is pushed at the HUD while the chord is held. Slow
-    /// enough that the webview is never the bottleneck, fast enough that the
-    /// caption reads as live.
-    const PARTIAL_EVERY: Duration = Duration::from_millis(320);
     /// How long a terminal caption (inserted, or a failure explanation) stays
     /// on screen before the HUD hides itself.
     const CAPTION_LINGER: Duration = Duration::from_millis(2200);
@@ -842,19 +838,12 @@ mod platform {
 
         let started_at = Instant::now();
         info!("dictation: phase=capture keyterms={keyterm_count}");
-        let mut last_partial_publish = Instant::now();
         let mut last_level = Instant::now();
         let mut captured_frames = 0usize;
         let mut heard_speech = false;
         let mut shutting_down = false;
         let mut capped = false;
         let mut utterance: Vec<f32> = Vec::new();
-        // The most recent revisable transcript. Reaches the HUD and NOTHING
-        // else: the inserted text comes from `await_final` below, never from
-        // this string. That separation is the whole reason a dropped
-        // connection cannot type half a sentence.
-        let mut displayed_partial = String::new();
-        let mut partial_dirty = false;
         // When the chord actually came up, so the "key up to text on screen"
         // budget is measured from the release rather than from this line.
         // Always set before the loop exits.
@@ -917,10 +906,7 @@ mod platform {
             let mut mid_hold_failure = None;
             while let Some(event) = session.poll() {
                 match event {
-                    AsrEvent::Partial(text) => {
-                        displayed_partial = text;
-                        partial_dirty = true;
-                    }
+                    AsrEvent::Partial(_) => {}
                     // A final before the chord is up means the provider ended
                     // the stream on its own. Treated as a failure rather than
                     // typed: the user is still speaking, so whatever arrived
@@ -959,15 +945,6 @@ mod platform {
             if last_level.elapsed() >= LEVEL_EVERY {
                 last_level = Instant::now();
                 hud::publish_level(app, audio::level(&samples));
-            }
-
-            if partial_dirty && last_partial_publish.elapsed() >= PARTIAL_EVERY {
-                last_partial_publish = Instant::now();
-                partial_dirty = false;
-                hud::publish(
-                    app,
-                    HudUpdate::new(HudPhase::Listening).with_text(displayed_partial.clone()),
-                );
             }
 
             if started_at.elapsed() >= audio::MAX_HOLD {
@@ -1017,10 +994,7 @@ mod platform {
         // through it.
         active_capture.stop();
 
-        hud::publish(
-            app,
-            HudUpdate::new(HudPhase::Transcribing).with_text(displayed_partial.clone()),
-        );
+        hud::publish(app, HudUpdate::new(HudPhase::Transcribing));
 
         // The utterance was silent. Nothing to finalize, and no reason to pay
         // for a round trip: close the stream and say nothing was typed.

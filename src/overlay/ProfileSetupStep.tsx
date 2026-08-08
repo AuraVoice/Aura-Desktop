@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { Store } from "@tauri-apps/plugin-store";
 import {
-  desktopProfileSyncedKey,
-  desktopRoleKey,
-  desktopWhereHeardKey,
+  desktopProfileSyncedForUidKey,
+  desktopRoleForUidKey,
+  desktopWhereHeardForUidKey,
   overlayStorePath,
   role as roleCopy,
   whereHeard as whereHeardCopy,
@@ -86,8 +86,8 @@ export function ProfileSetupStep({
     Store.load(overlayStorePath)
       .then(async (store) => {
         const [savedWhereHeard, savedRole] = await Promise.all([
-          store.get<StoredAnswer>(desktopWhereHeardKey),
-          store.get<StoredAnswer>(desktopRoleKey),
+          store.get<StoredAnswer>(desktopWhereHeardForUidKey(uid)),
+          store.get<StoredAnswer>(desktopRoleForUidKey(uid)),
         ]);
         if (cancelled) return;
         setWhereHeard(savedWhereHeard ?? null);
@@ -113,15 +113,15 @@ export function ProfileSetupStep({
     try {
       const store = await Store.load(overlayStorePath);
       await Promise.all([
-        store.set(desktopWhereHeardKey, {
+        store.set(desktopWhereHeardForUidKey(uid), {
           ...whereHeard,
           other: whereHeard.other?.trim() || undefined,
         }),
-        store.set(desktopRoleKey, {
+        store.set(desktopRoleForUidKey(uid), {
           ...role,
           other: role.other?.trim() || undefined,
         }),
-        store.set(desktopProfileSyncedKey, false),
+        store.set(desktopProfileSyncedForUidKey(uid), false),
       ]);
 
       const properties: Record<string, unknown> = {

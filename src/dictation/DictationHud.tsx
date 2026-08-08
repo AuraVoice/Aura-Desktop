@@ -139,11 +139,8 @@ function DictationConsent() {
 /// same pill enlarged while the hotkey is held. The pill has no click action;
 /// only the keyboard hook can start capture and recognition.
 ///
-/// It is wordless until there are words. The partial transcript appears once
-/// the recognizer has produced one, because recognition is now a round trip and
-/// a silent sliver gives the user no way to tell "still listening" from
-/// "nothing is happening". Rust widens the window on the same signal, so the
-/// caption and its surface arrive together.
+/// It stays wordless during live recognition. The waveform is enough proof that
+/// Aura is listening, and the final transcript belongs in the focused field.
 export function DictationHud() {
   const [update, setUpdate] = useState<DictationUpdate>(IDLE);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -212,23 +209,6 @@ export function DictationHud() {
         <span className="dictation-message__dot" aria-hidden="true" />
         <p className="dictation-message__text">
           {update.message ?? "Nothing was typed."}
-        </p>
-      </GlassSurface>
-    );
-  }
-
-  // The live partial. Revisable by definition, so it is styled as provisional
-  // and is never what gets typed: the inserted text comes from Rust's final
-  // transcript, which this window never sees until the "inserted" phase.
-  if (
-    (update.phase === "listening" || update.phase === "transcribing") &&
-    update.text
-  ) {
-    return (
-      <GlassSurface className="dictation-message is-partial" draggable={false}>
-        <span className="dictation-message__dot" aria-hidden="true" />
-        <p className="dictation-message__text" aria-live="polite">
-          {update.text}
         </p>
       </GlassSurface>
     );

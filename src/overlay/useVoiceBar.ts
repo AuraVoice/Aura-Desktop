@@ -866,6 +866,7 @@ export function useVoiceBar() {
           micTrack: sharedTrack,
           audioEl: ensureAudioEl(realtimeAudioElRef),
           signal: controller.signal,
+          mode,
           onActivity: (activity) => {
             currentRealtimeActivity = activity;
             setRealtimeActivity(activity);

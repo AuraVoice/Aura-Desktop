@@ -222,26 +222,6 @@ body,
   overflow: hidden;
 }
 
-/* The live partial. Dimmer than a settled caption on purpose: these words are
-   still revisable, and they are not what will be typed. */
-.dictation-message.is-partial .dictation-message__dot {
-  background: #7fd1a8;
-  animation: dictation-hold-pulse 1.2s ease-in-out infinite;
-}
-
-.dictation-message.is-partial .dictation-message__text {
-  color: var(--glass-text);
-  /* One line while speaking: the surface is a fixed height and the tail of the
-     sentence is the part the user is checking. */
-  -webkit-line-clamp: 1;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .dictation-message.is-partial .dictation-message__dot {
-    animation: none;
-  }
-}
-
 /* The one-time online-dictation prompt. The only clickable HUD surface besides
    the resting pill, so it is the only one with real buttons. */
 .dictation-consent {

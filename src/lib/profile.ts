@@ -5,9 +5,9 @@ import { auth as firebaseAuth } from "./firebase";
 import {
   desktopAnonIdKey,
   desktopAnonAliasedUidKey,
-  desktopProfileSyncedKey,
-  desktopRoleKey,
-  desktopWhereHeardKey,
+  desktopProfileSyncedForUidKey,
+  desktopRoleForUidKey,
+  desktopWhereHeardForUidKey,
   overlayStorePath,
 } from "./copy";
 import {
@@ -18,8 +18,8 @@ import {
 import { logError } from "./log";
 
 /** One first-run question answer: the stable option id plus optional freetext
- * from the "other" field. Persisted under desktopWhereHeardKey / desktopRoleKey
- * and read back by the post-sign-in sync. */
+ * from the "other" field. Persisted under UID-scoped onboarding keys and read
+ * back by the post-sign-in sync. */
 export interface StoredAnswer {
   id: string;
   other?: string;
@@ -218,16 +218,17 @@ export async function syncProfileOnSignIn(
   const signInMethod = await store.get<string>(desktopLastSignInMethodKey);
   const signInStatus = await store.get<string>(desktopLastSignInStatusKey);
   const signInAt = await store.get<string>(desktopLastSignInAtKey);
-  const metadata = await collectDesktopMetadata(store, anonId ?? uid);
+  const metadata = await collectDesktopMetadata(store, anonId ?? uid, uid);
   setPersonProperties(posthogSafeMetadata(metadata), uid);
   const auth = {
     ...authMetadata,
     sign_in_method: signInMethod ?? null,
   };
 
-  const alreadySynced = await store.get<boolean>(desktopProfileSyncedKey);
-  const whereHeard = await store.get<StoredAnswer>(desktopWhereHeardKey);
-  const role = await store.get<StoredAnswer>(desktopRoleKey);
+  const profileSyncedKey = desktopProfileSyncedForUidKey(uid);
+  const alreadySynced = await store.get<boolean>(profileSyncedKey);
+  const whereHeard = await store.get<StoredAnswer>(desktopWhereHeardForUidKey(uid));
+  const role = await store.get<StoredAnswer>(desktopRoleForUidKey(uid));
   const cleanedWhereHeard = cleanAnswer(whereHeard);
   const cleanedRole = cleanAnswer(role);
   const events = await pendingEvents(store);
@@ -250,7 +251,7 @@ export async function syncProfileOnSignIn(
     });
     if (synced && events.length > 0) await replacePendingEvents(store, []);
     if (metadata.install.onboarding_seen) {
-      await store.set(desktopProfileSyncedKey, true).catch((err) =>
+      await store.set(profileSyncedKey, true).catch((err) =>
         logError("profile: mark synced (no answers)", err),
       );
     }
@@ -280,7 +281,7 @@ export async function syncProfileOnSignIn(
   if (synced && events.length > 0) await replacePendingEvents(store, []);
 
   if (!alreadySynced) {
-    await store.set(desktopProfileSyncedKey, true).catch((err) =>
+    await store.set(profileSyncedKey, true).catch((err) =>
       logError("profile: mark synced", err),
     );
   }

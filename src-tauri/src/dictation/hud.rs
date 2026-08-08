@@ -43,10 +43,8 @@ const HOVER_SIDE_HEIGHT: f64 = 46.0;
 const HOVER_TOP_WIDTH: f64 = 164.0;
 const HOVER_TOP_HEIGHT: f64 = 63.0;
 
-/// The message pill. Used by `Error`, `Pending`, and by `Listening` and
-/// `Transcribing` once they actually have a partial transcript to show; the
-/// active pill stays wordless while there are no words. `Pending` is taller
-/// because it carries the held transcript as well as the explanation.
+/// The message pill. Used by `Error` and `Pending`; live recognition stays a
+/// compact waveform because the final transcript belongs in the focused field.
 const MESSAGE_WIDTH: f64 = 340.0;
 const MESSAGE_HEIGHT: f64 = 44.0;
 const PENDING_HEIGHT: f64 = 78.0;
@@ -111,7 +109,7 @@ fn accepts_clicks(phase: HudPhase) -> bool {
 #[serde(rename_all = "camelCase")]
 pub struct HudUpdate {
     pub phase: HudPhase,
-    /// The streaming partial, or the final text. Never logged anywhere.
+    /// The final or held text. Never logged anywhere.
     pub text: String,
     /// A short explanation shown under the text for a failure or a hold.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -189,8 +187,7 @@ fn build_window(app: &AppHandle) -> Result<(), String> {
     // WS_EX_NOACTIVATE below keeps it from taking focus, and the surface has no
     // click action. Active dictation switches back to click-through.
     let _ = window.set_ignore_cursor_events(false);
-    // Same display-affinity treatment the overlay gets: partial transcript text
-    // should not land in a screen share or a screenshot.
+    // Same display-affinity treatment the overlay gets.
     let _ = crate::overlay::exclude_main_window_from_capture(&window);
     apply_no_activate(&window);
     Ok(())
@@ -329,16 +326,8 @@ fn resting_size(edge: NotchEdge) -> LogicalSize<f64> {
 /// The HUD's footprint for one phase. Idle is the compact persistent pill;
 /// active phases enlarge it while keeping the same edge-aligned silhouette.
 ///
-/// `has_caption` is why this takes more than a phase. The listening surface is
-/// a wordless sliver right up until the recognizer actually has words, and
-/// then it has to be wide enough to read. Sizing on the phase alone would mean
-/// either a caption-width window sitting empty through every silent moment, or
-/// a 12px sliver trying to hold a sentence.
-fn surface_size(edge: NotchEdge, phase: HudPhase, has_caption: bool) -> LogicalSize<f64> {
+fn surface_size(edge: NotchEdge, phase: HudPhase, _has_caption: bool) -> LogicalSize<f64> {
     match phase {
-        HudPhase::Listening | HudPhase::Transcribing if has_caption => {
-            LogicalSize::new(MESSAGE_WIDTH, MESSAGE_HEIGHT)
-        }
         HudPhase::Idle if IDLE_HOVERED.load(Ordering::Relaxed) => match edge {
             NotchEdge::Top | NotchEdge::Bottom => {
                 LogicalSize::new(HOVER_TOP_WIDTH, HOVER_TOP_HEIGHT)
@@ -519,8 +508,6 @@ pub fn publish(app: &AppHandle, mut update: HudUpdate) {
     IDLE_HOVERED.store(false, Ordering::Relaxed);
     update.edge = overlay::snapshot(app).notch_edge.as_stored();
     let phase = update.phase;
-    // Drives the resize below, so the listening surface widens the moment
-    // there are words and stays a sliver while there are not.
     let has_caption = !update.text.is_empty();
     *LAST_UPDATE.lock().unwrap_or_else(|e| e.into_inner()) = Some(update.clone());
     if let Some(window) = app.get_webview_window(DICTATION_WINDOW) {

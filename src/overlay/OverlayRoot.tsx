@@ -149,7 +149,7 @@ export function OverlayRoot() {
   // Long-press-to-move is only armed on the resting bar (never mid-card or
   // mid-onboarding); the notch itself is the drag handle.
   const notchMove = useNotchMove(presentation === "bar");
-  const tail = useOnboardingTail(user !== null);
+  const tail = useOnboardingTail(user?.uid ?? null);
   // Suppress the double-tap-Ctrl notch gesture while dashboard-owned first-run
   // onboarding is active. The native hotkey test consumes the gesture on its
   // own screen; every other onboarding step keeps the hidden overlay dormant.

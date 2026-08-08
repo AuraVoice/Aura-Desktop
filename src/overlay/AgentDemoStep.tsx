@@ -21,7 +21,7 @@ const END_AFTER_MS = WARNING_AFTER_MS + 30 * 1_000;
 
 /** Post-sign-in step: a real voice session so the user experiences Buddy once
  * before landing. Reuses the same start/stop the notch uses, but keeps the
- * onboarding surface up (no summon_bar) and shows the live caption inline.
+ * onboarding surface up (no summon_bar) with only the waveform as feedback.
  * The dashboard handoff never depends on a successful call - any error still
  * offers Skip. */
 export function AgentDemoStep({ voice, onFinish }: AgentDemoStepProps) {
@@ -98,9 +98,9 @@ export function AgentDemoStep({ voice, onFinish }: AgentDemoStepProps) {
       "agent_demo_started",
     );
     if (outputMuted()) {
-      await voice.startSession();
+      await voice.startSession("onboarding");
     } else {
-      await voice.startBridgedSession();
+      await voice.startBridgedSession("onboarding");
     }
   }
 
@@ -166,9 +166,6 @@ export function AgentDemoStep({ voice, onFinish }: AgentDemoStepProps) {
       {(isLive || isConnecting) && (
         <div className="agent-demo-voice">
           <canvas ref={canvasRef} className="agent-demo-waveform" aria-hidden="true" />
-          {voice.assistantCaption && voice.status === "speaking" && (
-            <p className="agent-demo-caption">{voice.assistantCaption}</p>
-          )}
         </div>
       )}
       {startedAt !== null && inGracePeriod && (

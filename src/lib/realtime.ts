@@ -33,6 +33,7 @@ export interface StartRealtimeLegOptions {
   micTrack: MediaStreamTrack;
   audioEl: HTMLAudioElement;
   signal: AbortSignal;
+  mode?: "standard" | "guide" | "onboarding";
   onActivity?: (activity: RealtimeActivity) => void;
   onRemoteAudioTrack?: (track: MediaStreamTrack | null) => void;
 }
@@ -60,7 +61,7 @@ interface RealtimeSessionSecret {
 let realtimeLegSeq = 0;
 
 export async function startRealtimeLeg(opts: StartRealtimeLegOptions): Promise<RealtimeLeg> {
-  const { micTrack, audioEl, signal, onActivity, onRemoteAudioTrack } = opts;
+  const { micTrack, audioEl, signal, mode = "standard", onActivity, onRemoteAudioTrack } = opts;
 
   // TEMP (diagnostic): TTFT clock + per-invocation id.
   const legId = ++realtimeLegSeq;
@@ -69,8 +70,9 @@ export async function startRealtimeLeg(opts: StartRealtimeLegOptions): Promise<R
   logInfo("realtime: leg start", `legId=${legId}`);
 
   // 1. Mint an ephemeral secret server-side (OPENAI_API_KEY stays on the backend).
-  logInfo("realtime: mint requested", "POST /realtime/session");
-  const res = await authFetch("/realtime/session", { method: "POST", signal });
+  const modeParam = mode === "standard" ? "" : `?mode=${mode}`;
+  logInfo("realtime: mint requested", `POST /realtime/session${modeParam}`);
+  const res = await authFetch(`/realtime/session${modeParam}`, { method: "POST", signal });
   logInfo("realtime: mint response", `legId=${legId} status=${res.status} mintMs=${since()}`);
   if (!res.ok) {
     // 503 = bridge disabled or mint failed; caller falls back to the cold path.

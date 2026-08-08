@@ -11,6 +11,7 @@ import {
 import { Store } from "@tauri-apps/plugin-store";
 import {
   desktopOnboardingSeenKey,
+  desktopOnboardingSeenForUidKey,
   overlayStorePath,
 } from "./copy";
 import { logError } from "./log";
@@ -89,6 +90,7 @@ export function posthogSafeMetadata(metadata: DesktopMetadata): Record<string, u
 export async function collectDesktopMetadata(
   store: Store,
   installId: string,
+  uid?: string,
 ): Promise<DesktopMetadata> {
   const now = new Date().toISOString();
   const [
@@ -104,7 +106,7 @@ export async function collectDesktopMetadata(
     store.get<string>(firstStartedAtKey),
     store.get<string>(firstStartedVersionKey),
     store.get<string>(lastStartedVersionKey),
-    store.get<boolean>(desktopOnboardingSeenKey),
+    store.get<boolean>(uid ? desktopOnboardingSeenForUidKey(uid) : desktopOnboardingSeenKey),
     hostname().catch((err) => {
       logError("desktopMetadata: hostname", err);
       return null;
