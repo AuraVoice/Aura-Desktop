@@ -28,6 +28,12 @@ import {
 
 type AnalyzableAudioTrack = LocalAudioTrack | RemoteAudioTrack;
 
+function isMediaStreamTrack(
+  track: AnalyzableAudioTrack | MediaStreamTrack,
+): track is MediaStreamTrack {
+  return typeof MediaStreamTrack !== "undefined" && track instanceof MediaStreamTrack;
+}
+
 function trackForStatus(
   room: Room | null,
   status: VoiceSessionStatus,
@@ -60,6 +66,7 @@ export function useAudioLevels(
   room: Room | null,
   status: VoiceSessionStatus,
   canvasRef: RefObject<HTMLCanvasElement | null>,
+  mediaTrack: MediaStreamTrack | null = null,
 ) {
   useEffect(() => {
     const canvasElement = canvasRef.current;
@@ -75,7 +82,7 @@ export function useAudioLevels(
     const heights = new Float32Array(BAR_COUNT);
     const targets = new Float32Array(BAR_COUNT);
     let frequencyData: Uint8Array<ArrayBuffer> | null = null;
-    let activeTrack: AnalyzableAudioTrack | null = null;
+    let activeTrack: AnalyzableAudioTrack | MediaStreamTrack | null = null;
     let analyserBundle: ReturnType<typeof createAudioAnalyser> | null = null;
     let animationFrame = 0;
     let disposed = false;
@@ -91,19 +98,38 @@ export function useAudioLevels(
     }
 
     function refreshTrack() {
-      const nextTrack = trackForStatus(room, status);
+      const nextTrack = mediaTrack ?? trackForStatus(room, status);
       if (nextTrack === activeTrack && analyserBundle) return;
 
       releaseAnalyser();
       if (!nextTrack || reducedMotion) return;
 
       try {
-        analyserBundle = createAudioAnalyser(nextTrack, {
-          fftSize: 256,
-          smoothingTimeConstant: 0.86,
-          minDecibels: -88,
-          maxDecibels: -28,
-        });
+        if (isMediaStreamTrack(nextTrack)) {
+          const audioContext = new AudioContext();
+          const source = audioContext.createMediaStreamSource(new MediaStream([nextTrack]));
+          const analyser = audioContext.createAnalyser();
+          analyser.fftSize = 256;
+          analyser.smoothingTimeConstant = 0.86;
+          analyser.minDecibels = -88;
+          analyser.maxDecibels = -28;
+          source.connect(analyser);
+          analyserBundle = {
+            analyser,
+            cleanup: async () => {
+              source.disconnect();
+              analyser.disconnect();
+              await audioContext.close();
+            },
+          } as ReturnType<typeof createAudioAnalyser>;
+        } else {
+          analyserBundle = createAudioAnalyser(nextTrack, {
+            fftSize: 256,
+            smoothingTimeConstant: 0.86,
+            minDecibels: -88,
+            maxDecibels: -28,
+          });
+        }
         activeTrack = nextTrack;
         frequencyData = new Uint8Array(analyserBundle.analyser.frequencyBinCount);
         const audioContext = analyserBundle.analyser.context as AudioContext;
@@ -213,5 +239,5 @@ export function useAudioLevels(
       room?.off(RoomEvent.TrackUnsubscribed, refreshTrack);
       releaseAnalyser();
     };
-  }, [canvasRef, room, status]);
+  }, [canvasRef, mediaTrack, room, status]);
 }

@@ -1,39 +1,29 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Store } from "@tauri-apps/plugin-store";
-import QRCode from "react-qr-code";
 import {
   onboarding as copy,
   consent as consentCopy,
-  whereHeard as whereHeardCopy,
-  role as roleCopy,
-  desktopOnboardingSeenKey,
   desktopConsentAcceptedKey,
-  desktopWhereHeardKey,
-  desktopRoleKey,
-  getAuraAppUrl,
   overlayStorePath,
   privacyUrl,
   termsUrl,
 } from "../lib/copy";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { exit } from "@tauri-apps/plugin-process";
-import { setPersonProperties } from "../lib/analytics";
 import {
   telemetryConsentAccepted,
   trackOnboardingStepCompleted,
 } from "../lib/acquisitionAnalytics";
-import { getOrCreateAnonId, type StoredAnswer } from "../lib/profile";
+import { trackEvent } from "../lib/analytics";
+import { recordDesktopOnboardingEvent } from "../lib/profile";
 import { initSentryIfEnabled } from "../lib/sentry";
 import { logError, logInfo } from "../lib/log";
-import { ChoiceStep } from "./ChoiceStep";
-import { SignInForm, type Mode as SignInMode } from "./SignInForm";
+import { webAuthCopy } from "../lib/webAuthCopy";
+import iconUrl from "../assets/icons/Aura-Icon.png";
+import { SignInForm } from "./SignInForm";
+import { useWebAuthSignIn } from "./useWebAuthSignIn";
 import "./OnboardingFlow.css";
 
-type Step = "welcome" | "getApp" | "whereHeard" | "role" | "link";
-// Dots cover the pre-sign-in sequence only; the sign-in ("link") step has no dot
-// so a user can't skip the attribution questions by clicking ahead.
-const DOT_STEPS: Step[] = ["welcome", "getApp", "whereHeard", "role"];
 // This store file is shared with overlay.rs's window-position persistence,
 // which writes to it on every WindowEvent::Moved - a burst of which fires
 // exactly when SetupPanel first mounts post-sign-out (the Bar->Setup
@@ -43,147 +33,56 @@ const DOT_STEPS: Step[] = ["welcome", "getApp", "whereHeard", "role"];
 // expected common case.
 const STORE_LOAD_TIMEOUT_MS = 300;
 
-function ConsentStep({ onAccept }: { onAccept: () => void }) {
-  const [ageConfirmed, setAgeConfirmed] = useState(false);
-
+function GoogleMark() {
   return (
-    <div className="onboarding-step">
-      <h2 className="onboarding-heading">{consentCopy.heading}</h2>
-      <p className="onboarding-body">{consentCopy.body}</p>
-      <div className="onboarding-legal-links">
-        <button type="button" className="onboarding-link-button" onClick={() => void openUrl(privacyUrl)}>
-          {consentCopy.privacyLabel}
-        </button>
-        <button type="button" className="onboarding-link-button" onClick={() => void openUrl(termsUrl)}>
-          {consentCopy.termsLabel}
-        </button>
-      </div>
-      <label className="onboarding-age-check">
-        <input
-          type="checkbox"
-          checked={ageConfirmed}
-          onChange={(e) => setAgeConfirmed(e.target.checked)}
-        />
-        {consentCopy.ageLabel}
-      </label>
-      <button
-        type="button"
-        className="onboarding-primary-button"
-        disabled={!ageConfirmed}
-        onClick={onAccept}
-      >
-        {consentCopy.accept}
-      </button>
-      <button type="button" className="onboarding-link-button" onClick={() => void exit(0)}>
-        {consentCopy.quit}
-      </button>
-    </div>
-  );
-}
-
-function WelcomeStep({
-  onNext,
-  onSkipToLink,
-  onGoogleSignup,
-}: {
-  onNext: () => void;
-  onSkipToLink: () => void;
-  onGoogleSignup: () => void;
-}) {
-  return (
-    <div className="onboarding-step">
-      <h2 className="onboarding-heading">{copy.welcome.heading}</h2>
-      <p className="onboarding-body">{copy.welcome.body}</p>
-      <p className="onboarding-hint">{copy.welcome.trayHint}</p>
-      <button type="button" className="onboarding-primary-button" onClick={onNext}>
-        {copy.welcome.button}
-      </button>
-      <button type="button" className="onboarding-link-button" onClick={onSkipToLink}>
-        {copy.welcome.skipLink}
-      </button>
-      <button type="button" className="onboarding-link-button" onClick={onGoogleSignup}>
-        {copy.welcome.googleSignupLink}
-      </button>
-    </div>
-  );
-}
-
-function GetAppStep({ onNext, onBack }: { onNext: () => void; onBack: () => void }) {
-  return (
-    <div className="onboarding-step onboarding-step-get-app">
-      <div className="onboarding-qr-card">
-        <QRCode value={getAuraAppUrl} size={116} />
-      </div>
-      <div className="onboarding-get-app-copy">
-        <h2 className="onboarding-heading">{copy.getApp.heading}</h2>
-        <p className="onboarding-body">{copy.getApp.body}</p>
-        <button type="button" className="onboarding-primary-button" onClick={onNext}>
-          {copy.getApp.button}
-        </button>
-        <button type="button" className="onboarding-link-button" onClick={onBack}>
-          {copy.getApp.backLink}
-        </button>
-      </div>
-    </div>
+    <svg className="onboarding-google-mark" viewBox="0 0 18 18" aria-hidden="true">
+      <path fill="#4285F4" d="M17.64 9.205c0-.638-.057-1.252-.164-1.841H9v3.482h4.844a4.14 4.14 0 0 1-1.797 2.716v2.26h2.909c1.702-1.567 2.684-3.875 2.684-6.617Z" />
+      <path fill="#34A853" d="M9 18c2.43 0 4.467-.806 5.956-2.178l-2.91-2.26c-.805.54-1.835.86-3.046.86-2.344 0-4.328-1.584-5.037-3.71H.956v2.332A9 9 0 0 0 9 18Z" />
+      <path fill="#FBBC05" d="M3.963 10.712A5.41 5.41 0 0 1 3.682 9c0-.594.102-1.172.28-1.712V4.956H.957A9 9 0 0 0 0 9c0 1.452.347 2.827.956 4.044l3.007-2.332Z" />
+      <path fill="#EA4335" d="M9 3.578c1.321 0 2.507.454 3.442 1.346l2.582-2.582C13.463.89 11.426 0 9 0A9 9 0 0 0 .956 4.956l3.007 2.332C4.672 5.162 6.656 3.578 9 3.578Z" />
+    </svg>
   );
 }
 
 export function OnboardingFlow() {
-  const [step, setStep] = useState<Step>("welcome");
   const [resolved, setResolved] = useState(false);
   const [consentAccepted, setConsentAccepted] = useState(false);
-  const [initialSignInMode, setInitialSignInMode] = useState<SignInMode>("pairing");
-  const [whereHeardAnswer, setWhereHeardAnswer] = useState<StoredAnswer | null>(null);
-  const [roleAnswer, setRoleAnswer] = useState<StoredAnswer | null>(null);
+  const [ageConfirmed, setAgeConfirmed] = useState(false);
+  const [savingConsent, setSavingConsent] = useState(false);
+  const [consentError, setConsentError] = useState<string | null>(null);
+  const [phoneCodeVisible, setPhoneCodeVisible] = useState(false);
   const storeRef = useRef<Store | null>(null);
   const forcedRef = useRef(false);
+  const webAuth = useWebAuthSignIn();
 
   useEffect(() => {
     let cancelled = false;
     const startedAt = Date.now();
 
-    // Hard upper bound on the blank render below: if the store read is
-    // contended (see overlayStorePath's comment), default to the sign-in
-    // screen rather than leaving the overlay blank indefinitely. Biased
-    // toward "link" (skip welcome) rather than "welcome" - a user reaching
-    // this component post-sign-out has, by definition, already onboarded
-    // once, and "New here?" is still one click away if this guess is ever
-    // wrong for a genuinely first-run case.
+    // Hard upper bound on the blank render below. If the shared store is busy,
+    // show the welcome surface while the read continues rather than leaving
+    // the window empty.
     const timeoutId = setTimeout(() => {
       if (cancelled) return;
       forcedRef.current = true;
       logInfo(
         "OnboardingFlow: load store",
-        `timed out after ${STORE_LOAD_TIMEOUT_MS}ms, defaulting to link step`,
+        `timed out after ${STORE_LOAD_TIMEOUT_MS}ms, showing welcome screen`,
       );
-      setStep("link");
       setResolved(true);
     }, STORE_LOAD_TIMEOUT_MS);
 
     Store.load(overlayStorePath)
       .then(async (store) => {
         storeRef.current = store;
-        const seen = await store.get<boolean>(desktopOnboardingSeenKey);
         const accepted = await store.get<boolean>(desktopConsentAcceptedKey);
-        const whereHeard = await store.get<StoredAnswer>(desktopWhereHeardKey);
-        const role = await store.get<StoredAnswer>(desktopRoleKey);
         if (cancelled) return;
         setConsentAccepted(Boolean(accepted));
-        setWhereHeardAnswer(whereHeard ?? null);
-        setRoleAnswer(role ?? null);
         clearTimeout(timeoutId);
-        logInfo("OnboardingFlow: load store", `resolved seen=${Boolean(seen)} in ${Date.now() - startedAt}ms`);
-        // The timeout above already forced a render - a late resolution
-        // only gets logged (so the real duration is auditable), not applied,
-        // since re-driving step/resolved now could stomp on-screen
-        // navigation the user has already made.
-        if (forcedRef.current) return;
-        // Resume where an interrupted first-run left off: a returning user
-        // (seen) or one who already finished the questions (role answered)
-        // jumps straight to sign-in; a partial answerer resumes at the next
-        // unanswered question rather than re-asking.
-        if (seen || role) setStep("link");
-        else if (whereHeard) setStep("role");
+        logInfo(
+          "OnboardingFlow: load store",
+          `resolved consent=${Boolean(accepted)} in ${Date.now() - startedAt}ms`,
+        );
         setResolved(true);
       })
       .catch((err) => {
@@ -199,143 +98,177 @@ export function OnboardingFlow() {
 
   useEffect(() => {
     if (!resolved) return;
-    // The onboarding_seen flag is now written at the very end of the flow
-    // (after the post-sign-in tour + demo, in OnboardingTail), not here - so an
-    // interrupted first-run resumes instead of being marked complete at sign-in.
-    invoke("set_onboarding_step", { step }).catch((err) =>
+    invoke("set_onboarding_step", { step: "welcome" }).catch((err) =>
       logError("OnboardingFlow: set_onboarding_step", err),
     );
-  }, [step, resolved]);
+  }, [resolved]);
 
-  // Persists a question answer, mirrors it to PostHog under the per-install
-  // anonymous id (aliased to the uid post-sign-in), then advances. Referral is
-  // captured here, pre-sign-in, so it survives even if the user never finishes.
-  async function persistAnswer(
-    key: typeof desktopWhereHeardKey | typeof desktopRoleKey,
-    property: "where_heard" | "role",
-    answer: StoredAnswer,
-  ) {
-    const store = storeRef.current;
-    if (!store) return;
-    await store.set(key, answer).catch((err) =>
-      logError("OnboardingFlow: persist answer", err),
-    );
-    const anonId = await getOrCreateAnonId(store).catch((err) => {
-      logError("OnboardingFlow: anon id", err);
-      return undefined;
-    });
-    const props: Record<string, unknown> = { [property]: answer.id };
-    if (answer.other) props[`${property}_other`] = answer.other;
-    setPersonProperties(props, anonId ?? undefined);
+  async function acceptConsentIfNeeded(): Promise<boolean> {
+    if (!consentAccepted && !ageConfirmed) return false;
+    setConsentError(null);
+    if (!consentAccepted) {
+      setSavingConsent(true);
+      try {
+        const store = storeRef.current ?? await Store.load(overlayStorePath);
+        storeRef.current = store;
+        await store.set(desktopConsentAcceptedKey, true);
+        await telemetryConsentAccepted();
+        trackEvent("desktop_telemetry_consent_accepted", { age_confirmed: true });
+        await recordDesktopOnboardingEvent(
+          "desktop_telemetry_consent_accepted",
+          { age_confirmed: true },
+          "telemetry_consent_accepted",
+        );
+        await trackOnboardingStepCompleted("consent");
+        initSentryIfEnabled(true);
+        setConsentAccepted(true);
+      } catch (err) {
+        logError("OnboardingFlow: persist consent", err);
+        setConsentError("Aura couldn't save your choice. Please try again.");
+        setSavingConsent(false);
+        return false;
+      }
+      setSavingConsent(false);
+    }
+    return true;
   }
 
-  async function acceptConsent() {
-    await storeRef.current?.set(desktopConsentAcceptedKey, true).catch((err) =>
-      logError("OnboardingFlow: persist consent", err),
+  async function continueWithGoogle() {
+    if (savingConsent || webAuth.state.phase === "opening" || webAuth.state.phase === "waiting") return;
+    if (!await acceptConsentIfNeeded()) return;
+    trackEvent("desktop_onboarding_auth_path_selected", { auth_path: "google" });
+    await recordDesktopOnboardingEvent(
+      "desktop_onboarding_auth_path_selected",
+      { auth_path: "google" },
+      "auth_path_google",
     );
-    // Flip immediately in-memory so telemetry starts this session too, not
-    // just after the next launch - App.tsx's own startup read covers future
-    // launches, this covers the one where consent was just given.
-    void telemetryConsentAccepted().then(() => trackOnboardingStepCompleted("consent"));
-    initSentryIfEnabled(true);
-    setConsentAccepted(true);
+    await trackOnboardingStepCompleted("welcome");
+    await webAuth.start();
   }
 
-  // Render nothing for the one frame before the seen-flag resolves, avoiding
-  // a welcome-screen flash for returning users.
+  async function showPhoneCode() {
+    if (savingConsent || authBusy) return;
+    if (!await acceptConsentIfNeeded()) return;
+    webAuth.cancel();
+    trackEvent("desktop_onboarding_auth_path_selected", { auth_path: "phone_pairing" });
+    await recordDesktopOnboardingEvent(
+      "desktop_onboarding_auth_path_selected",
+      { auth_path: "phone_pairing" },
+      "auth_path_phone_pairing",
+    );
+    await trackOnboardingStepCompleted("welcome");
+    setPhoneCodeVisible(true);
+  }
+
+  // Render nothing for the short store read so a returning user does not see
+  // the age checkbox flash before their saved consent resolves.
   if (!resolved) return null;
 
-  if (!consentAccepted) {
-    return (
-      <div className="onboarding-flow">
-        <ConsentStep onAccept={acceptConsent} />
-      </div>
-    );
-  }
+  const authBusy = savingConsent
+    || webAuth.state.phase === "opening"
+    || webAuth.state.phase === "waiting"
+    || webAuth.state.phase === "signing_in";
+  const authError = webAuth.state.phase === "expired"
+    ? webAuthCopy.expired
+    : webAuth.state.phase === "failed"
+      ? webAuth.state.reason === "account_exists_different_credential"
+        ? webAuthCopy.accountExistsDifferentCredential
+        : webAuth.state.reason === "cancelled"
+          ? webAuthCopy.cancelled
+          : webAuth.state.reason === "popup_blocked"
+            ? webAuthCopy.popupBlocked
+            : webAuthCopy.otherFailure
+      : webAuth.state.phase === "error"
+        ? webAuthCopy.otherFailure
+        : null;
 
   return (
-    <div className="onboarding-flow">
-      {step === "welcome" && (
-        <WelcomeStep
-          onNext={() => {
-            void trackOnboardingStepCompleted("welcome");
-            setStep("getApp");
-          }}
-          onSkipToLink={() => {
-            void trackOnboardingStepCompleted("welcome");
-            setInitialSignInMode("pairing");
-            setStep("link");
-          }}
-          onGoogleSignup={() => {
-            void trackOnboardingStepCompleted("welcome");
-            setInitialSignInMode("google");
-            setStep("link");
-          }}
-        />
-      )}
-      {step === "getApp" && (
-        <GetAppStep
-          onNext={() => {
-            void trackOnboardingStepCompleted("get_app");
-            setStep("whereHeard");
-          }}
-          onBack={() => setStep("welcome")}
-        />
-      )}
-      {step === "whereHeard" && (
-        <ChoiceStep
-          heading={whereHeardCopy.heading}
-          body={whereHeardCopy.body}
-          options={whereHeardCopy.options}
-          otherPlaceholder={whereHeardCopy.otherPlaceholder}
-          buttonLabel={whereHeardCopy.button}
-          initial={whereHeardAnswer ?? undefined}
-          onSubmit={(answer) => {
-            setWhereHeardAnswer(answer);
-            void persistAnswer(desktopWhereHeardKey, "where_heard", answer);
-            void trackOnboardingStepCompleted("where_heard");
-            setStep("role");
-          }}
-        />
-      )}
-      {step === "role" && (
-        <ChoiceStep
-          heading={roleCopy.heading}
-          body={roleCopy.body}
-          options={roleCopy.options}
-          otherPlaceholder={roleCopy.otherPlaceholder}
-          buttonLabel={roleCopy.button}
-          initial={roleAnswer ?? undefined}
-          onSubmit={(answer) => {
-            setRoleAnswer(answer);
-            void persistAnswer(desktopRoleKey, "role", answer);
-            void trackOnboardingStepCompleted("role");
-            setInitialSignInMode("pairing");
-            setStep("link");
-          }}
-        />
-      )}
-      {step === "link" && <SignInForm initialMode={initialSignInMode} />}
+    <div className="onboarding-flow onboarding-welcome-flow">
+      <div className="onboarding-brand-mark">
+        <img src={iconUrl} alt="" className="onboarding-brand-icon" />
+      </div>
+      <div className="onboarding-step onboarding-welcome-step">
+        <h2 className="onboarding-heading">
+          <span className="onboarding-heading-accent">{copy.welcome.headingAccent}</span>
+          {copy.welcome.headingTail}
+        </h2>
+        <p className="onboarding-body">{copy.welcome.body}</p>
 
-      <div className="onboarding-footer">
-        {step !== "link" && (
-          <div className="onboarding-progress-dots">
-            {DOT_STEPS.map((s) => (
-              <button
-                key={s}
-                type="button"
-                className={`onboarding-dot${s === step ? " onboarding-dot-active" : ""}`}
-                onClick={() => setStep(s)}
-                aria-label={`Go to ${s} step`}
-              />
-            ))}
+        {!consentAccepted && (
+          <label className="onboarding-age-check">
+            <input
+              type="checkbox"
+              checked={ageConfirmed}
+              onChange={(event) => setAgeConfirmed(event.target.checked)}
+            />
+            <span>{consentCopy.ageLabel}</span>
+          </label>
+        )}
+
+        <button
+          type="button"
+          className="onboarding-google-button"
+          disabled={authBusy || (!consentAccepted && !ageConfirmed)}
+          onClick={() => void continueWithGoogle()}
+        >
+          <GoogleMark />
+          <span>
+            {savingConsent
+              ? "Saving your choice..."
+              : webAuth.state.phase === "opening"
+                ? webAuthCopy.opening
+                : webAuth.state.phase === "waiting"
+                  ? "Waiting for Google..."
+                  : webAuth.state.phase === "signing_in"
+                    ? "Signing you in..."
+                    : authError
+                      ? webAuthCopy.tryAgain
+                      : "Continue with Google"}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          className="onboarding-link-button onboarding-phone-link"
+          disabled={authBusy || (!consentAccepted && !ageConfirmed)}
+          onClick={() => {
+            if (phoneCodeVisible) setPhoneCodeVisible(false);
+            else void showPhoneCode();
+          }}
+        >
+          {phoneCodeVisible ? "Hide phone code" : "Connect with phone using a code"}
+        </button>
+
+        {phoneCodeVisible && (
+          <div className="onboarding-phone-pairing">
+            <SignInForm initialMode="pairing" pairingOnly showLegal={false} />
           </div>
         )}
-        {step === "link" && (
-          <button type="button" className="onboarding-link-button onboarding-new-here" onClick={() => setStep("welcome")}>
-            {copy.newHereLink}
+
+        {webAuth.state.phase === "waiting" && (
+          <p className="onboarding-status" role="status">{webAuthCopy.waiting}</p>
+        )}
+        {(consentError || authError) && (
+          <p className="onboarding-error" role="alert">{consentError ?? authError}</p>
+        )}
+        {authBusy && !savingConsent && webAuth.state.phase !== "signing_in" && (
+          <button type="button" className="onboarding-link-button" onClick={webAuth.cancel}>
+            {webAuthCopy.cancel}
           </button>
         )}
+
+        <p className="onboarding-consent-note">
+          By continuing, you agree to Aura's
+          {" "}
+          <button type="button" className="onboarding-inline-link" onClick={() => void openUrl(privacyUrl)}>
+            {consentCopy.privacyLabel}
+          </button>
+          {" and "}
+          <button type="button" className="onboarding-inline-link" onClick={() => void openUrl(termsUrl)}>
+            {consentCopy.termsLabel}
+          </button>
+          .
+        </p>
       </div>
     </div>
   );

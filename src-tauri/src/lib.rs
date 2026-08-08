@@ -29,7 +29,7 @@ mod win_focus;
 use log::{error, info};
 use tauri::{AppHandle, Manager, WindowEvent};
 use tauri_plugin_deep_link::DeepLinkExt;
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+use tauri_plugin_global_shortcut::ShortcutState;
 
 use overlay::{NotchEdge, OnboardingStep, OverlaySnapshot, OverlayStateHandle, PanelVariant};
 use win_focus::ForegroundGeneration;
@@ -67,22 +67,7 @@ fn set_slot_height(app: AppHandle, height: Option<f64>) {
 
 #[tauri::command]
 fn set_chat_enabled(app: AppHandle, enabled: bool) -> Result<(), String> {
-    let manager = app.global_shortcut();
-    if enabled {
-        if manager.is_registered(hotkeys::chat_shortcut()) {
-            return Ok(());
-        }
-        manager
-            .register(hotkeys::chat_shortcut())
-            .map_err(|e| format!("failed to register chat hotkey: {e}"))
-    } else {
-        if !manager.is_registered(hotkeys::chat_shortcut()) {
-            return Ok(());
-        }
-        manager
-            .unregister(hotkeys::chat_shortcut())
-            .map_err(|e| format!("failed to unregister chat hotkey: {e}"))
-    }
+    hotkeys::set_chat_enabled(&app, enabled)
 }
 
 /// "Show the Aura bar at all times". Pushed from the dashboard's Settings page
@@ -139,13 +124,13 @@ fn open_dashboard_route(app: AppHandle, route: String) -> Result<(), String> {
     dashboard::open_dashboard_route(&app, Some(&route))
 }
 
-fn should_summon_on_start<I, S>(args: I, just_updated: bool) -> bool
+fn should_summon_on_start<I, S>(args: I, autostart_enabled: bool, just_updated: bool) -> bool
 where
     I: IntoIterator<Item = S>,
     S: AsRef<str>,
 {
     let is_boot_launch = args.into_iter().any(|arg| arg.as_ref() == "--autostart");
-    !is_boot_launch || just_updated
+    !is_boot_launch || autostart_enabled || just_updated
 }
 
 #[tauri::command]
@@ -264,6 +249,7 @@ pub fn run() {
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
         .manage(OverlayStateHandle::default())
+        .manage(hotkeys::HotkeyState::default())
         .manage(security::SecurityHandle::default())
         .manage(guide::GuideRuntimeHandle::default())
         .manage(guide::GuideCaptureHandle::default())
@@ -312,6 +298,7 @@ pub fn run() {
             guide::commit_guide_frame,
             guide::ack_guide_response,
             updater::install_update,
+            updater::check_for_update,
             updater::pending_update_version,
             updater::just_updated_version,
             logging::read_recent_log_lines,
@@ -348,6 +335,12 @@ pub fn run() {
             meeting::stop_join_watch,
             meeting::debug_force_join,
             voice_toggle_key::voice_toggle_key_status,
+            voice_toggle_key::set_voice_toggle_key,
+            hotkeys::hotkey_bindings,
+            hotkeys::set_hotkey_binding,
+            hotkeys::reset_hotkey_bindings,
+            hotkeys::begin_hotkey_test,
+            hotkeys::end_hotkey_test,
             dictation::dictation_status,
             dictation::dictation_consent_state,
             dictation::dictation_set_consent,
@@ -437,26 +430,7 @@ pub fn run() {
             // way it must not abort setup: the app is still fully usable
             // through the tray, while panicking here kills it at every boot
             // with nothing on screen (this exact panic reached Sentry from a real install).
-            for (name, shortcut) in [
-                ("summon", hotkeys::summon_shortcut()),
-                ("open-dashboard", hotkeys::open_dashboard_shortcut()),
-                ("sign-out", hotkeys::sign_out_shortcut()),
-                ("screen-sight", hotkeys::screen_sight_shortcut()),
-                ("guide-mode", hotkeys::guide_mode_shortcut()),
-                ("output-mute", hotkeys::output_mute_shortcut()),
-            ] {
-                if let Err(e) = app.global_shortcut().register(shortcut) {
-                    error!("hotkeys: failed to register {name} ({e}) - another process holds it; continuing without it");
-                    if !cfg!(debug_assertions) {
-                        sentry::capture_message(
-                            &format!("hotkeys: failed to register {name}: {e}"),
-                            sentry::Level::Error,
-                        );
-                    }
-                } else {
-                    info!("hotkeys: registered {name}");
-                }
-            }
+            hotkeys::initialize(app.handle());
 
             // Before tray::build so the "Start with Windows" checkbox reads
             // the post-policy state. Release-only: a dev build would register
@@ -514,13 +488,16 @@ pub fn run() {
                     just_updated.clone();
             }
 
-            // A direct install or explicit app launch opens the full app window:
-            // onboarding for a new/signed-out user, Home for a returning one. The
-            // overlay notch stays a tray/Ctrl+Alt+B companion. Windows boot
-            // launches stay tray-only so Aura does not interrupt login. If the
-            // window fails to build, fall back to the overlay so the user is never
-            // left with no surface at all.
-            if should_summon_on_start(std::env::args(), just_updated.is_some()) {
+            // A direct install, explicit app launch, or enabled Windows boot launch
+            // opens the full app window: onboarding for a new/signed-out user, Home
+            // for a returning one. The overlay notch stays available through the
+            // tray and Left Ctrl double-tap. If the window fails to build, fall back
+            // to the overlay so the user is never left with no surface at all.
+            if should_summon_on_start(
+                std::env::args(),
+                autostart::is_enabled(app.handle()),
+                just_updated.is_some(),
+            ) {
                 if let Err(e) = dashboard::open_dashboard_window(app.handle()) {
                     error!("failed to open dashboard window on start: {e}; falling back to overlay");
                     overlay::summon(app.handle());
@@ -573,13 +550,14 @@ mod tests {
 
     #[test]
     fn manual_launch_summons_the_app() {
-        assert!(should_summon_on_start(["aura-desktop.exe"], false));
+        assert!(should_summon_on_start(["aura-desktop.exe"], false, false));
     }
 
     #[test]
-    fn windows_autostart_stays_hidden() {
-        assert!(!should_summon_on_start(
+    fn enabled_windows_autostart_summons_the_app() {
+        assert!(should_summon_on_start(
             ["aura-desktop.exe", "--autostart"],
+            true,
             false,
         ));
     }
@@ -588,6 +566,7 @@ mod tests {
     fn update_restart_summons_even_with_autostart_args() {
         assert!(should_summon_on_start(
             ["aura-desktop.exe", "--autostart"],
+            false,
             true,
         ));
     }

@@ -35,13 +35,11 @@ export interface ChatScreenState {
  * checks before sending, and the resolver that turns the pending frame into a
  * /chat attachment at send time.
  *
- * Rust captures the frame at summon (see overlay::summon_chat), so this hook
- * never triggers the first capture - it collects one that already exists. That
- * is what keeps the picture pointed at the app the user left rather than at the
- * overlay, and it means the capture cost overlaps with the user typing.
+ * Rust remembers the monitor at summon (see overlay::summon_chat), but no
+ * pixels are captured until the user turns the attachment on.
  */
 export function useChatScreenCapture(open: boolean) {
-  const [armed, setArmed] = useState(true);
+  const [armed, setArmed] = useState(false);
   const [capture, setCapture] = useState<ChatScreenCapture | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const captureRef = useRef<ChatScreenCapture | null>(null);
@@ -63,9 +61,8 @@ export function useChatScreenCapture(open: boolean) {
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    // The frame is normally already waiting; if the capture is still running
-    // this simply returns null and the chip stays hidden, which is the honest
-    // answer rather than a spinner over an empty box.
+    // Normally empty because chat screenshots start off. Collecting here also
+    // handles a capture that completed just before this surface remounted.
     takeChatCapture()
       .then((next) => {
         if (!cancelled) adoptCapture(next);
@@ -85,7 +82,7 @@ export function useChatScreenCapture(open: boolean) {
   useEffect(() => {
     if (open || !openedOnceRef.current) return;
     adoptCapture(null);
-    setArmed(true);
+    setArmed(false);
     discardChatCapture().catch((err) => logError("useChatScreenCapture: discard on close", err));
   }, [open, adoptCapture]);
 

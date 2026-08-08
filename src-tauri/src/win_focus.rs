@@ -48,11 +48,19 @@ impl Default for ForegroundGeneration {
 /// That's exactly what was freezing this window whenever it was summoned
 /// over another app.
 ///
-/// Instead, this taps (and immediately releases) Alt via `SendInput` right
-/// before `SetForegroundWindow` - satisfies the documented "the calling
+/// Instead, this taps (and immediately releases) `VK_NONAME` via `SendInput`
+/// right before `SetForegroundWindow` - satisfies the documented "the calling
 /// process received the last input event" exception
 /// (https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow)
 /// without ever sharing an input queue with another process.
+///
+/// This tapped `VK_MENU` until 2026-08-07, and that is what killed the
+/// onboarding hotkey tour: the Panel is the presentation that tour renders in,
+/// so the one screen asking the user to double-tap Left Ctrl dropped itself
+/// into keyboard menu mode first and swallowed every tap. `raise_for_hotkey`
+/// below already carried the fix for the notch and chat; the Panel never got
+/// it. See that function for why `VK_NONAME` is the safe key, and note the tap
+/// itself is not removable.
 ///
 /// The Win32 calls still run on a spawned thread rather than inline: even
 /// though the deadlock above is gone, `SetForegroundWindow` is still a
@@ -67,7 +75,7 @@ impl Default for ForegroundGeneration {
 /// before touching any Win32 API, bailing out otherwise.
 #[cfg(target_os = "windows")]
 pub fn force_foreground(app: &AppHandle, window: &WebviewWindow) {
-    raise(app, window, VK_MENU);
+    raise(app, window, VK_NONAME);
 }
 
 /// Same raise, tapping a key no application can see instead of Alt.
@@ -127,8 +135,6 @@ fn raise(app: &AppHandle, window: &WebviewWindow, tap: VIRTUAL_KEY) {
             // Logged on success too: "did the overlay actually get the
             // keyboard" is otherwise only answerable by trying to type.
             info!("win_focus::raise: foreground granted");
-        } else if tap == VK_MENU {
-            warn!("win_focus::raise: OS denied foreground focus; Esc is inactive until the panel is clicked");
         } else {
             warn!("win_focus::raise: OS denied foreground focus; typing goes to the previous app until the overlay is clicked");
         }

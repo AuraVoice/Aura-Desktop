@@ -1815,6 +1815,53 @@
 .db-shortcut-keys {
   display: flex;
   gap: 6px;
+  /* Pins the keys and the Change button together at the right edge; the row's
+     space-between would otherwise strand the keys in the middle. */
+  margin-left: auto;
+}
+.db-shortcut-change {
+  flex-shrink: 0;
+  padding: 7px 13px;
+  border: 1px solid var(--db-border);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--db-text, #34383d);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.db-shortcut-change:hover {
+  background: var(--db-hover, rgba(0, 0, 0, 0.04));
+}
+.db-shortcut-footer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+.db-shortcut-reset {
+  padding: 8px 14px;
+  border: 1px solid var(--db-border);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--db-text-muted, #6b7078);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.db-shortcut-reset:hover:not(:disabled) {
+  color: var(--db-text, #34383d);
+  background: var(--db-hover, rgba(0, 0, 0, 0.04));
+}
+.db-shortcut-reset:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.db-shortcut-reset-error {
+  color: #a43d38;
+  font-size: 12px;
 }
 .db-shortcut-keys kbd {
   min-width: 34px;
@@ -3171,9 +3218,76 @@
   background: #ebe9e1;
 }
 .db-settings-dialog-item:focus-visible,
-.db-settings-dialog-close:focus-visible {
+.db-settings-dialog-close:focus-visible,
+.db-settings-update-btn:focus-visible {
   outline: 2px solid var(--db-teal);
   outline-offset: 2px;
+}
+.db-settings-version {
+  margin-top: auto;
+  padding: 0 18px;
+  color: var(--db-text-mute);
+  font-size: 14px;
+}
+.db-settings-version-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 42px;
+}
+.db-settings-version-row > span {
+  min-width: 0;
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.db-settings-update-wrap {
+  position: relative;
+  display: grid;
+  flex: 0 0 auto;
+  place-items: center;
+}
+.db-settings-update-hint {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 2;
+  width: max-content;
+  max-width: 210px;
+  padding: 7px 10px;
+  border: 1px solid rgba(31, 35, 40, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--db-text);
+  box-shadow: var(--db-shadow-md);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+.db-settings-update-btn {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: #59554f;
+  cursor: pointer;
+}
+.db-settings-update-btn:hover:not(:disabled) {
+  background: #eeece5;
+  color: var(--db-text);
+}
+.db-settings-update-btn:disabled {
+  cursor: default;
+  opacity: 0.6;
 }
 .db-settings-dialog-content {
   min-width: 0;

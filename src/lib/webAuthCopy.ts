@@ -7,7 +7,7 @@ export const webAuthCopy = {
   cancel: "Cancel",
   expired: "That link timed out. Want to try again?",
   accountExistsDifferentCredential:
-    "That Google account already has an Aura account with a password. Sign in with email and password instead.",
+    "That Google account could not be linked. Try another Google account.",
   cancelled: "Looks like that got closed before finishing. Want to try again?",
   popupBlocked: "Your browser blocked the sign-in window. Check your popup blocker and try again.",
   otherFailure: "Something went sideways. Give it another try.",

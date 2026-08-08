@@ -15,8 +15,8 @@ const app = initializeApp(firebaseConfig);
 // there as future work.
 //
 // initializeAuth (vs getAuth) also skips the popup/redirect resolver on
-// purpose: this app signs in exclusively via signInWithCustomToken and
-// email/password, never popup/redirect flows.
+// purpose: Google authentication completes in the system browser and returns
+// a custom token, so this webview never uses popup or redirect flows.
 //
 // Tokens never cross into Rust: the Rust side learns only a boolean+uid via
 // set_auth_state (security.rs) and a boolean UI hint via set_session_cached

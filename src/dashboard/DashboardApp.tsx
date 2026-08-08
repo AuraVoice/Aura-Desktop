@@ -33,7 +33,7 @@ import { DashboardOnboarding } from "./DashboardOnboarding";
 import { useDashboardUser } from "./useDashboardUser";
 import { useDashboardNotifications } from "./useDashboardNotifications";
 import { navSections, navTitles } from "./navConfig";
-import { desktopOnboardingSeenKey, overlayStorePath } from "../lib/copy";
+import { desktopOnboardingSeenForUidKey, overlayStorePath } from "../lib/copy";
 import { logError } from "../lib/log";
 import { useGeneralSettings } from "../state/useGeneralSettings";
 import "./dashboard.css";
@@ -139,11 +139,17 @@ export function DashboardApp() {
   const user = useDashboardUser();
   const [onboarded, setOnboarded] = useState<boolean | null>(null);
   const [collapsed, setCollapsed] = useState(false);
+  const uid = user?.uid ?? null;
 
   useEffect(() => {
+    if (!uid) {
+      setOnboarded(false);
+      return;
+    }
     let cancelled = false;
+    setOnboarded(null);
     Store.load(overlayStorePath)
-      .then((store) => store.get<boolean>(desktopOnboardingSeenKey))
+      .then((store) => store.get<boolean>(desktopOnboardingSeenForUidKey(uid)))
       .then((seen) => {
         if (!cancelled) setOnboarded(Boolean(seen));
       })
@@ -154,7 +160,7 @@ export function DashboardApp() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [uid]);
 
   const showApp = user !== null && onboarded;
 

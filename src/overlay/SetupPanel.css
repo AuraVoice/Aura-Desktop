@@ -6,6 +6,12 @@
   padding: 14px 24px 20px;
   box-sizing: border-box;
   overflow: hidden;
+  --glass-text-bright: #28231d;
+  --glass-text-dim: #6f655b;
+  --glass-field-fill: rgba(255, 255, 255, 0.56);
+  --glass-border-flat: rgba(92, 72, 47, 0.18);
+  --glass-accent: #76c7b5;
+  background: #f5f4f0;
 }
 
 .setup-panel-header {
@@ -52,4 +58,47 @@
   font-size: 10px;
   color: var(--glass-text-dim);
   opacity: 0.6;
+}
+
+/* The setup overlay is shorter than the dashboard window. Keep the same
+   screen hierarchy while fitting it without turning consent into a scroll. */
+.setup-panel .onboarding-welcome-flow,
+.setup-panel .onboarding-welcome-step {
+  gap: 12px;
+}
+
+.setup-panel .onboarding-brand-mark {
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+}
+
+.setup-panel .onboarding-brand-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 11px;
+}
+
+.setup-panel .onboarding-welcome-step .onboarding-heading {
+  font-size: 27px;
+}
+
+.setup-panel .onboarding-welcome-step .onboarding-body {
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.setup-panel .onboarding-age-check {
+  margin-top: 2px;
+  padding: 8px 11px;
+}
+
+.setup-panel .onboarding-google-button {
+  min-height: 42px;
+  padding: 8px 18px;
+}
+
+.setup-panel .onboarding-consent-note {
+  font-size: 10px;
+  line-height: 1.4;
 }

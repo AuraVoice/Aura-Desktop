@@ -42,17 +42,21 @@ struct UpdateReadyPayload {
     version: String,
 }
 
+#[derive(Serialize)]
+pub struct ManualUpdateCheckResult {
+    status: &'static str,
+    version: Option<String>,
+}
+
 /// Startup check, then periodic re-checks for the whole app lifetime.
 /// TODO: once a real update feed/host exists, revisit whether its manifest
 /// format carries a staged/percentage rollout field the client should
 /// respect before installing, since the standard Tauri updater protocol has no
 /// built-in support for that, so it would need custom handling here.
 pub async fn run_update_loop(app: AppHandle) {
-    // At startup there is no session to interrupt yet, so install straight
-    // away instead of parking the update behind a click. Never in dev builds:
-    // auto-install would run the production installer over the developer's
-    // machine and kill the `tauri dev` process on every launch.
-    check_once(&app, !cfg!(debug_assertions)).await;
+    // Startup must never surprise the user with an install. It may download
+    // and park an update, but applying it stays behind a user click.
+    check_once(&app, false).await;
     loop {
         tokio::time::sleep(RECHECK_INTERVAL).await;
         // A session may exist now - always go through the visible notice.
@@ -98,10 +102,9 @@ async fn check_once(app: &AppHandle, auto_install: bool) {
     }
 }
 
-/// Startup path installs immediately; every other path (periodic re-check,
-/// startup with a call already live, startup install failure) parks the
-/// update and announces it: tray item plus the "update-ready" event the
-/// VoiceBar chip listens for.
+/// Background checks park the update and announce it: tray item plus the
+/// "update-ready" event the VoiceBar chip listens for. The auto-install branch
+/// is retained for explicit internal callers, but startup passes false.
 fn handle_downloaded(app: &AppHandle, update: Update, bytes: Vec<u8>, auto_install: bool) {
     // The voice gate still matters at startup: a fast user can summon and
     // start a call while the download is in flight. Meeting capture gates the
@@ -191,6 +194,42 @@ pub async fn install_update(app: AppHandle) -> Result<bool, String> {
         app.request_restart();
     }
     Ok(installed)
+}
+
+#[tauri::command]
+pub async fn check_for_update(app: AppHandle) -> Result<ManualUpdateCheckResult, String> {
+    if let Some(version) = pending_update_version(app.clone()) {
+        return install_downloaded_update(app, version).await;
+    }
+
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    let Some(update) = updater.check().await.map_err(|e| e.to_string())? else {
+        return Ok(ManualUpdateCheckResult {
+            status: "up_to_date",
+            version: None,
+        });
+    };
+
+    let version = update.version.clone();
+    let bytes = update.download(|_, _| {}, || {}).await.map_err(|e| e.to_string())?;
+    {
+        let Some(handle) = app.try_state::<PendingUpdate>() else {
+            return Err("updater state unavailable".to_string());
+        };
+        *handle.0.lock().unwrap_or_else(|e| e.into_inner()) = Some((update, bytes));
+    }
+    install_downloaded_update(app, version).await
+}
+
+async fn install_downloaded_update(
+    app: AppHandle,
+    version: String,
+) -> Result<ManualUpdateCheckResult, String> {
+    let installed = install_update(app).await?;
+    Ok(ManualUpdateCheckResult {
+        status: if installed { "installing" } else { "deferred" },
+        version: Some(version),
+    })
 }
 
 /// Cheap sync mutex read, covering the race where the download finished

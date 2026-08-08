@@ -40,6 +40,12 @@ export function useNotchGesture(
   // where desiredActive is already false, and without this a double-tap in any of
   // those states would re-summon (or restart a call) instead of closing the
   // surface the user is trying to get rid of.
+  //
+  // "disconnected" is the one visible state this must NOT dismiss on. A bar left
+  // over from a call that already finished sits at disconnected with nothing to
+  // hang up, so treating it as a surface to close spent the user's first
+  // double-tap clearing it and only started a call on the second. Error and
+  // voice-capped report their own statuses and still take the stop branch.
   const overlayVisibleRef = useRef(overlayVisible);
   const sessionActiveRef = useRef(voice.desiredActive);
   const lastSequenceRef = useRef(0);
@@ -55,6 +61,7 @@ export function useNotchGesture(
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    let unlistenKeyChange: (() => void) | undefined;
     let disposed = false;
 
     listen<AuraTogglePayload>("aura-toggle", (event) => {
@@ -89,7 +96,10 @@ export function useNotchGesture(
         return;
       }
 
-      if (sessionActiveRef.current || overlayVisibleRef.current) {
+      if (
+        sessionActiveRef.current ||
+        (overlayVisibleRef.current && currentVoice.status !== "disconnected")
+      ) {
         sessionActiveRef.current = false;
         logInfo("useNotchGesture: action", `sequence=${sequence} action=stop`);
         const actionStartedAtMs = Date.now();
@@ -178,6 +188,14 @@ export function useNotchGesture(
       })
       .catch((err) => logError("useNotchGesture: listen", err));
 
+    listen<VoiceToggleKeyStatus>("voice-toggle-key-changed", (event) => {
+      if (!disposed) setState({ ...event.payload, checking: false });
+    })
+      .then((fn) => {
+        if (disposed) fn(); else unlistenKeyChange = fn;
+      })
+      .catch((err) => logError("useNotchGesture: listen key change", err));
+
     invoke<VoiceToggleKeyStatus>("voice_toggle_key_status")
       .then((status) => {
         if (!disposed) setState({ ...status, checking: false });
@@ -197,6 +215,7 @@ export function useNotchGesture(
     return () => {
       disposed = true;
       unlisten?.();
+      unlistenKeyChange?.();
     };
   }, []);
 

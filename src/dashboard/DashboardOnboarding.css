@@ -1,7 +1,5 @@
-/* Dark full-window shell for the dashboard window's first-run flow. The step
-   components are dark-glass styled (white text), so onboarding stays dark and
-   the app underneath is light - a deliberate dark-onboarding -> light-app
-   transition, not a style clash. */
+/* Warm, quiet first-run shell. Onboarding owns the full window so the first
+   impression does not inherit the dark overlay treatment. */
 .db-onboarding {
   position: absolute;
   inset: 0;
@@ -9,12 +7,15 @@
   align-items: center;
   justify-content: center;
   padding: 32px;
-  overflow: auto;
-  background:
-    radial-gradient(120% 120% at 50% 0%, rgba(30, 200, 176, 0.1), transparent 60%),
-    #0e0f13;
+  overflow: hidden;
+  --glass-text-bright: #28231d;
+  --glass-text-dim: #6f655b;
+  --glass-field-fill: rgba(255, 255, 255, 0.56);
+  --glass-border-flat: rgba(92, 72, 47, 0.18);
+  --glass-accent: #76c7b5;
+  background: #f5f4f0 url("../assets/onboarding-ambient-v2.png") center / cover no-repeat;
 }
 .db-onboarding-panel {
   width: 100%;
-  max-width: 640px;
+  max-width: 780px;
 }

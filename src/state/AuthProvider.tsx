@@ -1,11 +1,12 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import { onAuthStateChanged, signOut, type User } from "firebase/auth";
+import { onAuthStateChanged, type User } from "firebase/auth";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { auth } from "../lib/firebase";
 import { logError } from "../lib/log";
 import { syncProfileOnSignIn } from "../lib/profile";
 import { initializeAcquisitionAnalytics } from "../lib/acquisitionAnalytics";
+import { signOutSession } from "../lib/signOutSession";
 
 interface AuthContextValue {
   user: User | null;
@@ -58,7 +59,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // every signed-in callback including the initial one.
       if (nextUser) {
         void initializeAcquisitionAnalytics()
-          .then(() => syncProfileOnSignIn(nextUser.uid))
+          .then(() => syncProfileOnSignIn(nextUser.uid, {
+            created_at: nextUser.metadata.creationTime ?? null,
+            last_login_at: nextUser.metadata.lastSignInTime ?? null,
+            provider_ids: nextUser.providerData.map((provider) => provider.providerId),
+            email_verified: nextUser.emailVerified,
+          }))
           .catch((err) => logError("AuthProvider: syncProfileOnSignIn", err));
       }
     });
@@ -70,16 +76,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     listen("sign-out-requested", () => {
-      signOut(auth).catch((err) => {
+      signOutSession().catch((err) => {
         logError("AuthProvider: sign-out-requested", err);
-        // Rust already revoked its native authorization before emitting this
-        // event; if Firebase's own sign-out failed, the user is still signed
-        // in on the JS side - re-assert the real state so the two sides
-        // can't stay split (signed-in UI over locked-out native commands).
-        invoke("set_auth_state", {
-          signedIn: auth.currentUser !== null,
-          uid: auth.currentUser?.uid ?? null,
-        }).catch((reassertErr) => logError("AuthProvider: set_auth_state re-assert", reassertErr));
       });
     })
       .then((fn) => {

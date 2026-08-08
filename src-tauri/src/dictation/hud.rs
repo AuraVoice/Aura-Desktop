@@ -36,25 +36,28 @@ pub const DICTATION_WINDOW: &str = "dictation";
 /// dictation is active.
 const RESTING_WIDTH: f64 = 8.0;
 const RESTING_HEIGHT: f64 = 40.0;
-const ACTIVE_WIDTH: f64 = 12.0;
+const ACTIVE_WIDTH: f64 = 24.0;
 const ACTIVE_HEIGHT: f64 = 65.0;
 const HOVER_SIDE_WIDTH: f64 = 196.0;
 const HOVER_SIDE_HEIGHT: f64 = 46.0;
 const HOVER_TOP_WIDTH: f64 = 164.0;
 const HOVER_TOP_HEIGHT: f64 = 63.0;
 
-/// The message pill. Used by `Error`, `Pending`, and by `Listening` and
-/// `Transcribing` once they actually have a partial transcript to show; the
-/// active pill stays wordless while there are no words. `Pending` is taller
-/// because it carries the held transcript as well as the explanation.
+/// The message pill. Used by `Error` and `Pending`; live recognition stays a
+/// compact waveform because the final transcript belongs in the focused field.
 const MESSAGE_WIDTH: f64 = 340.0;
 const MESSAGE_HEIGHT: f64 = 44.0;
 const PENDING_HEIGHT: f64 = 78.0;
 /// The one-time online-dictation consent prompt. Wider and taller than any
 /// other state because it is the only one that has to carry a disclosure the
 /// user is expected to read and two buttons they have to be able to hit.
+/// 132 was too short for the disclosure at its real wrapped length: the body
+/// ran to four lines, and since .glass-surface clips its overflow, the actions
+/// row was cut off the bottom of the surface and the Turn on button could not
+/// be clicked at all. Sized now to fit the copy with headroom; the CSS also
+/// guards the row so a longer disclosure shrinks the body instead.
 const CONSENT_WIDTH: f64 = 396.0;
-const CONSENT_HEIGHT: f64 = 132.0;
+const CONSENT_HEIGHT: f64 = 176.0;
 
 /// The window the current hold is typing into, remembered so a later phase
 /// change can re-place the HUD on the right display without the worker having
@@ -106,7 +109,7 @@ fn accepts_clicks(phase: HudPhase) -> bool {
 #[serde(rename_all = "camelCase")]
 pub struct HudUpdate {
     pub phase: HudPhase,
-    /// The streaming partial, or the final text. Never logged anywhere.
+    /// The final or held text. Never logged anywhere.
     pub text: String,
     /// A short explanation shown under the text for a failure or a hold.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -184,8 +187,7 @@ fn build_window(app: &AppHandle) -> Result<(), String> {
     // WS_EX_NOACTIVATE below keeps it from taking focus, and the surface has no
     // click action. Active dictation switches back to click-through.
     let _ = window.set_ignore_cursor_events(false);
-    // Same display-affinity treatment the overlay gets: partial transcript text
-    // should not land in a screen share or a screenshot.
+    // Same display-affinity treatment the overlay gets.
     let _ = crate::overlay::exclude_main_window_from_capture(&window);
     apply_no_activate(&window);
     Ok(())
@@ -217,6 +219,72 @@ fn apply_no_activate(window: &tauri::WebviewWindow) {
 #[cfg(not(windows))]
 fn apply_no_activate(_window: &tauri::WebviewWindow) {}
 
+/// Whether this phase needs the window to be activatable.
+///
+/// Consent is the ONLY phase with controls in it. Every other phase is hover
+/// only or click-through, which is why `apply_no_activate` was safe to set once
+/// at build and forget: a window that cannot activate cannot hand its WebView2
+/// child focus, and a click into an unfocused WebView2 never reaches the DOM.
+/// That is invisible until something in the window has to be clicked.
+///
+/// Kept separate from `accepts_clicks` on purpose even though both currently
+/// name Consent: Idle accepts the cursor so Windows can show its hover hint,
+/// and it must NOT become activatable to get that.
+fn needs_activation(phase: HudPhase) -> bool {
+    matches!(phase, HudPhase::Consent)
+}
+
+/// Adds or removes WS_EX_NOACTIVATE for the current phase, and logs the
+/// ex-style bits that actually stuck.
+///
+/// The readback is not paranoia. tao's `WindowFlags::apply_diff` rewrites
+/// GWL_EXSTYLE wholesale from its own cached flags, so any style set out of
+/// band here can be silently dropped by a later `set_ignore_cursor_events` or
+/// `show`. Logging what the window really carries turns "which flag won" from
+/// an argument into an observation.
+#[cfg(windows)]
+fn sync_activation(window: &tauri::WebviewWindow, phase: HudPhase) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+        WS_EX_TRANSPARENT,
+    };
+
+    let Ok(hwnd) = window.hwnd() else {
+        return;
+    };
+    let activatable = needs_activation(phase);
+    unsafe {
+        let current = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let no_activate = WS_EX_NOACTIVATE.0 as isize;
+        let next = if activatable {
+            current & !no_activate
+        } else {
+            current | no_activate
+        };
+        if next != current {
+            SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next);
+        }
+        let applied = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        log::info!(
+            "dictation.hud: phase={:?} activatable={} noactivate={} transparent={} layered={}",
+            phase,
+            activatable,
+            applied & no_activate != 0,
+            applied & WS_EX_TRANSPARENT.0 as isize != 0,
+            applied & WS_EX_LAYERED.0 as isize != 0,
+        );
+    }
+    // Focus has to follow the style: clearing WS_EX_NOACTIVATE only makes the
+    // window eligible to activate, it does not activate it, and WebView2 needs
+    // to actually own input before a click lands.
+    if activatable {
+        let _ = window.set_focus();
+    }
+}
+
+#[cfg(not(windows))]
+fn sync_activation(_window: &tauri::WebviewWindow, _phase: HudPhase) {}
+
 /// Centre of a window in PHYSICAL screen pixels, which is what
 /// `monitor_from_point` expects. Used to put the HUD on the display the user is
 /// actually typing into rather than always on the primary one.
@@ -244,23 +312,22 @@ fn target_center(_target: isize) -> Option<(f64, f64)> {
     None
 }
 
-fn resting_size(_edge: NotchEdge) -> LogicalSize<f64> {
-    LogicalSize::new(RESTING_WIDTH, RESTING_HEIGHT)
+fn oriented_size(edge: NotchEdge, side_width: f64, side_height: f64) -> LogicalSize<f64> {
+    match edge {
+        NotchEdge::Top | NotchEdge::Bottom => LogicalSize::new(side_height, side_width),
+        NotchEdge::Left | NotchEdge::Right => LogicalSize::new(side_width, side_height),
+    }
+}
+
+fn resting_size(edge: NotchEdge) -> LogicalSize<f64> {
+    oriented_size(edge, RESTING_WIDTH, RESTING_HEIGHT)
 }
 
 /// The HUD's footprint for one phase. Idle is the compact persistent pill;
-/// active phases enlarge it while keeping the same vertical silhouette.
+/// active phases enlarge it while keeping the same edge-aligned silhouette.
 ///
-/// `has_caption` is why this takes more than a phase. The listening surface is
-/// a wordless sliver right up until the recognizer actually has words, and
-/// then it has to be wide enough to read. Sizing on the phase alone would mean
-/// either a caption-width window sitting empty through every silent moment, or
-/// a 12px sliver trying to hold a sentence.
-fn surface_size(edge: NotchEdge, phase: HudPhase, has_caption: bool) -> LogicalSize<f64> {
+fn surface_size(edge: NotchEdge, phase: HudPhase, _has_caption: bool) -> LogicalSize<f64> {
     match phase {
-        HudPhase::Listening | HudPhase::Transcribing if has_caption => {
-            LogicalSize::new(MESSAGE_WIDTH, MESSAGE_HEIGHT)
-        }
         HudPhase::Idle if IDLE_HOVERED.load(Ordering::Relaxed) => match edge {
             NotchEdge::Top | NotchEdge::Bottom => {
                 LogicalSize::new(HOVER_TOP_WIDTH, HOVER_TOP_HEIGHT)
@@ -273,7 +340,7 @@ fn surface_size(edge: NotchEdge, phase: HudPhase, has_caption: bool) -> LogicalS
         HudPhase::Error => LogicalSize::new(MESSAGE_WIDTH, MESSAGE_HEIGHT),
         HudPhase::Pending => LogicalSize::new(MESSAGE_WIDTH, PENDING_HEIGHT),
         HudPhase::Consent => LogicalSize::new(CONSENT_WIDTH, CONSENT_HEIGHT),
-        _ => LogicalSize::new(ACTIVE_WIDTH, ACTIVE_HEIGHT),
+        _ => oriented_size(edge, ACTIVE_WIDTH, ACTIVE_HEIGHT),
     }
 }
 
@@ -358,6 +425,7 @@ pub fn show(app: &AppHandle, target: isize) {
             if !SUPPRESSED_BY_OVERLAY.load(Ordering::Relaxed) {
                 let _ = window.show();
             }
+            sync_activation(&window, HudPhase::Listening);
         }
     });
 }
@@ -382,6 +450,7 @@ pub fn show_idle(app: &AppHandle) {
             if !SUPPRESSED_BY_OVERLAY.load(Ordering::Relaxed) {
                 let _ = window.show();
             }
+            sync_activation(&window, HudPhase::Idle);
             let _ = window.emit("dictation-update", update);
         }
     });
@@ -439,8 +508,6 @@ pub fn publish(app: &AppHandle, mut update: HudUpdate) {
     IDLE_HOVERED.store(false, Ordering::Relaxed);
     update.edge = overlay::snapshot(app).notch_edge.as_stored();
     let phase = update.phase;
-    // Drives the resize below, so the listening surface widens the moment
-    // there are words and stays a sliver while there are not.
     let has_caption = !update.text.is_empty();
     *LAST_UPDATE.lock().unwrap_or_else(|e| e.into_inner()) = Some(update.clone());
     if let Some(window) = app.get_webview_window(DICTATION_WINDOW) {
@@ -455,6 +522,10 @@ pub fn publish(app: &AppHandle, mut update: HudUpdate) {
             if !SUPPRESSED_BY_OVERLAY.load(Ordering::Relaxed) {
                 let _ = window.show();
             }
+            // LAST, after both calls above: each one goes through tao's
+            // apply_diff, which rewrites the whole ex-style from its own cached
+            // flags and would drop anything set before it.
+            sync_activation(&window, phase);
         }
     });
 }

@@ -115,10 +115,6 @@ mod platform {
     use super::vocab;
     use super::{DictationStatus, DICTATION_CHORD};
 
-    /// How often a partial is pushed at the HUD while the chord is held. Slow
-    /// enough that the webview is never the bottleneck, fast enough that the
-    /// caption reads as live.
-    const PARTIAL_EVERY: Duration = Duration::from_millis(320);
     /// How long a terminal caption (inserted, or a failure explanation) stays
     /// on screen before the HUD hides itself.
     const CAPTION_LINGER: Duration = Duration::from_millis(2200);
@@ -154,6 +150,9 @@ mod platform {
     /// cross-process property read, and it is skipped outright whenever the UIA
     /// worker is busy with a voice turn.
     const PROBE_TICK: Duration = Duration::from_millis(250);
+    const SIGN_IN_REASON: &str = "Sign in to use dictation.";
+    const UNAVAILABLE_REASON: &str = "Dictation is temporarily unavailable. Try again shortly.";
+    const UNAVAILABLE_HUD: &str = "Dictation is temporarily unavailable. Nothing was typed.";
 
     enum Message {
         Chord(ChordSignal),
@@ -684,7 +683,11 @@ mod platform {
                 "Turn on online dictation to use the dictation chord.",
             )
         } else if !credential::is_present() {
-            DictationStatus::unavailable("Sign in to use dictation.")
+            DictationStatus::unavailable(if crate::security::current_uid(app).is_some() {
+                UNAVAILABLE_REASON
+            } else {
+                SIGN_IN_REASON
+            })
         } else {
             DictationStatus {
                 available: true,
@@ -740,6 +743,7 @@ mod platform {
         // out user never lights the Windows microphone indicator for an
         // utterance that was never going to be transcribed.
         let Some(token) = credential::usable() else {
+            let signed_in = crate::security::current_uid(app).is_some();
             let shutting_down = drain_until_release(rx);
             hud::show(app, target);
             hold_failure(
@@ -747,8 +751,16 @@ mod platform {
                 generation,
                 failed,
                 Vec::new(),
-                AsrError::NotAuthenticated.category(),
-                AsrError::NotAuthenticated.hud_message(),
+                if signed_in {
+                    "unavailable"
+                } else {
+                    AsrError::NotAuthenticated.category()
+                },
+                if signed_in {
+                    UNAVAILABLE_HUD
+                } else {
+                    AsrError::NotAuthenticated.hud_message()
+                },
             );
             refresh_status(app, status);
             return shutting_down;
@@ -826,19 +838,12 @@ mod platform {
 
         let started_at = Instant::now();
         info!("dictation: phase=capture keyterms={keyterm_count}");
-        let mut last_partial_publish = Instant::now();
         let mut last_level = Instant::now();
         let mut captured_frames = 0usize;
         let mut heard_speech = false;
         let mut shutting_down = false;
         let mut capped = false;
         let mut utterance: Vec<f32> = Vec::new();
-        // The most recent revisable transcript. Reaches the HUD and NOTHING
-        // else: the inserted text comes from `await_final` below, never from
-        // this string. That separation is the whole reason a dropped
-        // connection cannot type half a sentence.
-        let mut displayed_partial = String::new();
-        let mut partial_dirty = false;
         // When the chord actually came up, so the "key up to text on screen"
         // budget is measured from the release rather than from this line.
         // Always set before the loop exits.
@@ -901,10 +906,7 @@ mod platform {
             let mut mid_hold_failure = None;
             while let Some(event) = session.poll() {
                 match event {
-                    AsrEvent::Partial(text) => {
-                        displayed_partial = text;
-                        partial_dirty = true;
-                    }
+                    AsrEvent::Partial(_) => {}
                     // A final before the chord is up means the provider ended
                     // the stream on its own. Treated as a failure rather than
                     // typed: the user is still speaking, so whatever arrived
@@ -943,15 +945,6 @@ mod platform {
             if last_level.elapsed() >= LEVEL_EVERY {
                 last_level = Instant::now();
                 hud::publish_level(app, audio::level(&samples));
-            }
-
-            if partial_dirty && last_partial_publish.elapsed() >= PARTIAL_EVERY {
-                last_partial_publish = Instant::now();
-                partial_dirty = false;
-                hud::publish(
-                    app,
-                    HudUpdate::new(HudPhase::Listening).with_text(displayed_partial.clone()),
-                );
             }
 
             if started_at.elapsed() >= audio::MAX_HOLD {
@@ -1001,22 +994,20 @@ mod platform {
         // through it.
         active_capture.stop();
 
-        hud::publish(
-            app,
-            HudUpdate::new(HudPhase::Transcribing).with_text(displayed_partial.clone()),
-        );
-
         // The utterance was silent. Nothing to finalize, and no reason to pay
-        // for a round trip: close the stream and say nothing was typed.
+        // for a round trip or show a failure: releasing without speaking is a
+        // neutral cancel.
         if !heard_speech {
             session.cancel();
             info!(
                 "dictation: nothing to insert (frames={captured_frames} hold_ms={})",
                 started_at.elapsed().as_millis()
             );
-            finish_with(app, generation, HudUpdate::new(HudPhase::Idle), CAPTION_LINGER);
+            finish_with(app, generation, HudUpdate::new(HudPhase::Idle), Duration::ZERO);
             return shutting_down;
         }
+
+        hud::publish(app, HudUpdate::new(HudPhase::Transcribing));
 
         if let Err(error) = session.finish() {
             session.cancel();
@@ -1073,14 +1064,10 @@ mod platform {
         }
 
         if decoded.trim().is_empty() {
-            hold_failure(
-                app,
-                generation,
-                failed,
-                utterance,
-                "empty_result",
-                "No transcription was produced. Nothing was typed.",
+            info!(
+                "dictation: empty transcription result (frames={captured_frames} hold_ms={hold_ms})"
             );
+            finish_with(app, generation, HudUpdate::new(HudPhase::Idle), Duration::ZERO);
             return shutting_down;
         }
 
@@ -1209,11 +1196,21 @@ mod platform {
         // the waveform has to be told the hold is over. Without it the bars
         // would hold their last spike for the whole caption linger.
         hud::publish_level(app, 0.0);
+        let phase = update.phase;
         hud::publish(app, update);
         // Same "one place every terminal path funnels through" argument as the
         // level reset above: unmuting here means an error or an aborted hold
         // gives the user their audio back exactly like a clean insert does.
         crate::audio_ducking::restore(app);
+        // Every other phase is a status the user reads and forgets, so timing
+        // out to the resting pill is right. Consent is a QUESTION, and nothing
+        // here cancels or extends the timer, so a user still reading the
+        // disclosure watched it vanish mid-sentence with no way to answer.
+        // It leaves on its own terms instead: dictation_set_consent publishes
+        // Idle the moment either button is pressed.
+        if phase == HudPhase::Consent {
+            return;
+        }
         let handle = app.clone();
         tauri::async_runtime::spawn(async move {
             tokio::time::sleep(linger).await;
@@ -1258,7 +1255,11 @@ mod stub {
 }
 
 #[tauri::command]
-pub fn dictation_status(state: tauri::State<'_, DictationHandle>) -> DictationStatus {
+pub fn dictation_status(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, DictationHandle>,
+) -> DictationStatus {
+    state.refresh(&app);
     state.status()
 }
 
@@ -1299,6 +1300,7 @@ pub async fn dictation_set_consent(
 ) -> Result<ConsentState, String> {
     #[cfg(windows)]
     {
+        log::info!("dictation: consent answered accepted={accepted}");
         let accepted = consent::set_accepted(&app, accepted)?;
         state.refresh(&app);
         // Take the prompt off screen the moment it is answered, rather than

@@ -49,10 +49,10 @@ The UI is a data-driven fixed card shell (`src/dashboard/components/`: `Dashboar
 stateDiagram-v2
     [*] --> Hidden
 
-    Hidden --> Panel: Ctrl+Alt+B (hotkey_pressed)
+    Hidden --> Panel: Left Ctrl twice (starts voice and summons Buddy)
     Hidden --> Panel: tray click / 2nd instance (summon)
     Hidden --> Panel: call starts while hidden (set_voice_active true)
-    Panel --> Hidden: Ctrl+Alt+B again, or Esc\n(hide_ending_voice - ends any live call)
+    Panel --> Hidden: Left Ctrl twice again, or Esc\n(ends any live call)
 
     Panel --> Pointing: point_at (screen-sight "element.point")
     Pointing --> Panel: cancel_pointing (after ~3.4s hold)
@@ -235,7 +235,7 @@ sequenceDiagram
         LK-->>Hook: TranscriptionReceived -> assistantCaption
         Hook->>Bar: status, assistantCaption
     end
-    User->>Bar: click mic again (or Esc / Ctrl+Alt+B)
+    User->>Bar: click mic again (or Esc / double-tap Left Ctrl)
     Bar->>Hook: endSession()
     Hook->>LK: room.disconnect()
     Hook->>Rust: invoke set_voice_active(false)

@@ -2,21 +2,30 @@ import { getVersion } from "@tauri-apps/api/app";
 import { Store } from "@tauri-apps/plugin-store";
 import {
   setAnonymousDistinctId,
+  setAnalyticsSuperProperties,
   setTelemetryEnabled,
   trackEvent,
   trackEventWithResult,
 } from "./analytics";
 import {
   desktopConsentAcceptedKey,
-  desktopOnboardingSeenKey,
   overlayStorePath,
 } from "./copy";
+import {
+  collectDesktopMetadata,
+  firstStartedAtKey,
+  firstStartedVersionKey,
+  lastStartedVersionKey,
+  posthogSafeMetadata,
+  type DesktopMetadata,
+} from "./desktopMetadata";
 import { logError } from "./log";
-import { getOrCreateAnonId } from "./profile";
+import {
+  getOrCreateAnonId,
+  recordDesktopOnboardingEvent,
+  rememberDesktopSignIn,
+} from "./profile";
 
-const firstStartedAtKey = "desktop_first_started_at";
-const firstStartedVersionKey = "desktop_first_started_version";
-const lastStartedVersionKey = "desktop_last_started_version";
 const installObservedSentKey = "desktop_install_observed_sent";
 const onboardingStepSentKeyPrefix = "desktop_onboarding_step_sent";
 const onboardingCompletedSentKey = "desktop_onboarding_completed_sent";
@@ -30,6 +39,7 @@ type StartupContext = {
   appVersion: string;
   previousVersion: string | null;
   isReturningInstall: boolean;
+  metadata: DesktopMetadata;
 };
 
 let startupContext: StartupContext | null = null;
@@ -49,11 +59,10 @@ async function sendOnce(
 async function recordStartup(): Promise<void> {
   try {
     const store = await Store.load(overlayStorePath);
-    const [appVersion, existingFirstStart, previousVersion, onboardingSeen] = await Promise.all([
+    const [appVersion, existingFirstStart, previousVersion] = await Promise.all([
       getVersion().catch(() => "unknown"),
       store.get<string>(firstStartedAtKey),
       store.get<string>(lastStartedVersionKey),
-      store.get<boolean>(desktopOnboardingSeenKey),
     ]);
     const isReturningInstall = Boolean(existingFirstStart);
 
@@ -65,17 +74,20 @@ async function recordStartup(): Promise<void> {
 
     const anonId = await getOrCreateAnonId(store);
     setAnonymousDistinctId(anonId);
+    const metadata = await collectDesktopMetadata(store, anonId);
+    setAnalyticsSuperProperties(posthogSafeMetadata(metadata));
     startupContext = {
       store,
       appVersion,
       previousVersion: previousVersion ?? null,
       isReturningInstall,
+      metadata,
     };
 
     const consentAccepted = await store.get<boolean>(desktopConsentAcceptedKey);
     if (consentAccepted !== true) return;
     setTelemetryEnabled(true);
-    await flushStartupEvents(Boolean(onboardingSeen));
+    await flushStartupEvents();
   } catch (err) {
     logError("acquisitionAnalytics: recordStartup", err);
   }
@@ -89,12 +101,12 @@ export function initializeAcquisitionAnalytics(): Promise<void> {
 export async function telemetryConsentAccepted(): Promise<void> {
   await initializeAcquisitionAnalytics();
   setTelemetryEnabled(true);
-  await flushStartupEvents(false);
+  await flushStartupEvents();
 }
 
-async function flushStartupEvents(onboardingSeen: boolean): Promise<void> {
+async function flushStartupEvents(): Promise<void> {
   if (!startupContext) return;
-  const { store, appVersion, previousVersion, isReturningInstall } = startupContext;
+  const { store, appVersion, previousVersion, isReturningInstall, metadata } = startupContext;
   await sendOnce(store, installObservedSentKey, "desktop_install_observed", {
     app_version: appVersion,
     previous_version: previousVersion,
@@ -106,7 +118,7 @@ async function flushStartupEvents(onboardingSeen: boolean): Promise<void> {
       app_version: appVersion,
       launch_reason: "process_start",
       previous_version: previousVersion,
-      is_returning_install: isReturningInstall || onboardingSeen,
+      is_returning_install: isReturningInstall || metadata.install.onboarding_seen,
     });
   }
 }
@@ -125,6 +137,11 @@ export async function trackOnboardingStepCompleted(onboardingStep: string): Prom
         onboarding_step: onboardingStep,
       },
     );
+    await recordDesktopOnboardingEvent(
+      "desktop_onboarding_step_completed",
+      { onboarding_step: onboardingStep },
+      `onboarding_step_${onboardingStep}`,
+    );
   } catch (err) {
     logError("acquisitionAnalytics: onboarding step", err);
   } finally {
@@ -137,6 +154,11 @@ export async function trackOnboardingCompleted(): Promise<void> {
     await initializeAcquisitionAnalytics();
     const store = await Store.load(overlayStorePath);
     await sendOnce(store, onboardingCompletedSentKey, "desktop_onboarding_completed");
+    await recordDesktopOnboardingEvent(
+      "desktop_onboarding_completed",
+      {},
+      "onboarding_completed",
+    );
   } catch (err) {
     logError("acquisitionAnalytics: onboarding completed", err);
   }
@@ -162,16 +184,31 @@ export function normalizedErrorCode(error: unknown, fallback: string): string {
 export function beginDesktopSignIn(signInMethod: SignInMethod) {
   const startedAt = performance.now();
   let finished = false;
+  void rememberDesktopSignIn(signInMethod, "started");
   trackEvent("desktop_sign_in_started", { sign_in_method: signInMethod });
+  void recordDesktopOnboardingEvent(
+    "desktop_sign_in_started",
+    { sign_in_method: signInMethod },
+    `sign_in_started_${signInMethod}`,
+  );
 
   return {
     completed() {
       if (finished) return;
       finished = true;
+      void rememberDesktopSignIn(signInMethod, "completed");
       trackEvent("desktop_sign_in_completed", {
         sign_in_method: signInMethod,
         duration_ms: Math.round(performance.now() - startedAt),
       });
+      void recordDesktopOnboardingEvent(
+        "desktop_sign_in_completed",
+        {
+          sign_in_method: signInMethod,
+          duration_ms: Math.round(performance.now() - startedAt),
+        },
+        `sign_in_completed_${signInMethod}`,
+      );
       void trackOnboardingStepCompleted("sign_in");
     },
     failed(error: unknown, fallback = "unknown") {
@@ -182,6 +219,15 @@ export function beginDesktopSignIn(signInMethod: SignInMethod) {
         duration_ms: Math.round(performance.now() - startedAt),
         error_code: normalizedErrorCode(error, fallback),
       });
+      void recordDesktopOnboardingEvent(
+        "desktop_sign_in_failed",
+        {
+          sign_in_method: signInMethod,
+          duration_ms: Math.round(performance.now() - startedAt),
+          error_code: normalizedErrorCode(error, fallback),
+        },
+        `sign_in_failed_${signInMethod}_${Date.now()}`,
+      );
     },
   };
 }

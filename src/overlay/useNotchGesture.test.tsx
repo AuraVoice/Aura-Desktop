@@ -44,6 +44,8 @@ function voiceState(
     showMicSettingsHint: false,
     isVoiceCapped: false,
     desiredActive: false,
+    realtimeActivity: null,
+    realtimeVisualizerTrack: null,
     startSession: vi.fn(async () => {}),
     startBridgedSession: vi.fn(async () => {}),
     prepareSession: vi.fn(() => Promise.resolve()),

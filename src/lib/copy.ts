@@ -12,7 +12,7 @@ export const createEventUrl = "https://calendar.google.com/calendar/u/0/r/evente
 
 export const consent = {
   heading: "Before we get started",
-  body: "Aura Desktop uses your voice (and, only while you explicitly turn on screen sight, your screen) to power Buddy. Aura also detects a Left Ctrl double-tap to start or end voice, without storing or transmitting keyboard input. By continuing, you agree to Aura's Privacy Policy and Terms of Service, including the desktop addendum covering screen sight, global shortcuts, and telemetry.",
+  body: "Aura Desktop uses your voice to power Buddy. Your screen is shared only when you attach it in text chat, turn on Screen Sight, or start Guide Mode. Aura also detects your configured voice shortcut to start or end voice, without storing or transmitting keyboard input. By continuing, you agree to Aura's Privacy Policy and Terms of Service, including the desktop addendum covering screen sight, global shortcuts, and telemetry.",
   ageLabel: "I confirm I am 18 years of age or older",
   privacyLabel: "Privacy Policy",
   termsLabel: "Terms of Service",
@@ -31,7 +31,16 @@ export const consent = {
  * render these strings, so the thing the user agreed to and the thing Settings
  * says they agreed to cannot drift apart. */
 export const dictationConsent = {
-  heading: "Dictation now transcribes online",
+  /** A first-time ask, not a change notice. The earlier "Dictation now
+   * transcribes online" was written for a user whose dictation used to run
+   * on-device; nobody has ever run that build, so the "now" only left a new
+   * reader wondering what they had missed. */
+  heading: "Turn on dictation",
+  /** The HUD prompt's own wording. Kept separate from `body` because the card
+   * is 396px wide and Settings is a full page: one string for both meant the
+   * shorter surface set the ceiling for how much either could say. */
+  hudBody:
+    "Hold the keys and Aura types what you say. Your speech goes to our transcription service to become text. The audio is not saved, and nothing is sent unless you are holding the keys.",
   body: "While you hold the keys, your speech is sent to our transcription provider and turned into text. Audio is not kept after the words come back, and nothing is transcribed unless you are holding the keys.",
   /** Shown in Settings under the toggle, where there is room for the rest. */
   detail:
@@ -49,9 +58,10 @@ export const dictationConsent = {
 
 export const onboarding = {
   welcome: {
-    heading: "Meet Buddy, your AI friend on this PC.",
-    body: "Talk things through, stay on track, and pick up right where your phone left off.",
-    trayHint: "Buddy lives in your system tray. Press Ctrl+Alt+B anytime to bring it back.",
+    headingAccent: "Meet Buddy",
+    headingTail: ", your AI companion on this PC.",
+    body: "Talk things through, get help, and complete tasks without leaving the screen you're on.",
+    trayHint: "Buddy lives in your system tray. Double-tap Left Ctrl anytime to start talking.",
     button: "Get set up",
     skipLink: "Already have Aura? Link now",
     googleSignupLink: "New here? Sign up with Google",
@@ -69,14 +79,14 @@ export const onboarding = {
 // the backend profile - see analytics.ts and profile.ts. Options are stable ids
 // (sent to analytics), labels are display-only.
 export const whereHeard = {
-  heading: "How did you find Buddy?",
+  heading: "How did you find Aura?",
   body: "Quick one so we know what's working. Pick the closest.",
   options: [
     { id: "search", label: "Google or search" },
-    { id: "youtube", label: "YouTube" },
-    { id: "social", label: "X, Reddit, or another feed" },
+    { id: "x", label: "X" },
+    { id: "linkedin", label: "LinkedIn" },
+    { id: "reddit", label: "Reddit" },
     { id: "friend", label: "A friend or colleague" },
-    { id: "work", label: "Someone at work" },
     { id: "other", label: "Somewhere else" },
   ],
   otherPlaceholder: "Where, exactly? (optional)",
@@ -85,7 +95,7 @@ export const whereHeard = {
 
 // First-run role question. Same destinations as whereHeard.
 export const role = {
-  heading: "What best describes you?",
+  heading: "What's your role?",
   body: "This helps Buddy show up the way you'd want.",
   options: [
     { id: "founder", label: "Founder or building something" },
@@ -99,14 +109,6 @@ export const role = {
   button: "Continue",
 } as const;
 
-// The hotkey tour step teaches the shortcuts before the live demo. Keycap data
-// comes from hotkeyHints below; this is the surrounding copy.
-export const hotkeyTour = {
-  heading: "Your shortcuts",
-  body: "These work anywhere on your PC, even when Buddy is tucked away.",
-  button: "Got it, let's try it",
-} as const;
-
 // The live "talk to Buddy" demo step, shown right after sign-in.
 export const agentDemo = {
   heading: "Say hi to Buddy",
@@ -116,11 +118,19 @@ export const agentDemo = {
   skip: "Skip for now",
   connecting: "Connecting you to Buddy...",
   live: "Buddy's listening. Say something.",
+  listening: "Buddy is listening",
+  userTalking: "You're talking",
+  thinking: "Buddy is thinking",
+  buddyTalking: "Buddy is talking",
+  timeWarning: "You can keep talking. This intro will end in",
+  timeEnded: "Nice talking with you. Your intro session has ended. You can talk to Buddy anytime with Left Ctrl.",
+  continue: "Continue",
   errorHint: "Couldn't start the call. Check your mic, or skip for now.",
 } as const;
 
 export const signIn = {
-  pairingPrompt: "On your phone: Aura -> Settings -> Link this PC",
+  pairingPrompt: "On your phone:",
+  pairingPath: "Aura -> Settings -> Link this PC",
   emailPrompt: "Sign in to bring Buddy to your desktop",
   emailHint: "you@email.com",
   passwordHint: "Password",
@@ -140,20 +150,13 @@ export const signIn = {
   switchFromGoogleToPairing: "Have the phone app instead? Link it",
 } as const;
 
-export const hotkeyHints = {
-  summon: { keys: ["Ctrl", "Alt", "B"], action: "summon Buddy anywhere" },
-  voice: { keys: ["Left Ctrl twice"], action: "start or end voice" },
-  screenSight: { keys: ["Ctrl", "Alt", "S"], action: "toggle screen sight" },
-  dashboard: { keys: ["Ctrl", "Alt", "D"], action: "open your dashboard" },
-} as const;
-
 export const bar = {
   title: "Buddy",
   fallbackErrorCaption: "Something went sideways with the call.",
   pillFallbackCaption: "Buddy is listening...",
   openMicSettingsTooltip: "Open mic settings",
-  screenSightOnTooltip: "Stop letting Buddy see your screen",
-  screenSightOffTooltip: "Let Buddy see your screen",
+  screenSightOnTooltip: "Stop sending Screen Sight images",
+  screenSightOffTooltip: "Send Screen Sight images",
   minimizeTooltip: "Minimize (keeps the call going)",
   micTryAgainTooltip: "Try again",
   micEndCallTooltip: "End the conversation",
@@ -293,6 +296,8 @@ export const signOut = {
 } as const;
 
 export const desktopOnboardingSeenKey = "desktop_onboarding_seen";
+export const desktopOnboardingSeenForUidKey = (uid: string) =>
+  `${desktopOnboardingSeenKey}_${encodeURIComponent(uid)}`;
 // Deliberately its own key, not folded into desktopOnboardingSeenKey above -
 // they gate different things (has the onboarding tour been shown vs. has the
 // user affirmatively accepted ToS/Privacy/telemetry), and lessons-learnt.txt
@@ -304,9 +309,15 @@ export const desktopConsentAcceptedKey = "desktop_consent_accepted";
 // reason as the two above - they gate independent concerns in the shared store.
 export const desktopWhereHeardKey = "desktop_where_heard";
 export const desktopRoleKey = "desktop_role";
+export const desktopWhereHeardForUidKey = (uid: string) =>
+  `${desktopWhereHeardKey}_${encodeURIComponent(uid)}`;
+export const desktopRoleForUidKey = (uid: string) =>
+  `${desktopRoleKey}_${encodeURIComponent(uid)}`;
 // Set once the post-sign-in profile sync (PostHog alias + $set, backend POST)
 // succeeds, so it never re-runs for a returning user.
 export const desktopProfileSyncedKey = "desktop_profile_synced";
+export const desktopProfileSyncedForUidKey = (uid: string) =>
+  `${desktopProfileSyncedKey}_${encodeURIComponent(uid)}`;
 // Per-install anonymous id used as the PostHog distinct_id for pre-sign-in
 // attribution capture, then aliased to the real uid on sign-in. Deliberately
 // NOT the literal "anonymous" - aliasing that would chain-merge every signed-out

@@ -31,7 +31,7 @@ import {
 } from "./desktopNotificationContract";
 import { logError } from "./log";
 import { notifications as copy } from "./notificationCopy";
-import { loadGeneralSettings, type GeneralSettings } from "./generalSettings";
+import { loadGeneralSettings } from "./generalSettings";
 
 const STORE_FILE = "desktop-notifications.json";
 const INBOX_KEY = "inbox"; // Record<notificationId, StoredNotification>
@@ -216,7 +216,9 @@ function toastCopyFor(
 
 /** Settings key gating each opt-out category, or null when the type is
  *  operational and cannot be switched off. */
-const CATEGORY_SETTING: Partial<Record<DesktopNotificationType, keyof GeneralSettings>> = {
+type NotificationSettingKey = "notifySuggestions" | "notifyAnnouncements" | "notifyMilestones";
+
+const CATEGORY_SETTING: Partial<Record<DesktopNotificationType, NotificationSettingKey>> = {
   suggestion: "notifySuggestions",
   announcement: "notifyAnnouncements",
   milestone: "notifyMilestones",

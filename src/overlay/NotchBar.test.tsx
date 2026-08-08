@@ -23,6 +23,8 @@ function voiceState(
     showMicSettingsHint: false,
     isVoiceCapped: false,
     desiredActive: true,
+    realtimeActivity: null,
+    realtimeVisualizerTrack: null,
     startSession: async () => {},
     startBridgedSession: async () => {},
     prepareSession: () => Promise.resolve(),
@@ -78,13 +80,15 @@ describe("NotchBar", () => {
     expect(html).not.toContain(">Stop<");
   });
 
-  it("renders an accessible menu trigger only when the root wires it", () => {
-    const html = renderToStaticMarkup(
-      <NotchBar voice={voiceState()} edge="top" onMenuToggle={() => {}} menuOpen />,
-    );
-    expect(html).toContain("Close Aura menu");
-    expect(html).toContain('aria-expanded="true"');
-    expect(html).toContain("notch-menu-trigger is-open");
+  it("carries no controls: the pill is the waveform and passive status only", () => {
+    // The kebab trigger and the output-mute dot were removed from the pill; the
+    // menu's actions live in the tray now. Nothing here may be clickable, or the
+    // deep drag region has something to fight with.
+    const html = renderToStaticMarkup(<NotchBar voice={voiceState()} edge="top" />);
+    expect(html).toContain("notch-visualizer");
+    expect(html).not.toContain("notch-menu-trigger");
+    expect(html).not.toContain("notch-mute-indicator");
+    expect(html).not.toContain("<button");
   });
 });
 

@@ -20,6 +20,11 @@
   text-align: center;
 }
 
+.sign-in-pairing-path {
+  color: inherit;
+  font-weight: 700;
+}
+
 .sign-in-code-input {
   width: 220px;
   text-align: center;

@@ -9,6 +9,7 @@ const PROJECT_TOKEN = "phc_CDtz3DmNraHdnJ2w9W7WJNkJ8VANYPBWAcqV2Uf77k5s";
 const HOST = "https://us.i.posthog.com";
 
 const STATIC_PROPERTIES = { platform: "desktop-react", $os: "Windows" };
+let superProperties: Record<string, unknown> = {};
 
 // Single shared gate: both PostHog (here) and Sentry (see lib/sentry.ts) check
 // this same in-memory flag, kept in sync with the persisted consent flag by
@@ -23,6 +24,10 @@ export function setTelemetryEnabled(enabled: boolean): void {
 
 export function setAnonymousDistinctId(distinctId: string): void {
   anonymousDistinctId = distinctId;
+}
+
+export function setAnalyticsSuperProperties(properties: Record<string, unknown>): void {
+  superProperties = { ...superProperties, ...properties };
 }
 
 async function captureEvent(
@@ -41,7 +46,7 @@ async function captureEvent(
         event,
         distinct_id: distinctId,
         timestamp: new Date().toISOString(),
-        properties: { ...STATIC_PROPERTIES, ...properties },
+        properties: { ...STATIC_PROPERTIES, ...superProperties, ...properties },
       }),
     });
     if (!response.ok) {
@@ -109,7 +114,7 @@ export function setPersonProperties(
   void postCapture("setPersonProperties", {
     event: "$identify",
     distinct_id: id,
-    properties: { ...STATIC_PROPERTIES, $set: properties },
+    properties: { ...STATIC_PROPERTIES, ...superProperties, $set: properties },
   });
 }
 
@@ -122,6 +127,6 @@ export function aliasAnonymousToUser(anonId: string, uid: string): Promise<boole
   return postCapture("aliasAnonymousToUser", {
     event: "$create_alias",
     distinct_id: uid,
-    properties: { ...STATIC_PROPERTIES, alias: anonId },
+    properties: { ...STATIC_PROPERTIES, ...superProperties, alias: anonId },
   });
 }

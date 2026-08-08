@@ -4,7 +4,6 @@ import { GlassSurface } from "./GlassSurface";
 import type { VoiceBarState } from "./useVoiceBar";
 import type { NotchEdge } from "./notchEdge";
 import { useAudioLevels } from "./useAudioLevels";
-import { KebabIcon } from "./icons";
 import "./NotchBar.css";
 
 // The compact waveform-only pill (subtitle removed): a "\_/" bucket silhouette
@@ -35,11 +34,6 @@ interface NotchBarProps {
   dragHandlers?: NotchDragHandlers;
   guideArmed?: boolean;
   guideActive?: boolean;
-  outputMuted?: boolean;
-  /** Muted on this device, but the worker never confirmed it stopped speaking. */
-  outputMuteUnconfirmed?: boolean;
-  menuOpen?: boolean;
-  onMenuToggle?: () => void;
 }
 
 export function NotchBar({
@@ -48,10 +42,6 @@ export function NotchBar({
   dragHandlers,
   guideArmed = false,
   guideActive = false,
-  outputMuted = false,
-  outputMuteUnconfirmed = false,
-  menuOpen = false,
-  onMenuToggle,
 }: NotchBarProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   useAudioLevels(voice.room, voice.status, canvasRef);
@@ -65,21 +55,6 @@ export function NotchBar({
             <div className="notch-recorder" aria-hidden="true">
               <canvas ref={canvasRef} className="notch-visualizer" />
             </div>
-            {onMenuToggle && (
-              <button
-                type="button"
-                className={`notch-menu-trigger${menuOpen ? " is-open" : ""}`}
-                aria-label={menuOpen ? "Close Aura menu" : "Open Aura menu"}
-                aria-expanded={menuOpen}
-                onPointerDown={(event) => event.stopPropagation()}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onMenuToggle();
-                }}
-              >
-                <KebabIcon />
-              </button>
-            )}
             {showGuideStatus && (
               <span
                 className={`notch-guide-indicator ${
@@ -91,23 +66,6 @@ export function NotchBar({
                     : "Guide Mode is starting"
                 }
                 title={guideActive ? "Guide Mode active" : "Guide Mode starting"}
-              />
-            )}
-            {outputMuted && (
-              <span
-                className={`notch-mute-indicator${
-                  outputMuteUnconfirmed ? " is-unconfirmed" : ""
-                }`}
-                aria-label={
-                  outputMuteUnconfirmed
-                    ? "Aura is muted on this device only"
-                    : "Aura's voice is muted"
-                }
-                title={
-                  outputMuteUnconfirmed
-                    ? "Muted on this device only. Ctrl+Alt+M"
-                    : "Voice muted. Ctrl+Alt+M"
-                }
               />
             )}
           </div>

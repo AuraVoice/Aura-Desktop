@@ -87,7 +87,7 @@ export function ConversationsPage() {
             <EmptyState
               Icon={AudioLines}
               heading="No conversations in this range"
-              copy="Press Ctrl twice to start one, or widen the range above."
+              copy="Use your voice shortcut to start one, or widen the range above."
             />
           }
         />
