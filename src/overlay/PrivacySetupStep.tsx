@@ -27,7 +27,6 @@ export function PrivacySetupStep({
   const [error, setError] = useState<string | null>(null);
   const [confirmingNoSharing, setConfirmingNoSharing] = useState(false);
   const isMac = platform() === "macos";
-
   useEffect(() => {
     let cancelled = false;
     loadGeneralSettings()
@@ -170,7 +169,10 @@ export function PrivacySetupStep({
             <span className="privacy-row-icon privacy-row-icon-voice"><AudioLines size={20} aria-hidden="true" /></span>
             <span className="privacy-row-copy">
               <strong>Voice Screen Sight</strong>
-              <small>Buddy sees your screen only when you turn on Screen Sight with Ctrl+Alt+S.</small>
+              <small>
+                Buddy sees your screen during Guide Mode, or while you talk after enabling
+                &quot;Let Aura see your screen while you talk&quot; in Settings.
+              </small>
             </span>
             <span className="privacy-status-badge">Off by default</span>
           </div>

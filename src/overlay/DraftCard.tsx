@@ -40,11 +40,14 @@ const SNIPPET_CHIP_ORDER: readonly RefineChip[] = ["regenerate"];
 export function DraftCard({
   card,
   onHeightChange,
+  visible = false,
 }: {
   card: DraftCardState;
   onHeightChange?: (height: number) => void;
+  visible?: boolean;
 }) {
   const { phase, channel, draft, errorReason, copied, refineFailed } = card;
+  const confirmDisplayed = card.confirmDisplayed;
   const innerRef = useRef<HTMLDivElement>(null);
 
   const measureHeight = useCallback(() => {
@@ -66,6 +69,7 @@ export function DraftCard({
 
   useLayoutEffect(() => {
     measureHeight();
+    if (visible && phase === "shown" && draft) confirmDisplayed();
     const inner = innerRef.current;
     if (!inner || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measureHeight);
@@ -76,7 +80,7 @@ export function DraftCard({
       observer.disconnect();
       window.removeEventListener("resize", measureHeight);
     };
-  }, [measureHeight, phase, draft?.text]);
+  }, [measureHeight, phase, draft, visible, confirmDisplayed]);
 
   const title = refineFailed
     ? copyStrings.refineFailed

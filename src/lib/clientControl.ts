@@ -68,3 +68,40 @@ export async function publishOutputMode(room: Room, control: OutputModeControl):
     topic: "client_events",
   });
 }
+
+export interface ArtifactDisplayed {
+  artifactId: string;
+  revision: number;
+}
+
+/**
+ * Receipt for a card the overlay actually rendered. Publishing the card only
+ * proves the worker sent a packet, so without this "Done, it's on your screen."
+ * is a claim about the network. Id and revision identify the exact revision
+ * drawn, which is also what makes the worker's one resend idempotent.
+ */
+export function encodeArtifactDisplayed(ack: ArtifactDisplayed): Uint8Array {
+  if (!/^[0-9a-f]{32}$/.test(ack.artifactId)) {
+    throw new Error("artifact.displayed requires a 128-bit hex artifact id");
+  }
+  if (!Number.isSafeInteger(ack.revision) || ack.revision < 1) {
+    throw new Error("artifact.displayed revision must be a positive safe integer");
+  }
+  return new TextEncoder().encode(
+    JSON.stringify({
+      type: "artifact.displayed",
+      artifact_id: ack.artifactId,
+      revision: ack.revision,
+    }),
+  );
+}
+
+export async function publishArtifactDisplayed(
+  room: Room,
+  ack: ArtifactDisplayed,
+): Promise<void> {
+  await room.localParticipant.publishData(encodeArtifactDisplayed(ack), {
+    reliable: true,
+    topic: "client_events",
+  });
+}

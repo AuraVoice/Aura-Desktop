@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Room, RoomEvent, type RemoteParticipant } from "livekit-client";
 import { invoke } from "@tauri-apps/api/core";
 import { validateAgentDataMessage } from "../lib/agentData";
+import { publishArtifactDisplayed } from "../lib/clientControl";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { AuthRequiredError, routeToDashboardForExpiredSession } from "../lib/api";
 import { trackEvent } from "../lib/analytics";
@@ -38,6 +39,7 @@ export interface DraftInfo {
   title: string;
   language: string;
   persisted: boolean;
+  structured: boolean;
 }
 
 interface DraftCardData {
@@ -56,6 +58,8 @@ export interface DraftCardState extends DraftCardData {
   dismiss: () => void;
   /** Silent clear (sign-out); dismiss() is the user-facing, analytics-tracked one. */
   reset: () => void;
+  /** Called by DraftCard after this revision commits into a visible overlay. */
+  confirmDisplayed: () => void;
 }
 
 const INITIAL: DraftCardData = {
@@ -173,6 +177,7 @@ function parseStructuredArtifact(
     title: artifact.title,
     language: typeof artifact.language === "string" ? artifact.language : "",
     persisted: typeof payload.persisted === "boolean" ? payload.persisted : true,
+    structured: true,
   };
 }
 
@@ -202,7 +207,27 @@ export function parseCreatedDraft(payload: Record<string, unknown>): DraftInfo |
     title: typeof payload.title === "string" ? payload.title.slice(0, 80) : "",
     language: typeof payload.language === "string" ? payload.language.slice(0, 32) : "",
     persisted: typeof payload.persisted === "boolean" ? payload.persisted : true,
+    structured: false,
   };
+}
+
+async function structuredArtifactIntegrityValid(payload: Record<string, unknown>): Promise<boolean> {
+  const artifact = asRecord(payload.artifact);
+  if (artifact === null || !("body" in artifact)) return true;
+  if (typeof artifact.body !== "string" || typeof artifact.body_sha256 !== "string") return false;
+  try {
+    const digest = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(artifact.body),
+    );
+    const actual = Array.from(new Uint8Array(digest), (byte) =>
+      byte.toString(16).padStart(2, "0"),
+    ).join("");
+    return actual === artifact.body_sha256;
+  } catch (err) {
+    logError("useDraftCard: artifact integrity", err);
+    return false;
+  }
 }
 
 /**
@@ -225,7 +250,11 @@ export function useDraftCard(
   dataRef.current = data;
   const presentationRef = useRef(presentation);
   presentationRef.current = presentation;
+  const roomRef = useRef(room);
+  roomRef.current = room;
   const pendingPanelRestoreRef = useRef(false);
+  const ackedArtifactRef = useRef("");
+  const ackInFlightRef = useRef("");
 
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const refineFailedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -268,6 +297,26 @@ export function useDraftCard(
       refineFailedTimerRef.current = null;
       setData((prev) => ({ ...prev, refineFailed: false }));
     }, REFINE_FAILED_FLASH_MS);
+  }, []);
+
+  const confirmDisplayed = useCallback(() => {
+    const draft = dataRef.current.draft;
+    const activeRoom = roomRef.current;
+    if (!draft?.structured || !activeRoom) return;
+    const key = `${draft.draftId}:${draft.revision}`;
+    if (ackedArtifactRef.current === key || ackInFlightRef.current === key) return;
+    ackInFlightRef.current = key;
+    void publishArtifactDisplayed(activeRoom, {
+      artifactId: draft.draftId,
+      revision: draft.revision,
+    })
+      .then(() => {
+        ackedArtifactRef.current = key;
+      })
+      .catch((err) => logError("useDraftCard: artifact ack", err))
+      .finally(() => {
+        if (ackInFlightRef.current === key) ackInFlightRef.current = "";
+      });
   }, []);
 
   const handleDraftEvent = useCallback(
@@ -370,6 +419,8 @@ export function useDraftCard(
   // ignore-unknown, never throw into LiveKit.
   useEffect(() => {
     if (!room) return;
+    let receiveQueue = Promise.resolve();
+    let disposed = false;
 
     function onDataReceived(
       payload: Uint8Array,
@@ -377,17 +428,23 @@ export function useDraftCard(
       _kind?: unknown,
       topic?: string,
     ) {
-      try {
+      receiveQueue = receiveQueue.then(async () => {
         const verdict = validateAgentDataMessage(payload, participant, topic);
         if (verdict.kind !== "valid" || !verdict.type.startsWith("draft.")) return;
+        if (!(await structuredArtifactIntegrityValid(verdict.payload))) {
+          logError("useDraftCard: artifact checksum mismatch", verdict.type);
+          return;
+        }
+        if (disposed) return;
         handleDraftEvent({ type: verdict.type, payload: verdict.payload });
-      } catch (err) {
+      }).catch((err) => {
         logError("useDraftCard: onDataReceived", err);
-      }
+      });
     }
 
     room.on(RoomEvent.DataReceived, onDataReceived);
     return () => {
+      disposed = true;
       room.off(RoomEvent.DataReceived, onDataReceived);
     };
   }, [room, handleDraftEvent]);
@@ -459,6 +516,7 @@ export function useDraftCard(
                     text: result.text,
                     length: targetLength,
                     revision: prev.draft.revision + 1,
+                    structured: false,
                   },
                 }
               : prev,
@@ -498,5 +556,5 @@ export function useDraftCard(
     trackEvent("draft_card_dismissed", { channel: channel ?? "unknown" });
   }, [reset]);
 
-  return { ...data, copy, refine, dismiss, reset };
+  return { ...data, copy, refine, dismiss, reset, confirmDisplayed };
 }

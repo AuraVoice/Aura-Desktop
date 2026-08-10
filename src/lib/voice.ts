@@ -72,10 +72,13 @@ export async function fetchVoiceToken(
   const conversationParam = conversationId
     ? `&conversation_id=${encodeURIComponent(conversationId)}`
     : "";
+  // This build acknowledges only after a validated artifact revision commits
+  // into a visible card. The worker requires that proof from the first card.
+  const artifactAckParam = "&artifact_ack=displayed-v1";
   const [, tokenResult] = await Promise.allSettled([
     postTextHandoff(),
     authFetch(
-      `/voice/token?surface=desktop&manifest=${manifestParam}${modeParam}${bridgedParam}${outputParam}${conversationParam}`,
+      `/voice/token?surface=desktop&manifest=${manifestParam}${modeParam}${bridgedParam}${outputParam}${conversationParam}${artifactAckParam}`,
     ),
   ]);
   if (tokenResult.status === "rejected") throw tokenResult.reason;

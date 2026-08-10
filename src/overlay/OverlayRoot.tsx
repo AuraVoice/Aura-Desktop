@@ -7,6 +7,7 @@ import { useVoiceBar } from "./useVoiceBar";
 import { useNotchGesture } from "./useNotchGesture";
 import { useOnboardingTail } from "./useOnboardingTail";
 import { useScreenSight } from "./useScreenSight";
+import { useTurnScreenCapture } from "./useTurnScreenCapture";
 import { useSystemControl } from "./useSystemControl";
 import { useDraftCard } from "./useDraftCard";
 import { useMeetings } from "./useMeetings";
@@ -119,6 +120,14 @@ export function OverlayRoot() {
     signedIn: user !== null,
     onPoint: handleGuidePoint,
   });
+  // Per-turn screen context for voice, opt-in only. The hook treats a null room
+  // as "do nothing", so the opt-out is the same disable path the hook already
+  // uses, and it stays inert while Guide Mode is armed because Guide owns
+  // continuous capture. Mounted after useGuideMode because it needs guide.armed.
+  const turnCapture = useTurnScreenCapture(
+    generalSettings.voiceScreenContext ? voice.room : null,
+    guide.armed,
+  );
   const guideVoiceEpochRef = useRef<number | null>(null);
   // Same rule as the notch gesture: a muted call never opens the audio-only
   // Realtime leg, so Guide's voice start goes straight to the cold path.
@@ -272,16 +281,22 @@ export function OverlayRoot() {
   }, [appliedSlotHeight]);
 
   // The subtitle used to be the only place notices surfaced. With it gone,
-  // route the two that matter - an actionable voice error, or the voice shortcut
-  // being unavailable - to a toast so a failure is never silent. De-duped so the
-  // same message doesn't re-toast on every render.
+  // route the ones that matter - an actionable voice error, the voice shortcut
+  // being unavailable, or a screen capture that could not be shared - to a toast
+  // so a failure is never silent. De-duped so the same message doesn't re-toast
+  // on every render.
   const lastNoticeRef = useRef<string | null>(null);
   const voiceError = voice.errorMessage;
+  const captureNotice = turnCapture.notice;
   const shortcutReason =
     !notchGesture.checking && !notchGesture.available ? notchGesture.reason ?? null : null;
   useEffect(() => {
-    const notice = voiceError ?? shortcutReason;
-    if (!notice || notice === lastNoticeRef.current) return;
+    const notice = voiceError ?? shortcutReason ?? captureNotice;
+    if (!notice) {
+      lastNoticeRef.current = null;
+      return;
+    }
+    if (notice === lastNoticeRef.current) return;
     lastNoticeRef.current = notice;
     invoke("show_actionable_toast", {
       notificationId: `overlay-notice-${Date.now()}`,
@@ -289,7 +304,7 @@ export function OverlayRoot() {
       title: "Aura",
       body: notice,
     }).catch((err) => logError("OverlayRoot: overlay notice toast", err));
-  }, [voiceError, shortcutReason]);
+  }, [voiceError, shortcutReason, captureNotice]);
 
   const unreadCount = notifications.unreadCount;
   useEffect(() => {
@@ -513,7 +528,13 @@ export function OverlayRoot() {
           onHeightChange={setChatSlotHeight}
         />
       )}
-      {!visibleChatOpen && showDraftCard && <DraftCard card={draftCard} onHeightChange={setDraftCardHeight} />}
+      {!visibleChatOpen && showDraftCard && (
+        <DraftCard
+          card={draftCard}
+          onHeightChange={setDraftCardHeight}
+          visible={presentation === "bar" || presentation === "companion"}
+        />
+      )}
       {!visibleChatOpen && showInbox && (
         <NotificationInboxCard
           notifications={notifications}
