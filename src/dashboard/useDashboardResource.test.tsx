@@ -1,19 +1,27 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createElement } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { useDashboardResource, type ResourceHandle } from "./useDashboardResource";
+import {
+  DashboardResourceScope,
+  useDashboardResource,
+  type ResourceHandle,
+} from "./useDashboardResource";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 const readCache = vi.hoisted(() => vi.fn(async () => null));
 const writeCache = vi.hoisted(() => vi.fn(async () => undefined));
-vi.mock("../lib/dashboardCache", () => ({ readCache, writeCache }));
+vi.mock("../lib/dashboardCache", () => ({
+  dashboardCacheKey: (uid: string, key: string) => `uid:${uid}:${key}`,
+  readCache,
+  writeCache,
+}));
 vi.mock("../lib/api", () => ({ AuthRequiredError: class AuthRequiredError extends Error {} }));
 vi.mock("../lib/log", () => ({ logError: vi.fn() }));
 
 let renderer: ReactTestRenderer | null = null;
 
-function Probe<T>({
+function ResourceProbe<T>({
   cacheKey,
   fetcher,
   toCache,
@@ -26,6 +34,14 @@ function Probe<T>({
 }) {
   onState(useDashboardResource(cacheKey, fetcher, toCache ? { toCache } : undefined));
   return null;
+}
+
+function Probe<T>(props: React.ComponentProps<typeof ResourceProbe<T>>) {
+  return createElement(
+    DashboardResourceScope,
+    { uid: "test-user" },
+    createElement(ResourceProbe<T>, props),
+  );
 }
 
 async function flush() {
@@ -55,7 +71,11 @@ describe("useDashboardResource", () => {
     expect(fetcher).toHaveBeenCalledTimes(1);
     expect(last!.data).toEqual([1, 2, 3]);
     expect(last!.loading).toBe(false);
-    expect(writeCache).toHaveBeenCalledWith("k-cold", [1, 2, 3], expect.any(Number));
+    expect(writeCache).toHaveBeenCalledWith(
+      "uid:test-user:k-cold",
+      [1, 2, 3],
+      expect.any(Number),
+    );
   });
 
   it("does not refetch within the freshness window on remount", async () => {
@@ -94,7 +114,7 @@ describe("useDashboardResource", () => {
     });
     await flush();
     expect(writeCache).toHaveBeenCalledWith(
-      "k-strip",
+      "uid:test-user:k-strip",
       [{ id: "a", image_url: null }],
       expect.any(Number),
     );

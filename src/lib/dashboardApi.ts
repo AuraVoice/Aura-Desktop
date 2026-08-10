@@ -56,8 +56,8 @@ interface RawHomeStats {
   sessions_this_week: number;
 }
 
-export async function getHomeStats(): Promise<HomeStats> {
-  const raw = await authGetJson<RawHomeStats>("/desktop/home/stats");
+export async function getHomeStats(signal?: AbortSignal): Promise<HomeStats> {
+  const raw = await authGetJson<RawHomeStats>("/desktop/home/stats", signal);
   return {
     lastUsedAt: raw.last_used_at,
     lastSessionSeconds: raw.last_session_seconds,
@@ -86,8 +86,11 @@ interface RawActivity {
   }>;
 }
 
-export async function getRecentActivity(limit = 8): Promise<ActivityItem[]> {
-  const raw = await authGetJson<RawActivity>(`/desktop/activity?limit=${limit}`);
+export async function getRecentActivity(
+  limit = 8,
+  signal?: AbortSignal,
+): Promise<ActivityItem[]> {
+  const raw = await authGetJson<RawActivity>(`/desktop/activity?limit=${limit}`, signal);
   return raw.items ?? [];
 }
 

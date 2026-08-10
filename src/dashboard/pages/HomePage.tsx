@@ -29,6 +29,7 @@ import { AnimatedHotkeyGuide } from "../AnimatedHotkeyGuide";
 import { DataView } from "../DataView";
 import { count, duration, relativeTime } from "../format";
 import { useAsyncData } from "../useAsyncData";
+import { useDashboardResource, type ResourceHandle } from "../useDashboardResource";
 
 const ACTIVITY_KIND_LABEL: Record<ActivityItem["kind"], string> = {
   voice: "Voice conversation",
@@ -95,8 +96,8 @@ function UpNext({
   showCalendar,
 }: {
   state: ReturnType<typeof useAsyncData<UpcomingMeetings | null>>;
-  activity: ReturnType<typeof useAsyncData<ActivityItem[]>>;
-  meetings: ReturnType<typeof useAsyncData<MeetingDoc[]>>;
+  activity: ResourceHandle<ActivityItem[]>;
+  meetings: ResourceHandle<MeetingDoc[]>;
   showCalendar: boolean;
 }) {
   const [slideIndex, setSlideIndex] = useState(0);
@@ -237,8 +238,8 @@ function TodayBriefing({
   showCalendar,
 }: {
   calendar: ReturnType<typeof useAsyncData<UpcomingMeetings | null>>;
-  activity: ReturnType<typeof useAsyncData<ActivityItem[]>>;
-  meetings: ReturnType<typeof useAsyncData<MeetingDoc[]>>;
+  activity: ResourceHandle<ActivityItem[]>;
+  meetings: ResourceHandle<MeetingDoc[]>;
   showCalendar: boolean;
 }) {
   const navigate = useNavigate();
@@ -320,17 +321,32 @@ function TodayBriefing({
 export function HomePage() {
   const navigate = useNavigate();
   const generalSettings = useGeneralSettings();
-  const stats = useAsyncData<HomeStats>(() => getHomeStats(), "home stats");
-  const activity = useAsyncData<ActivityItem[]>(() => getRecentActivity(8), "recent activity");
+  const stats = useDashboardResource<HomeStats>(
+    "home:stats",
+    (signal) => getHomeStats(signal),
+    { freshnessMs: 10 * 60_000 },
+  );
+  const activity = useDashboardResource<ActivityItem[]>(
+    "home:activity:8",
+    (signal) => getRecentActivity(8, signal),
+    { freshnessMs: 5 * 60_000 },
+  );
   const calendar = useAsyncData<UpcomingMeetings | null>(
     () => fetchUpcomingMeetings(10_000),
     "home calendar",
   );
-  const history = useAsyncData(
-    () => getHistorySessions(new Date(Date.now() - 31 * 86_400_000).toISOString()),
-    "home streak",
+  const history = useDashboardResource(
+    "home:streak:31d",
+    (signal) => getHistorySessions(
+      new Date(Date.now() - 31 * 86_400_000).toISOString(),
+      signal,
+    ),
+    { freshnessMs: 30 * 60_000 },
   );
-  const meetings = useAsyncData<MeetingDoc[]>(() => getMeetings(), "home meetings");
+  const meetings = useDashboardResource<MeetingDoc[]>(
+    "meetings",
+    (signal) => getMeetings(signal),
+  );
   const streak = activeStreak(history.data?.sessions.map((session) => session.started_at) ?? []);
 
   function startConversation() {

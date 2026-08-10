@@ -1,6 +1,21 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  createContext,
+  createElement,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { AuthRequiredError } from "../lib/api";
-import { readCache, writeCache, type CacheEntry } from "../lib/dashboardCache";
+import {
+  dashboardCacheKey,
+  readCache,
+  writeCache,
+  type CacheEntry,
+} from "../lib/dashboardCache";
 import { logError } from "../lib/log";
 
 /**
@@ -22,12 +37,23 @@ import { logError } from "../lib/log";
  * settles instead of hanging.
  */
 
-const DEFAULT_FRESHNESS_MS = 30_000;
+const DEFAULT_FRESHNESS_MS = 5 * 60_000;
 const REQUEST_TIMEOUT_MS = 15_000;
 
 // Module-level tiers, shared across every mount in this window's JS context.
 const memory = new Map<string, CacheEntry<unknown>>();
 const inflight = new Map<string, Promise<unknown>>();
+const DashboardResourceScopeContext = createContext<string | null>(null);
+
+export function DashboardResourceScope({
+  uid,
+  children,
+}: {
+  uid: string;
+  children?: ReactNode;
+}) {
+  return createElement(DashboardResourceScopeContext.Provider, { value: uid }, children);
+}
 
 export interface ResourceState<T> {
   data: T | null;
@@ -104,8 +130,11 @@ export function useDashboardResource<T>(
   fetcher: (signal: AbortSignal) => Promise<T>,
   options?: ResourceOptions<T>,
 ): ResourceHandle<T> {
+  const uid = useContext(DashboardResourceScopeContext);
+  if (!uid) throw new Error("useDashboardResource requires an authenticated dashboard scope");
+  const scopedKey = useMemo(() => dashboardCacheKey(uid, key), [uid, key]);
   const freshnessMs = options?.freshnessMs ?? DEFAULT_FRESHNESS_MS;
-  const [state, setState] = useState<ResourceState<T>>(() => seed<T>(key));
+  const [state, setState] = useState<ResourceState<T>>(() => seed<T>(scopedKey));
 
   const fetcherRef = useRef(fetcher);
   fetcherRef.current = fetcher;
@@ -125,16 +154,16 @@ export function useDashboardResource<T>(
     forcedRef.current = false;
 
     // Re-seed synchronously for the current key (covers key switches).
-    setState(seed<T>(key));
+    setState(seed<T>(scopedKey));
 
     (async () => {
-      let entry = memory.get(key) as CacheEntry<T> | undefined;
+      let entry = memory.get(scopedKey) as CacheEntry<T> | undefined;
 
       if (!entry) {
-        const disk = await readCache<T>(key);
+        const disk = await readCache<T>(scopedKey);
         if (cancelled) return;
         if (disk) {
-          memory.set(key, disk);
+          memory.set(scopedKey, disk);
           entry = disk;
           setState({
             data: disk.data,
@@ -156,10 +185,12 @@ export function useDashboardResource<T>(
       setState((s) => ({ ...s, refreshing: hadData, loading: !hadData }));
 
       try {
-        const data = await runSingleFlight(key, (signal) => fetcherRef.current(signal));
-        if (cancelled) return;
+        const data = await runSingleFlight(scopedKey, (signal) => fetcherRef.current(signal));
         const cachedAt = Date.now();
-        memory.set(key, { data, cachedAt });
+        memory.set(scopedKey, { data, cachedAt });
+        const persist = toCacheRef.current ? toCacheRef.current(data) : data;
+        void writeCache(scopedKey, persist, cachedAt);
+        if (cancelled) return;
         setState({
           data,
           loading: false,
@@ -169,8 +200,6 @@ export function useDashboardResource<T>(
           refreshing: false,
           cachedAt,
         });
-        const persist = toCacheRef.current ? toCacheRef.current(data) : data;
-        void writeCache(key, persist, cachedAt);
       } catch (err) {
         if (cancelled) return;
         const authExpired = err instanceof AuthRequiredError;
@@ -196,7 +225,18 @@ export function useDashboardResource<T>(
     };
     // fetcher/toCache are read through refs; key/tick/freshness drive re-runs.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, tick, freshnessMs]);
+  }, [key, scopedKey, tick, freshnessMs]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const revalidateIfStale = () => {
+      const entry = memory.get(scopedKey);
+      if (entry && Date.now() - entry.cachedAt < freshnessMs) return;
+      setTick((value) => value + 1);
+    };
+    window.addEventListener("focus", revalidateIfStale);
+    return () => window.removeEventListener("focus", revalidateIfStale);
+  }, [scopedKey, freshnessMs]);
 
   return { ...state, reload };
 }

@@ -31,6 +31,7 @@ import { GeneralPage } from "./pages/GeneralPage";
 import { DictationPage } from "./pages/DictationPage";
 import { DashboardOnboarding } from "./DashboardOnboarding";
 import { useDashboardUser } from "./useDashboardUser";
+import { DashboardResourceScope } from "./useDashboardResource";
 import { useDashboardNotifications } from "./useDashboardNotifications";
 import { navSections, navTitles } from "./navConfig";
 import { desktopOnboardingSeenForUidKey, overlayStorePath } from "../lib/copy";
@@ -80,6 +81,8 @@ export function DashboardShell({ user, collapsed }: { user: User | null; collaps
     contentRef.current.scrollLeft = 0;
   }, [mainPath]);
 
+  if (!user) return null;
+
   return (
     <div className={`db-app${collapsed ? " db-app-collapsed" : ""}${
       generalSettings.reduceMotion ? " db-reduce-motion" : ""
@@ -93,17 +96,19 @@ export function DashboardShell({ user, collapsed }: { user: User | null; collaps
           notifications={notifications}
         />
         <div className="db-content" ref={contentRef}>
-          <Routes location={mainPath}>
-            <Route path="/" element={<Navigate to="/home" replace />} />
-            {routes.map(({ to, label }) => (
-              <Route
-                key={to}
-                path={to}
-                element={dashboardPages[to] ?? <ComingSoonPage title={label} />}
-              />
-            ))}
-            <Route path="*" element={<Navigate to="/home" replace />} />
-          </Routes>
+          <DashboardResourceScope uid={user.uid}>
+            <Routes location={mainPath}>
+              <Route path="/" element={<Navigate to="/home" replace />} />
+              {routes.map(({ to, label }) => (
+                <Route
+                  key={to}
+                  path={to}
+                  element={dashboardPages[to] ?? <ComingSoonPage title={label} />}
+                />
+              ))}
+              <Route path="*" element={<Navigate to="/home" replace />} />
+            </Routes>
+          </DashboardResourceScope>
         </div>
       </div>
       {settingsOpen && <SettingsDialog path={location.pathname} onClose={closeSettings} />}
