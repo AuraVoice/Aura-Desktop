@@ -232,6 +232,12 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
                 onChange={(value) => void updateTaskbarVisibility(value)}
               />
               <ToggleRow
+                label="Let Aura see your screen while you talk"
+                description="Send what's on screen with each thing you say during a voice call, so Aura can answer about it. Nothing is sent while you're silent or not on a call."
+                checked={settings.voiceScreenContext}
+                onChange={(value) => void update("voiceScreenContext", value)}
+              />
+              <ToggleRow
                 label="Reduce motion"
                 description="Use fades instead of pulsing keycaps and larger transitions."
                 checked={settings.reduceMotion}

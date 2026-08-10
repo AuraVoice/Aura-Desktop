@@ -17,6 +17,7 @@ export interface GeneralSettings {
   dictationSounds: boolean;
   muteOthersWhileDictating: boolean;
   textOutputMuted: boolean;
+  voiceScreenContext: boolean;
   notifySuggestions: boolean;
   notifyAnnouncements: boolean;
   notifyMilestones: boolean;
@@ -41,6 +42,10 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   dictationSounds: true,
   muteOthersWhileDictating: false,
   textOutputMuted: false,
+  // Off for everyone until they turn it on. Sending a frame every spoken turn
+  // is the kind of thing a user has to opt into knowingly, and mergeSettings
+  // folds the new key into an existing store without a migration.
+  voiceScreenContext: false,
   notifySuggestions: true,
   notifyAnnouncements: true,
   notifyMilestones: true,
