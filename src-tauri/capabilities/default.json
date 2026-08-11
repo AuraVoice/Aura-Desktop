@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main overlay window, the in-app dashboard window, and the dictation HUD",
-  "windows": ["main", "dashboard", "dictation"],
+  "description": "Capability for the main overlay window, the in-app dashboard window, the dictation HUD, and the status pill",
+  "windows": ["main", "dashboard", "dictation", "status-pill"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",

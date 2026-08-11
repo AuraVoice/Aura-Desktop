@@ -253,6 +253,9 @@
 .notch-bar-inner.has-guide {
   padding-right: 26px;
 }
+.notch-bar-inner.has-output-mute {
+  padding-left: 30px;
+}
 
 .notch-recorder {
   width: 100%;
@@ -281,6 +284,29 @@
   background: #ef4444;
   box-shadow: 0 0 10px rgba(239, 68, 68, 0.95);
   animation: notch-guide-pulse 1.6s ease-in-out infinite;
+}
+
+.notch-mute-indicator {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  display: grid;
+  width: 16px;
+  height: 16px;
+  transform: translateY(-50%);
+  place-items: center;
+  color: #ffbd66;
+  pointer-events: none;
+}
+
+.notch-mute-indicator svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 @keyframes notch-guide-pulse {

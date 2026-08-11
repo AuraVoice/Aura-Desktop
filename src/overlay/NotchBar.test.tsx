@@ -81,13 +81,13 @@ describe("NotchBar", () => {
   });
 
   it("carries no controls: the pill is the waveform and passive status only", () => {
-    // The kebab trigger and the output-mute dot were removed from the pill; the
-    // menu's actions live in the tray now. Nothing here may be clickable, or the
-    // deep drag region has something to fight with.
-    const html = renderToStaticMarkup(<NotchBar voice={voiceState()} edge="top" />);
+    // The menu's actions live in the tray. Muted output is a passive status icon,
+    // not a control, so the deep drag region still has nothing to fight with.
+    const html = renderToStaticMarkup(<NotchBar voice={voiceState()} edge="top" outputMuted />);
     expect(html).toContain("notch-visualizer");
     expect(html).not.toContain("notch-menu-trigger");
-    expect(html).not.toContain("notch-mute-indicator");
+    expect(html).toContain("notch-mute-indicator");
+    expect(html).toContain("Voice muted. Ctrl+Alt+M");
     expect(html).not.toContain("<button");
   });
 });

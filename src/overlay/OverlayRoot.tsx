@@ -37,6 +37,7 @@ import { ChatSlot, INITIAL_CHAT_SLOT_HEIGHT } from "./ChatSlot";
 import { useChatScreenCapture } from "./useChatScreenCapture";
 import { useChatSession } from "./useChatSession";
 import { useOutputMode } from "./useOutputMode";
+import { useStatusPillEvents } from "./useStatusPillEvents";
 
 // Fixed heights remain for fixed-content surfaces. DraftCard reports its own
 // measured content height so a short reply stays compact and a long one grows.
@@ -77,9 +78,8 @@ export function OverlayRoot() {
   // transient notch show must never hide out from under.
   const outputMode = useOutputMode({
     room: voice.room,
-    presentation,
-    callLive: voice.desiredActive,
   });
+  useStatusPillEvents();
   const visibleChatOpen = chatEnabled && chatOpen;
   const screenCapture = useChatScreenCapture(visibleChatOpen);
   const chat = useChatSession({
@@ -550,6 +550,7 @@ export function OverlayRoot() {
         dragHandlers={notchMove.dragHandlers}
         guideArmed={guide.armed}
         guideActive={guide.active}
+        outputMuted={outputMode.muted}
       />
     </div>
   );

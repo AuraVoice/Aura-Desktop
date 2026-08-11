@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { RoomEvent, type RemoteParticipant, type Room } from "livekit-client";
 import { validateAgentDataMessage } from "../lib/agentData";
 import { publishOutputMode } from "../lib/clientControl";
 import { logError, logInfo } from "../lib/log";
+import { showStatusPill } from "../lib/statusPill";
 import {
   loadOutputMode,
   outputMuted,
@@ -17,9 +17,6 @@ import {
 // consequence of giving up early is a warning indicator on a mute that did in
 // fact apply.
 const ACK_TIMEOUT_MS = 3_000;
-// A hotkey pressed with the overlay hidden would otherwise change nothing the
-// user can see. Show the notch just long enough to read the indicator.
-const TRANSIENT_SHOW_MS = 2_000;
 
 export type OutputAckState = "idle" | "pending" | "applied" | "unconfirmed";
 
@@ -30,10 +27,6 @@ export interface OutputModeState {
 
 interface UseOutputModeOptions {
   room: Room | null;
-  /** Current overlay presentation, for the transient show while hidden. */
-  presentation: string;
-  /** True while a call is live: never auto-hide the notch out from under one. */
-  callLive: boolean;
 }
 
 /**
@@ -49,19 +42,12 @@ interface UseOutputModeOptions {
  */
 export function useOutputMode({
   room,
-  presentation,
-  callLive,
 }: UseOutputModeOptions): OutputModeState {
   const [muted, setMuted] = useState(outputMuted());
   const [ackState, setAckState] = useState<OutputAckState>("idle");
   const pendingGenerationRef = useRef<number | null>(null);
   const ackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const showTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const presentationRef = useRef(presentation);
-  const callLiveRef = useRef(callLive);
   const roomRef = useRef<Room | null>(room);
-  presentationRef.current = presentation;
-  callLiveRef.current = callLive;
   roomRef.current = room;
 
   const clearAckTimer = useCallback(() => {
@@ -87,6 +73,7 @@ export function useOutputMode({
         if (pendingGenerationRef.current !== generation) return;
         pendingGenerationRef.current = null;
         setAckState("unconfirmed");
+        showStatusPill("voice-change-unconfirmed");
         logInfo(
           "useOutputMode: no acknowledgement",
           `generation=${generation} mode=${mode} - muted on this device only, the worker is still synthesizing speech`,
@@ -146,28 +133,10 @@ export function useOutputMode({
     };
   }, [room, clearAckTimer]);
 
-  // Show the notch briefly when the toggle would otherwise be invisible. Only
-  // from a fully hidden overlay, and never over a live call: re-hiding then
-  // would yank a call surface the user is looking at.
-  const showTransiently = useCallback(() => {
-    if (presentationRef.current !== "hidden" || callLiveRef.current) return;
-    if (showTimerRef.current) clearTimeout(showTimerRef.current);
-    invoke("summon_bar")
-      .then(() => {
-        showTimerRef.current = setTimeout(() => {
-          showTimerRef.current = null;
-          if (presentationRef.current !== "bar" || callLiveRef.current) return;
-          void invoke("dismiss_bar").catch((err) =>
-            logError("useOutputMode: dismiss_bar", err),
-          );
-        }, TRANSIENT_SHOW_MS);
-      })
-      .catch((err) => logError("useOutputMode: summon_bar", err));
-  }, []);
-
   const toggle = useCallback(() => {
     const next = !outputMuted();
     const generation = setOutputMuted(next);
+    showStatusPill(next ? "voice-muted" : "voice-unmuted");
     const targetRoom = roomRef.current;
     if (targetRoom) {
       publish(targetRoom, generation, next ? "text" : "voice");
@@ -178,25 +147,27 @@ export function useOutputMode({
       clearAckTimer();
       setAckState("idle");
     }
-    showTransiently();
-  }, [clearAckTimer, publish, showTransiently]);
+  }, [clearAckTimer, publish]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    let disposed = false;
     listen("output-mute-toggle-requested", () => {
       toggle();
     })
       .then((fn) => {
-        unlisten = fn;
+        if (disposed) fn(); else unlisten = fn;
       })
       .catch((err) => logError("useOutputMode: listen output-mute-toggle-requested", err));
-    return () => unlisten?.();
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, [toggle]);
 
   useEffect(
     () => () => {
       if (ackTimerRef.current) clearTimeout(ackTimerRef.current);
-      if (showTimerRef.current) clearTimeout(showTimerRef.current);
     },
     [],
   );

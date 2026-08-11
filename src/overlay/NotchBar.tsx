@@ -34,6 +34,7 @@ interface NotchBarProps {
   dragHandlers?: NotchDragHandlers;
   guideArmed?: boolean;
   guideActive?: boolean;
+  outputMuted?: boolean;
 }
 
 export function NotchBar({
@@ -42,6 +43,7 @@ export function NotchBar({
   dragHandlers,
   guideArmed = false,
   guideActive = false,
+  outputMuted = false,
 }: NotchBarProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   useAudioLevels(voice.room, voice.status, canvasRef);
@@ -51,7 +53,7 @@ export function NotchBar({
     <div className={`notch-shell notch-shell-${edge}`} {...dragHandlers}>
       <GlassSurface className={`notch-bar notch-bar-${voice.status}`} draggable={false}>
         <div className="notch-shape">
-          <div className={`notch-bar-inner${showGuideStatus ? " has-guide" : ""}`}>
+          <div className={`notch-bar-inner${showGuideStatus ? " has-guide" : ""}${outputMuted ? " has-output-mute" : ""}`}>
             <div className="notch-recorder" aria-hidden="true">
               <canvas ref={canvasRef} className="notch-visualizer" />
             </div>
@@ -67,6 +69,18 @@ export function NotchBar({
                 }
                 title={guideActive ? "Guide Mode active" : "Guide Mode starting"}
               />
+            )}
+            {outputMuted && (
+              <span
+                className="notch-mute-indicator"
+                aria-label="Voice muted"
+                title="Voice muted. Ctrl+Alt+M"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 9.5h4L13 5v14l-5-4.5H4z" />
+                  <path d="M16 9l5 6M21 9l-5 6" />
+                </svg>
+              </span>
             )}
           </div>
         </div>

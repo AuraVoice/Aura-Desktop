@@ -4,13 +4,21 @@ import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import App from "./App";
 import { DashboardApp } from "./dashboard/DashboardApp";
 import { DictationHud } from "./dictation/DictationHud";
+import { StatusPill } from "./overlay/StatusPill";
 
 // Every window loads the same bundle; route on the window label. "main" is the
 // transparent always-on-top overlay; "dashboard" is the decorated in-app window;
-// "dictation" is the persistent passive pill and hold-to-talk caption strip.
+// "dictation" is the persistent passive pill and hold-to-talk caption strip;
+// "status-pill" is the brief bottom-middle confirmation for global state toggles.
 const label = getCurrentWebviewWindow().label;
 const Root =
-  label === "dashboard" ? DashboardApp : label === "dictation" ? DictationHud : App;
+  label === "dashboard"
+    ? DashboardApp
+    : label === "dictation"
+      ? DictationHud
+      : label === "status-pill"
+        ? StatusPill
+        : App;
 
 // The overlay window is sized exactly to its content and must never scroll: mark
 // it so overflow is clipped there (scoped to the overlay only - the dashboard

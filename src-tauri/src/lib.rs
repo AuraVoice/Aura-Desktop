@@ -18,6 +18,7 @@ mod screenshot;
 mod screenshot_store;
 mod security;
 mod sentry_setup;
+mod status_pill;
 mod system_control;
 mod toast;
 mod tray;
@@ -261,6 +262,7 @@ pub fn run() {
         .manage(meeting::MeetingCaptureHandle::default())
         .manage(meeting::JoinWatchHandle::default())
         .manage(toast::PendingToastActivation::default())
+        .manage(status_pill::StatusPillHandle::default())
         .manage(screenshot::ChatCaptureHandle::default())
         .invoke_handler(tauri::generate_handler![
             current_overlay_state,
@@ -370,6 +372,8 @@ pub fn run() {
             uia::capture_structured_context,
             toast::show_actionable_toast,
             toast::take_pending_toast_activation,
+            status_pill::show_status_pill,
+            status_pill::status_pill_state,
             autostart::autostart_enabled,
             autostart::set_autostart_enabled,
             set_always_show_bar,
