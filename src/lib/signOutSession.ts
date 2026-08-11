@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { signOut } from "firebase/auth";
 import { auth } from "./firebase";
+import { clearDashboardCache } from "./dashboardCache";
 import { logError } from "./log";
 import { revokeSavedImages } from "./savedImageCache";
 
@@ -18,6 +19,7 @@ async function restoreNativeSession(): Promise<void> {
 }
 
 async function performSignOut(): Promise<void> {
+  const departingUid = auth.currentUser?.uid ?? null;
   try {
     // Lock native commands first, then remove the short-lived transcription
     // credential before Firebase clears its persisted refresh and ID tokens.
@@ -44,6 +46,7 @@ async function performSignOut(): Promise<void> {
 
     revokeSavedImages();
     await signOut(auth);
+    await clearDashboardCache(departingUid);
   } catch (err) {
     // A failed Firebase sign-out leaves the user authenticated. Restore the
     // native mirror so the signed-in UI and native authorization cannot split.

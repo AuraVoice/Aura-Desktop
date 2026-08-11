@@ -250,6 +250,7 @@ mod platform {
     use tauri::AppHandle;
     use tokio::sync::mpsc as tokio_mpsc;
     use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
+    use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::System::Threading::GetCurrentThreadId;
     use windows::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE;
     use windows::Win32::UI::WindowsAndMessaging::{
@@ -421,11 +422,21 @@ mod platform {
                 }
                 EVENT_SENDER.with(|sender| *sender.borrow_mut() = Some(event_tx));
 
+                let module = match unsafe { GetModuleHandleW(None) } {
+                    Ok(module) => module,
+                    Err(err) => {
+                        let _ = startup_tx.send(Err(format!(
+                            "listener module handle unavailable: {err}"
+                        )));
+                        EVENT_SENDER.with(|sender| sender.borrow_mut().take());
+                        return;
+                    }
+                };
                 let hook = unsafe {
                     SetWindowsHookExW(
                         WH_KEYBOARD_LL,
                         Some(keyboard_hook),
-                        Some(HINSTANCE::default()),
+                        Some(HINSTANCE::from(module)),
                         0,
                     )
                 };
