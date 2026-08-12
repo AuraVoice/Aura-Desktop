@@ -268,6 +268,9 @@ interface ChatSlotProps {
 // them away from what they were reading.
 const AUTOSCROLL_STICK_PX = 24;
 const HISTORY_SHEET_SCREEN_RATIO = 0.4;
+const COMPOSER_MIN_HEIGHT = 36;
+const COMPOSER_MAX_HEIGHT = COMPOSER_MIN_HEIGHT * 2;
+const COMPOSER_GROW_THRESHOLD = 80;
 
 function fallbackHistorySheetHeight(): number {
   const availableHeight = window.screen.availHeight || window.innerHeight || 720;
@@ -585,6 +588,18 @@ export function ChatSlot({
       window.removeEventListener("resize", report);
     };
   }, [historyOpen]);
+
+  useLayoutEffect(() => {
+    const composer = composerRef.current;
+    if (!composer) return;
+    composer.style.height = `${COMPOSER_MIN_HEIGHT}px`;
+    if (message.length < COMPOSER_GROW_THRESHOLD) return;
+    const borderHeight = composer.offsetHeight - composer.clientHeight;
+    composer.style.height = `${Math.min(
+      COMPOSER_MAX_HEIGHT,
+      Math.max(COMPOSER_MIN_HEIGHT, composer.scrollHeight + borderHeight),
+    )}px`;
+  }, [message]);
 
   const screenToggleTitle = lane === "live"
     ? "Ask out loud and Aura already sees your screen"

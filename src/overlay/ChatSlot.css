@@ -51,7 +51,7 @@
      always matches the children actually rendered. A fixed four-track template
      against a three-child grid left an empty 48px track under the composer and
      floated it a full row off the card's bottom edge. */
-  grid-template-rows: 40px auto 48px;
+  grid-template-rows: 40px auto minmax(48px, auto);
   width: 100%;
   height: auto;
   color: var(--db-text, var(--glass-text-bright));
@@ -59,7 +59,7 @@
 }
 
 .chat-slot-inner.has-chip {
-  grid-template-rows: 40px auto 40px 48px;
+  grid-template-rows: 40px auto 40px minmax(48px, auto);
 }
 
 .chat-slot-header {
@@ -726,7 +726,7 @@
 
 .chat-slot-composer {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 8px;
   padding: 6px 12px;
 }
@@ -739,8 +739,7 @@
   justify-content: center;
   position: absolute;
   left: 6px;
-  top: 50%;
-  transform: translateY(-50%);
+  bottom: 6px;
   width: 24px;
   height: 24px;
   padding: 0;
@@ -773,10 +772,12 @@
 }
 
 .chat-slot-composer textarea {
+  display: block;
   box-sizing: border-box;
   width: 100%;
   min-width: 0;
   height: 36px;
+  max-height: 72px;
   padding: 7px 14px 7px 34px;
   resize: none;
   overflow-y: auto;
@@ -828,7 +829,7 @@
   height: 36px;
   padding: 0;
   border: none;
-  border-radius: 10px;
+  border-radius: 30px;
   background: var(--db-teal, var(--glass-accent));
   color: #071f1c;
   cursor: pointer;
