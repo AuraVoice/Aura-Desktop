@@ -49,12 +49,27 @@ pub fn open_dashboard_window(app: &AppHandle) -> Result<(), String> {
     open_dashboard_route(app, None)
 }
 
+/// The global dashboard shortcut is a true toggle. Explicit navigation from
+/// buttons and notifications still uses open_dashboard_route so it never hides
+/// a window the user just asked to visit.
+pub fn toggle_dashboard_window(app: &AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window(DASHBOARD_WINDOW) {
+        let visible = window.is_visible().map_err(|e| e.to_string())?;
+        let minimized = window.is_minimized().map_err(|e| e.to_string())?;
+        if visible && !minimized {
+            return window.hide().map_err(|e| e.to_string());
+        }
+    }
+    open_dashboard_window(app)
+}
+
 /// Opens the dashboard at a validated in-app route. Existing windows receive
 /// an event after they are visible; new windows boot with the route in the URL
 /// hash so HashRouter can render the destination on its first frame.
 pub fn open_dashboard_route(app: &AppHandle, route: Option<&str>) -> Result<(), String> {
     let route = normalize_route(route);
     if let Some(window) = app.get_webview_window(DASHBOARD_WINDOW) {
+        window.unminimize().map_err(|e| e.to_string())?;
         window.show().map_err(|e| e.to_string())?;
         window.set_focus().map_err(|e| e.to_string())?;
         window

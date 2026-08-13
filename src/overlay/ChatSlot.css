@@ -51,7 +51,7 @@
      always matches the children actually rendered. A fixed four-track template
      against a three-child grid left an empty 48px track under the composer and
      floated it a full row off the card's bottom edge. */
-  grid-template-rows: 40px auto minmax(48px, auto);
+  grid-template-rows: 44px auto minmax(48px, auto);
   width: 100%;
   height: auto;
   color: var(--db-text, var(--glass-text-bright));
@@ -59,21 +59,23 @@
 }
 
 .chat-slot-inner.has-chip {
-  grid-template-rows: 40px auto 40px minmax(48px, auto);
+  grid-template-rows: 44px auto 40px minmax(48px, auto);
 }
 
 .chat-slot-header {
+  position: relative;
+  z-index: 2;
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  padding: 2px 8px;
+  padding: 6px 8px 2px;
 }
 
 .bar-icon-button.chat-history-toggle {
   position: absolute;
   z-index: 3;
-  top: 2px;
+  top: 6px;
   left: 8px;
   border-color: transparent;
   border-radius: 0;
@@ -89,12 +91,13 @@
 
 .chat-slot-frame.history-open > .chat-history-toggle {
   position: fixed;
-  top: 2px;
+  top: 6px;
   left: calc(var(--chat-history-sheet-left) + 8px);
 }
 
 .bar-icon-button.chat-slot-close {
-  color: var(--db-text-mute, var(--glass-text-dim));
+  color: var(--db-text, var(--glass-text-bright));
+  opacity: 1;
 }
 
 .bar-icon-button.chat-slot-new {
@@ -161,7 +164,7 @@
 .bar-icon-button.chat-history-sheet-close {
   position: absolute;
   z-index: 3;
-  top: 2px;
+  top: 6px;
   right: 8px;
   color: var(--db-text-mute, var(--glass-text-dim));
 }

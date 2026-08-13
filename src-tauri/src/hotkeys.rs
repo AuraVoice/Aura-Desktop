@@ -30,8 +30,8 @@ struct HotkeySpec {
 }
 
 const SPECS: [HotkeySpec; 6] = [
-    HotkeySpec { id: "chat", label: "Open text chat", default_accelerator: "Control+Alt+Space" },
-    HotkeySpec { id: "dashboard", label: "Open your dashboard", default_accelerator: "Control+Alt+KeyD" },
+    HotkeySpec { id: "chat", label: "Toggle text chat", default_accelerator: "Control+Alt+Space" },
+    HotkeySpec { id: "dashboard", label: "Toggle your dashboard", default_accelerator: "Control+Alt+KeyD" },
     HotkeySpec { id: "screenSight", label: "Toggle Screen Sight", default_accelerator: "Control+Alt+KeyS" },
     HotkeySpec { id: "guide", label: "Toggle Guide Mode", default_accelerator: "Control+Alt+KeyG" },
     HotkeySpec { id: "outputMute", label: "Mute or unmute Buddy", default_accelerator: "Control+Alt+KeyM" },
@@ -607,11 +607,9 @@ pub fn handle(app: &AppHandle, shortcut: &Shortcut) {
     };
     match action.as_deref() {
         Some("voice") => crate::voice_toggle_key::emit_toggle(app),
-        Some("chat") => {
-            if let Err(e) = overlay::summon_chat(app) { log::error!("hotkeys: summon chat failed: {e}"); }
-        }
+        Some("chat") => overlay::request_chat_toggle(app),
         Some("dashboard") => {
-            if let Err(e) = dashboard::open_dashboard_window(app) { log::error!("hotkeys: open dashboard failed: {e}"); }
+            if let Err(e) = dashboard::toggle_dashboard_window(app) { log::error!("hotkeys: toggle dashboard failed: {e}"); }
         }
         Some("signOut") => overlay::sign_out_requested(app),
         Some("screenSight") => security::toggle_screen_sight(app),

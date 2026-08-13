@@ -94,6 +94,7 @@ pub struct GuideRuntime {
     capture_in_flight: bool,
     needs_reseed: bool,
     geometry_revision: u64,
+    summoned_overlay: bool,
 }
 
 /// The persistent capture session for the current armed epoch.
@@ -529,9 +530,18 @@ pub async fn arm_guide(app: AppHandle) -> Result<GuideArmedPayload, String> {
         clear(&app, false);
         return Ok(armed_payload(&app));
     }
+    let summoned_overlay = crate::overlay::snapshot(&app).presentation
+        == crate::overlay::OverlayPresentation::Hidden;
     if let Err(error) = crate::overlay::summon_bar(&app) {
         clear(&app, true);
         return Err(format!("Guide indicator unavailable: {error}"));
+    }
+    if let Some(runtime) = runtime_handle(&app) {
+        runtime
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .summoned_overlay = summoned_overlay;
     }
     emit_armed(&app, payload.clone());
     Ok(payload)
@@ -555,7 +565,7 @@ pub fn clear(app: &AppHandle, emit: bool) {
         state.in_flight = false;
         state.target_armed = false;
     }
-    let changed = {
+    let (changed, dismiss_owned_overlay) = {
         let Some(security_handle) = crate::security::handle(app) else {
             return;
         };
@@ -565,10 +575,14 @@ pub fn clear(app: &AppHandle, emit: bool) {
         };
         let mut runtime = runtime_handle.0.lock().unwrap_or_else(|e| e.into_inner());
         let changed = security.disarm_guide();
+        let dismiss_owned_overlay = runtime.summoned_overlay;
         runtime.clear();
-        changed
+        (changed, dismiss_owned_overlay)
     };
     release_capture_session(app);
+    if dismiss_owned_overlay {
+        crate::overlay::dismiss_idle_bar(app);
+    }
     if emit && changed {
         emit_armed(app, armed_payload(app));
     }

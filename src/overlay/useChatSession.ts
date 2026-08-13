@@ -1,6 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { RoomEvent, type RemoteParticipant, type Room } from "livekit-client";
-import { validateAgentDataMessage } from "../lib/agentData";
 import { AuthRequiredError, routeToDashboardForExpiredSession } from "../lib/api";
 import {
   clearCachedChat,
@@ -25,7 +23,9 @@ import {
   type ChatStreamFrame,
 } from "../lib/chatStream";
 import type { ChatAttachment } from "../lib/chatScreenCapture";
+import { trackEvent } from "../lib/analytics";
 import { logError } from "../lib/log";
+import { captureException } from "../lib/sentry";
 import { MAX_MESSAGE_LENGTH, type ChatLane, type ChatMessage } from "./ChatSlot";
 
 interface UseChatSessionOptions {
@@ -33,11 +33,9 @@ interface UseChatSessionOptions {
   /** Whose transcript this is. Every local cache read and write carries it, so
    * one account's chat can never render in another's window. */
   uid: string | null;
-  room: Room | null;
   /** Screen context for the turn about to go out, resolved at send time so the
-   * frame is as fresh as the message. Cold lane only - see the live-lane note
-   * in runTurn. Must never throw; a message goes out without its picture
-   * rather than not at all. */
+   * frame is as fresh as the message. Must never throw; a message goes out
+   * without its picture rather than not at all. */
   resolveAttachments?: () => Promise<ChatAttachment[]>;
 }
 
@@ -81,17 +79,6 @@ function historyFrom(messages: ChatMessage[], excludedTurnId?: string): ChatHist
  * genuine transport failure gets blamed on the connection; a rejected request
  * names its own status so Retry is not offered as the answer to everything. */
 function failureText(err: unknown): string {
-  if (err instanceof LiveTurnFailure) {
-    if (err.reason === "no_response") {
-      return "Aura stopped responding to this message. Retry to send it again.";
-    }
-    if (err.reason === "duplicate") return "Aura already received this message and did not run it twice.";
-    if (err.reason === "busy" || err.reason === "busy_timeout") {
-      return "Aura was still finishing another turn. Retry this message in a moment.";
-    }
-    if (err.reason === "message_too_long") return "This message is longer than the live chat limit.";
-    return "Aura could not finish this live message. Retry to try again.";
-  }
   if (!(err instanceof ChatRequestError)) {
     return "The connection dropped before Aura finished. Retry this message to continue.";
   }
@@ -104,19 +91,12 @@ function failureText(err: unknown): string {
   return `Aura could not accept this message (HTTP ${err.status}).`;
 }
 
-class LiveTurnFailure extends Error {
-  constructor(readonly reason: string) {
-    super(reason);
-  }
+function chatFailureReason(err: unknown): string {
+  if (err instanceof AuthRequiredError) return "auth_required";
+  if (err instanceof ChatRequestError) return `http_${err.status}`;
+  if (err instanceof Error && err.message.includes("terminal frame")) return "missing_terminal_frame";
+  return "transport_failed";
 }
-
-// A live turn is watched only while the worker owes an event on a bounded
-// timeline: from publish until the accept ack, and from the start ack until the
-// turn ends. The gap between those two is real queue wait behind other turns,
-// which has no bound and is already honestly shown as "Queued, N ahead", so
-// watching it would fail turns that are merely waiting their proper turn.
-const LIVE_ACK_TIMEOUT_MS = 10_000;
-const LIVE_PROGRESS_TIMEOUT_MS = 60_000;
 
 // Two different limits that must not be confused. The cache one is local and
 // never crosses the wire; the server one has to stay within the backend's
@@ -266,19 +246,15 @@ function reminderText(reminder: Record<string, unknown>): string {
   return triggerAt ? `${message}\n${triggerAt}` : message;
 }
 
-export function useChatSession({ enabled, uid, room, resolveAttachments }: UseChatSessionOptions) {
+export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSessionOptions) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sending, setSending] = useState(false);
   const [limitReached, setLimitReached] = useState(false);
-  const lane: ChatLane = enabled && room ? "live" : "cold";
+  const lane: ChatLane = "cold";
   // Explicitly a plain string: a conversation id adopted from the server on
   // hydration is not necessarily one this client minted.
   const conversationIdRef = useRef<string>(crypto.randomUUID());
   const enabledRef = useRef(enabled);
-  const roomRef = useRef(room);
-  const liveGenerationRef = useRef(0);
-  const livePendingRef = useRef(new Set<string>());
-  const liveWatchdogsRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const activeRequestRef = useRef<{ clientMessageId: string; controller: AbortController } | null>(null);
   const messagesRef = useRef(messages);
   const resolveAttachmentsRef = useRef(resolveAttachments);
@@ -299,7 +275,6 @@ export function useChatSession({ enabled, uid, room, resolveAttachments }: UseCh
   const [sessionsCursor, setSessionsCursor] = useState<string | null>(null);
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [sessionsError, setSessionsError] = useState<string | null>(null);
-  roomRef.current = enabled ? room : null;
   messagesRef.current = messages;
   resolveAttachmentsRef.current = resolveAttachments;
   uidRef.current = uid;
@@ -311,47 +286,6 @@ export function useChatSession({ enabled, uid, room, resolveAttachments }: UseCh
       return current.map((item, itemIndex) => itemIndex === index ? message : item);
     });
   }, []);
-
-  const clearLiveWatchdog = useCallback((clientMessageId: string) => {
-    const timer = liveWatchdogsRef.current.get(clientMessageId);
-    if (timer === undefined) return;
-    clearTimeout(timer);
-    liveWatchdogsRef.current.delete(clientMessageId);
-  }, []);
-
-  const failLiveTurn = useCallback((clientMessageId: string, err: unknown) => {
-    clearLiveWatchdog(clientMessageId);
-    livePendingRef.current.delete(clientMessageId);
-    setMessages((current) => {
-      const updated = current.flatMap<ChatMessage>((message) => {
-        if (message.id === clientMessageId) return [{ ...message, state: "failed" }];
-        if (message.id !== `${clientMessageId}:assistant`) return [message];
-        return message.text ? [{ ...message, state: "complete" }] : [];
-      }).filter((message) => message.id !== `${clientMessageId}:error`);
-      return [
-        ...updated,
-        {
-          id: `${clientMessageId}:error`,
-          turnId: clientMessageId,
-          role: "assistant",
-          text: failureText(err),
-          state: "complete",
-          kind: "error",
-          lane: "live",
-        },
-      ];
-    });
-  }, [clearLiveWatchdog]);
-
-  /** Fails the turn locally if the worker goes silent while it owes an event. */
-  const armLiveWatchdog = useCallback((clientMessageId: string, timeoutMs: number) => {
-    clearLiveWatchdog(clientMessageId);
-    liveWatchdogsRef.current.set(clientMessageId, setTimeout(() => {
-      liveWatchdogsRef.current.delete(clientMessageId);
-      if (!livePendingRef.current.has(clientMessageId)) return;
-      failLiveTurn(clientMessageId, new LiveTurnFailure("no_response"));
-    }, timeoutMs));
-  }, [clearLiveWatchdog, failLiveTurn]);
 
   useEffect(() => {
     enabledRef.current = enabled;
@@ -369,9 +303,6 @@ export function useChatSession({ enabled, uid, room, resolveAttachments }: UseCh
     }
     activeRequestRef.current?.controller.abort();
     activeRequestRef.current = null;
-    for (const timer of liveWatchdogsRef.current.values()) clearTimeout(timer);
-    liveWatchdogsRef.current.clear();
-    livePendingRef.current.clear();
     conversationIdRef.current = crypto.randomUUID();
     serverConversationRef.current = null;
     setChatConversationId(null);
@@ -394,145 +325,6 @@ export function useChatSession({ enabled, uid, room, resolveAttachments }: UseCh
     // leave one account's chat readable by the next.
     void clearCachedChat(null);
   }, [enabled]);
-
-  useEffect(() => {
-    if (!enabled || !room) return;
-    liveGenerationRef.current += 1;
-
-    function onDataReceived(
-      payload: Uint8Array,
-      participant?: RemoteParticipant,
-      _kind?: unknown,
-      topic?: string,
-    ) {
-      try {
-        const verdict = validateAgentDataMessage(payload, participant, topic);
-        if (verdict.kind !== "valid" || topic !== "agent_events") return;
-        if (
-          verdict.type !== "assistant.text.delta"
-          && verdict.type !== "assistant.text.done"
-          && verdict.type !== "text_input.accepted"
-          && verdict.type !== "text_input.started"
-          && verdict.type !== "text_input.failed"
-        ) return;
-        const clientMessageId = verdict.payload.client_message_id as string;
-        if (!livePendingRef.current.has(clientMessageId)) return;
-
-        if (verdict.type === "text_input.accepted") {
-          // Acked. What follows is queue wait with no bound, so stop watching
-          // until the worker actually starts this turn.
-          clearLiveWatchdog(clientMessageId);
-          const queuePosition = verdict.payload.queue_position as number;
-          setMessages((current) => current.map((message) =>
-            message.id === clientMessageId
-              ? { ...message, state: "queued", queuePosition }
-              : message,
-          ));
-          return;
-        }
-        if (verdict.type === "text_input.started") {
-          armLiveWatchdog(clientMessageId, LIVE_PROGRESS_TIMEOUT_MS);
-          setMessages((current) => {
-            const assistantId = `${clientMessageId}:assistant`;
-            const started = current.map((message) =>
-              message.id === clientMessageId
-                ? { ...message, state: "sent" as const, queuePosition: undefined }
-                : message,
-            );
-            if (started.some((message) => message.id === assistantId)) return started;
-            return [
-              ...started,
-              {
-                id: assistantId,
-                turnId: clientMessageId,
-                role: "assistant",
-                text: "",
-                state: "streaming",
-                kind: "text",
-                lane: "live",
-              },
-            ];
-          });
-          return;
-        }
-        if (verdict.type === "assistant.text.delta") {
-          armLiveWatchdog(clientMessageId, LIVE_PROGRESS_TIMEOUT_MS);
-          const delta = verdict.payload.text as string;
-          setMessages((current) => {
-            const assistantId = `${clientMessageId}:assistant`;
-            if (current.some((message) => message.id === assistantId)) {
-              return current.map((message) =>
-                message.id === assistantId
-                  ? { ...message, text: message.text + delta, state: "streaming" }
-                  : message,
-              );
-            }
-            return [
-              ...current,
-              {
-                id: assistantId,
-                turnId: clientMessageId,
-                role: "assistant",
-                text: delta,
-                state: "streaming",
-                kind: "text",
-                lane: "live",
-              },
-            ];
-          });
-          return;
-        }
-        if (verdict.type === "assistant.text.done") {
-          const finalText = verdict.payload.text as string;
-          clearLiveWatchdog(clientMessageId);
-          livePendingRef.current.delete(clientMessageId);
-          setMessages((current) => {
-            const assistantId = `${clientMessageId}:assistant`;
-            const completed = current.map((message) => {
-              if (message.id === clientMessageId) {
-                return { ...message, state: "complete" as const, queuePosition: undefined };
-              }
-              if (message.id === assistantId) {
-                return { ...message, text: finalText || message.text, state: "complete" as const };
-              }
-              return message;
-            });
-            if (!finalText || completed.some((message) => message.id === assistantId)) return completed;
-            return [
-              ...completed,
-              {
-                id: assistantId,
-                turnId: clientMessageId,
-                role: "assistant",
-                text: finalText,
-                state: "complete",
-                kind: "text",
-                lane: "live",
-              },
-            ];
-          });
-          return;
-        }
-        failLiveTurn(clientMessageId, new LiveTurnFailure(verdict.payload.reason as string));
-      } catch (err) {
-        logError("useChatSession: live event", err);
-      }
-    }
-
-    function failPendingConnection() {
-      for (const clientMessageId of Array.from(livePendingRef.current)) {
-        failLiveTurn(clientMessageId, new Error("LiveKit room disconnected"));
-      }
-    }
-
-    room.on(RoomEvent.DataReceived, onDataReceived);
-    room.on(RoomEvent.Disconnected, failPendingConnection);
-    return () => {
-      room.off(RoomEvent.DataReceived, onDataReceived);
-      room.off(RoomEvent.Disconnected, failPendingConnection);
-      failPendingConnection();
-    };
-  }, [armLiveWatchdog, clearLiveWatchdog, enabled, failLiveTurn, room]);
 
   /** Replaces the local transcript with the server's, and says whether the
    * backend is still finishing anything.
@@ -940,6 +732,12 @@ export function useChatSession({ enabled, uid, room, resolveAttachments }: UseCh
         case "error":
           terminalFrameSeen = true;
           errorFrameSeen = true;
+          trackEvent("chat_turn_failed", { reason: "error_frame" });
+          captureException(new Error("Desktop chat returned an error frame"), {
+            feature: "desktop_text_chat",
+            reason: "error_frame",
+            clientMessageId,
+          });
           finishAssistantText();
           markUser("failed");
           upsert({
@@ -989,6 +787,13 @@ export function useChatSession({ enabled, uid, room, resolveAttachments }: UseCh
       }
     } catch (err) {
       if (controller.signal.aborted && !enabledRef.current) return;
+      const reason = chatFailureReason(err);
+      trackEvent("chat_turn_failed", { reason });
+      captureException(err instanceof Error ? err : new Error(reason), {
+        feature: "desktop_text_chat",
+        reason,
+        clientMessageId,
+      });
       if (!errorFrameSeen) {
         markUser("failed");
         finishAssistantText();
@@ -1014,52 +819,28 @@ export function useChatSession({ enabled, uid, room, resolveAttachments }: UseCh
     }
   }, []);
 
-  const publishLiveTurn = useCallback((clientMessageId: string, text: string) => {
-    const targetRoom = roomRef.current;
-    if (!enabledRef.current || !targetRoom) return false;
-    livePendingRef.current.add(clientMessageId);
-    armLiveWatchdog(clientMessageId, LIVE_ACK_TIMEOUT_MS);
-    const payload = new TextEncoder().encode(JSON.stringify({
-      type: "text_input",
-      text,
-      client_message_id: clientMessageId,
-      generation: liveGenerationRef.current,
-    }));
-    void targetRoom.localParticipant.publishData(payload, {
-      reliable: true,
-      topic: "client_events",
-    }).catch((err) => {
-      if (!livePendingRef.current.has(clientMessageId)) return;
-      failLiveTurn(clientMessageId, err);
-      logError("useChatSession: live publish", err);
-    });
-    return true;
-  }, [armLiveWatchdog, failLiveTurn]);
-
   const send = useCallback((text: string) => {
     const trimmed = text.trim();
-    const currentLane: ChatLane = roomRef.current ? "live" : "cold";
     if (
       !enabledRef.current
-      || (currentLane === "cold" && (activeRequestRef.current || sending || limitReached))
+      || activeRequestRef.current
+      || sending
+      || limitReached
       || !trimmed
-      || trimmed.length > MAX_MESSAGE_LENGTH[currentLane]
+      || trimmed.length > MAX_MESSAGE_LENGTH.cold
     ) return false;
     const clientMessageId = crypto.randomUUID();
-    const history = currentLane === "cold" ? historyFrom(messages) : [];
+    const history = historyFrom(messages);
     const bubble: ChatMessage = {
       id: clientMessageId,
       turnId: clientMessageId,
       role: "user",
       text: trimmed,
-      // Only the live lane has a real queue to be behind; its accept ack carries
-      // the position. A cold send goes straight out, so it is "sending".
-      state: currentLane === "live" ? "queued" : "sending",
+      state: "sending",
       kind: "text",
-      lane: currentLane,
+      lane: "cold",
     };
     setMessages((current) => [...current, bubble]);
-    if (currentLane === "live") return publishLiveTurn(clientMessageId, trimmed);
     // Cached without awaiting, so a slow or broken disk can never delay the
     // request. The settled-transcript effect above rewrites this row once the
     // turn ends; this write only exists so a crash mid-turn still shows what
@@ -1075,32 +856,15 @@ export function useChatSession({ enabled, uid, room, resolveAttachments }: UseCh
     }
     void runTurn(clientMessageId, trimmed, history, true);
     return true;
-  }, [limitReached, messages, publishLiveTurn, runTurn, sending]);
+  }, [limitReached, messages, runTurn, sending]);
 
   const retry = useCallback((clientMessageId: string) => {
     const message = messages.find((item) => item.id === clientMessageId && item.role === "user");
     if (!message) return;
-    if (message.lane === "live") {
-      if (!enabledRef.current || !roomRef.current || livePendingRef.current.has(clientMessageId)) return;
-      // The worker rejects any client_message_id it has already enqueued, which
-      // is what stops an accidental double-publish from running twice. A retry
-      // the user asked for is a new turn, so it needs a fresh id or it comes
-      // straight back as "duplicate" and can never succeed. The bubble is
-      // re-keyed to that id so every derived event id still correlates.
-      const retryMessageId = crypto.randomUUID();
-      setMessages((current) => current
-        .filter((item) => item.turnId !== clientMessageId || item.role === "user")
-        .map((item) => item.id === clientMessageId
-          ? { ...item, id: retryMessageId, turnId: retryMessageId, state: "queued", queuePosition: undefined }
-          : item));
-      publishLiveTurn(retryMessageId, message.text);
-      return;
-    }
     if (!enabledRef.current || activeRequestRef.current || sending || limitReached) return;
-    // A fresh id, for the same reason the live lane needs one: the backend now
-    // stores this turn's answer under its client_message_id and replays that
-    // stored answer for a repeat of the same id. Re-sending the old id would
-    // return the old failure forever instead of actually retrying.
+    // The backend stores this turn's answer under its client_message_id and
+    // replays that stored answer for a repeat of the same id. Re-sending the old
+    // id would return the old failure forever instead of actually retrying.
     const retryMessageId = crypto.randomUUID();
     const history = historyFrom(messages, clientMessageId);
     setMessages((current) => current
@@ -1109,20 +873,19 @@ export function useChatSession({ enabled, uid, room, resolveAttachments }: UseCh
         ? { ...item, id: retryMessageId, turnId: retryMessageId, state: "sending" }
         : item));
     void runTurn(retryMessageId, message.text, history);
-  }, [limitReached, messages, publishLiveTurn, runTurn, sending]);
+  }, [limitReached, messages, runTurn, sending]);
 
   const submitClarification = useCallback((messageId: string, selectedOptions: string[]) => {
     if (activeRequestRef.current || sending || limitReached || selectedOptions.length === 0) return;
     const reply = selectedOptions.join(", ");
-    const currentLane: ChatLane = roomRef.current ? "live" : "cold";
-    if (reply.length > MAX_MESSAGE_LENGTH[currentLane]) {
+    if (reply.length > MAX_MESSAGE_LENGTH.cold) {
       upsertMessage({
         id: `${messageId}:length-error`,
         role: "assistant",
-        text: `This clarification reply is longer than the ${MAX_MESSAGE_LENGTH[currentLane].toLocaleString()} character limit.`,
+        text: `This clarification reply is longer than the ${MAX_MESSAGE_LENGTH.cold.toLocaleString()} character limit.`,
         state: "complete",
         kind: "error",
-        lane: currentLane,
+        lane: "cold",
       });
       return;
     }
@@ -1216,7 +979,7 @@ export function useChatSession({ enabled, uid, room, resolveAttachments }: UseCh
     // writes into whichever conversation is current when its frames arrive, and
     // its cache row is keyed the same way. ChatSlot also disables the entry
     // points, but a click can beat that state, so the refusal lives here too.
-    if (activeRequestRef.current || livePendingRef.current.size > 0) return false;
+    if (activeRequestRef.current) return false;
     if (conversationId === serverConversationRef.current) return true;
 
     const selection = ++selectionRef.current;
@@ -1279,9 +1042,7 @@ export function useChatSession({ enabled, uid, room, resolveAttachments }: UseCh
   const newConversation = useCallback((): boolean => {
     if (
       !enabledRef.current
-      || roomRef.current
       || activeRequestRef.current
-      || livePendingRef.current.size > 0
     ) return false;
 
     selectionRef.current += 1;
@@ -1302,8 +1063,8 @@ export function useChatSession({ enabled, uid, room, resolveAttachments }: UseCh
 
   return {
     messages,
-    sending: lane === "cold" && sending,
-    limitReached: lane === "cold" && limitReached,
+    sending,
+    limitReached,
     lane,
     send,
     retry,

@@ -81,11 +81,12 @@ export function OverlayRoot() {
   });
   useStatusPillEvents();
   const visibleChatOpen = chatEnabled && chatOpen;
+  const chatOpenRef = useRef(visibleChatOpen);
+  chatOpenRef.current = visibleChatOpen;
   const screenCapture = useChatScreenCapture(visibleChatOpen);
   const chat = useChatSession({
     enabled: chatEnabled,
     uid: user?.uid ?? null,
-    room: voice.room,
     resolveAttachments: screenCapture.resolveForSend,
   });
   const previousVoiceActiveRef = useRef(false);
@@ -352,12 +353,45 @@ export function OverlayRoot() {
     return () => unlisten?.();
   }, [captureNow]);
 
-  // The native chat hotkey shows the Bar first, then this event opens the chat
-  // slot below it; ChatSlot focuses its own composer on mount.
+  const dismissChatOverlay = useCallback(() => {
+    chatOpenRef.current = false;
+    setChatHistoryOpen(false);
+    setChatOpen(false);
+    invoke("dismiss_bar").catch((err) =>
+      logError("OverlayRoot: dismiss chat overlay", err),
+    );
+  }, []);
+
+  // The global shortcut is a true toggle. Native emits this without summoning
+  // first, so closing never flashes the window or steals foreground focus.
+  useEffect(() => {
+    if (!chatEnabled) return;
+    let unlisten: (() => void) | undefined;
+    listen("chat-toggle-requested", () => {
+      if (chatOpenRef.current) {
+        dismissChatOverlay();
+        return;
+      }
+      chatOpenRef.current = true;
+      invoke("summon_chat").catch((err) => {
+        chatOpenRef.current = false;
+        logError("OverlayRoot: summon chat from hotkey", err);
+      });
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch((err) => logError("OverlayRoot: listen chat-toggle-requested", err));
+    return () => unlisten?.();
+  }, [chatEnabled, dismissChatOverlay]);
+
+  // summon_chat shows the Bar first, then this event opens the chat slot below
+  // it; ChatSlot focuses its own composer on mount.
   useEffect(() => {
     if (!chatEnabled) return;
     let unlisten: (() => void) | undefined;
     listen("chat-requested", () => {
+      chatOpenRef.current = true;
       setChatOpen(true);
       setChatHistoryOpen(false);
       // Pressing the hotkey with the slot already open is a no-op for
@@ -510,10 +544,7 @@ export function OverlayRoot() {
           focusNonce={chatFocusNonce}
           screen={screenCapture.state}
           onNewConversation={chat.newConversation}
-          onClose={() => {
-            setChatHistoryOpen(false);
-            setChatOpen(false);
-          }}
+          onClose={dismissChatOverlay}
           historyOpen={chatHistoryOpen}
           onHistoryOpenChange={setChatHistoryOpen}
           history={chat.history}

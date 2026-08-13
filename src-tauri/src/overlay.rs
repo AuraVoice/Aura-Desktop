@@ -911,6 +911,17 @@ pub fn summon_chat(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+/// Asks the frontend to decide whether the chat shortcut should open or close.
+/// Emitting before any native presentation change keeps the close half of the
+/// toggle from briefly showing or focusing a window that is about to disappear.
+pub fn request_chat_toggle(app: &AppHandle) {
+    if let Some(window) = main_window(app) {
+        if let Err(e) = window.emit("chat-toggle-requested", ()) {
+            error!("overlay::request_chat_toggle: failed to emit: {e}");
+        }
+    }
+}
+
 /// Forwards the output-mute hotkey to the frontend, which owns the bit.
 /// Deliberately changes nothing native: no presentation change and no
 /// force_foreground (the Alt tap it injects traps the next Ctrl double-tap, see
@@ -967,6 +978,27 @@ pub fn dismiss_bar(app: &AppHandle) {
     }
     if let Some(handle) = state_handle(app) {
         let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        let resting = resting_presentation(&state);
+        state.presentation = resting;
+        state.pre_pointing = None;
+    }
+    apply(app);
+}
+
+/// Releases a bar that a passive feature summoned only when no active surface
+/// has taken ownership since. Unlike dismiss_bar this never ends a voice call.
+pub fn dismiss_idle_bar(app: &AppHandle) {
+    let Some(handle) = state_handle(app) else {
+        return;
+    };
+    {
+        let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        if state.presentation != OverlayPresentation::Bar
+            || state.voice_active
+            || state.slot_height.is_some()
+        {
+            return;
+        }
         let resting = resting_presentation(&state);
         state.presentation = resting;
         state.pre_pointing = None;

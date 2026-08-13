@@ -289,14 +289,14 @@ const COUNTER_THRESHOLD: Record<ChatLane, number> = {
   live: 1_800,
 };
 
-/** Header (40) + the transcript's 260px floor + the body's own 8px padding +
+/** Header (44) + the transcript's 260px floor + the body's own 8px padding +
  * composer (48): what an empty chat
  * renders at, used for the frame before the first measurement lands. The card's
  * height is otherwise never computed here - CSS sizes it to its content and the
  * measured result is what gets reported. Predicting it from row constants and
  * then stretching the card to the window is what put empty glass under the
  * composer for three rounds: two owners, no way to tell which one was wrong. */
-export const INITIAL_CHAT_SLOT_HEIGHT = 356;
+export const INITIAL_CHAT_SLOT_HEIGHT = 360;
 
 /** During a call the worker attaches screen frames to spoken turns only, so a
  * chip here would promise something the live lane cannot deliver. */
