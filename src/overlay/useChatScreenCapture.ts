@@ -18,6 +18,9 @@ import { logError } from "../lib/log";
  */
 const STALE_AFTER_MS = 60_000;
 
+const EXPLICIT_SCREEN_SAVE_REQUEST =
+  /\b(?:save|capture|keep|remember)\s+(?:(?:this|the|my|current)\s+)?(?:screen|screenshot)\b|\b(?:take|save)\s+(?:a\s+)?screenshot\b|\bscreenshot\s+(?:this|that|it)\b/i;
+
 export interface ChatScreenState {
   /** Whether the next message carries the screen. */
   armed: boolean;
@@ -122,19 +125,24 @@ export function useChatScreenCapture(open: boolean) {
    * follow-up like "make that shorter" does not silently ship a second
    * screenshot the user never asked for.
    */
-  const resolveForSend = useCallback(async (): Promise<ChatAttachment[]> => {
-    if (!armedRef.current) return [];
+  const resolveForSend = useCallback(async (message: string): Promise<ChatAttachment[]> => {
+    const explicitlyRequested = EXPLICIT_SCREEN_SAVE_REQUEST.test(message);
+    if (!armedRef.current && !explicitlyRequested) return [];
     try {
       let pending = captureRef.current;
-      if (!pending || Date.now() - pending.capturedAtMs > STALE_AFTER_MS) {
+      if (explicitlyRequested || !pending || Date.now() - pending.capturedAtMs > STALE_AFTER_MS) {
         await refreshChatCapture();
         pending = await takeChatCapture();
       }
-      if (!pending) return [];
+      if (!pending) {
+        if (explicitlyRequested) throw new Error("Aura could not capture the current screen");
+        return [];
+      }
       const data = await toBase64(pending.bytes);
       return [screenAttachment(data)];
     } catch (err) {
       logError("useChatScreenCapture: resolveForSend", err);
+      if (explicitlyRequested) throw err;
       return [];
     } finally {
       setArmed(false);

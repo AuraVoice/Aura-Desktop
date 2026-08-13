@@ -34,9 +34,9 @@ interface UseChatSessionOptions {
    * one account's chat can never render in another's window. */
   uid: string | null;
   /** Screen context for the turn about to go out, resolved at send time so the
-   * frame is as fresh as the message. Must never throw; a message goes out
-   * without its picture rather than not at all. */
-  resolveAttachments?: () => Promise<ChatAttachment[]>;
+   * frame is as fresh as the message. An explicit screen-save request rejects
+   * when capture fails so the text cannot be sent as if the screen were present. */
+  resolveAttachments?: (message: string) => Promise<ChatAttachment[]>;
 }
 
 /** How many history entries the backend will actually consume (its
@@ -79,6 +79,9 @@ function historyFrom(messages: ChatMessage[], excludedTurnId?: string): ChatHist
  * genuine transport failure gets blamed on the connection; a rejected request
  * names its own status so Retry is not offered as the answer to everything. */
 function failureText(err: unknown): string {
+  if (err instanceof Error && err.message === "Aura could not capture the current screen") {
+    return "Aura could not capture this screen. Keep it visible and try again.";
+  }
   if (!(err instanceof ChatRequestError)) {
     return "The connection dropped before Aura finished. Retry this message to continue.";
   }
@@ -94,6 +97,9 @@ function failureText(err: unknown): string {
 function chatFailureReason(err: unknown): string {
   if (err instanceof AuthRequiredError) return "auth_required";
   if (err instanceof ChatRequestError) return `http_${err.status}`;
+  if (err instanceof Error && err.message === "Aura could not capture the current screen") {
+    return "screen_capture_failed";
+  }
   if (err instanceof Error && err.message.includes("terminal frame")) return "missing_terminal_frame";
   return "transport_failed";
 }
@@ -767,11 +773,10 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
       }
     };
 
-    const attachments = withScreenContext && resolveAttachmentsRef.current
-      ? await resolveAttachmentsRef.current()
-      : [];
-
     try {
+      const attachments = withScreenContext && resolveAttachmentsRef.current
+        ? await resolveAttachmentsRef.current(text)
+        : [];
       await streamChat({
         message: text,
         history,
