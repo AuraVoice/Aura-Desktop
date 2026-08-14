@@ -56,9 +56,11 @@ mod insert;
 #[cfg(windows)]
 pub mod trace;
 #[cfg(windows)]
+mod usage;
+#[cfg(windows)]
 mod vocab;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub use chord::DICTATION_CHORD;
 
@@ -112,6 +114,7 @@ mod platform {
     use super::hud::{self, HudPhase, HudUpdate};
     use super::insert::{self, InsertOutcome};
     use super::trace;
+    use super::usage;
     use super::vocab;
     use super::{DictationStatus, DICTATION_CHORD};
 
@@ -577,6 +580,7 @@ mod platform {
                             held.app_hint.clone(),
                         );
                     }
+                    usage::record_later(app, usage::word_count(&held.text));
                     finish_with(
                         app,
                         held.generation,
@@ -1130,6 +1134,9 @@ mod platform {
                 app_key,
             );
         }
+        if matches!(outcome, InsertOutcome::Inserted) {
+            usage::record_later(app, usage::word_count(&final_text));
+        }
 
         let (update, linger) = match outcome {
             InsertOutcome::Inserted => (
@@ -1261,6 +1268,33 @@ pub fn dictation_status(
 ) -> DictationStatus {
     state.refresh(&app);
     state.status()
+}
+
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DictationUsageEntry {
+    pub recorded_at_ms: i64,
+    pub words: u64,
+}
+
+#[tauri::command]
+pub async fn dictation_usage_entries(
+    app: tauri::AppHandle,
+) -> Result<Vec<DictationUsageEntry>, String> {
+    #[cfg(windows)]
+    {
+        let Some(uid) = crate::security::current_uid(&app) else {
+            return Ok(Vec::new());
+        };
+        tauri::async_runtime::spawn_blocking(move || usage::entries(&app, &uid))
+            .await
+            .map_err(|error| format!("dictation usage task failed: {error}"))?
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = app;
+        Ok(Vec::new())
+    }
 }
 
 /// The online-dictation consent state, for the HUD prompt and the Settings

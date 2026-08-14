@@ -95,7 +95,12 @@ export function ConversationsPage() {
 
       <DetailModal
         open={selected != null}
-        title={selected === ARCHIVE_ID ? "Earlier history" : "Conversation"}
+        title={
+          selected === ARCHIVE_ID
+            ? "Earlier history"
+            : selectedSession?.summary.trim() || undefined
+        }
+        centerTitle={selected !== ARCHIVE_ID}
         onClose={() => setSelected(null)}
       >
         {selected === ARCHIVE_ID && archive ? (
@@ -103,7 +108,6 @@ export function ConversationsPage() {
         ) : selectedSession ? (
           <ConversationDetail
             sessionId={selectedSession.session_id}
-            summary={selectedSession.summary}
             startedAt={selectedSession.started_at}
           />
         ) : null}
@@ -116,26 +120,22 @@ export function ConversationsPage() {
  * Has its own loading/error state inside the modal so the grid never blocks. */
 function ConversationDetail({
   sessionId,
-  summary,
   startedAt,
 }: {
   sessionId: string;
-  summary: string;
   startedAt: string;
 }) {
   const detail = useAsyncData(() => getSessionDetail(sessionId), `session:${sessionId}`);
 
   return (
     <div className="db-detail">
-      <p className="db-detail-meta">{shortDateTime(startedAt)}</p>
-      {summary && <p className="db-detail-summary">{summary}</p>}
+      <p className="db-detail-meta db-conversation-time">{shortDateTime(startedAt)}</p>
       <div className="db-detail-transcript">
         {detail.loading && <p className="db-muted">Loading transcript…</p>}
         {detail.error && <p className="db-muted">Transcript unavailable.</p>}
         {detail.data?.raw_turns?.length
           ? detail.data.raw_turns.map((turn, i) => (
               <div className={`db-turn db-turn-${turn.role}`} key={turn.message_id ?? i}>
-                <span className="db-turn-role">{turn.role}</span>
                 <p className="db-turn-text">{turn.text}</p>
               </div>
             ))

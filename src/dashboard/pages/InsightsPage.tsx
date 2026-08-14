@@ -1,10 +1,15 @@
 import {
+  useEffect,
+  useId,
+  useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   type CSSProperties,
   type ComponentType,
 } from "react";
 import { createPortal } from "react-dom";
+import { invoke } from "@tauri-apps/api/core";
 import {
   AudioLines,
   Bot,
@@ -12,6 +17,7 @@ import {
   Clock3,
   FileText,
   Info,
+  Keyboard,
   Monitor,
   MousePointer2,
   Save,
@@ -41,6 +47,11 @@ interface InsightSnapshot {
   drafts: RawDraft[];
   saves: RawScreenSave[];
   meetings: MeetingDoc[];
+}
+
+interface DictationUsageEntry {
+  recordedAtMs: number;
+  words: number;
 }
 
 interface HeatmapDay {
@@ -153,25 +164,72 @@ function percentage(value: number, total: number): number {
   return total > 0 ? Math.round((value / total) * 100) : 0;
 }
 
+function CountingNumber({ value }: { value: number }) {
+  const [displayValue, setDisplayValue] = useState("0");
+
+  useLayoutEffect(() => {
+    let frame = 0;
+    let startedAt: number | null = null;
+    setDisplayValue("0");
+    const animate = (now: number) => {
+      startedAt ??= now;
+      const progress = Math.min(1, (now - startedAt) / 2_000);
+      setDisplayValue(Math.floor(value * progress).toLocaleString());
+      if (progress < 1) {
+        frame = window.requestAnimationFrame(animate);
+      } else {
+        setDisplayValue(value.toLocaleString());
+      }
+    };
+    frame = window.requestAnimationFrame(animate);
+    return () => window.cancelAnimationFrame(frame);
+  }, [value]);
+
+  return (
+    <span className="db-insight-animated-number" aria-label={value.toLocaleString()}>
+      <span aria-hidden>{displayValue}</span>
+    </span>
+  );
+}
+
 function SummaryCard({
   label,
   value,
   detail,
+  animateValue = false,
   children,
   wide = false,
 }: {
   label: string;
-  value: string;
+  value: string | number;
   detail?: string;
+  animateValue?: boolean;
   children?: React.ReactNode;
   wide?: boolean;
 }) {
+  const tooltipId = useId();
   return (
     <article className={`db-insight-summary-card${wide ? " is-wide" : ""}`}>
-      <strong className="db-insight-summary-value">{value}</strong>
+      <strong className="db-insight-summary-value">
+        {typeof value === "number"
+          ? animateValue ? <CountingNumber value={value} /> : value.toLocaleString()
+          : value}
+      </strong>
       <div className="db-insight-summary-label">
         <span>{label}</span>
-        {detail && <Info size={14} aria-label={detail} />}
+        {detail && (
+          <span
+            className="db-insight-info"
+            tabIndex={0}
+            aria-label={`${label}: ${detail}`}
+            aria-describedby={tooltipId}
+          >
+            <Info size={14} aria-hidden />
+            <span className="db-insight-info-tooltip" id={tooltipId} role="tooltip">
+              {detail}
+            </span>
+          </span>
+        )}
       </div>
       {children}
     </article>
@@ -180,15 +238,35 @@ function SummaryCard({
 
 function Gauge({ value, label }: { value: number; label: string }) {
   const bounded = Math.max(0, Math.min(value, 100));
+  const valuePathRef = useRef<SVGPathElement>(null);
+
+  useLayoutEffect(() => {
+    const path = valuePathRef.current;
+    if (!path) return;
+    const animation = path.animate(
+      [
+        { strokeDashoffset: "100" },
+        { strokeDashoffset: String(100 - bounded) },
+      ],
+      {
+        duration: 3_000,
+        easing: "cubic-bezier(0.4, 0, 0.2, 1)",
+        fill: "both",
+      },
+    );
+    return () => animation.cancel();
+  }, [bounded]);
+
   return (
     <div className="db-insight-gauge">
       <svg viewBox="0 0 160 88" role="img" aria-label={`${label}: ${bounded}%`}>
         <path className="db-insight-gauge-track" d="M 16 76 A 64 64 0 0 1 144 76" />
         <path
+          ref={valuePathRef}
           className="db-insight-gauge-value"
           d="M 16 76 A 64 64 0 0 1 144 76"
           pathLength="100"
-          style={{ "--gauge-value": bounded } as CSSProperties}
+          style={{ strokeDashoffset: 100 - bounded }}
         />
       </svg>
       <span>{label}</span>
@@ -215,7 +293,7 @@ function UsageBars({ rows }: { rows: UsageRow[] }) {
               <span
                 style={{
                   "--bar-value": `${share}%`,
-                  "--bar-delay": `${index * 70}ms`,
+                  "--bar-delay": `${240 + (index * 90)}ms`,
                 } as CSSProperties}
               />
             </div>
@@ -232,6 +310,7 @@ export function InsightsPage() {
   const [tab, setTab] = useState<InsightTab>("usage");
   const [shareState, setShareState] = useState<"idle" | "done" | "error">("idle");
   const [heatmapTooltip, setHeatmapTooltip] = useState<HeatmapTooltip | null>(null);
+  const [dictationUsage, setDictationUsage] = useState<DictationUsageEntry[]>([]);
   const rangeDays = range === "7d" ? 7 : 30;
   const currentCutoff = useMemo(() => daysAgo(rangeDays - 1), [rangeDays]);
   const previousCutoff = useMemo(() => daysAgo(rangeDays * 2 - 1), [rangeDays]);
@@ -248,6 +327,20 @@ export function InsightsPage() {
       return { history, drafts, saves, meetings };
     },
   );
+
+  useEffect(() => {
+    let cancelled = false;
+    void invoke<DictationUsageEntry[]>("dictation_usage_entries")
+      .then((entries) => {
+        if (!cancelled) setDictationUsage(entries);
+      })
+      .catch(() => {
+        if (!cancelled) setDictationUsage([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const metrics = useMemo(() => {
     if (!res.data) return null;
@@ -367,6 +460,10 @@ export function InsightsPage() {
       (sum, item) => sum + item.num_of_tool_calls + item.screen_sight_frame_count,
       0,
     );
+    const wordsDictated = dictationUsage.reduce(
+      (sum, entry) => sum + (entry.recordedAtMs >= currentMs ? entry.words : 0),
+      0,
+    );
 
     return {
       conversations: sessions.length,
@@ -375,6 +472,7 @@ export function InsightsPage() {
       toolCalls: sessions.reduce((sum, item) => sum + item.num_of_tool_calls, 0),
       screenFrames: sessions.reduce((sum, item) => sum + item.screen_sight_frame_count, 0),
       actions,
+      wordsDictated,
       voiceSeconds,
       previousVoiceSeconds,
       averageSeconds: sessions.length > 0 ? Math.round(voiceSeconds / sessions.length) : 0,
@@ -386,7 +484,7 @@ export function InsightsPage() {
       activeDays,
       heatmap,
     };
-  }, [res.data, currentCutoff, previousCutoff, rangeDays]);
+  }, [res.data, currentCutoff, previousCutoff, rangeDays, dictationUsage]);
 
   const monthLabels = useMemo(() => {
     if (!metrics) return [];
@@ -566,10 +664,11 @@ export function InsightsPage() {
         <PageError authExpired={res.authExpired} onRetry={res.reload} />
       ) : res.loading || !metrics ? (
         <div className="db-insight-loading-layout" aria-label="Loading insights">
-          <div className="db-insight-summary-grid">
+          <div className="db-insight-summary-grid is-usage">
             <div className="db-insight-summary-card db-insight-skeleton" />
             <div className="db-insight-summary-card db-insight-skeleton" />
-            <div className="db-insight-summary-card db-insight-skeleton is-wide" />
+            <div className="db-insight-summary-card db-insight-skeleton" />
+            <div className="db-insight-summary-card db-insight-skeleton" />
           </div>
           <div className="db-insight-lower-grid">
             <div className="db-insight-panel db-insight-skeleton" />
@@ -578,13 +677,18 @@ export function InsightsPage() {
         </div>
       ) : (
         <>
-          <section className="db-insight-summary-grid" aria-label={`${tab} summary`}>
+          <section
+            className={`db-insight-summary-grid is-${tab}`}
+            aria-label={`${tab} summary`}
+            key={`summary-${tab}-${range}`}
+          >
             {tab === "usage" ? (
               <>
                 <SummaryCard
                   label="Conversations"
-                  value={String(metrics.conversations)}
+                  value={metrics.conversations}
                   detail="Completed Aura conversations in this period"
+                  animateValue
                 >
                   <Gauge
                     value={percentage(metrics.activeDays, rangeDays)}
@@ -593,8 +697,9 @@ export function InsightsPage() {
                 </SummaryCard>
                 <SummaryCard
                   label="Things created"
-                  value={String(metrics.drafts + metrics.saves + metrics.meetings)}
+                  value={metrics.drafts + metrics.saves + metrics.meetings}
                   detail="Drafts, saved context, and meetings"
+                  animateValue
                 >
                   <div className="db-insight-breakdown">
                     <span><strong>{metrics.drafts}</strong> drafts created</span>
@@ -604,19 +709,29 @@ export function InsightsPage() {
                 </SummaryCard>
                 <SummaryCard
                   label="Actions assisted"
-                  value={String(metrics.actions)}
+                  value={metrics.actions}
                   detail="Tool calls and screen context used by Aura"
-                  wide
+                  animateValue
                 >
-                  <div className="db-insight-device">
+                  <div className="db-insight-device is-compact">
                     <span><Monitor size={19} aria-hidden /> Desktop</span>
-                    <strong>{metrics.actions} actions</strong>
                     <span className="db-insight-comparison">
                       {comparisonLabel(
                         metrics.conversations,
                         metrics.previousConversations,
                       )}
                     </span>
+                  </div>
+                </SummaryCard>
+                <SummaryCard
+                  label="Words dictated"
+                  value={metrics.wordsDictated}
+                  detail="Words successfully inserted with Aura Dictation in this period. The count stays local to this device."
+                  animateValue
+                >
+                  <div className="db-insight-device is-compact">
+                    <span><Keyboard size={19} aria-hidden /> Dictation</span>
+                    <span className="db-insight-comparison">This device</span>
                   </div>
                 </SummaryCard>
               </>
@@ -644,7 +759,7 @@ export function InsightsPage() {
                 </SummaryCard>
                 <SummaryCard
                   label="Dialogue exchanges"
-                  value={String(metrics.exchanges)}
+                  value={metrics.exchanges}
                   detail="User and Aura turns in this period"
                   wide
                 >
@@ -660,7 +775,7 @@ export function InsightsPage() {
             )}
           </section>
 
-          <section className="db-insight-lower-grid">
+          <section className="db-insight-lower-grid" key={`details-${tab}-${range}`}>
             <article className="db-insight-panel db-insight-usage">
               <div className="db-insight-panel-head">
                 <h3>{tab === "usage" ? "Desktop usage" : "Voice activity"}</h3>

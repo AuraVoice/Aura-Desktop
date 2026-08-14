@@ -14,12 +14,14 @@ const EXIT_MS = 170;
 export function DetailModal({
   open,
   title,
+  centerTitle = false,
   onClose,
   headerAction,
   children,
 }: {
   open: boolean;
   title?: string;
+  centerTitle?: boolean;
   onClose: () => void;
   headerAction?: ReactNode;
   children: ReactNode;
@@ -78,8 +80,8 @@ export function DetailModal({
         tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="db-modal-head">
-          {title && <h2 className="db-modal-title">{title}</h2>}
+        <div className={`db-modal-head${centerTitle ? " db-modal-head-centered" : ""}`}>
+          {title && <h2 className="db-modal-title" title={title}>{title}</h2>}
           <div className="db-modal-head-actions">
             {headerAction}
             <button type="button" className="db-modal-close" aria-label="Close" onClick={onClose}>

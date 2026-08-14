@@ -350,6 +350,7 @@ pub fn run() {
             hotkeys::begin_hotkey_test,
             hotkeys::end_hotkey_test,
             dictation::dictation_status,
+            dictation::dictation_usage_entries,
             dictation::dictation_consent_state,
             dictation::dictation_set_consent,
             dictation::dictation_set_credential,
