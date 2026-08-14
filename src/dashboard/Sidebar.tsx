@@ -1,5 +1,6 @@
 import { NavLink, useLocation } from "react-router-dom";
 import iconUrl from "../assets/icons/Aura-Icon.png";
+import { PolishedPill } from "../components/PolishedPill";
 import {
   footerNavItems,
   primaryNavItems,
@@ -53,10 +54,11 @@ function SidebarLink({ item, collapsed }: { item: NavItem; collapsed: boolean })
     <NavLink
       to={to}
       className={({ isActive }) => `db-nav-item${isActive ? " db-nav-item-active" : ""}`}
-      title={collapsed ? label : undefined}
+      title={collapsed ? `${label}${item.beta ? " (Beta)" : ""}` : undefined}
     >
       <Icon size={20} className="db-nav-icon" aria-hidden />
       <span className="db-nav-label">{label}</span>
+      {item.beta && <PolishedPill className="db-nav-beta">Beta</PolishedPill>}
     </NavLink>
   );
 }

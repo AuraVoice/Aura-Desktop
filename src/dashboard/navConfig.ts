@@ -18,6 +18,7 @@ export interface NavItem {
   to: string;
   label: string;
   Icon: LucideIcon;
+  beta?: boolean;
 }
 
 /** Primary navigation stays in one uninterrupted list. Settings is a separate
@@ -27,8 +28,8 @@ export const primaryNavItems: NavItem[] = [
   { to: "/conversations", label: "Conversations", Icon: AudioLines },
   { to: "/drafts", label: "Drafts", Icon: FileText },
   { to: "/saved", label: "Saved", Icon: Bookmark },
-  { to: "/meetings", label: "Meetings", Icon: Video },
-  { to: "/research", label: "Research", Icon: Search },
+  { to: "/meetings", label: "Meetings", Icon: Video, beta: true },
+  { to: "/research", label: "Research", Icon: Search, beta: true },
   { to: "/insights", label: "Insights", Icon: LineChart },
   { to: "/dictation", label: "Dictation", Icon: Mic },
   { to: "/connectors", label: "Connectors", Icon: Link2 },

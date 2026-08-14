@@ -93,31 +93,61 @@
 }
 .db-window-controls {
   display: flex;
+  align-items: center;
+  gap: 8px;
   margin-left: auto;
+  padding: 0 12px;
 }
 .db-window-controls button {
   display: grid;
-  width: 46px;
-  height: 38px;
+  width: 16.5px;
+  height: 16.5px;
   padding: 0;
   place-items: center;
   border: 0;
-  border-radius: 0;
-  background: transparent;
-  color: #30343a;
-  cursor: default;
+  border-radius: 50%;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.48), 0 1px 2px rgba(31, 35, 40, 0.14);
+  color: #111;
+  cursor: pointer;
+  transition: filter 0.15s var(--db-ease), transform 0.15s var(--db-ease);
+}
+.db-window-controls .db-window-minimize {
+  background: #ffbd2e;
+}
+.db-window-controls .db-window-maximize {
+  background: #28c840;
+}
+.db-window-controls .db-window-close {
+  background: #ff5f57;
 }
 .db-window-controls button:hover {
-  background: #eee;
+  filter: saturate(1.08) brightness(1.03);
+  transform: translateY(-1px) scale(1.08);
 }
-.db-window-controls .db-window-close:hover {
-  background: #c42b1c;
-  color: #fff;
+.db-window-controls button:active {
+  transform: translateY(0) scale(0.94);
+}
+.db-window-controls button svg {
+  width: 8.8px;
+  height: 8.8px;
+  opacity: 1;
+  stroke-width: 2.5;
+  transition: opacity 0.15s var(--db-ease);
+}
+.db-window-controls button:hover svg {
+  opacity: 1;
 }
 .db-window-controls button:focus-visible {
   position: relative;
-  outline: 2px solid #1ec8b0;
-  outline-offset: -2px;
+  outline: 2px solid rgba(31, 35, 40, 0.7);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .db-window-controls button,
+  .db-window-controls button svg {
+    transition-duration: 0.01ms;
+  }
 }
 
 /* Keep scrolling functional but hide the chrome scrollbar everywhere inside
@@ -136,6 +166,10 @@
   animation-duration: 0.01ms !important;
   animation-iteration-count: 1 !important;
   transition-duration: 0.01ms !important;
+}
+.db-app.db-reduce-motion .aura-polished-pill::after {
+  animation-duration: 1.4s !important;
+  animation-iteration-count: infinite !important;
 }
 
 /* ── Sidebar ─────────────────────────────────────────────────────────── */
@@ -310,14 +344,15 @@
   font-weight: 500;
   overflow: hidden;
   transition: background 0.15s var(--db-ease), color 0.15s var(--db-ease),
-    transform 0.12s var(--db-ease), gap 0.28s var(--db-ease),
+    transform 0.18s var(--db-ease), gap 0.28s var(--db-ease),
     padding 0.28s var(--db-ease);
 }
 .db-nav-item:hover {
   background: var(--db-hover);
+  transform: translateY(-3px) scale(1.03);
 }
 .db-nav-item:active {
-  transform: scale(0.98);
+  transform: translateY(0) scale(0.98);
 }
 .db-nav-item-active,
 .db-nav-item-active:hover {
@@ -336,6 +371,18 @@
   transition: max-width 0.28s var(--db-ease), opacity 0.16s var(--db-ease),
     transform 0.28s var(--db-ease);
 }
+.db-nav-beta {
+  max-width: 34px;
+  margin-left: auto;
+  opacity: 1;
+  transition: max-width 0.28s var(--db-ease), padding 0.28s var(--db-ease),
+    opacity 0.16s var(--db-ease);
+}
+.db-nav-item-active .db-nav-beta {
+  --aura-pill-border: rgba(255, 215, 128, 0.5);
+  --aura-pill-fill: rgba(228, 168, 43, 0.2);
+  --aura-pill-text: #ffe19a;
+}
 .db-sidebar-collapsed .db-nav-item {
   gap: 0;
   padding: 10px;
@@ -344,6 +391,18 @@
   max-width: 0;
   opacity: 0;
   transform: translateX(-4px);
+}
+.db-sidebar-collapsed .db-nav-beta {
+  max-width: 0;
+  padding-inline: 0;
+  border-width: 0;
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .db-nav-item {
+    transition-duration: 0.01ms;
+  }
 }
 
 .db-avatar {

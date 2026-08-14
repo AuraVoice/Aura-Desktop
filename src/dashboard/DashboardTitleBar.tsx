@@ -43,6 +43,7 @@ export function DashboardTitleBar({
       <div className="db-window-controls">
         <button
           type="button"
+          className="db-window-minimize"
           aria-label="Minimize"
           onDoubleClick={(event) => event.stopPropagation()}
           onClick={() => runWindowAction("minimize")}
@@ -51,6 +52,7 @@ export function DashboardTitleBar({
         </button>
         <button
           type="button"
+          className="db-window-maximize"
           aria-label="Maximize"
           onDoubleClick={(event) => event.stopPropagation()}
           onClick={() => runWindowAction("maximize")}

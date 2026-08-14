@@ -1,0 +1,50 @@
+.aura-polished-pill {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  padding: 3px 6px;
+  overflow: hidden;
+  border: 1px solid var(--aura-pill-border, rgba(174, 116, 20, 0.34));
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.62), rgba(255, 255, 255, 0.08)),
+    var(--aura-pill-fill, rgba(232, 174, 51, 0.2));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72), 0 1px 3px rgba(115, 73, 7, 0.14);
+  color: var(--aura-pill-text, #805300);
+  font-size: 8px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.aura-polished-pill::after {
+  position: absolute;
+  top: -90%;
+  left: -40%;
+  width: 32%;
+  height: 280%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.94), transparent);
+  content: "";
+  pointer-events: none;
+  transform: translate3d(-180%, -35%, 0) rotate(-25deg);
+  animation: aura-polished-pill-flash 1.4s linear infinite;
+}
+
+@keyframes aura-polished-pill-flash {
+  from {
+    transform: translate3d(-180%, -35%, 0) rotate(-25deg);
+  }
+  to {
+    transform: translate3d(520%, 35%, 0) rotate(-25deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aura-polished-pill::after {
+    animation: none;
+  }
+}
