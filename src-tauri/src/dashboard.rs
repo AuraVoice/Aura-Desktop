@@ -20,6 +20,7 @@ const DASHBOARD_ROUTES: &[&str] = &[
     "/drafts",
     "/saved",
     "/meetings",
+    "/research",
     "/insights",
     "/general",
     "/connectors",
@@ -46,7 +47,7 @@ fn normalize_route(route: Option<&str>) -> &'static str {
 /// opaque, resizable app window with frontend-owned chrome that shows in the taskbar.
 /// It loads the same bundle as "main"; main.tsx routes on the window label.
 pub fn open_dashboard_window(app: &AppHandle) -> Result<(), String> {
-    open_dashboard_route(app, None)
+    open_dashboard_route(app, None, None)
 }
 
 /// The global dashboard shortcut is a true toggle. Explicit navigation from
@@ -66,19 +67,34 @@ pub fn toggle_dashboard_window(app: &AppHandle) -> Result<(), String> {
 /// Opens the dashboard at a validated in-app route. Existing windows receive
 /// an event after they are visible; new windows boot with the route in the URL
 /// hash so HashRouter can render the destination on its first frame.
-pub fn open_dashboard_route(app: &AppHandle, route: Option<&str>) -> Result<(), String> {
+pub fn open_dashboard_route(
+    app: &AppHandle,
+    route: Option<&str>,
+    resource_id: Option<&str>,
+) -> Result<(), String> {
     let route = normalize_route(route);
+    let destination = if route == "/research" {
+        resource_id
+            .filter(|value| !value.is_empty() && value.len() <= 160)
+            .map(|value| {
+                let encoded: String = url::form_urlencoded::byte_serialize(value.as_bytes()).collect();
+                format!("{route}?run={encoded}")
+            })
+            .unwrap_or_else(|| route.to_string())
+    } else {
+        route.to_string()
+    };
     if let Some(window) = app.get_webview_window(DASHBOARD_WINDOW) {
         window.unminimize().map_err(|e| e.to_string())?;
         window.show().map_err(|e| e.to_string())?;
         window.set_focus().map_err(|e| e.to_string())?;
         window
-            .emit("dashboard-navigate", route)
+            .emit("dashboard-navigate", &destination)
             .map_err(|e| e.to_string())?;
         return Ok(());
     }
 
-    let url = format!("index.html#{route}");
+    let url = format!("index.html#{destination}");
     let window = WebviewWindowBuilder::new(app, DASHBOARD_WINDOW, WebviewUrl::App(url.into()))
         .title("Aura")
         .inner_size(1000.0, 700.0)

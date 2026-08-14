@@ -10,6 +10,7 @@ import {
   Smartphone,
   HelpCircle,
   Mic,
+  Search,
   type LucideIcon,
 } from "lucide-react";
 
@@ -27,6 +28,7 @@ export const primaryNavItems: NavItem[] = [
   { to: "/drafts", label: "Drafts", Icon: FileText },
   { to: "/saved", label: "Saved", Icon: Bookmark },
   { to: "/meetings", label: "Meetings", Icon: Video },
+  { to: "/research", label: "Research", Icon: Search },
   { to: "/insights", label: "Insights", Icon: LineChart },
   { to: "/dictation", label: "Dictation", Icon: Mic },
   { to: "/connectors", label: "Connectors", Icon: Link2 },

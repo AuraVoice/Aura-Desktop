@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openPath } from "@tauri-apps/plugin-opener";
 import {
@@ -7,6 +7,7 @@ import {
   FileJson,
   HardDrive,
   LoaderCircle,
+  RefreshCw,
   Trash2,
   TriangleAlert,
   Video,
@@ -49,7 +50,15 @@ interface ExportResult {
   includedAudio: boolean;
 }
 
-type MeetingVisualState = "ready" | "processing" | "failed";
+// "stalled" is the state this page could not previously express. The server doc
+// and the device queue are two different sources of truth, and when the handoff
+// between them broke the card kept rendering an ordinary spinner forever while
+// the recovery panel below said "Needs attention" about the very same recording.
+type MeetingVisualState = "ready" | "processing" | "failed" | "stalled";
+
+// Mirrors the backend's F.STALL_DEADLINE_MINUTES. Past this, "processing" is not
+// a claim this UI is entitled to keep making.
+const STALL_AFTER_MS = 6 * 60 * 60_000;
 
 const processingLabels: Partial<Record<MeetingProcessingStage, string>> = {
   capturing: "Capturing",
@@ -57,50 +66,83 @@ const processingLabels: Partial<Record<MeetingProcessingStage, string>> = {
   queued: "Queued",
   transcribing: "Transcribing",
   building_insights: "Building insights",
+  quality_check: "Checking quality",
+  needs_attention: "Needs attention",
 };
 
-function visualState(meeting: MeetingDoc): MeetingVisualState {
+/// True when this device still holds a finished recording the server has not
+/// acknowledged, so any server-side "processing" is describing work that never
+/// actually arrived.
+function localHandoffPending(local: LocalRecording | undefined): boolean {
+  if (!local) return false;
+  return local.state === "needs_attention"
+    || local.state === "finalized_local"
+    || local.state === "capturing_interrupted";
+}
+
+function visualState(
+  meeting: MeetingDoc,
+  local?: LocalRecording,
+): MeetingVisualState {
   if (meeting.status === "ready") return "ready";
   if (meeting.status === "failed" || meeting.status === "excluded") return "failed";
+  if (meeting.status === "needs_attention") return "stalled";
+  if (localHandoffPending(local)) return "stalled";
+  const startedAt = Date.parse(meeting.createdAt);
+  if (Number.isFinite(startedAt) && Date.now() - startedAt > STALL_AFTER_MS) {
+    return "stalled";
+  }
   return "processing";
 }
 
-function statusIcon(meeting: MeetingDoc): LucideIcon {
-  const state = visualState(meeting);
+function statusIcon(meeting: MeetingDoc, local?: LocalRecording): LucideIcon {
+  const state = visualState(meeting, local);
   if (state === "ready") return Video;
-  if (state === "failed") return TriangleAlert;
+  if (state === "failed" || state === "stalled") return TriangleAlert;
   return LoaderCircle;
 }
 
-function statusLabel(meeting: MeetingDoc): string {
+function statusLabel(meeting: MeetingDoc, local?: LocalRecording): string {
   if (meeting.status === "ready") return "Ready";
   if (meeting.status === "excluded") return "Skipped";
   if (meeting.status === "failed") return "Failed";
+  if (visualState(meeting, local) === "stalled") {
+    return localHandoffPending(local) ? "On this device" : "Stalled";
+  }
   return meeting.processingStage
     ? processingLabels[meeting.processingStage] ?? "Processing"
     : "Processing";
 }
 
-function stateCopy(meeting: MeetingDoc): string {
+function stateCopy(meeting: MeetingDoc, local?: LocalRecording): string {
   if (meeting.status === "failed" || meeting.status === "excluded") {
     return meetingFailureCopy(meeting.failureCode);
+  }
+  if (visualState(meeting, local) === "stalled") {
+    if (localHandoffPending(local)) {
+      return "Recorded and saved on this device. Aura has not finished sending it "
+        + "for transcription yet, and will keep trying.";
+    }
+    return meeting.failureCode
+      ? meetingFailureCopy(meeting.failureCode)
+      : "This has been processing far longer than it should. Aura is retrying it.";
   }
   if (meeting.processingStage === "transcribing") return meetingNotes.processingTranscript;
   if (meeting.processingStage === "building_insights") return meetingNotes.buildingInsights;
   return meetingNotes.processing;
 }
 
-function meetingToCard(meeting: MeetingDoc): CardModel {
-  const state = visualState(meeting);
+function meetingToCard(meeting: MeetingDoc, local?: LocalRecording): CardModel {
+  const state = visualState(meeting, local);
   return {
     id: meeting.meetingId,
-    badge: { Icon: statusIcon(meeting), label: statusLabel(meeting) },
+    badge: { Icon: statusIcon(meeting, local), label: statusLabel(meeting, local) },
     title: meeting.title || "Untitled meeting",
     meta: shortDateTime(meeting.createdAt),
     preview:
       state === "ready"
         ? meeting.note?.summary || meetingNotes.processing
-        : stateCopy(meeting),
+        : stateCopy(meeting, local),
   };
 }
 
@@ -116,10 +158,12 @@ function NoteList({ items }: { items: string[] }) {
 
 function MeetingDetail({
   meeting,
+  local,
   onBack,
   onListReload,
 }: {
   meeting: MeetingDoc;
+  local?: LocalRecording;
   onBack: () => void;
   onListReload: () => void;
 }) {
@@ -128,7 +172,7 @@ function MeetingDetail({
     (signal) => getMeeting(meeting.meetingId, signal),
   );
   const current = detail.data ?? meeting;
-  const state = visualState(current);
+  const state = visualState(current, local);
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState(false);
 
@@ -236,8 +280,23 @@ function MeetingDetail({
   );
 }
 
+/// True when this recording still has work to hand off. Drives "Process now".
+function canRetryLocally(recording: LocalRecording): boolean {
+  return recording.exportable
+    && recording.state !== "local_deleted"
+    && recording.state !== "uploaded_verified"
+    && recording.state !== "split_brain"
+    && recording.state !== "local_missing"
+    && recording.state !== "capture_failed_integrity"
+    && recording.state !== "delete_requested";
+}
+
 function localRecordingStatus(recording: LocalRecording): string {
   if (recording.state === "local_deleted") return "Local audio deleted";
+  // Deliberately ahead of lastErrorCode: a run still waiting to hand off is the
+  // useful fact, and an error that has since been retried is not.
+  if (recording.state === "needs_attention") return "Waiting to upload. Aura will retry.";
+  if (recording.state === "finalized_local") return "Recorded here, waiting to upload";
   if (recording.lastErrorCode) return "Needs attention";
   if (recording.retainLocalUntilMs) {
     const remainingMs = recording.retainLocalUntilMs - Date.now();
@@ -269,14 +328,15 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function LocalRecoverySection() {
+/// One source for the device queue, shared by the meeting cards and the recovery
+/// list. They used to read separate data and could contradict each other about
+/// the same recording.
+function useLocalRecordings() {
   const [recordings, setRecordings] = useState<LocalRecording[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
-  const [busy, setBusy] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
 
-  const loadRecordings = () => {
+  const loadRecordings = useCallback(() => {
     setLoading(true);
     setError(false);
     void invoke<LocalRecording[]>("local_recordings")
@@ -286,9 +346,21 @@ function LocalRecoverySection() {
         setError(true);
       })
       .finally(() => setLoading(false));
-  };
+  }, []);
 
-  useEffect(loadRecordings, []);
+  useEffect(() => loadRecordings(), [loadRecordings]);
+  return { recordings, loading, error, loadRecordings };
+}
+
+function LocalRecoverySection({
+  recordings,
+  loading,
+  error,
+  loadRecordings,
+  onListReload,
+}: ReturnType<typeof useLocalRecordings> & { onListReload: () => void }) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
 
   const exportRecording = async (
     recording: LocalRecording,
@@ -321,6 +393,49 @@ function LocalRecoverySection() {
     } catch (err) {
       logError("MeetingsPage: export local recording", err);
       setMessage("Aura could not export this recording. Its retained copy was not changed.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const retryRecording = async (recording: LocalRecording) => {
+    const action = `${recording.captureRunId}:retry`;
+    setBusy(action);
+    setMessage(null);
+    try {
+      const requeued = await invoke<boolean>("retry_capture_jobs", {
+        captureRunId: recording.captureRunId,
+      });
+      setMessage(
+        requeued
+          ? "Queued for upload. Aura will send it and build the note."
+          : "Nothing left to send for this recording.",
+      );
+      loadRecordings();
+      onListReload();
+    } catch (err) {
+      logError("MeetingsPage: retry local recording", err);
+      setMessage("Aura could not queue this recording. Its local copy is untouched.");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const retryAll = async () => {
+    setBusy("retry-all");
+    setMessage(null);
+    try {
+      const revived = await invoke<number>("revive_stranded_captures");
+      setMessage(
+        revived > 0
+          ? `Queued ${revived} recording${revived === 1 ? "" : "s"} for upload.`
+          : "Every recording on this device is already handed off or queued.",
+      );
+      loadRecordings();
+      onListReload();
+    } catch (err) {
+      logError("MeetingsPage: retry all local recordings", err);
+      setMessage("Aura could not queue these recordings. Their local copies are untouched.");
     } finally {
       setBusy(null);
     }
@@ -362,14 +477,27 @@ function LocalRecoverySection() {
             after capture ends.
           </p>
         </div>
-        <button
-          type="button"
-          className="db-secondary-btn"
-          onClick={loadRecordings}
-          disabled={loading}
-        >
-          {loading ? "Checking..." : "Refresh"}
-        </button>
+        <div className="db-local-recording-actions">
+          {recordings.some(canRetryLocally) && (
+            <button
+              type="button"
+              className="db-primary-btn"
+              onClick={() => void retryAll()}
+              disabled={busy !== null || loading}
+            >
+              <RefreshCw size={15} />
+              {busy === "retry-all" ? "Queueing..." : "Retry all"}
+            </button>
+          )}
+          <button
+            type="button"
+            className="db-secondary-btn"
+            onClick={loadRecordings}
+            disabled={loading}
+          >
+            {loading ? "Checking..." : "Refresh"}
+          </button>
+        </div>
       </div>
 
       {error ? (
@@ -396,9 +524,22 @@ function LocalRecoverySection() {
                   </span>
                 </div>
                 <div className="db-local-recording-actions">
+                  {canRetryLocally(recording) && (
+                    <button
+                      type="button"
+                      className="db-primary-btn"
+                      disabled={busy !== null}
+                      onClick={() => void retryRecording(recording)}
+                    >
+                      <RefreshCw size={15} />
+                      {busy === `${recording.captureRunId}:retry`
+                        ? "Queueing..."
+                        : "Process now"}
+                    </button>
+                  )}
                   <button
                     type="button"
-                    className="db-primary-btn"
+                    className="db-secondary-btn"
                     disabled={!recording.exportable || busy !== null}
                     onClick={() => void exportRecording(recording, true)}
                   >
@@ -443,9 +584,20 @@ export function MeetingsPage() {
     "meetings",
     (signal) => getMeetings(signal),
   );
+  const local = useLocalRecordings();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const meetings = useMemo(() => res.data ?? [], [res.data]);
-  const models = useMemo(() => meetings.map(meetingToCard), [meetings]);
+  const localByMeeting = useMemo(() => {
+    const map = new Map<string, LocalRecording>();
+    for (const recording of local.recordings) {
+      map.set(recording.meetingId, recording);
+    }
+    return map;
+  }, [local.recordings]);
+  const models = useMemo(
+    () => meetings.map((meeting) => meetingToCard(meeting, localByMeeting.get(meeting.meetingId))),
+    [meetings, localByMeeting],
+  );
   const selectedMeeting = selectedId
     ? meetings.find((meeting) => meeting.meetingId === selectedId) ?? null
     : null;
@@ -455,12 +607,13 @@ export function MeetingsPage() {
       {selectedMeeting ? (
         <MeetingDetail
           meeting={selectedMeeting}
+          local={localByMeeting.get(selectedMeeting.meetingId)}
           onBack={() => setSelectedId(null)}
           onListReload={res.reload}
         />
       ) : (
         <>
-          <LocalRecoverySection />
+          <LocalRecoverySection {...local} onListReload={res.reload} />
           <div className="db-page-toolbar db-page-toolbar-end">
             <RefreshIndicator
               refreshing={res.refreshing}

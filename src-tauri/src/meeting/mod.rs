@@ -746,6 +746,58 @@ pub async fn retry_capture_jobs(app: AppHandle, capture_run_id: String) -> Resul
     result
 }
 
+/// Adopts the server's capture fence for a run whose uploads are being rejected
+/// as stale, then re-arms its blocked jobs. Forward only; the store refuses a
+/// backward move, which would mean the evidence had forked.
+#[tauri::command]
+pub async fn adopt_capture_fence(
+    app: AppHandle,
+    capture_run_id: String,
+    capture_fence: i64,
+) -> Result<bool, String> {
+    require_runtime_owner(&app)?;
+    let ticket = crate::security::authorize(&app, crate::security::Operation::MarkSegmentUploaded)?;
+    let owner_uid = ticket.uid().to_string();
+    let blocking_app = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        queue::adopt_capture_fence(&blocking_app, &owner_uid, &capture_run_id, capture_fence)
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    crate::security::recheck(
+        &app,
+        crate::security::Operation::MarkSegmentUploaded,
+        &ticket,
+    )?;
+    result
+}
+
+/// Re-queues every capture this device recorded but never handed off. Called
+/// once when a signed-in session comes up, and by the recordings list's
+/// "Retry all", so a stranded recording never waits on a user noticing it.
+#[tauri::command]
+pub async fn revive_stranded_captures(app: AppHandle) -> Result<usize, String> {
+    require_runtime_owner(&app)?;
+    let ticket = crate::security::authorize(&app, crate::security::Operation::MarkSegmentUploaded)?;
+    let owner_uid = ticket.uid().to_string();
+    let runtime_instance_id = app
+        .state::<MeetingRuntimeLease>()
+        .runtime_instance_id()
+        .to_string();
+    let blocking_app = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        queue::revive_stranded_runs(&blocking_app, &owner_uid, &runtime_instance_id)
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    crate::security::recheck(
+        &app,
+        crate::security::Operation::MarkSegmentUploaded,
+        &ticket,
+    )?;
+    result
+}
+
 #[tauri::command]
 pub async fn local_recordings(app: AppHandle) -> Result<Vec<queue::LocalRecording>, String> {
     require_runtime_owner(&app)?;

@@ -121,8 +121,12 @@ fn open_dashboard_window(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-fn open_dashboard_route(app: AppHandle, route: String) -> Result<(), String> {
-    dashboard::open_dashboard_route(&app, Some(&route))
+fn open_dashboard_route(
+    app: AppHandle,
+    route: String,
+    resource_id: Option<String>,
+) -> Result<(), String> {
+    dashboard::open_dashboard_route(&app, Some(&route), resource_id.as_deref())
 }
 
 fn should_summon_on_start<I, S>(args: I, autostart_enabled: bool, just_updated: bool) -> bool
@@ -330,6 +334,8 @@ pub fn run() {
             meeting::resolve_completion_job,
             meeting::fail_queue_job,
             meeting::retry_capture_jobs,
+            meeting::revive_stranded_captures,
+            meeting::adopt_capture_fence,
             meeting::local_recordings,
             meeting::export_local_recording,
             meeting::delete_local_recording,

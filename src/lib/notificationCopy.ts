@@ -15,6 +15,8 @@ export const notifications = {
   viewMeeting: "View insights",
   retryUpload: "Retry upload",
   openSettings: "Settings",
+  viewResearch: "Read the brief",
+  answerResearchQuestion: "Answer the question",
 
   // Generic, privacy-safe toast copy. The meeting title, insights, action
   // items, and participants NEVER appear on a lock screen.

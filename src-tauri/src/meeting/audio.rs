@@ -203,11 +203,38 @@ fn capture_thread(shared: Arc<StreamShared>, loopback: bool) {
                 let _ = client.stop_stream();
                 break 'lifetime;
             }
-            if let Err(e) = capture.read_from_device_to_deque(&mut raw) {
-                warn!("meeting.audio: read failed, re-opening: {e}");
-                let _ = client.stop_stream();
-                shared.rebound.store(true, Ordering::Relaxed);
-                continue 'lifetime;
+            // GetBuffer returns ONE WASAPI packet. Polling every 40 ms while
+            // reading only once dropped the other queued ~10 ms packets; the
+            // engine then replaced that missing speech with zeros to preserve
+            // wall-clock alignment. Drain the shared-mode queue completely on
+            // every poll so audio reaches FLAC continuously.
+            loop {
+                let packet_frames = match capture.get_next_packet_size() {
+                    Ok(Some(frames)) => frames,
+                    Ok(None) => 0,
+                    Err(e) => {
+                        warn!("meeting.audio: packet query failed, re-opening: {e}");
+                        let _ = client.stop_stream();
+                        shared.rebound.store(true, Ordering::Relaxed);
+                        continue 'lifetime;
+                    }
+                };
+                if packet_frames == 0 {
+                    break;
+                }
+                match capture.read_from_device_to_deque(&mut raw) {
+                    Ok(buffer) => {
+                        if buffer.flags.data_discontinuity || buffer.flags.timestamp_error {
+                            shared.rebound.store(true, Ordering::Relaxed);
+                        }
+                    }
+                    Err(e) => {
+                        warn!("meeting.audio: read failed, re-opening: {e}");
+                        let _ = client.stop_stream();
+                        shared.rebound.store(true, Ordering::Relaxed);
+                        continue 'lifetime;
+                    }
+                }
             }
             // f32 mono frames: 4 bytes each. Partial trailing bytes stay in
             // the deque for the next read.

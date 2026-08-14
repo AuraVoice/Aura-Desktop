@@ -306,13 +306,24 @@ async function maybeToast(
  * Validate + persist + dedup one raw event, then toast per policy. The single
  * entry point for every producer. Returns the stored row (or null if the event
  * was rejected/expired) and whether it was new (vs a dedup hit).
+ *
+ * `parseFailed` separates the ONE drop that is data loss from the five that are
+ * deliberate. An expired event, a switched-off category, an owner mismatch or a
+ * disabled inbox are all cases where discarding is the correct outcome. A shape
+ * this client cannot parse is not: it means a producer sent something newer than
+ * this build understands, and the outbox poller must not step its durable cursor
+ * past it as though it had been handled.
  */
 export async function ingest(
   raw: unknown,
   ctx: ToastContext,
-): Promise<{ notification: StoredNotification | null; isNew: boolean }> {
+): Promise<{
+  notification: StoredNotification | null;
+  isNew: boolean;
+  parseFailed?: boolean;
+}> {
   const parsed = parseNotification(raw);
-  if (!parsed) return { notification: null, isNew: false };
+  if (!parsed) return { notification: null, isNew: false, parseFailed: true };
 
   const nowMs = Date.now();
   if (isExpired(parsed, nowMs)) return { notification: null, isNew: false };

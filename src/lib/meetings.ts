@@ -16,18 +16,24 @@ export class MeetingTransportError extends Error {
   status: number;
   code: string;
   classification: MeetingJobFailureClassification;
+  /** The server's own capture fence, present on a `stale_capture_fence` 409.
+   * Lets the caller tell "we are simply behind" (adopt it and carry on) from
+   * "we have forked" (unrecoverable). Null on older backends. */
+  serverCaptureFence: number | null;
 
   constructor(
     message: string,
     status: number,
     code: string,
     classification: MeetingJobFailureClassification,
+    serverCaptureFence: number | null = null,
   ) {
     super(message);
     this.name = "MeetingTransportError";
     this.status = status;
     this.code = code;
     this.classification = classification;
+    this.serverCaptureFence = serverCaptureFence;
   }
 }
 
@@ -410,6 +416,22 @@ function isSameIdentity(payload: Record<string, unknown>): boolean {
   ].includes(errorCode(payload, ""));
 }
 
+// A 409 says "your view of this run disagrees with the server's". Most of those
+// disagreements are repairable, and treating every one as terminal is what
+// stranded real recordings: the job died, no retry was scheduled, no
+// notification fired, and the local audio expired untouched. Only a conflict no
+// client action can reconcile stays terminal.
+const RECOVERABLE_CONFLICT_CODES = [
+  // The server advanced past us. Re-claim, adopt its fence, resume.
+  "stale_capture_fence",
+  // Our manifest disagreed with the persisted segments. Rebuild it from local
+  // truth and complete again.
+  "manifest_integrity_failed",
+  "completion_conflict",
+  // Ingest is closed for this run, but the evidence itself is intact.
+  "capture_run_not_accepting_uploads",
+];
+
 function transportError(
   operation: string,
   status: number,
@@ -421,14 +443,23 @@ function transportError(
   else if (status === 403) classification = "paused";
   else if (status === 408 || status === 429 || status >= 500 || status === 404) {
     classification = "transient";
+  } else if (status === 409 && RECOVERABLE_CONFLICT_CODES.includes(code)) {
+    classification = "transient";
   } else {
     classification = "terminal";
   }
+  const detail = typeof payload.detail === "object" && payload.detail !== null
+    ? payload.detail as Record<string, unknown>
+    : payload;
+  const serverFence = typeof detail.capture_fence === "number"
+    ? detail.capture_fence
+    : null;
   return new MeetingTransportError(
     `${operation} failed (${status}, ${code})`,
     status,
     code,
     classification,
+    serverFence,
   );
 }
 

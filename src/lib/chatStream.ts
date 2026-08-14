@@ -44,7 +44,7 @@ export type ChatStreamFrame =
  * simply never sees the new frames and falls back to `tool_status`.
  *
  * Bump this only together with the parser below. */
-export const CHAT_CONTRACT_VERSION = 2;
+export const CHAT_CONTRACT_VERSION = 3;
 
 /** A non-2xx response from /chat. Distinct from a transport failure so the
  * caller can say what actually went wrong instead of blaming the connection.

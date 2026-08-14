@@ -24,6 +24,11 @@ export const DEDUP_KEY_MAX = 200;
 // this list is backward compatible at schemaVersion 1: unknown types were
 // already dropped by parseNotification, so accepting three more only lets
 // through events that previously fell on the floor.
+// The four research types are emitted by the backend's notify_result stage
+// (services/research/stages/notify_result.py). They are listed here for the
+// same reason as the three above: without an entry, parseNotification drops
+// the event and the durable cursor still moves past it, so a finished research
+// run would be silently unannounceable on any build that predates this line.
 export const NOTIFICATION_TYPES = [
   "meeting_ready",
   "meeting_needs_attention",
@@ -34,6 +39,10 @@ export const NOTIFICATION_TYPES = [
   "suggestion",
   "announcement",
   "milestone",
+  "research_ready",
+  "research_partial",
+  "research_failed",
+  "research_needs_input",
 ] as const;
 export type DesktopNotificationType = (typeof NOTIFICATION_TYPES)[number];
 
@@ -47,7 +56,13 @@ export type ToastPolicy = (typeof TOAST_POLICIES)[number];
 
 // The ONLY actions the desktop will honor. Each maps to owned code in the
 // inbox; the backend cannot introduce a new one without a client release.
-export const ACTIONS = ["open_notifications", "view_meeting", "retry_meeting_upload"] as const;
+export const ACTIONS = [
+  "open_notifications",
+  "view_meeting",
+  "retry_meeting_upload",
+  "view_research",
+  "answer_research_question",
+] as const;
 export type NotificationAction = (typeof ACTIONS)[number];
 
 export interface DesktopNotification {

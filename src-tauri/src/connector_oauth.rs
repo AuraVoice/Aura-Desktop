@@ -28,7 +28,7 @@ pub fn ingest_urls(app: &AppHandle, urls: &[Url]) {
             return;
         }
 
-        if let Err(error) = dashboard::open_dashboard_route(app, Some("/connectors")) {
+        if let Err(error) = dashboard::open_dashboard_route(app, Some("/connectors"), None) {
             log::error!("connector oauth: failed to open connectors page: {error}");
         }
         if let Err(error) = app.emit("connector-oauth-complete", raw) {

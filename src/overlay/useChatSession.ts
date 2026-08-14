@@ -346,6 +346,7 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
     signal: AbortSignal,
     selection: number = selectionRef.current,
   ): Promise<HydrationOutcome> => {
+    const sourceConversationId = conversationIdRef.current;
     // One page is enough: the endpoint returns the NEWEST page in send order, so
     // the tail of a long conversation is what lands here. Older pages are the
     // history panel's job, via olderCursor.
@@ -419,6 +420,10 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
           kind: "error",
         });
       }
+      // Local-only rows belong to the conversation that was visible when this
+      // hydration began. Carrying them across an explicit switch would append
+      // one conversation's failed sends and voice rows to every other thread.
+      if (sourceConversationId !== conversationId) return normalizeTurnFailures(rebuilt);
       // Anything the server has never seen: a live-lane turn (never persisted),
       // the turn currently streaming, or a send that never reached the backend.
       const carried: ChatMessage[] = [];

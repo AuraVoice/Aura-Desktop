@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 pub const CAPTURES_DIR: &str = "meeting-captures";
 pub const DATABASE_FILE: &str = "meeting-v2.sqlite3";
 const LEGACY_MANIFEST_FILE: &str = "manifest.json";
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 const AUDIO_RETENTION_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 const JOB_LEASE_MS: i64 = 2 * 60 * 1000;
 const RETRY_BASE_MS: i64 = 30 * 1000;
@@ -367,7 +367,15 @@ impl Store {
                 meeting_id TEXT NOT NULL REFERENCES meetings(meeting_id),
                 owner_uid TEXT NOT NULL,
                 event_id TEXT NOT NULL,
+                -- The fence segments on disk were ENCRYPTED under. It is part
+                -- of the AEAD associated data, so it must never change once any
+                -- segment exists: changing it makes the run own audio
+                -- undecryptable.
                 capture_fence INTEGER NOT NULL,
+                -- The fence the SERVER is on, when it has moved ahead of ours.
+                -- Wire only: sent in upload/completion headers so a re-issued
+                -- lease stops rejecting us. NULL means same as capture_fence.
+                server_capture_fence INTEGER,
                 protocol_version INTEGER NOT NULL,
                 runtime_instance_id TEXT NOT NULL,
                 installation_id TEXT NOT NULL,
@@ -500,9 +508,19 @@ impl Store {
                 schema_version INTEGER NOT NULL,
                 details_json TEXT NOT NULL
              );
-             PRAGMA user_version=1;",
+             PRAGMA user_version=2;",
         )
         .map_err(db_error)?;
+        // Existing databases predate server_capture_fence. CREATE TABLE IF NOT
+        // EXISTS above is a no-op for them, so add the column separately and
+        // tolerate the duplicate-column error on a re-run.
+        let has_column = tx
+            .prepare("SELECT server_capture_fence FROM capture_runs LIMIT 1")
+            .is_ok();
+        if !has_column {
+            tx.execute_batch("ALTER TABLE capture_runs ADD COLUMN server_capture_fence INTEGER;")
+                .map_err(db_error)?;
+        }
         tx.commit().map_err(db_error)
     }
 }
@@ -1171,7 +1189,14 @@ impl Store {
             if owner_uid != &request.owner_uid {
                 return Err("unknown capture run".to_string());
             }
-            if *capture_fence != request.capture_fence {
+            // A BACKWARD fence is a genuine fork: some other writer has moved on
+            // and this evidence can never be reconciled. A FORWARD fence is just
+            // the server telling us it re-issued the lease (an app restart mid
+            // meeting), and refusing it stranded every segment already recorded
+            // under the old fence with no way to restamp them. Adopt it: the
+            // server compares segments on content identity, not on fence, so
+            // already-uploaded segments stay valid alongside the new ones.
+            if *capture_fence > request.capture_fence {
                 return Err("capture fence conflicts with retained local evidence".to_string());
             }
             if *completion_acked != 0 || state == "local_deleted" {
@@ -1183,10 +1208,12 @@ impl Store {
                     runtime_instance_id=?2,
                     installation_id=?3,
                     protocol_version=?4,
+                    server_capture_fence=?6,
                     finished_at_ms=NULL,
                     retain_local_until_ms=NULL,
                     complete_reason='',
                     manifest_sha256=NULL,
+                    last_error_code=NULL,
                     updated_at_ms=?5
                  WHERE capture_run_id=?1",
                 params![
@@ -1195,6 +1222,7 @@ impl Store {
                     request.installation_id,
                     request.protocol_version,
                     timestamp,
+                    request.capture_fence,
                 ],
             )
             .map_err(db_error)?;
@@ -1921,7 +1949,8 @@ impl Store {
                 "SELECT
                     j.job_id, j.meeting_id, j.capture_run_id, j.seq,
                     j.content_sha256, j.attempt_count, r.event_id,
-                    r.capture_fence, r.protocol_version, r.owner_uid,
+                    COALESCE(r.server_capture_fence, r.capture_fence),
+                    r.protocol_version, r.owner_uid,
                     s.start_ms, s.duration_ms, s.incomplete, s.byte_length,
                     s.channel_count, s.sample_rate_hz, s.local_present
                  FROM upload_jobs j
@@ -2073,7 +2102,8 @@ impl Store {
                 "SELECT
                     j.job_id, j.meeting_id, j.capture_run_id,
                     j.manifest_sha256, j.attempt_count, r.event_id,
-                    r.capture_fence, r.protocol_version, r.owner_uid,
+                    COALESCE(r.server_capture_fence, r.capture_fence),
+                    r.protocol_version, r.owner_uid,
                     r.total_duration_ms, r.complete_reason
                  FROM completion_jobs j
                  JOIN capture_runs r ON r.capture_run_id=j.capture_run_id
@@ -2283,7 +2313,8 @@ impl Store {
         let job: (String, String, u32, String, u64, i64, u32, String, i64) = tx
             .query_row(
                 "SELECT j.meeting_id, j.capture_run_id, j.seq,
-                        j.content_sha256, s.byte_length, r.capture_fence,
+                        j.content_sha256, s.byte_length,
+                        COALESCE(r.server_capture_fence, r.capture_fence),
                         j.attempt_count, r.owner_uid, r.protocol_version
                  FROM upload_jobs j
                  JOIN segments s ON s.capture_run_id=j.capture_run_id
@@ -2335,6 +2366,15 @@ impl Store {
             params![job.1, job.2, job.3, timestamp],
         )
         .map_err(db_error)?;
+        // A success is more recent than whatever error preceded it. Nothing used
+        // to clear this, so one transient blip labelled a fully uploaded
+        // recording "Needs attention" forever.
+        tx.execute(
+            "UPDATE capture_runs SET last_error_code=NULL, updated_at_ms=?2
+             WHERE capture_run_id=?1 AND last_error_code IS NOT NULL",
+            params![job.1, timestamp],
+        )
+        .map_err(db_error)?;
         audit(
             &tx,
             if job.8 >= 2 {
@@ -2382,7 +2422,8 @@ impl Store {
         let job: (String, String, String, i64, u32, String) = tx
             .query_row(
                 "SELECT j.meeting_id, j.capture_run_id, j.manifest_sha256,
-                        r.capture_fence, j.attempt_count, r.owner_uid
+                        COALESCE(r.server_capture_fence, r.capture_fence),
+                        j.attempt_count, r.owner_uid
                  FROM completion_jobs j
                  JOIN capture_runs r ON r.capture_run_id=j.capture_run_id
                  WHERE j.job_id=?1 AND j.state='leased' AND j.lease_token=?2",
@@ -2426,6 +2467,7 @@ impl Store {
             "UPDATE capture_runs SET state='uploaded_verified',
                 completion_acked=1,
                 acked_at_ms=COALESCE(acked_at_ms, ?2),
+                last_error_code=NULL,
                 updated_at_ms=?2
              WHERE capture_run_id=?1 AND manifest_sha256=?3",
             params![job.1, timestamp, job.2],
@@ -2592,12 +2634,20 @@ impl Store {
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(db_error)?;
-        let run: Option<(String, String, i64)> = tx
+        let run: Option<(String, String, i64, String, i64)> = tx
             .query_row(
-                "SELECT owner_uid, meeting_id, capture_fence
+                "SELECT owner_uid, meeting_id, capture_fence, state, completion_acked
                  FROM capture_runs WHERE capture_run_id=?1",
                 params![capture_run_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
             )
             .optional()
             .map_err(db_error)?;
@@ -2607,24 +2657,65 @@ impl Store {
         if run.0 != owner_uid {
             return Ok(false);
         }
+        // A run whose local evidence is gone or forked cannot be retried into
+        // anything useful, and one the server already acknowledged needs nothing.
+        if run.4 != 0
+            || matches!(
+                run.3.as_str(),
+                "split_brain"
+                    | "local_missing"
+                    | "local_deleted"
+                    | "capture_failed_integrity"
+                    | "delete_requested"
+            )
+        {
+            return Ok(false);
+        }
         let timestamp = now_ms();
+        // 'terminal' is included deliberately. A terminal job had no revival path
+        // at all: nothing moved it back to pending, no notification fired, and no
+        // UI offered a retry, so one unlucky 409 destroyed the whole recording.
+        // Reviving is safe because every server mutation is idempotent on exact
+        // evidence identity - a replay returns the original receipt.
         let uploads = tx
             .execute(
                 "UPDATE upload_jobs SET state='pending', next_attempt_at_ms=?2,
+                    attempt_count=0, lease_token=NULL, lease_expires_at_ms=NULL,
                     last_error_code=NULL, updated_at_ms=?2
-                 WHERE capture_run_id=?1 AND state IN ('retry','paused')",
+                 WHERE capture_run_id=?1 AND state IN ('retry','paused','terminal')",
                 params![capture_run_id, timestamp],
             )
             .map_err(db_error)?;
         let completions = tx
             .execute(
                 "UPDATE completion_jobs SET state='pending', next_attempt_at_ms=?2,
+                    attempt_count=0, lease_token=NULL, lease_expires_at_ms=NULL,
                     last_error_code=NULL, updated_at_ms=?2
-                 WHERE capture_run_id=?1 AND state IN ('retry','paused')",
+                 WHERE capture_run_id=?1 AND state IN ('retry','paused','terminal')",
                 params![capture_run_id, timestamp],
             )
             .map_err(db_error)?;
-        let changed = uploads + completions > 0;
+        // fail_job parks a non-retryable run in 'needs_attention', but
+        // claim_next_completion_job only ever looks at 'finalized_local'. Without
+        // restoring the state the revived completion job could never be claimed
+        // and the retry would silently do nothing.
+        let restored = if run.3 == "needs_attention" {
+            tx.execute(
+                "UPDATE capture_runs SET state='finalized_local', updated_at_ms=?2
+                 WHERE capture_run_id=?1 AND finished_at_ms IS NOT NULL",
+                params![capture_run_id, timestamp],
+            )
+            .map_err(db_error)?
+        } else {
+            0
+        };
+        tx.execute(
+            "UPDATE capture_runs SET last_error_code=NULL, updated_at_ms=?2
+             WHERE capture_run_id=?1",
+            params![capture_run_id, timestamp],
+        )
+        .map_err(db_error)?;
+        let changed = uploads + completions + restored > 0;
         if changed {
             audit(
                 &tx,
@@ -2976,6 +3067,125 @@ impl Store {
             }),
         )?;
         tx.commit().map_err(db_error)
+    }
+
+    /// Moves a run forward onto the fence the server reported, so uploads that
+    /// were rejected as stale can proceed.
+    ///
+    /// Forward only. A backward fence means another writer owns the meeting and
+    /// this evidence has forked; adopting it would corrupt the run. Segments are
+    /// compared server-side on content identity rather than fence, so segments
+    /// already accepted under the old fence stay valid beside the new ones.
+    ///
+    /// Without this, a fence the client could not match was permanent: every
+    /// upload 409'd, the job retried on a timer forever, and the recording sat
+    /// on disk until retention removed it.
+    pub fn adopt_capture_fence(
+        &self,
+        owner_uid: &str,
+        capture_run_id: &str,
+        capture_fence: i64,
+    ) -> Result<bool, String> {
+        self.initialize()?;
+        let mut conn = self.connect()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_error)?;
+        // Only the WIRE fence moves. capture_fence is baked into the AEAD
+        // associated data of every segment already on disk, so advancing it
+        // makes this run's own audio undecryptable (aead::Error) - the exact
+        // failure that made the recording unreadable rather than merely unsent.
+        let changed = tx
+            .execute(
+                "UPDATE capture_runs SET server_capture_fence=?3, last_error_code=NULL,
+                    updated_at_ms=?4
+                 WHERE capture_run_id=?1 AND owner_uid=?2
+                   AND COALESCE(server_capture_fence, capture_fence)<?3
+                   AND completion_acked=0
+                   AND state NOT IN ('split_brain','local_missing','local_deleted',
+                                     'capture_failed_integrity','delete_requested')",
+                params![capture_run_id, owner_uid, capture_fence, now_ms()],
+            )
+            .map_err(db_error)?;
+        if changed == 0 {
+            tx.commit().map_err(db_error)?;
+            return Ok(false);
+        }
+        // Let the blocked jobs run immediately rather than serving out a backoff
+        // that was scheduled against a disagreement we just resolved.
+        let timestamp = now_ms();
+        for table in ["upload_jobs", "completion_jobs"] {
+            tx.execute(
+                &format!(
+                    "UPDATE {table} SET state='pending', next_attempt_at_ms=?2,
+                        lease_token=NULL, lease_expires_at_ms=NULL,
+                        last_error_code=NULL, updated_at_ms=?2
+                     WHERE capture_run_id=?1 AND state IN ('retry','paused','terminal')"
+                ),
+                params![capture_run_id, timestamp],
+            )
+            .map_err(db_error)?;
+        }
+        tx.commit().map_err(db_error)?;
+        Ok(true)
+    }
+
+    /// Revives every run this device recorded but could not hand off: a run
+    /// parked in `needs_attention`, or one holding jobs that a prior failure
+    /// classified terminal. Runs once when a session comes up, so ordinary
+    /// backoff still governs the retries that follow.
+    ///
+    /// This exists because a stranded run had no route back on its own. Nothing
+    /// rescheduled a terminal job, no notification fired for one, and the audio
+    /// simply aged out of local retention still unsent.
+    pub fn revive_stranded_runs(
+        &self,
+        owner_uid: &str,
+        runtime_instance_id: &str,
+    ) -> Result<usize, String> {
+        self.initialize()?;
+        let candidates: Vec<String> = {
+            let conn = self.connect()?;
+            let mut statement = conn
+                .prepare(
+                    "SELECT r.capture_run_id
+                     FROM capture_runs r
+                     WHERE r.owner_uid=?1
+                       AND r.completion_acked=0
+                       AND r.state NOT IN ('capturing','split_brain','local_missing',
+                                           'local_deleted','capture_failed_integrity',
+                                           'delete_requested')
+                       AND (
+                            r.state='needs_attention'
+                            OR EXISTS(
+                                SELECT 1 FROM upload_jobs u
+                                WHERE u.capture_run_id=r.capture_run_id
+                                  AND u.state='terminal'
+                            )
+                            OR EXISTS(
+                                SELECT 1 FROM completion_jobs c
+                                WHERE c.capture_run_id=r.capture_run_id
+                                  AND c.state='terminal'
+                            )
+                       )",
+                )
+                .map_err(db_error)?;
+            let rows = statement
+                .query_map(params![owner_uid], |row| row.get::<_, String>(0))
+                .map_err(db_error)?;
+            let mut collected = Vec::new();
+            for row in rows {
+                collected.push(row.map_err(db_error)?);
+            }
+            collected
+        };
+        let mut revived = 0usize;
+        for capture_run_id in candidates {
+            if self.retry_capture_jobs(owner_uid, &capture_run_id, runtime_instance_id)? {
+                revived += 1;
+            }
+        }
+        Ok(revived)
     }
 
     pub fn local_recordings(&self, owner_uid: &str) -> Result<Vec<LocalRecording>, String> {
@@ -3369,6 +3579,12 @@ impl Store {
                         OR (
                             r.finished_at_ms IS NOT NULL
                             AND ?1>=r.finished_at_ms + ?2
+                            -- Policy retention assumes the cloud already has a
+                            -- copy. Until the server acknowledges completion this
+                            -- encrypted audio is the ONLY copy that exists, and
+                            -- deleting it destroys the recording outright. An
+                            -- explicit user delete still wins.
+                            AND r.completion_acked!=0
                         )
                    )
                  ORDER BY j.due_at_ms",

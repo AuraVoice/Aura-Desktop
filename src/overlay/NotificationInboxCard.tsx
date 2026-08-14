@@ -106,6 +106,10 @@ function actionLabel(action: StoredNotification["action"]): string | null {
       return copy.viewMeeting;
     case "retry_meeting_upload":
       return copy.retryUpload;
+    case "view_research":
+      return copy.viewResearch;
+    case "answer_research_question":
+      return copy.answerResearchQuestion;
     default:
       return null; // open_notifications / null: the inbox itself, no inline action
   }

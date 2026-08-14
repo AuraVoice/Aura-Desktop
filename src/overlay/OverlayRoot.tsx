@@ -429,6 +429,11 @@ export function OverlayRoot() {
       && notification.resourceId
     ) {
       meetingCapture.retryNow(notification.resourceId);
+    } else if (
+      notification.action === "view_research"
+      || notification.action === "answer_research_question"
+    ) {
+      void openDashboardWindow("/research", notification.resourceId);
     }
   }
 

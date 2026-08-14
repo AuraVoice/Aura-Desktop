@@ -157,6 +157,23 @@ pub fn retry_capture_jobs(
     store(app)?.retry_capture_jobs(owner_uid, capture_run_id, runtime_instance_id)
 }
 
+pub fn revive_stranded_runs(
+    app: &AppHandle,
+    owner_uid: &str,
+    runtime_instance_id: &str,
+) -> Result<usize, String> {
+    store(app)?.revive_stranded_runs(owner_uid, runtime_instance_id)
+}
+
+pub fn adopt_capture_fence(
+    app: &AppHandle,
+    owner_uid: &str,
+    capture_run_id: &str,
+    capture_fence: i64,
+) -> Result<bool, String> {
+    store(app)?.adopt_capture_fence(owner_uid, capture_run_id, capture_fence)
+}
+
 pub fn read_segment(
     app: &AppHandle,
     owner_uid: &str,

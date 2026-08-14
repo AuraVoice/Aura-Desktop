@@ -29,6 +29,7 @@ import { ComingSoonPage } from "./pages/ComingSoonPage";
 import { InsightsPage } from "./pages/InsightsPage";
 import { GeneralPage } from "./pages/GeneralPage";
 import { DictationPage } from "./pages/DictationPage";
+import { ResearchPage } from "./pages/ResearchPage";
 import { DashboardOnboarding } from "./DashboardOnboarding";
 import { useDashboardUser } from "./useDashboardUser";
 import { DashboardResourceScope } from "./useDashboardResource";
@@ -46,6 +47,7 @@ export const dashboardPages: Record<string, ReactElement> = {
   "/drafts": <DraftsPage />,
   "/saved": <SavedPage />,
   "/meetings": <MeetingsPage />,
+  "/research": <ResearchPage />,
   "/insights": <InsightsPage />,
   "/general": <GeneralPage />,
   "/dictation": <DictationPage />,
@@ -97,7 +99,7 @@ export function DashboardShell({ user, collapsed }: { user: User | null; collaps
         />
         <div className="db-content" ref={contentRef}>
           <DashboardResourceScope uid={user.uid}>
-            <Routes location={mainPath}>
+            <Routes location={settingsOpen ? mainPath : location}>
               <Route path="/" element={<Navigate to="/home" replace />} />
               {routes.map(({ to, label }) => (
                 <Route

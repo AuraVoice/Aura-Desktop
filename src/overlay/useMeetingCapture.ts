@@ -11,6 +11,7 @@ import {
   MeetingTransportError,
   type CompletionReceipt,
   type MeetingCompletionSegment,
+  type MeetingJobFailureClassification,
   type UploadReceipt,
   uploadSegment,
 } from "../lib/meetings";
@@ -547,7 +548,40 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
         });
       }
 
-      const failLease = async (lease: QueueJobLease, err: unknown) => {
+      // The server tells us where its fence is on every stale-fence rejection.
+      // Adopting it turns a permanent 409 loop back into ordinary progress; the
+      // store refuses a backward move, so a genuine fork still cannot be papered
+      // over. Returns true when the run moved and its jobs were re-armed.
+      const resyncFence = async (
+        lease: QueueJobLease,
+        err: unknown,
+      ): Promise<boolean> => {
+        if (!(err instanceof MeetingTransportError)) return false;
+        if (err.code !== "stale_capture_fence") return false;
+        if (err.serverCaptureFence === null) return false;
+        if (err.serverCaptureFence <= lease.captureFence) return false;
+        try {
+          const adopted = await invoke<boolean>("adopt_capture_fence", {
+            captureRunId: lease.captureRunId,
+            captureFence: err.serverCaptureFence,
+          });
+          if (adopted) {
+            logInfo(
+              "useMeetingCapture",
+              `adopted server capture fence ${err.serverCaptureFence} for ${lease.captureRunId}`,
+            );
+          }
+          return adopted;
+        } catch (adoptError) {
+          logError("useMeetingCapture: adopt capture fence", adoptError);
+          return false;
+        }
+      };
+
+      const failLease = async (
+        lease: QueueJobLease,
+        err: unknown,
+      ): Promise<MeetingJobFailureClassification> => {
         const failure = err instanceof MeetingTransportError
           ? { classification: err.classification, errorCode: err.code }
           : err instanceof AuthRequiredError
@@ -580,7 +614,15 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
           );
         }
         logError(`useMeetingCapture: ${lease.kind} ${lease.jobId}`, err);
+        return failure.classification;
       };
+
+      // "auth" and "paused" are conditions of the whole session: every remaining
+      // job would fail identically, so stop the pass. Any other failure belongs
+      // to one job and must not stall the ones queued behind it - a single bad
+      // segment used to block every other upload and completion.
+      const stopsThePass = (classification: MeetingJobFailureClassification) =>
+        classification === "auth" || classification === "paused";
 
       let handled = 0;
       while (isCurrent() && handled < 64) {
@@ -635,8 +677,10 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
           });
         } catch (err) {
           if (!isCurrent()) return;
-          await failLease(lease, err);
-          break;
+          // Resync before recording the failure: a stale fence we can adopt is
+          // a disagreement we just resolved, not a fault of this job.
+          if (await resyncFence(lease, err)) continue;
+          if (stopsThePass(await failLease(lease, err))) break;
         }
       }
 
@@ -696,8 +740,10 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
           });
         } catch (err) {
           if (!isCurrent()) return;
-          await failLease(lease, err);
-          break;
+          // Resync before recording the failure: a stale fence we can adopt is
+          // a disagreement we just resolved, not a fault of this job.
+          if (await resyncFence(lease, err)) continue;
+          if (stopsThePass(await failLease(lease, err))) break;
         }
       }
     } catch (err) {
@@ -828,7 +874,20 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
         }
       })
       .catch((err) => logError("useMeetingCapture: capture_status", err));
-    void pump();
+    // Re-queue anything a previous session gave up on BEFORE the first pump, so
+    // a recording stranded by a one-off conflict resumes on its own rather than
+    // waiting for someone to notice it in the recordings list. Once per signed-in
+    // session only: the revived jobs go back under ordinary backoff from here.
+    void invoke<number>("revive_stranded_captures")
+      .then((revived) => {
+        if (revived > 0) {
+          logInfo("useMeetingCapture", `revived ${revived} stranded capture(s)`);
+        }
+      })
+      .catch((err) => logError("useMeetingCapture: revive stranded", err))
+      .finally(() => {
+        if (uidRef.current === uid) void pump();
+      });
     const id = setInterval(() => void pump(), PUMP_INTERVAL_MS);
     return () => clearInterval(id);
   }, [uid, ownsRuntime, pump]);

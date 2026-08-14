@@ -67,6 +67,9 @@ export interface DesktopNotificationPreferences {
   committed_enabled: boolean;
   proactive_enabled: boolean;
   account_enabled: boolean;
+  notification_contract_version: number;
+  research_ui_version: number;
+  supported_actions: NotificationAction[];
 }
 
 export async function updateDesktopNotificationPreferences(
@@ -94,6 +97,11 @@ export async function updateDesktopNotificationPreferences(
     committed_enabled: body.committed_enabled,
     proactive_enabled: body.proactive_enabled,
     account_enabled: body.account_enabled,
+    notification_contract_version: Number(body.notification_contract_version ?? 0),
+    research_ui_version: Number(body.research_ui_version ?? 0),
+    supported_actions: Array.isArray(body.supported_actions)
+      ? body.supported_actions as NotificationAction[]
+      : [],
   };
 }
 

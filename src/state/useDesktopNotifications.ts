@@ -35,6 +35,11 @@ import {
 
 const OUTBOX_POLL_INTERVAL_MS = 60_000;
 const OUTBOX_MAX_PAGES_PER_POLL = 20;
+// How many polls a page containing an unparseable event is re-read before the
+// cursor moves past it anyway. At the 60s poll interval this is ~5 minutes of
+// holding, which covers a transient backend shape problem, while still
+// guaranteeing the poller cannot be wedged forever by one permanently bad row.
+const UNPARSEABLE_PAGE_MAX_ATTEMPTS = 5;
 
 export interface DesktopNotificationsState {
   inbox: StoredNotification[];
@@ -69,6 +74,10 @@ export function useDesktopNotifications({
   const [ownerReady, setOwnerReady] = useState(false);
   const boundUidRef = useRef<string | null>(null);
   const outboxCursorRef = useRef("");
+  // cursor -> how many times a page starting there failed to parse. In memory
+  // only: a restart re-attempting a bad page is the desired behaviour, since the
+  // restart may well be the client release that can finally read it.
+  const unparseableAttemptsRef = useRef(new Map<string, number>());
   // appHidden flips often; hold it in a ref so ingest reads the latest value
   // without re-subscribing the listener each time.
   const appHiddenRef = useRef(appHidden);
@@ -155,6 +164,9 @@ export function useDesktopNotifications({
           committed_enabled: true,
           proactive_enabled: true,
           account_enabled: true,
+          notification_contract_version: 1,
+          research_ui_version: 1,
+          supported_actions: ["view_research", "answer_research_question"],
         });
       } catch (err) {
         if (!cancelled) {
@@ -196,11 +208,13 @@ export function useDesktopNotifications({
             throw err;
           }
           if (cancelled || boundUidRef.current !== uid) return;
+          let unparseable = 0;
           for (const raw of page.items) {
             const result = await ingest(raw, {
               appHidden: appHiddenRef.current,
               ownerUid: uid,
             });
+            if (result.parseFailed) unparseable += 1;
             if (result.notification) {
               await acknowledgeDesktopNotification(
                 result.notification.notificationId,
@@ -211,6 +225,37 @@ export function useDesktopNotifications({
               });
             }
           }
+
+          // An event this build cannot parse is usually a backend that shipped a
+          // new notification type first. Advancing the durable cursor past it
+          // loses it permanently, including after the client release that would
+          // have understood it, so hold the cursor and re-read the page next
+          // poll instead.
+          if (unparseable > 0) {
+            const attempts = (unparseableAttemptsRef.current.get(previousCursor) ?? 0) + 1;
+            unparseableAttemptsRef.current.set(previousCursor, attempts);
+            if (attempts < UNPARSEABLE_PAGE_MAX_ATTEMPTS) {
+              logError(
+                "useDesktopNotifications: holding outbox cursor on unparseable page",
+                new Error(
+                  `${unparseable} unparseable event(s), attempt ${attempts}`,
+                ),
+              );
+              break;
+            }
+            // Dead-letter. Retrying forever would wedge the poller and stop every
+            // LATER notification too, which is a worse failure than losing this
+            // page. Loud, because it is real data loss.
+            logError(
+              "useDesktopNotifications: skipping unparseable outbox page",
+              new Error(
+                `${unparseable} event(s) dropped after ${attempts} attempts`,
+              ),
+            );
+            trackEvent("desktop_notification_page_dropped", { count: unparseable });
+          }
+          unparseableAttemptsRef.current.delete(previousCursor);
+
           if (page.nextCursor && page.nextCursor !== previousCursor) {
             outboxCursorRef.current = page.nextCursor;
             await saveOutboxCursor(uid, page.nextCursor);
@@ -284,6 +329,9 @@ export function useDesktopNotifications({
       committed_enabled: true,
       proactive_enabled: true,
       account_enabled: true,
+      notification_contract_version: 1,
+      research_ui_version: 1,
+      supported_actions: ["view_research", "answer_research_question"],
     }).catch((err) => {
       setNotificationsEnabledState(!enabled);
       void setDisabled(enabled);

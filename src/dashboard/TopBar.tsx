@@ -24,6 +24,10 @@ interface ToastActivation {
   action: string | null;
 }
 
+function researchDestination(resourceId: string | null | undefined): string {
+  return resourceId ? `/research?run=${encodeURIComponent(resourceId)}` : "/research";
+}
+
 function initialsFor(user: FirebaseUser | null): string {
   const source = user?.displayName || user?.email || "";
   const parts = source.trim().split(/\s+/).filter(Boolean);
@@ -106,6 +110,13 @@ export function TopBar({ title, user, notifications }: TopBarProps) {
       ) {
         setNotifOpen(false);
         navigate("/meetings");
+      } else if (
+        activation.action === "view_research" ||
+        activation.action === "answer_research_question"
+      ) {
+        const row = notifications?.inbox.find((item) => item.notificationId === activation.notificationId);
+        setNotifOpen(false);
+        navigate(researchDestination(row?.resourceId));
       } else {
         setOpen(false);
         setNotifOpen(true);
@@ -150,7 +161,7 @@ export function TopBar({ title, user, notifications }: TopBarProps) {
       disposed = true;
       unlisten?.();
     };
-  }, [markNotificationSeen, navigate]);
+  }, [markNotificationSeen, navigate, notifications?.inbox]);
 
   function viewProfile() {
     setOpen(false);
@@ -167,6 +178,9 @@ export function TopBar({ title, user, notifications }: TopBarProps) {
     if (row.action === "view_meeting" || row.action === "retry_meeting_upload") {
       setNotifOpen(false);
       navigate("/meetings");
+    } else if (row.action === "view_research" || row.action === "answer_research_question") {
+      setNotifOpen(false);
+      navigate(researchDestination(row.resourceId));
     }
   }
 
