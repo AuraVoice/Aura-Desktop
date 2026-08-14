@@ -82,37 +82,21 @@ jobs:
       # sitting inside it, taking fourteen minutes back when it swept all of
       # Program Files, is what killed the release before this one.
       - name: Install Artifact Signing client tools
+        timeout-minutes: 5
         shell: pwsh
         run: |
-          $installerPath = Join-Path $env:RUNNER_TEMP "ArtifactSigningClientTools.msi"
-          Invoke-WebRequest -Uri "https://download.microsoft.com/download/70ad2c3b-761f-4aa9-a9de-e7405aa2b4c1/ArtifactSigningClientTools.msi" -OutFile $installerPath
-          $installer = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @('/i', "`"$installerPath`"", '/quiet', '/norestart')
-          if ($installer.ExitCode -ne 0) {
-            throw "Artifact Signing client tools installation failed with exit code $($installer.ExitCode)."
+          $nuget = Get-Command nuget.exe -ErrorAction SilentlyContinue
+          if (-not $nuget) {
+            throw "NuGet CLI was not found on the GitHub runner."
           }
 
-          # Searched in order, stopping at the first hit. The MSI installs
-          # per-user, so LOCALAPPDATA wins immediately; the Program Files
-          # fallbacks only exist to survive another rename like the Trusted to
-          # Artifact Signing one, and are scoped to Microsoft* rather than the
-          # whole tree. Sweeping all of Program Files and sorting afterwards
-          # cost about six minutes a run on a GitHub runner for no extra
-          # coverage, since the dlib was always in the first root anyway.
-          $searchRoots = @(
-            (Join-Path $env:LOCALAPPDATA "Microsoft")
-            (Join-Path $env:ProgramFiles "Microsoft*")
-            (Join-Path ${env:ProgramFiles(x86)} "Microsoft*")
-          )
+          $clientRoot = Join-Path $env:RUNNER_TEMP "artifact-signing-client"
+          & $nuget.Source install Microsoft.ArtifactSigning.Client -Version 1.0.128 -OutputDirectory $clientRoot -ExcludeVersion -NonInteractive
+          if ($LASTEXITCODE -ne 0) {
+            throw "Artifact Signing NuGet package installation failed."
+          }
 
-          $dlib = $null
-          foreach ($root in $searchRoots) {
-            $dlib = Get-ChildItem -Path $root -Filter Azure.CodeSigning.Dlib.dll -Recurse -File -ErrorAction SilentlyContinue |
-              Select-Object -First 1
-            if ($dlib) { break }
-          }
-          if (-not $dlib) {
-            throw "Artifact Signing dlib (Azure.CodeSigning.Dlib.dll) was not found under: $($searchRoots -join '; ')."
-          }
+          $dlib = Get-Item -LiteralPath (Join-Path $clientRoot "Microsoft.ArtifactSigning.Client\bin\x64\Azure.CodeSigning.Dlib.dll") -ErrorAction Stop
           $dlibPath = $dlib.FullName
           Write-Host "Using Artifact Signing dlib: $dlibPath"
 
