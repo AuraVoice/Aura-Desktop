@@ -9,6 +9,7 @@ import {
 } from "../lib/hotkeys";
 import { ShortcutEditorDialog } from "./ShortcutEditorDialog";
 import { trackEvent } from "../lib/analytics";
+import { trackOnboardingStepCompleted } from "../lib/acquisitionAnalytics";
 import { recordDesktopOnboardingEvent } from "../lib/profile";
 import { logError } from "../lib/log";
 import "./HotkeyTourStep.css";
@@ -309,6 +310,7 @@ export function HotkeyTourStep({ keyLabel, onContinue }: HotkeyTourStepProps) {
                     { binding_count: bindings.length },
                     "hotkey_tour_completed",
                   );
+                  void trackOnboardingStepCompleted("hotkey_tour");
                   onContinue();
                 }}
               >

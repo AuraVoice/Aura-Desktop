@@ -6,7 +6,12 @@ import {
   desktopOnboardingSeenForUidKey,
   overlayStorePath,
 } from "../lib/copy";
+import {
+  trackOnboardingCompleted,
+  trackOnboardingStepCompleted,
+} from "../lib/acquisitionAnalytics";
 import { logError } from "../lib/log";
+import { syncProfileOnSignIn } from "../lib/profile";
 
 export type OnboardingTailStatus = "unknown" | "active" | "done";
 
@@ -60,20 +65,31 @@ export function useOnboardingTail(uid: string | null) {
   }, []);
 
   const complete = useCallback(() => {
-    if (uid) {
-      void (async () => {
-        const store = storeRef.current ?? await Store.load(overlayStorePath);
-        storeRef.current = store;
-        await Promise.all([
-          store.set(desktopOnboardingSeenForUidKey(uid), true),
-          store.set(desktopOnboardingSeenKey, true),
-        ]);
-      })().catch((err) => logError("useOnboardingTail: persist onboarding_seen", err));
-    }
-    setStatus("done");
-    void emit(ONBOARDING_COMPLETED_EVENT).catch((err) =>
-      logError("useOnboardingTail: emit completion", err),
-    );
+    void (async () => {
+      if (uid) {
+        try {
+          const store = storeRef.current ?? await Store.load(overlayStorePath);
+          storeRef.current = store;
+          await Promise.all([
+            store.set(desktopOnboardingSeenForUidKey(uid), true),
+            store.set(desktopOnboardingSeenKey, true),
+          ]);
+        } catch (err) {
+          logError("useOnboardingTail: persist onboarding_seen", err);
+        }
+      }
+
+      setStatus("done");
+      await emit(ONBOARDING_COMPLETED_EVENT).catch((err) =>
+        logError("useOnboardingTail: emit completion", err),
+      );
+
+      if (uid) {
+        await trackOnboardingStepCompleted("agent_demo");
+        await trackOnboardingCompleted();
+        await syncProfileOnSignIn(uid);
+      }
+    })().catch((err) => logError("useOnboardingTail: complete", err));
   }, [uid]);
 
   const profileComplete = useCallback(() => {}, []);

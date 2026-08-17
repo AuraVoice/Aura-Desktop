@@ -2,10 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { logError } from "../lib/log";
-import {
-  trackOnboardingCompleted,
-  trackOnboardingStepCompleted,
-} from "../lib/acquisitionAnalytics";
 import { HotkeyTourStep } from "./HotkeyTourStep";
 import { AgentDemoStep } from "./AgentDemoStep";
 import { ProfileSetupStep } from "./ProfileSetupStep";
@@ -97,8 +93,6 @@ export function OnboardingTail({
     await invoke("dismiss_bar").catch((err) =>
       logError("OnboardingTail: dismiss_bar", err),
     );
-    void trackOnboardingStepCompleted("agent_demo");
-    void trackOnboardingCompleted();
     onComplete();
   }
 
@@ -134,18 +128,12 @@ export function OnboardingTail({
       {step === "hotkeyTour" && (
         <HotkeyTourStep
           keyLabel={keyLabel}
-          onContinue={() => {
-            void trackOnboardingStepCompleted("hotkey_tour");
-            setStep("privacy");
-          }}
+          onContinue={() => setStep("privacy")}
         />
       )}
       {step === "privacy" && (
         <PrivacySetupStep
-          onContinue={() => {
-            void trackOnboardingStepCompleted("privacy_setup");
-            setStep("agentDemo");
-          }}
+          onContinue={() => setStep("agentDemo")}
         />
       )}
       {step === "agentDemo" && (

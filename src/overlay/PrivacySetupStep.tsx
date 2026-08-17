@@ -9,6 +9,7 @@ import {
   type GeneralSettings,
 } from "../lib/generalSettings";
 import { trackEvent } from "../lib/analytics";
+import { trackOnboardingStepCompleted } from "../lib/acquisitionAnalytics";
 import { recordDesktopOnboardingEvent } from "../lib/profile";
 import { logError } from "../lib/log";
 import "./PrivacySetupStep.css";
@@ -93,6 +94,7 @@ export function PrivacySetupStep({
         properties,
         "privacy_setup_saved",
       );
+      void trackOnboardingStepCompleted("privacy_setup");
       onContinue();
     } catch (err) {
       logError("PrivacySetupStep: save settings", err);
