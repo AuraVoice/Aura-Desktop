@@ -1,9 +1,11 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { Store } from "@tauri-apps/plugin-store";
 import { authFetch } from "../lib/api";
 import { overlayStorePath } from "../lib/copy";
 import { auth } from "../lib/firebase";
 import { logError } from "../lib/log";
+
+const DISPLAY_NAME_MAX_LENGTH = 24;
 
 export interface AccountOnboardingProfile {
   display_name: string;
@@ -115,14 +117,6 @@ async function completeAccountOnboarding(uid: string, payload: {
   return state;
 }
 
-function dateInputValue(date: Date): string {
-  return [
-    date.getFullYear().toString().padStart(4, "0"),
-    (date.getMonth() + 1).toString().padStart(2, "0"),
-    date.getDate().toString().padStart(2, "0"),
-  ].join("-");
-}
-
 function ageFor(dateOfBirth: string): number | null {
   const parts = dateOfBirth.split("-").map(Number);
   if (parts.length !== 3 || parts.some((part) => !Number.isInteger(part))) return null;
@@ -159,18 +153,15 @@ export function AccountOnboarding({
     return new Set(state.profile.onboarding_interests.filter((interest) => allowed.has(interest)));
   });
   const [consent, setConsent] = useState(state.profile.aura_consent_granted ?? true);
+  const [confirmWithoutMemory, setConfirmWithoutMemory] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const today = useMemo(() => new Date(), []);
-  const latestBirthDate = useMemo(() => {
-    const date = new Date(today.getFullYear() - state.minimum_age, today.getMonth(), today.getDate());
-    return dateInputValue(date);
-  }, [state.minimum_age, today]);
   const selectedAge = ageFor(dateOfBirth);
+  const isBelowMinimumAge = selectedAge !== null && selectedAge < state.minimum_age;
   const isMinor = selectedAge !== null && selectedAge < 18;
   const valid = displayName.trim().length > 0
-    && displayName.trim().length <= 40
+    && displayName.trim().length <= DISPLAY_NAME_MAX_LENGTH
     && selectedAge !== null
     && selectedAge >= state.minimum_age
     && gender !== null
@@ -184,8 +175,13 @@ export function AccountOnboarding({
     });
   }
 
-  async function submit() {
+  async function submit(confirmedWithoutMemory = false) {
     if (!valid || saving) return;
+    if (!isMinor && !consent && !confirmedWithoutMemory) {
+      setConfirmWithoutMemory(true);
+      return;
+    }
+    setConfirmWithoutMemory(false);
     setSaving(true);
     setError(null);
     try {
@@ -216,27 +212,32 @@ export function AccountOnboarding({
         <h2 id="account-onboarding-heading">Help Buddy get to know you</h2>
         <p>These choices belong to your Aura account, so they follow you across desktop and mobile.</p>
 
-        <label className="account-onboarding-field">
-          <span>What should Buddy call you?</span>
-          <input
-            type="text"
-            maxLength={40}
-            value={displayName}
-            onChange={(event) => setDisplayName(event.target.value)}
-          />
-        </label>
+        <div className="account-onboarding-fields">
+          <label className="account-onboarding-field">
+            <span>What should Buddy call you?</span>
+            <input
+              type="text"
+              maxLength={DISPLAY_NAME_MAX_LENGTH}
+              value={displayName}
+              onChange={(event) => setDisplayName(event.target.value)}
+            />
+            <small>{displayName.length}/{DISPLAY_NAME_MAX_LENGTH} characters</small>
+          </label>
 
-        <label className="account-onboarding-field">
-          <span>Date of birth</span>
-          <input
-            type="date"
-            min="1900-01-01"
-            max={latestBirthDate}
-            value={dateOfBirth}
-            onChange={(event) => setDateOfBirth(event.target.value)}
-          />
-          <small>Aura is available to users age {state.minimum_age} or older.</small>
-        </label>
+          <label className="account-onboarding-field">
+            <span>Date of birth</span>
+            <input
+              type="date"
+              min="1900-01-01"
+              value={dateOfBirth}
+              onChange={(event) => setDateOfBirth(event.target.value)}
+              aria-invalid={isBelowMinimumAge}
+            />
+            {isBelowMinimumAge
+              ? <small className="account-onboarding-age-warning" role="alert">You must be {state.minimum_age} or older to use Aura.</small>
+              : <small>Aura is available to users age {state.minimum_age} or older.</small>}
+          </label>
+        </div>
 
         <fieldset className="account-onboarding-group">
           <legend>Gender</legend>
@@ -288,20 +289,49 @@ export function AccountOnboarding({
             type="checkbox"
             checked={isMinor ? false : consent}
             disabled={isMinor}
-            onChange={(event) => setConsent(event.target.checked)}
+            onChange={(event) => {
+              setConsent(event.target.checked);
+              setConfirmWithoutMemory(false);
+            }}
           />
         </label>
       </div>
 
       {error && <p className="account-onboarding-error" role="alert">{error}</p>}
-      <button
-        type="button"
-        className="onboarding-primary-button"
-        disabled={!valid || saving}
-        onClick={() => void submit()}
-      >
-        {saving ? "Saving..." : "Continue"}
-      </button>
+      {confirmWithoutMemory ? (
+        <div className="account-onboarding-confirmation" role="alert">
+          <strong>Keep Buddy personal?</strong>
+          <span>Without memory, every chat starts fresh and Buddy feels more generic.</span>
+          <div>
+            <button
+              type="button"
+              className="account-onboarding-confirm-secondary"
+              onClick={() => {
+                setConsent(true);
+                setConfirmWithoutMemory(false);
+              }}
+            >
+              Keep it personal
+            </button>
+            <button
+              type="button"
+              className="onboarding-primary-button"
+              onClick={() => void submit(true)}
+            >
+              Continue anyway
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          type="button"
+          className="onboarding-primary-button"
+          disabled={!valid || saving}
+          onClick={() => void submit()}
+        >
+          {saving ? "Saving..." : "Continue"}
+        </button>
+      )}
     </div>
   );
 }
