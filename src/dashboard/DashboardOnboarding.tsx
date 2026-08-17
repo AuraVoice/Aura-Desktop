@@ -9,6 +9,7 @@ import { VoiceSetupStep } from "../overlay/VoiceSetupStep";
 import { useVoiceBar } from "../overlay/useVoiceBar";
 import { useOnboardingTail } from "../overlay/useOnboardingTail";
 import { useDashboardUser } from "./useDashboardUser";
+import { AccountOnboarding, type AccountOnboardingState } from "./AccountOnboarding";
 import { logError } from "../lib/log";
 import "../overlay/OnboardingFlow.css";
 import "./DashboardOnboarding.css";
@@ -93,17 +94,47 @@ function DashboardTail({
  * the overlay's Google welcome and consent screen; post-sign-in currently runs
  * the existing tour + demo. `onComplete` fires once
  * first-run is finished (or was already done), so the parent can show the app. */
-export function DashboardOnboarding({ onComplete }: { onComplete: () => void }) {
+export function DashboardOnboarding({
+  accountComplete,
+  accountState,
+  accountError,
+  onRetryAccount,
+  onAccountComplete,
+  onComplete,
+}: {
+  accountComplete: boolean | null;
+  accountState: AccountOnboardingState | null;
+  accountError: string | null;
+  onRetryAccount: () => void;
+  onAccountComplete: (state: AccountOnboardingState) => Promise<void>;
+  onComplete: () => void;
+}) {
   const user = useDashboardUser();
   const tail = useOnboardingTail(user?.uid ?? null);
 
   useEffect(() => {
-    if (user && tail.status === "done") onComplete();
-  }, [user, tail.status, onComplete]);
+    if (user && accountComplete === true && tail.status === "done") onComplete();
+  }, [user, accountComplete, tail.status, onComplete]);
 
   let content: ReactNode = null;
   if (!user) {
     content = <OnboardingFlow />;
+  } else if (accountError) {
+    content = (
+      <div className="onboarding-step account-onboarding-status">
+        <h2 className="onboarding-heading">Account setup couldn't load</h2>
+        <p className="onboarding-body">Check your connection and try again. Your progress has not been marked complete.</p>
+        <button type="button" className="onboarding-primary-button" onClick={onRetryAccount}>Try again</button>
+      </div>
+    );
+  } else if (accountComplete === null) {
+    content = (
+      <div className="onboarding-step account-onboarding-status">
+        <p className="onboarding-body">Checking your account setup...</p>
+      </div>
+    );
+  } else if (accountComplete === false && accountState) {
+    content = <AccountOnboarding uid={user.uid} state={accountState} onComplete={onAccountComplete} />;
   } else if (tail.status === "active") {
     content = (
       <DashboardTail

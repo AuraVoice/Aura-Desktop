@@ -6,6 +6,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 const mocks = vi.hoisted(() => ({
   user: null as { uid: string } | null,
   seen: false,
+  accountComplete: true,
 }));
 
 vi.mock("@tauri-apps/plugin-store", () => ({
@@ -14,6 +15,11 @@ vi.mock("@tauri-apps/plugin-store", () => ({
   },
 }));
 vi.mock("./useDashboardUser", () => ({ useDashboardUser: () => mocks.user }));
+vi.mock("./AccountOnboarding", () => ({
+  hasConfirmedAccountOnboarding: vi.fn(async () => mocks.accountComplete),
+  fetchAccountOnboarding: vi.fn(async () => ({ complete: mocks.accountComplete })),
+  markAccountOnboardingConfirmed: vi.fn(async () => {}),
+}));
 vi.mock("./DashboardOnboarding", () => ({ DashboardOnboarding: () => <div>dashboard-onboarding</div> }));
 vi.mock("./Sidebar", () => ({ Sidebar: () => <aside>sidebar</aside> }));
 vi.mock("./TopBar", () => ({ TopBar: () => <header>topbar</header> }));
@@ -24,6 +30,7 @@ vi.mock("react-router-dom", () => ({
   Routes: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   useLocation: () => ({ pathname: "/home" }),
   useNavigate: () => vi.fn(),
+  useSearchParams: () => [new URLSearchParams(), vi.fn()],
 }));
 vi.mock("./pages/HomePage", () => ({ HomePage: () => <div>home</div> }));
 vi.mock("./pages/ConversationsPage", () => ({ ConversationsPage: () => <div>conversations</div> }));

@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   useOnboardingTail: vi.fn(),
   useGuideMode: vi.fn(),
   useDraftCard: vi.fn(),
+  useUpdateReady: vi.fn(),
   guideStop: vi.fn(),
   startBridgedSession: vi.fn(() => Promise.resolve()),
 }));
@@ -52,7 +53,7 @@ vi.mock("./useDraftCard", () => ({
   useDraftCard: mocks.useDraftCard,
 }));
 vi.mock("./useGuideMode", () => ({ useGuideMode: mocks.useGuideMode }));
-vi.mock("./useUpdateReady", () => ({ useUpdateReady: vi.fn() }));
+vi.mock("./useUpdateReady", () => ({ useUpdateReady: mocks.useUpdateReady }));
 vi.mock("./useMeetings", () => ({ useMeetings: mocks.useMeetings }));
 vi.mock("./useMeetingArm", () => ({ useMeetingArm: mocks.useMeetingArm }));
 vi.mock("./useMeetingCapture", () => ({ useMeetingCapture: mocks.useMeetingCapture }));
@@ -80,6 +81,7 @@ beforeEach(() => {
     stop: mocks.guideStop,
   });
   mocks.useDraftCard.mockReturnValue({ phase: "idle", reset: vi.fn() });
+  mocks.useUpdateReady.mockReturnValue({ version: null, updatedNotice: null });
   mocks.useMeetings.mockReturnValue({ events: [] });
   mocks.useMeetingArm.mockReturnValue({ isArmed: vi.fn(() => false), revision: 0 });
   mocks.useMeetingCapture.mockReturnValue({});

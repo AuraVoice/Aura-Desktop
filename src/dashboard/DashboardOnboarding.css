@@ -19,3 +19,146 @@
   width: 100%;
   max-width: 780px;
 }
+
+.account-onboarding {
+  display: flex;
+  width: 100%;
+  max-height: calc(100vh - 110px);
+  box-sizing: border-box;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 24px;
+  border-radius: 24px;
+  background: rgba(245, 244, 240, 0.96);
+  color: #28231d;
+}
+
+.account-onboarding-scroll {
+  width: 100%;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.account-onboarding-scroll::-webkit-scrollbar {
+  display: none;
+}
+
+.account-onboarding h2,
+.account-onboarding > p {
+  margin: 0;
+}
+
+.account-onboarding h2 {
+  font-family: var(--font-title);
+  font-size: 26px;
+  text-align: center;
+}
+
+.account-onboarding-scroll > p {
+  margin: 8px auto 22px;
+  color: #6f655b;
+  text-align: center;
+}
+
+.account-onboarding-field,
+.account-onboarding-group {
+  display: block;
+  width: 100%;
+  margin: 0 0 20px;
+  padding: 0;
+  border: 0;
+}
+
+.account-onboarding-field > span,
+.account-onboarding-group legend {
+  display: block;
+  margin-bottom: 9px;
+  color: #49423b;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.account-onboarding-field input {
+  width: 100%;
+  min-height: 44px;
+  box-sizing: border-box;
+  padding: 10px 13px;
+  border: 1px solid rgba(54, 47, 39, 0.18);
+  border-radius: 14px;
+  background: #fff;
+  color: #28231d;
+  font: inherit;
+}
+
+.account-onboarding-field small {
+  display: block;
+  margin-top: 6px;
+  color: #81766b;
+  font-size: 11px;
+}
+
+.account-onboarding-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.account-onboarding-choices button {
+  min-height: 38px;
+  padding: 8px 14px;
+  border: 1px solid rgba(54, 47, 39, 0.16);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.8);
+  color: #49423b;
+  cursor: pointer;
+}
+
+.account-onboarding-choices button.is-selected {
+  border-color: rgba(47, 159, 145, 0.68);
+  background: rgba(210, 239, 233, 0.78);
+  color: #216b62;
+  font-weight: 700;
+}
+
+.account-onboarding-consent {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 14px 16px;
+  border: 1px solid rgba(47, 159, 145, 0.28);
+  border-radius: 16px;
+  background: rgba(239, 251, 248, 0.7);
+}
+
+.account-onboarding-consent span,
+.account-onboarding-consent small {
+  display: block;
+}
+
+.account-onboarding-consent small {
+  margin-top: 4px;
+  color: #6f655b;
+}
+
+.account-onboarding-consent input {
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+}
+
+.account-onboarding-consent.is-disabled {
+  border-color: rgba(54, 47, 39, 0.14);
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.account-onboarding-error {
+  margin: 0;
+  color: #a33a2c;
+  font-size: 12px;
+}
+
+.account-onboarding-status {
+  margin: 0 auto;
+}

@@ -31,6 +31,12 @@ import { GeneralPage } from "./pages/GeneralPage";
 import { DictationPage } from "./pages/DictationPage";
 import { ResearchPage } from "./pages/ResearchPage";
 import { DashboardOnboarding } from "./DashboardOnboarding";
+import {
+  fetchAccountOnboarding,
+  hasConfirmedAccountOnboarding,
+  markAccountOnboardingConfirmed,
+  type AccountOnboardingState,
+} from "./AccountOnboarding";
 import { useDashboardUser } from "./useDashboardUser";
 import { DashboardResourceScope } from "./useDashboardResource";
 import { useDashboardNotifications } from "./useDashboardNotifications";
@@ -153,12 +159,52 @@ function DashboardRouteListener() {
 export function DashboardApp() {
   const user = useDashboardUser();
   const [onboarded, setOnboarded] = useState<boolean | null>(null);
+  const [accountComplete, setAccountComplete] = useState<boolean | null>(null);
+  const [accountState, setAccountState] = useState<AccountOnboardingState | null>(null);
+  const [accountError, setAccountError] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState(false);
+  const accountRequestRef = useRef(0);
   const uid = user?.uid ?? null;
+  const currentUidRef = useRef(uid);
+  currentUidRef.current = uid;
+
+  const loadAccountOnboarding = useCallback(async (accountUid: string) => {
+    const requestId = ++accountRequestRef.current;
+    setAccountComplete(null);
+    setAccountState(null);
+    setAccountError(null);
+    try {
+      if (await hasConfirmedAccountOnboarding(accountUid)) {
+        if (requestId === accountRequestRef.current && currentUidRef.current === accountUid) {
+          setAccountComplete(true);
+        }
+        return;
+      }
+      const state = await fetchAccountOnboarding(accountUid);
+      if (requestId !== accountRequestRef.current || currentUidRef.current !== accountUid) return;
+      if (state.complete) {
+        await markAccountOnboardingConfirmed(accountUid).catch((err) =>
+          logError("DashboardApp: cache account onboarding", err),
+        );
+      }
+      if (requestId !== accountRequestRef.current || currentUidRef.current !== accountUid) return;
+      setAccountState(state);
+      setAccountComplete(state.complete);
+    } catch (err) {
+      logError("DashboardApp: load account onboarding", err);
+      if (requestId === accountRequestRef.current && currentUidRef.current === accountUid) {
+        setAccountError("Aura couldn't confirm your account setup.");
+      }
+    }
+  }, []);
 
   useEffect(() => {
     if (!uid) {
       setOnboarded(false);
+      setAccountComplete(null);
+      setAccountState(null);
+      setAccountError(null);
+      accountRequestRef.current += 1;
       return;
     }
     let cancelled = false;
@@ -177,7 +223,11 @@ export function DashboardApp() {
     };
   }, [uid]);
 
-  const showApp = user !== null && onboarded;
+  useEffect(() => {
+    if (uid) void loadAccountOnboarding(uid);
+  }, [uid, loadAccountOnboarding]);
+
+  const showApp = user !== null && onboarded === true && accountComplete === true;
 
   return (
     <div className="db-window">
@@ -193,7 +243,26 @@ export function DashboardApp() {
                 <DashboardShell user={user} collapsed={collapsed} />
               </HashRouter>
             ) : (
-              <DashboardOnboarding onComplete={() => setOnboarded(true)} />
+              <DashboardOnboarding
+                accountComplete={accountComplete}
+                accountState={accountState}
+                accountError={accountError}
+                onRetryAccount={() => {
+                  if (uid) void loadAccountOnboarding(uid);
+                }}
+                onAccountComplete={async (state) => {
+                  if (!uid) return;
+                  const completedUid = uid;
+                  if (currentUidRef.current !== completedUid) return;
+                  await markAccountOnboardingConfirmed(completedUid).catch((err) =>
+                    logError("DashboardApp: cache completed account onboarding", err),
+                  );
+                  if (currentUidRef.current !== completedUid) return;
+                  setAccountState(state);
+                  setAccountComplete(true);
+                }}
+                onComplete={() => setOnboarded(true)}
+              />
             )}
           </ErrorBoundary>
         )}

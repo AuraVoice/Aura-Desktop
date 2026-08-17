@@ -22,6 +22,13 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve({ k
 import { DashboardOnboarding } from "./DashboardOnboarding";
 
 let renderer: ReactTestRenderer | null = null;
+const accountProps = {
+  accountComplete: true,
+  accountState: null,
+  accountError: null,
+  onRetryAccount: vi.fn(),
+  onAccountComplete: vi.fn(async () => {}),
+};
 
 afterEach(() => {
   if (renderer) {
@@ -36,7 +43,7 @@ describe("DashboardOnboarding", () => {
     mocks.user = null;
     mocks.status = "active";
     act(() => {
-      renderer = create(<DashboardOnboarding onComplete={vi.fn()} />);
+      renderer = create(<DashboardOnboarding {...accountProps} onComplete={vi.fn()} />);
     });
     expect(JSON.stringify(renderer!.toJSON())).toContain("overlay-flow");
   });
@@ -45,7 +52,7 @@ describe("DashboardOnboarding", () => {
     mocks.user = { uid: "user-1" };
     mocks.status = "active";
     await act(async () => {
-      renderer = create(<DashboardOnboarding onComplete={vi.fn()} />);
+      renderer = create(<DashboardOnboarding {...accountProps} onComplete={vi.fn()} />);
     });
     expect(JSON.stringify(renderer!.toJSON())).toContain("hotkey-tour");
   });

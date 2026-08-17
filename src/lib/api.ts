@@ -3,6 +3,7 @@ import { fetch } from "@tauri-apps/plugin-http";
 import { hostname } from "@tauri-apps/plugin-os";
 import packageJson from "../../package.json";
 import { auth } from "./firebase";
+import { getOrCreateDesktopInstallId } from "./desktopInstallId";
 import { logError } from "./log";
 import { pairingCodeLength, pairingErrorCopy } from "./pairingCopy";
 import { rawPairingCode } from "./pairingCodeFormat";
@@ -91,10 +92,13 @@ export async function claimPairingCode(code: string): Promise<string> {
     throw new PairingError("bad_length", pairingErrorCopy.badLength);
   }
 
-  const deviceName = await hostname().catch((err) => {
-    logError("claimPairingCode: hostname", err);
-    return null;
-  });
+  const [deviceName, installId] = await Promise.all([
+    hostname().catch((err) => {
+      logError("claimPairingCode: hostname", err);
+      return null;
+    }),
+    getOrCreateDesktopInstallId(),
+  ]);
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), CLAIM_TIMEOUT_MS);
@@ -104,7 +108,7 @@ export async function claimPairingCode(code: string): Promise<string> {
     response = await fetch(`${API_BASE_URL}/devices/pair/claim`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...PLATFORM_HEADERS },
-      body: JSON.stringify({ code: raw, device_name: deviceName ?? "" }),
+      body: JSON.stringify({ code: raw, device_name: deviceName ?? "", install_id: installId }),
       signal: controller.signal,
     });
   } catch (err) {
@@ -158,10 +162,13 @@ export type WebAuthStartResult = {
 
 /** Requests a fresh web-auth session code to embed in the browser URL. */
 export async function startWebAuth(): Promise<WebAuthStartResult> {
-  const deviceName = await hostname().catch((err) => {
-    logError("startWebAuth: hostname", err);
-    return null;
-  });
+  const [deviceName, installId] = await Promise.all([
+    hostname().catch((err) => {
+      logError("startWebAuth: hostname", err);
+      return null;
+    }),
+    getOrCreateDesktopInstallId(),
+  ]);
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), WEB_AUTH_START_TIMEOUT_MS);
@@ -171,7 +178,7 @@ export async function startWebAuth(): Promise<WebAuthStartResult> {
     response = await fetch(`${API_BASE_URL}/devices/web-auth/start`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...PLATFORM_HEADERS },
-      body: JSON.stringify({ device_name: deviceName ?? "" }),
+      body: JSON.stringify({ device_name: deviceName ?? "", install_id: installId }),
       signal: controller.signal,
     });
   } catch (err) {

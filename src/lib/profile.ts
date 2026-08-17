@@ -15,6 +15,7 @@ import {
   posthogSafeMetadata,
   type DesktopMetadata,
 } from "./desktopMetadata";
+import { getOrCreateDesktopInstallId } from "./desktopInstallId";
 import { logError } from "./log";
 
 /** One first-run question answer: the stable option id plus optional freetext
@@ -50,11 +51,7 @@ const MAX_PENDING_EVENTS = 50;
  * call. Used as the PostHog distinct_id for pre-sign-in attribution capture so
  * it can later be aliased to the real uid (never the shared "anonymous"). */
 export async function getOrCreateAnonId(store: Store): Promise<string> {
-  const existing = await store.get<string>(desktopAnonIdKey);
-  if (existing) return existing;
-  const id = crypto.randomUUID();
-  await store.set(desktopAnonIdKey, id);
-  return id;
+  return getOrCreateDesktopInstallId(store);
 }
 
 function cleanAnswer(answer: StoredAnswer | undefined): StoredAnswer | undefined {
