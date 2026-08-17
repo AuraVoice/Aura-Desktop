@@ -573,13 +573,32 @@ describe("useGuideMode", () => {
     expect(room.streamBytes.mock.calls[0][0].attributes.change).toBe("0");
   });
 
-  it("becomes operational only after matching mode and frame acknowledgements", async () => {
+  it("becomes operational only after matching mode, task, and frame state", async () => {
     await mountHook();
     expect(hookArmed).toBe(true);
     expect(hookActive).toBe(false);
     const agent = room.remoteParticipants.get("agent");
 
     await act(async () => {
+      room.emit(
+        RoomEvent.DataReceived,
+        new TextEncoder().encode(JSON.stringify({
+          type: "guide.task",
+          payload: {
+            guide_session_id: SESSION_ID,
+            task_id: "a".repeat(32),
+            revision: 1,
+            status: "active",
+            current_step_id: "step-1",
+            current_step_title: "First step",
+            resumable: true,
+            completion: false,
+          },
+        })),
+        agent,
+        undefined,
+        "agent_events",
+      );
       room.emit(
         RoomEvent.DataReceived,
         new TextEncoder().encode(JSON.stringify({

@@ -26,7 +26,12 @@ import type { ChatAttachment } from "../lib/chatScreenCapture";
 import { trackEvent } from "../lib/analytics";
 import { logError } from "../lib/log";
 import { captureException } from "../lib/sentry";
-import { MAX_MESSAGE_LENGTH, type ChatLane, type ChatMessage } from "./ChatSlot";
+import {
+  MAX_MESSAGE_LENGTH,
+  type ChatLane,
+  type ChatMessage,
+  type ChatReminder,
+} from "./ChatSlot";
 
 interface UseChatSessionOptions {
   enabled: boolean;
@@ -201,25 +206,23 @@ function fromCacheRow(row: CachedChatMessage): ChatMessage {
  * caller resolves the pairing, which is the only place both halves are in view. */
 function fromServerMessage(message: DesktopChatMessage, turnFailed: boolean): ChatMessage[] {
   const id = localMessageId(message.clientMessageId, message.role);
-  const out: ChatMessage[] = [{
+  const failed = message.status === "failed" && message.role === "assistant";
+  const reminder = message.role === "assistant" && !failed && message.reminder
+    ? toChatReminder(message.reminder)
+    : null;
+  return [{
     id,
     turnId: message.clientMessageId,
     role: message.role,
-    text: message.text,
+    text: reminder?.displayMode === "standalone" ? reminder.message : message.text,
     state: turnFailed && message.role === "user" ? "failed" : "complete",
-    kind: message.status === "failed" && message.role === "assistant" ? "error" : "text",
+    kind: failed
+      ? "error"
+      : reminder
+        ? "reminder"
+        : "text",
+    reminder: reminder ?? undefined,
   }];
-  if (message.role === "assistant" && message.reminder) {
-    out.push({
-      id: `${message.clientMessageId}:reminder`,
-      turnId: message.clientMessageId,
-      role: "assistant",
-      text: reminderText(message.reminder),
-      state: "complete",
-      kind: "reminder",
-    });
-  }
-  return out;
 }
 
 /** A user bubble is failed exactly when its turn's assistant half is an error.
@@ -246,10 +249,12 @@ function normalizeTurnFailures(messages: ChatMessage[]): ChatMessage[] {
   );
 }
 
-function reminderText(reminder: Record<string, unknown>): string {
+function toChatReminder(reminder: Record<string, unknown>, animate = false): ChatReminder {
   const message = typeof reminder.message === "string" ? reminder.message : "Reminder updated";
-  const triggerAt = typeof reminder.trigger_at === "string" ? reminder.trigger_at : "";
-  return triggerAt ? `${message}\n${triggerAt}` : message;
+  const triggerAt = typeof reminder.trigger_at === "string" ? reminder.trigger_at : null;
+  const displayMode = reminder.display_mode === "supplemental" ? "supplemental" : "standalone";
+  const receiptStatus = reminder.receipt_status === "updated" ? "updated" : "created";
+  return { message, triggerAt, animate, displayMode, receiptStatus };
 }
 
 export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSessionOptions) {
@@ -589,11 +594,12 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
       },
     ]);
 
-    const upsert = (message: ChatMessage) => {
+    const upsert = (message: ChatMessage, replaceId?: string) => {
       setMessages((current) => {
-        const index = current.findIndex((item) => item.id === message.id);
-        if (index < 0) return [...current, message];
-        return current.map((item, itemIndex) => itemIndex === index ? message : item);
+        const next = replaceId ? current.filter((item) => item.id !== replaceId) : current;
+        const index = next.findIndex((item) => item.id === message.id);
+        if (index < 0) return [...next, message];
+        return next.map((item, itemIndex) => itemIndex === index ? message : item);
       });
     };
 
@@ -632,14 +638,18 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
       finishAssistantText();
       markUser("sent");
       if (metadata.reminder) {
-        upsert({
-          id: `${clientMessageId}:reminder`,
-          turnId: clientMessageId,
-          role: "assistant",
-          text: reminderText(metadata.reminder),
-          state: "complete",
-          kind: "reminder",
-        });
+        const reminder = toChatReminder(metadata.reminder, true);
+        setMessages((current) => current.map((message) =>
+          message.id === assistantId
+            ? {
+                ...message,
+                text: reminder.displayMode === "standalone" ? reminder.message : message.text,
+                state: "complete",
+                kind: "reminder",
+                reminder,
+              }
+            : message,
+        ));
       }
     };
 
@@ -665,17 +675,20 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
         // deliberately still collapses onto a single overwritten row, because a
         // v1 backend only ever sends one.
         case "tool_start":
-          upsert({
-            id: `${clientMessageId}:tool:${frame.id}`,
-            turnId: clientMessageId,
-            role: "assistant",
-            text: frame.label,
-            state: "complete",
-            kind: "activity",
-            tool: frame.tool,
-            detail: frame.detail,
-            running: true,
-          });
+          upsert(
+            {
+              id: `${clientMessageId}:tool:${frame.id}`,
+              turnId: clientMessageId,
+              role: "assistant",
+              text: frame.label,
+              state: "complete",
+              kind: "activity",
+              tool: frame.tool,
+              detail: frame.detail,
+              running: true,
+            },
+            toolStatusId,
+          );
           break;
         case "tool_end":
           setMessages((current) => current.map((message) =>

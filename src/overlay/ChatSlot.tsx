@@ -43,6 +43,14 @@ import "./ChatSlot.css";
 export type ChatMessageState = "sent" | "queued" | "sending" | "failed" | "streaming" | "complete";
 export type ChatLane = "cold" | "live";
 
+export interface ChatReminder {
+  message: string;
+  triggerAt: string | null;
+  animate: boolean;
+  displayMode: "standalone" | "supplemental";
+  receiptStatus: "created" | "updated";
+}
+
 export interface ChatMessage {
   id: string;
   turnId?: string;
@@ -65,6 +73,7 @@ export interface ChatMessage {
   detail?: string;
   running?: boolean;
   ok?: boolean;
+  reminder?: ChatReminder;
 }
 
 /** Where each row sits WITHIN its own turn. Lower renders first.
@@ -125,16 +134,17 @@ export function displayOrder(messages: ChatMessage[]): ChatMessage[] {
  * reasoning row or a running tool row is speaking for the same turn - otherwise
  * both render at once and the turn claims to be thinking twice.
  *
- * Keyed on `streaming`/`running` rather than the row merely existing: a finished
- * reasoning row collapses to "Thought about this" and a settled activity row
- * loses its spinner, so if the first token still has not landed nothing is
- * animating and the placeholder has to come back. */
+ * Reasoning and activity rows are keyed on `streaming`/`running`: once settled,
+ * the placeholder may need to return while the answer is still empty. A status
+ * row is transient and removed when the turn finishes, so its presence always
+ * signals current progress. */
 function turnsSignallingProgress(messages: ChatMessage[]): Set<string> {
   const turnIds = new Set<string>();
   for (const message of messages) {
     if (!message.turnId) continue;
     if (message.kind === "thinking" && message.state === "streaming") turnIds.add(message.turnId);
     if (message.kind === "activity" && message.running) turnIds.add(message.turnId);
+    if (message.kind === "status") turnIds.add(message.turnId);
   }
   return turnIds;
 }
@@ -309,7 +319,63 @@ function screenChipVisible(lane: ChatLane, screen: ChatScreenState): boolean {
  * markdown would only add block spacing and could mangle stray punctuation. */
 function rendersMarkdown(message: ChatMessage): boolean {
   if (message.role !== "assistant") return false;
-  return message.kind === undefined || message.kind === "text" || message.kind === "reminder";
+  return message.kind === undefined || message.kind === "text";
+}
+
+function localCalendarDay(date: Date): number {
+  return Date.UTC(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function reminderTimeLabel(triggerAt: string | null): string | null {
+  if (!triggerAt) return null;
+  const trigger = new Date(triggerAt);
+  if (Number.isNaN(trigger.getTime())) return null;
+
+  const today = new Date();
+  const dayDifference = Math.round(
+    (localCalendarDay(trigger) - localCalendarDay(today)) / 86_400_000,
+  );
+  const day = dayDifference === 0
+    ? "Today"
+    : dayDifference === 1
+      ? "Tomorrow"
+      : trigger.toLocaleDateString(undefined, {
+          month: "short",
+          day: "numeric",
+          year: trigger.getFullYear() === today.getFullYear() ? undefined : "numeric",
+        });
+  const time = trigger.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return `${day} · ${time}`;
+}
+
+function ReminderCard({ reminder }: { reminder: ChatReminder }) {
+  const timeLabel = reminderTimeLabel(reminder.triggerAt);
+  const [swinging, setSwinging] = useState(reminder.animate);
+  return (
+    <div className="chat-reminder-card">
+      <Bell
+        className={`chat-reminder-icon${swinging ? " is-swinging" : ""}`}
+        size={28}
+        strokeWidth={1.8}
+        aria-hidden="true"
+        onAnimationEnd={() => setSwinging(false)}
+      />
+      <div className="chat-reminder-content">
+        <span className="chat-reminder-label">
+          {reminder.receiptStatus === "updated" ? "Reminder updated" : "Reminder set"}
+        </span>
+        <span className="chat-reminder-message">{reminder.message}</span>
+        {timeLabel && (
+          <time className="chat-reminder-time" dateTime={reminder.triggerAt ?? undefined}>
+            {timeLabel}
+          </time>
+        )}
+      </div>
+    </div>
+  );
 }
 
 const COPIED_FLASH_MS = 1_500;
@@ -680,8 +746,31 @@ export function ChatSlot({
               key={item.id}
               className={`chat-message chat-message-${item.role} chat-message-${item.state}`}
             >
-              <div className={`chat-message-bubble chat-message-kind-${item.kind ?? "text"}`}>
-                {rendersMarkdown(item) ? (
+              <div className={`chat-message-bubble chat-message-kind-${item.kind ?? "text"}${
+                item.reminder?.displayMode === "supplemental"
+                  ? " chat-reminder-supplemental"
+                  : ""
+              }`}>
+                {item.kind === "reminder" && item.reminder ? (
+                  item.reminder.displayMode === "supplemental" ? (
+                    <>
+                      <div className="chat-markdown">
+                        <Markdown
+                          remarkPlugins={[remarkGfm]}
+                          components={MARKDOWN_COMPONENTS}
+                          skipHtml
+                          disallowedElements={["a", "img"]}
+                          unwrapDisallowed
+                        >
+                          {item.text}
+                        </Markdown>
+                      </div>
+                      <ReminderCard reminder={item.reminder} />
+                    </>
+                  ) : (
+                    <ReminderCard reminder={item.reminder} />
+                  )
+                ) : rendersMarkdown(item) ? (
                   <div className="chat-markdown">
                     <Markdown
                       remarkPlugins={[remarkGfm]}

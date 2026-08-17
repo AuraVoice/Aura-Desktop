@@ -368,6 +368,127 @@
   color: var(--db-danger, #ff9f9f);
 }
 
+.chat-message-kind-reminder {
+  min-width: min(280px, 100%);
+  padding: 12px 14px;
+  border-color: rgba(133, 145, 255, 0.34);
+  background: linear-gradient(135deg, rgba(63, 56, 128, 0.82), rgba(35, 42, 88, 0.86));
+}
+
+.chat-reminder-card {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+}
+
+.chat-reminder-supplemental {
+  border-color: var(--db-border, rgba(255, 255, 255, 0.08));
+  background: var(--db-surface-2, rgba(255, 255, 255, 0.06));
+}
+
+.chat-reminder-supplemental .chat-reminder-card {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid rgba(133, 145, 255, 0.34);
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(63, 56, 128, 0.82), rgba(35, 42, 88, 0.86));
+}
+
+.chat-reminder-icon {
+  justify-self: center;
+  color: #f4c95d;
+  transform-origin: 50% 10%;
+}
+
+.chat-reminder-icon.is-swinging {
+  animation: chat-reminder-bell-swing 1.3s ease-in-out 1;
+}
+
+@keyframes chat-reminder-bell-swing {
+  0%,
+  100% {
+    transform: rotate(0deg);
+  }
+  20% {
+    transform: rotate(-13deg);
+  }
+  42% {
+    transform: rotate(9deg);
+  }
+  64% {
+    transform: rotate(-5deg);
+  }
+  82% {
+    transform: rotate(2deg);
+  }
+}
+
+.chat-reminder-content {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.chat-reminder-label {
+  color: rgba(255, 255, 255, 0.68);
+  font: 600 10px/1.2 var(--font-body);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.chat-reminder-message {
+  color: rgba(255, 255, 255, 0.97);
+  font: 600 13px/1.4 var(--font-body);
+}
+
+.chat-reminder-time {
+  position: relative;
+  display: inline-flex;
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 3px 7px;
+  overflow: hidden;
+  border: 1px solid rgba(221, 224, 255, 0.38);
+  border-radius: 999px;
+  background: rgba(221, 224, 255, 0.13);
+  color: #f8f9ff;
+  font: 750 12px/1.1 var(--font-body);
+  letter-spacing: 0.01em;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+.chat-reminder-time::after {
+  position: absolute;
+  top: -90%;
+  left: -40%;
+  width: 32%;
+  height: 280%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.94), transparent);
+  content: "";
+  pointer-events: none;
+  transform: translate3d(-180%, -35%, 0) rotate(-25deg);
+  animation: chat-reminder-time-flash 3.2s ease-in-out infinite;
+}
+
+@keyframes chat-reminder-time-flash {
+  0% {
+    transform: translate3d(-180%, -35%, 0) rotate(-25deg);
+  }
+  38%,
+  100% {
+    transform: translate3d(520%, 35%, 0) rotate(-25deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-reminder-icon.is-swinging,
+  .chat-reminder-time::after {
+    animation: none;
+  }
+}
+
 .chat-message-kind-divider {
   position: relative;
   width: 100%;

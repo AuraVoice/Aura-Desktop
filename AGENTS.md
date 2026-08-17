@@ -1,5 +1,20 @@
 # Repository Guidelines
 
+## Subjective Product Feedback
+
+When the user gives direct feedback about sound, visuals, wording, animation, or
+other subjective product qualities, treat the user's judgment as authoritative.
+
+Make the smallest requested change and stop. Do not perform research studies,
+benchmark alternatives, analyze waveforms/spectrums, compare multiple candidates,
+or attempt to predict whether the user will like the result unless explicitly
+asked.
+
+If the user asks to find an asset online, do one targeted search, choose one
+clearly usable result matching their description, integrate it, and leave
+subjective acceptance testing to the user. Do not inspect or evaluate the asset's
+subjective quality. Preserve everything the user said was already correct.
+
 ## Required Repository Instructions
 
 Before any repository task, read and follow `CLAUDE.md` in full. It defines architecture, workflows, cross-repository contracts, and working rules. If guidance conflicts, the stricter Agent Git Restrictions below prevail.

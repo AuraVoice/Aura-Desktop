@@ -24,7 +24,7 @@ import type { VoiceSessionStatus } from "./useVoiceBar";
 const FINGERPRINT_INTERVAL_MS = 750;
 const HEARTBEAT_INTERVAL_MS = 20_000;
 const RESPONSE_TIMEOUT_MS = 15_000;
-const MODE_ACK_FALLBACK_MS = 3_000;
+const MODE_ACK_TIMEOUT_MS = 3_000;
 const VERIFICATION_TIMEOUT_MS = 30_000;
 const RETAINED_FRAME_GEOMETRY_COUNT = 6;
 const GUIDE_TASK_STORAGE_KEY = "aura.guide.currentTask.v2";
@@ -258,6 +258,7 @@ export function useGuideMode({ room, status, signedIn, onPoint }: UseGuideModeOp
   const readyAgentRoomRef = useRef<Room | null>(null);
   const pendingModeAckRef = useRef<PendingModeAck | null>(null);
   const activeModeGenerationRef = useRef<number | null>(null);
+  const firstFrameReadyGenerationRef = useRef<number | null>(null);
   const turnTraceRef = useRef<{
     traceId: string;
     eventId: string;
@@ -339,6 +340,7 @@ export function useGuideMode({ room, status, signedIn, onPoint }: UseGuideModeOp
     readyAgentRoomRef.current = null;
     pendingModeAckRef.current = null;
     activeModeGenerationRef.current = null;
+    firstFrameReadyGenerationRef.current = null;
     setActive(false);
     agentPrimeGenerationRef.current += 1;
   }, [clearModeAckTimer, clearResponseTimer, clearVerificationTimer]);
@@ -665,6 +667,7 @@ export function useGuideMode({ room, status, signedIn, onPoint }: UseGuideModeOp
       agentPrimeGenerationRef.current = primeGeneration;
       readyAgentRoomRef.current = null;
       activeModeGenerationRef.current = null;
+      firstFrameReadyGenerationRef.current = null;
       setActive(false);
       clearModeAckTimer();
       const modeGeneration = modeGenerationRef.current + 1;
@@ -687,22 +690,25 @@ export function useGuideMode({ room, status, signedIn, onPoint }: UseGuideModeOp
           return;
         }
         modeAckTimerRef.current = null;
-        readyAgentRoomRef.current = targetRoom;
-        activeModeGenerationRef.current = modeGeneration;
+        pendingModeAckRef.current = null;
+        readyAgentRoomRef.current = null;
+        activeModeGenerationRef.current = null;
+        firstFrameReadyGenerationRef.current = null;
+        setActive(false);
         logGuideEvent("execution", "failed", "mode_ack_timeout", {
           guide_session_id: sessionId,
           generation: modeGeneration,
           guide_epoch: current.epoch,
-          fallback: "legacy_frame_handshake",
+          fallback: "disarm",
         });
         logInfo(
-          "useGuideMode: mode acknowledgment unavailable, trying legacy frame handshake",
+          "useGuideMode: mode acknowledgment unavailable, disarming Guide Mode",
           `generation=${modeGeneration} epoch=${current.epoch}`,
         );
-        if (isLive(statusRef.current)) {
-          void processCaptureRef.current("resume", true);
-        }
-      }, MODE_ACK_FALLBACK_MS);
+        void invoke("disarm_guide").catch((error) =>
+          logGuideFailure("execution", "disarm_after_mode_ack_timeout_failed", error),
+        );
+      }, MODE_ACK_TIMEOUT_MS);
       await publishCurrentMode(targetRoom, modeGeneration);
       if (
         agentPrimeGenerationRef.current !== primeGeneration ||
@@ -719,7 +725,7 @@ export function useGuideMode({ room, status, signedIn, onPoint }: UseGuideModeOp
         `generation=${modeGeneration} epoch=${current.epoch}`,
       );
     },
-    [clearModeAckTimer, publishCurrentMode],
+    [clearModeAckTimer, logGuideFailure, publishCurrentMode],
   );
 
   const startScheduler = useCallback(() => {
@@ -968,6 +974,7 @@ export function useGuideMode({ room, status, signedIn, onPoint }: UseGuideModeOp
         pendingModeAckRef.current = null;
         activeModeGenerationRef.current = null;
         readyAgentRoomRef.current = null;
+        firstFrameReadyGenerationRef.current = null;
         setActive(false);
         logInfo(
           "useGuideMode: mode rejected",
@@ -1053,6 +1060,14 @@ export function useGuideMode({ room, status, signedIn, onPoint }: UseGuideModeOp
           "useGuideMode: task",
           `task=${nextTask.taskId} revision=${nextTask.revision} status=${nextTask.status} step=${nextTask.currentStepId ?? "none"}`,
         );
+        if (
+          !nextTask.completion &&
+          readyAgentRoomRef.current === room &&
+          activeModeGenerationRef.current !== null &&
+          firstFrameReadyGenerationRef.current === activeModeGenerationRef.current
+        ) {
+          setActive(true);
+        }
         if (nextTask.completion) {
           completedRef.current = true;
           trackEvent("guide_completed");
@@ -1137,11 +1152,13 @@ export function useGuideMode({ room, status, signedIn, onPoint }: UseGuideModeOp
             readyAgentRoomRef.current === room &&
             activeModeGenerationRef.current !== null
           ) {
-            setActive(true);
+            firstFrameReadyGenerationRef.current = activeModeGenerationRef.current;
+            if (taskStateRef.current !== null) setActive(true);
           } else if (verdict.payload.accepted !== true) {
             setActive(false);
             readyAgentRoomRef.current = null;
             activeModeGenerationRef.current = null;
+            firstFrameReadyGenerationRef.current = null;
             void invoke("disarm_guide").catch((error) =>
               logGuideFailure("execution", "disarm_after_frame_rejection_failed", error),
             );
@@ -1157,12 +1174,6 @@ export function useGuideMode({ room, status, signedIn, onPoint }: UseGuideModeOp
       const awaiting = awaitingRef.current;
       if (!awaiting || nextStep.frameId !== awaiting.envelope.frameId) return;
       clearResponseTimer();
-      if (
-        readyAgentRoomRef.current === room &&
-        activeModeGenerationRef.current !== null
-      ) {
-        setActive(true);
-      }
       stepsReceivedRef.current += 1;
       trackEvent("guide_steps_received", {
         responseLatencyMs: Math.max(0, Date.now() - awaiting.sentAtMs),
