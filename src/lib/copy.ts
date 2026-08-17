@@ -168,12 +168,14 @@ export const bar = {
 } as const;
 
 export const update = {
+  ready: (version: string) => `Aura v${version} is ready to install.`,
   chipTooltip: (version: string) => `Update ready: restart to install v${version}`,
   confirm: (version: string) => `Update v${version} is ready. Restart Buddy to install it?`,
   later: "Later",
   dismiss: "Dismiss",
-  restartIdle: "Restart now",
+  restartIdle: "Update and restart",
   restartBusy: "Restarting...",
+  laterHint: "The update will remain available from the Aura tray menu.",
   restarting: "Installing the update. Buddy will be right back.",
   deferred: "Buddy is in a call. Try again after it ends.",
   failed: "The update couldn't install. Buddy will retry in the background.",

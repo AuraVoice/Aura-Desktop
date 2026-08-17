@@ -74,6 +74,7 @@
    not a fixed 460). */
 .notch-column > .draft-card,
 .notch-column > .notification-inbox-card,
+.notch-column > .update-banner-overlay,
 .notch-column > .callback-card {
   align-self: stretch;
   justify-self: stretch;
@@ -101,16 +102,19 @@
    overrides touch only animation-name. */
 .notch-column-bottom > .draft-card,
 .notch-column-bottom > .notification-inbox-card,
+.notch-column-bottom > .update-banner-overlay,
 .notch-column-bottom > .callback-card {
   animation-name: card-enter-bottom;
 }
 .notch-column-left > .draft-card,
 .notch-column-left > .notification-inbox-card,
+.notch-column-left > .update-banner-overlay,
 .notch-column-left > .callback-card {
   animation-name: card-enter-left;
 }
 .notch-column-right > .draft-card,
 .notch-column-right > .notification-inbox-card,
+.notch-column-right > .update-banner-overlay,
 .notch-column-right > .callback-card {
   animation-name: card-enter-right;
 }

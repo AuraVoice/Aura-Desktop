@@ -31,6 +31,12 @@ const JUST_UPDATED_MARKER: &str = "just-updated";
 #[derive(Default)]
 pub struct PendingUpdate(pub Mutex<Option<(Update, Vec<u8>)>>);
 
+/// Version whose in-app banner was dismissed for this process. The downloaded
+/// update remains available from the tray, and a fresh app launch offers it
+/// again.
+#[derive(Default)]
+pub struct DismissedUpdate(pub Mutex<Option<String>>);
+
 /// Version read from the just-updated marker at startup. Consumed (taken)
 /// by the `just_updated_version` command so the confirmation caption shows
 /// once per post-update launch, not again on every VoiceBar remount.
@@ -131,9 +137,16 @@ fn handle_downloaded(app: &AppHandle, update: Update, bytes: Vec<u8>, auto_insta
     if let Some(handle) = app.try_state::<PendingUpdate>() {
         *handle.0.lock().unwrap_or_else(|e| e.into_inner()) = Some((update, bytes));
     }
+    announce_update_ready(app, &version);
+}
+
+fn announce_update_ready(app: &AppHandle, version: &str) {
+    if let Some(handle) = app.try_state::<DismissedUpdate>() {
+        *handle.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
     tray::mark_update_ready(app, &version);
     info!("update check: v{version} downloaded, ready once accepted");
-    if let Err(e) = app.emit("update-ready", UpdateReadyPayload { version }) {
+    if let Err(e) = app.emit("update-ready", UpdateReadyPayload { version: version.to_string() }) {
         error!("update check: failed to emit update-ready: {e}");
     }
 }
@@ -199,7 +212,11 @@ pub async fn install_update(app: AppHandle) -> Result<bool, String> {
 #[tauri::command]
 pub async fn check_for_update(app: AppHandle) -> Result<ManualUpdateCheckResult, String> {
     if let Some(version) = pending_update_version(app.clone()) {
-        return install_downloaded_update(app, version).await;
+        announce_update_ready(&app, &version);
+        return Ok(ManualUpdateCheckResult {
+            status: "ready",
+            version: Some(version),
+        });
     }
 
     let updater = app.updater().map_err(|e| e.to_string())?;
@@ -218,16 +235,9 @@ pub async fn check_for_update(app: AppHandle) -> Result<ManualUpdateCheckResult,
         };
         *handle.0.lock().unwrap_or_else(|e| e.into_inner()) = Some((update, bytes));
     }
-    install_downloaded_update(app, version).await
-}
-
-async fn install_downloaded_update(
-    app: AppHandle,
-    version: String,
-) -> Result<ManualUpdateCheckResult, String> {
-    let installed = install_update(app).await?;
+    announce_update_ready(&app, &version);
     Ok(ManualUpdateCheckResult {
-        status: if installed { "installing" } else { "deferred" },
+        status: "ready",
         version: Some(version),
     })
 }
@@ -240,6 +250,29 @@ pub fn pending_update_version(app: AppHandle) -> Option<String> {
     let handle = app.try_state::<PendingUpdate>()?;
     let pending = handle.0.lock().unwrap_or_else(|e| e.into_inner());
     pending.as_ref().map(|(update, _)| update.version.clone())
+}
+
+#[tauri::command]
+pub fn pending_update_banner_version(app: AppHandle) -> Option<String> {
+    let version = pending_update_version(app.clone())?;
+    let dismissed = app.try_state::<DismissedUpdate>()?;
+    let dismissed = dismissed.0.lock().unwrap_or_else(|e| e.into_inner());
+    (dismissed.as_deref() != Some(version.as_str())).then_some(version)
+}
+
+#[tauri::command]
+pub fn dismiss_update_banner(app: AppHandle, version: String) -> bool {
+    if pending_update_version(app.clone()).as_deref() != Some(version.as_str()) {
+        return false;
+    }
+    let Some(handle) = app.try_state::<DismissedUpdate>() else {
+        return false;
+    };
+    *handle.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(version.clone());
+    if let Err(e) = app.emit("update-dismissed", UpdateReadyPayload { version }) {
+        error!("updater: failed to emit update-dismissed: {e}");
+    }
+    true
 }
 
 /// One-shot: taking (not reading) the notice is what guarantees the caption

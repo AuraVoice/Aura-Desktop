@@ -25,6 +25,7 @@ export function useUpdateReady(): UpdateReadyState {
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    let unlistenDismissed: (() => void) | undefined;
     listen<UpdateReadyPayload>("update-ready", (event) => {
       setVersion(event.payload.version);
     })
@@ -32,10 +33,17 @@ export function useUpdateReady(): UpdateReadyState {
         unlisten = fn;
       })
       .catch((err) => logError("useUpdateReady: listen update-ready", err));
+    listen<UpdateReadyPayload>("update-dismissed", (event) => {
+      setVersion((current) => current === event.payload.version ? null : current);
+    })
+      .then((fn) => {
+        unlistenDismissed = fn;
+      })
+      .catch((err) => logError("useUpdateReady: listen update-dismissed", err));
 
     // Covers the race where the download finished before this hook mounted,
     // same idiom as OverlayRoot's current_overlay_state query.
-    invoke<string | null>("pending_update_version")
+    invoke<string | null>("pending_update_banner_version")
       .then((pending) => {
         if (pending) setVersion(pending);
       })
@@ -52,6 +60,7 @@ export function useUpdateReady(): UpdateReadyState {
 
     return () => {
       unlisten?.();
+      unlistenDismissed?.();
       if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current);
     };
   }, []);

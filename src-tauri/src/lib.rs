@@ -261,6 +261,7 @@ pub fn run() {
         .manage(guide::GuideToggleHandle::default())
         .manage(ForegroundGeneration::default())
         .manage(updater::PendingUpdate::default())
+        .manage(updater::DismissedUpdate::default())
         .manage(updater::UpdatedNotice::default())
         .manage(meeting::MeetingRuntimeLease::acquire())
         .manage(meeting::MeetingCaptureHandle::default())
@@ -306,6 +307,8 @@ pub fn run() {
             updater::install_update,
             updater::check_for_update,
             updater::pending_update_version,
+            updater::pending_update_banner_version,
+            updater::dismiss_update_banner,
             updater::just_updated_version,
             logging::read_recent_log_lines,
             screenshot::capture_cursor_display_with_geometry,

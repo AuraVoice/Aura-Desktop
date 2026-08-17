@@ -38,6 +38,8 @@ import { navSections, navTitles } from "./navConfig";
 import { desktopOnboardingSeenForUidKey, overlayStorePath } from "../lib/copy";
 import { logError } from "../lib/log";
 import { useGeneralSettings } from "../state/useGeneralSettings";
+import { useUpdateReady } from "../overlay/useUpdateReady";
+import { UpdateBanner } from "../UpdateBanner";
 import "./dashboard.css";
 
 // Routes with a real page today. Everything else falls back to the placeholder.
@@ -60,6 +62,7 @@ export const dashboardPages: Record<string, ReactElement> = {
 
 export function DashboardShell({ user, collapsed }: { user: User | null; collapsed: boolean }) {
   const generalSettings = useGeneralSettings();
+  const updateReady = useUpdateReady();
   const location = useLocation();
   const navigate = useNavigate();
   const contentRef = useRef<HTMLDivElement>(null);
@@ -96,6 +99,11 @@ export function DashboardShell({ user, collapsed }: { user: User | null; collaps
           title={location.pathname === "/insights" ? "" : title}
           user={user}
           notifications={notifications}
+        />
+        <UpdateBanner
+          version={updateReady.version}
+          updatedVersion={updateReady.updatedNotice}
+          surface="dashboard"
         />
         <div className="db-content" ref={contentRef}>
           <DashboardResourceScope uid={user.uid}>

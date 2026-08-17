@@ -38,11 +38,15 @@ import { useChatScreenCapture } from "./useChatScreenCapture";
 import { useChatSession } from "./useChatSession";
 import { useOutputMode } from "./useOutputMode";
 import { useStatusPillEvents } from "./useStatusPillEvents";
+import { useUpdateReady } from "./useUpdateReady";
+import { UpdateBanner } from "../UpdateBanner";
 
 // Fixed heights remain for fixed-content surfaces. DraftCard reports its own
 // measured content height so a short reply stays compact and a long one grows.
 const NOTIFICATION_INBOX_CARD_HEIGHT = 300;
 const CALLBACK_CARD_HEIGHT = 180;
+const UPDATE_BANNER_HEIGHT = 112;
+const UPDATED_NOTICE_HEIGHT = 72;
 
 type OverlayPresentation =
   | "hidden"
@@ -60,6 +64,7 @@ interface OverlaySnapshot {
 export function OverlayRoot() {
   const { user } = useAuth();
   const generalSettings = useGeneralSettings();
+  const updateReady = useUpdateReady();
   const [presentation, setPresentation] = useState<OverlayPresentation>("hidden");
   const [notchEdge, setNotchEdge] = useState<NotchEdge>("top");
   const [chatOpen, setChatOpen] = useState(false);
@@ -258,21 +263,30 @@ export function OverlayRoot() {
     enabled: generalSettings.dailyCatchUp,
   });
 
-  // Slot priority (CLAUDE.md): chat > draft > agenda > meeting note > daily
+  // Slot priority (CLAUDE.md): chat > draft > inbox > update > daily
   // catch-up. Only chat, draft, the inbox (opened from the tray), and the daily
   // catch-up are mounted today. Chat outranks everything below it because the
   // user is mid-sentence in it: an arriving draft card must never take the slot
   // out from under them.
   const showInbox = user !== null && inboxOpen && !showDraftCard;
+  const showUpdateBanner =
+    user !== null
+    && (updateReady.version !== null || updateReady.updatedNotice !== null)
+    && !showDraftCard
+    && !showInbox;
   const showCallbackCard =
-    user !== null && callbackCard.visible && !showDraftCard && !showInbox;
+    user !== null && callbackCard.visible && !showDraftCard && !showInbox && !showUpdateBanner;
   const slotHeight = showDraftCard
     ? draftCardHeight
     : showInbox
       ? NOTIFICATION_INBOX_CARD_HEIGHT
-      : showCallbackCard
-        ? CALLBACK_CARD_HEIGHT
-        : null;
+      : showUpdateBanner
+        ? updateReady.version !== null
+          ? UPDATE_BANNER_HEIGHT
+          : UPDATED_NOTICE_HEIGHT
+        : showCallbackCard
+          ? CALLBACK_CARD_HEIGHT
+          : null;
   const appliedSlotHeight = visibleChatOpen ? chatSlotHeight : slotHeight;
 
   useEffect(() => {
@@ -576,6 +590,13 @@ export function OverlayRoot() {
           notifications={notifications}
           onClose={() => setInboxOpen(false)}
           onAction={handleNotificationAction}
+        />
+      )}
+      {!visibleChatOpen && showUpdateBanner && (
+        <UpdateBanner
+          version={updateReady.version}
+          updatedVersion={updateReady.updatedNotice}
+          surface="overlay"
         />
       )}
       {!visibleChatOpen && showCallbackCard && <CallbackCard card={callbackCard} />}

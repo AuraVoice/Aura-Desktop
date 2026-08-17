@@ -1,0 +1,110 @@
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.update-banner-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.update-banner-copy strong {
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.update-banner-copy span {
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.update-banner-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.update-banner button {
+  min-height: 32px;
+  border-radius: 999px;
+  padding: 7px 13px;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.update-banner button:disabled {
+  cursor: wait;
+  opacity: 0.58;
+}
+
+.glass-surface.update-banner-overlay {
+  width: 100%;
+  height: 100%;
+  padding: 16px 18px;
+  border-radius: 22px;
+}
+
+.update-banner-overlay .update-banner-copy span {
+  color: var(--glass-text-dim);
+}
+
+.update-banner-overlay .update-banner-primary {
+  border: 0;
+  background: var(--glass-accent);
+  color: #0a0a0a;
+}
+
+.update-banner-overlay .update-banner-secondary {
+  border: 1px solid var(--glass-border-flat);
+  background: var(--glass-field-fill);
+  color: var(--glass-text-bright);
+}
+
+.update-banner-dashboard {
+  margin: 0 32px;
+  padding: 12px 16px;
+  flex-shrink: 0;
+  border: 1px solid rgba(30, 200, 176, 0.3);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: var(--db-shadow-sm);
+}
+
+.update-banner-dashboard .update-banner-copy span {
+  color: var(--db-text-dim);
+}
+
+.update-banner-dashboard .update-banner-primary {
+  border: 0;
+  background: var(--db-active);
+  color: #fff;
+}
+
+.update-banner-dashboard .update-banner-secondary {
+  border: 1px solid var(--db-border);
+  background: #fff;
+  color: var(--db-text);
+}
+
+.update-banner button:focus-visible {
+  outline: 2px solid var(--glass-accent, var(--db-teal));
+  outline-offset: 2px;
+}
+
+@media (max-width: 760px) {
+  .update-banner-dashboard {
+    margin-inline: 20px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .update-banner button {
+    transition: none;
+  }
+}

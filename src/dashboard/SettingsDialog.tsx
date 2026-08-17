@@ -48,7 +48,7 @@ const SETTINGS_PAGES: Record<string, ReactElement> = {
 export const settingsRoutes = new Set(Object.keys(SETTINGS_PAGES));
 
 interface ManualUpdateCheckResult {
-  status: "up_to_date" | "installing" | "deferred";
+  status: "up_to_date" | "ready";
   version: string | null;
 }
 
@@ -57,7 +57,7 @@ export function SettingsDialog({ path, onClose }: { path: string; onClose: () =>
   const restoreRef = useRef<HTMLElement | null>(null);
   const statusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [version, setVersion] = useState("");
-  const [updateStatus, setUpdateStatus] = useState<"idle" | "checking" | "up_to_date" | "installing" | "deferred" | "error">("idle");
+  const [updateStatus, setUpdateStatus] = useState<"idle" | "checking" | "up_to_date" | "ready" | "error">("idle");
   const [showUpdateHint, setShowUpdateHint] = useState(false);
   const versionLabel = version ? `Aura v${version}` : "Aura";
   const updateHint = updateStatus === "idle" ? "Check for updates" : updateStatusLabel(updateStatus);
@@ -86,7 +86,7 @@ export function SettingsDialog({ path, onClose }: { path: string; onClose: () =>
   }, []);
 
   async function checkForUpdate() {
-    if (updateStatus === "checking" || updateStatus === "installing") return;
+    if (updateStatus === "checking") return;
     if (statusTimerRef.current) clearTimeout(statusTimerRef.current);
     setShowUpdateHint(true);
     setUpdateStatus("checking");
@@ -98,7 +98,7 @@ export function SettingsDialog({ path, onClose }: { path: string; onClose: () =>
     }
   }
 
-  function showUpdateStatus(status: "up_to_date" | "installing" | "deferred" | "error") {
+  function showUpdateStatus(status: "up_to_date" | "ready" | "error") {
     setUpdateStatus(status);
     setShowUpdateHint(true);
     statusTimerRef.current = setTimeout(() => {
@@ -141,7 +141,7 @@ export function SettingsDialog({ path, onClose }: { path: string; onClose: () =>
                   className="db-settings-update-btn"
                   aria-label="Check for updates"
                   onClick={checkForUpdate}
-                  disabled={updateStatus === "checking" || updateStatus === "installing"}
+                  disabled={updateStatus === "checking"}
                 >
                   <CloudCheck size={22} aria-hidden />
                 </button>
@@ -165,16 +165,14 @@ export function SettingsDialog({ path, onClose }: { path: string; onClose: () =>
   );
 }
 
-function updateStatusLabel(status: "checking" | "up_to_date" | "installing" | "deferred" | "error" | "idle") {
+function updateStatusLabel(status: "checking" | "up_to_date" | "ready" | "error" | "idle") {
   switch (status) {
     case "checking":
       return "Checking for updates...";
     case "up_to_date":
       return "Up-to-date";
-    case "installing":
-      return "Installing update...";
-    case "deferred":
-      return "Finish voice or meeting, then try again.";
+    case "ready":
+      return "Update ready";
     case "error":
       return "Update check failed.";
     default:
