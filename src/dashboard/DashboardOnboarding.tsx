@@ -5,6 +5,7 @@ import { HotkeyTourStep } from "../overlay/HotkeyTourStep";
 import { AgentDemoStep } from "../overlay/AgentDemoStep";
 import { ProfileSetupStep } from "../overlay/ProfileSetupStep";
 import { PrivacySetupStep } from "../overlay/PrivacySetupStep";
+import { VoiceSetupStep } from "../overlay/VoiceSetupStep";
 import { useVoiceBar } from "../overlay/useVoiceBar";
 import { useOnboardingTail } from "../overlay/useOnboardingTail";
 import { useDashboardUser } from "./useDashboardUser";
@@ -19,7 +20,7 @@ interface VoiceToggleKeyStatus {
 }
 
 /** Post-sign-in tail owned by the dashboard window: profile, hotkey tour,
- * privacy, then live demo. The main overlay stays hidden while this runs. The
+ * privacy, voice choice, then live demo. The main overlay stays hidden while this runs. The
  * live demo reuses this window's own useVoiceBar
  * (LiveKit is per-webview, so this is a distinct instance from the overlay's). */
 function DashboardTail({
@@ -34,7 +35,7 @@ function DashboardTail({
   onFinish: () => void;
 }) {
   const voice = useVoiceBar();
-  type DashboardTailStep = "profile" | "tour" | "privacy" | "demo";
+  type DashboardTailStep = "profile" | "tour" | "privacy" | "voice" | "demo";
   const initialStepRef = useRef<DashboardTailStep>(needsProfile ? "profile" : "tour");
   const [step, setStep] = useState<DashboardTailStep>(initialStepRef.current);
   const [keyLabel, setKeyLabel] = useState<string | undefined>();
@@ -48,6 +49,8 @@ function DashboardTail({
   async function goBack() {
     if (step === "demo") {
       if (voice.desiredActive) await voice.endSession().catch(() => {});
+      setStep("voice");
+    } else if (step === "voice") {
       setStep("privacy");
     } else if (step === "privacy") {
       setStep("tour");
@@ -78,8 +81,9 @@ function DashboardTail({
         <HotkeyTourStep keyLabel={keyLabel} onContinue={() => setStep("privacy")} />
       )}
       {step === "privacy" && (
-        <PrivacySetupStep onContinue={() => setStep("demo")} />
+        <PrivacySetupStep onContinue={() => setStep("voice")} />
       )}
+      {step === "voice" && <VoiceSetupStep onContinue={() => setStep("demo")} />}
       {step === "demo" && <AgentDemoStep voice={voice} onFinish={onFinish} />}
     </div>
   );

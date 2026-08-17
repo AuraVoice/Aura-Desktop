@@ -6,10 +6,11 @@ import { HotkeyTourStep } from "./HotkeyTourStep";
 import { AgentDemoStep } from "./AgentDemoStep";
 import { ProfileSetupStep } from "./ProfileSetupStep";
 import { PrivacySetupStep } from "./PrivacySetupStep";
+import { VoiceSetupStep } from "./VoiceSetupStep";
 import type { VoiceBarState } from "./useVoiceBar";
 import "./OnboardingFlow.css";
 
-type TailStep = "profile" | "hotkeyTour" | "privacy" | "agentDemo";
+type TailStep = "profile" | "hotkeyTour" | "privacy" | "voice" | "agentDemo";
 
 interface VoiceToggleKeyStatus {
   available: boolean;
@@ -31,8 +32,8 @@ interface OnboardingTailProps {
   onComplete: () => void;
 }
 
-/** The post-sign-in tail: hotkey tour, then a live agent demo, then a handoff
- * to the dashboard. Rendered by OverlayRoot in a panel-sized surface once the
+/** The post-sign-in tail: hotkey tour, privacy, voice choice, then a live agent
+ * demo and handoff to the dashboard. Rendered by OverlayRoot once the
  * user signs in mid first-run (OnboardingFlow itself only mounts signed-out). */
 export function OnboardingTail({
   uid,
@@ -99,6 +100,8 @@ export function OnboardingTail({
   async function goBack() {
     if (step === "agentDemo") {
       if (voice.desiredActive) await voice.endSession().catch(() => {});
+      setStep("voice");
+    } else if (step === "voice") {
       setStep("privacy");
     } else if (step === "privacy") {
       setStep("hotkeyTour");
@@ -133,8 +136,11 @@ export function OnboardingTail({
       )}
       {step === "privacy" && (
         <PrivacySetupStep
-          onContinue={() => setStep("agentDemo")}
+          onContinue={() => setStep("voice")}
         />
+      )}
+      {step === "voice" && (
+        <VoiceSetupStep onContinue={() => setStep("agentDemo")} />
       )}
       {step === "agentDemo" && (
         <AgentDemoStep voice={voice} onFinish={() => void finishDemo()} />

@@ -5,6 +5,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   CloudCheck,
   CreditCard,
+  AudioLines,
   Monitor,
   SlidersHorizontal,
   UserRound,
@@ -15,6 +16,7 @@ import {
 import { AccountPage } from "./pages/AccountPage";
 import { BillingPage } from "./pages/BillingPage";
 import { GeneralPage } from "./pages/GeneralPage";
+import { VoicePage } from "./pages/VoicePage";
 
 interface SettingsItem {
   to: string;
@@ -24,6 +26,7 @@ interface SettingsItem {
 
 const SETTINGS_ITEMS: SettingsItem[] = [
   { to: "/general", label: "General", Icon: SlidersHorizontal },
+  { to: "/voice", label: "Voice", Icon: AudioLines },
   { to: "/system", label: "System", Icon: Monitor },
 ];
 
@@ -35,6 +38,7 @@ const ACCOUNT_ITEMS: SettingsItem[] = [
 
 const SETTINGS_PAGES: Record<string, ReactElement> = {
   "/general": <GeneralPage section="general" />,
+  "/voice": <VoicePage />,
   "/system": <GeneralPage section="system" />,
   "/account": <AccountPage />,
   "/billing": <BillingPage />,

@@ -1,0 +1,30 @@
+.voice-setup-step {
+  width: min(100%, 720px);
+  max-width: 720px;
+  gap: 14px;
+}
+
+.voice-setup-heading {
+  display: flex;
+  max-width: 560px;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.voice-setup-heading .onboarding-heading {
+  font-size: 24px;
+  letter-spacing: -0.02em;
+}
+
+.voice-setup-heading .onboarding-body {
+  line-height: 1.45;
+}
+
+.voice-setup-continue {
+  min-width: 132px;
+  margin-top: 2px;
+}
+
+.onboarding-flow:has(.voice-setup-step) .onboarding-topbar {
+  max-width: 720px;
+}

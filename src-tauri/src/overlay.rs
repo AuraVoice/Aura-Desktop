@@ -132,6 +132,7 @@ pub enum OnboardingStep {
     Role,
     Link,
     HotkeyTour,
+    Voice,
     AgentDemo,
 }
 
@@ -543,7 +544,8 @@ fn size_for(state: &OverlayState) -> LogicalSize<f64> {
         (OverlayPresentation::Panel, PanelVariant::Setup) => {
             LogicalSize::new(SETUP_WIDTH, SETUP_HEIGHT)
         }
-        (OverlayPresentation::Panel, _) if state.onboarding_step == OnboardingStep::HotkeyTour => {
+        (OverlayPresentation::Panel, _)
+            if matches!(state.onboarding_step, OnboardingStep::HotkeyTour | OnboardingStep::Voice) => {
             LogicalSize::new(HOTKEY_TOUR_WIDTH, HOTKEY_TOUR_HEIGHT)
         }
         _ => LogicalSize::new(COMPANION_WIDTH, COMPANION_HEIGHT),
