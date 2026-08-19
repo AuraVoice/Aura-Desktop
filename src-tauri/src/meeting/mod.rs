@@ -248,6 +248,18 @@ pub fn startup_maintenance(app: &AppHandle) {
                 queue::initialize(&maintenance_app)?;
                 let reconciliation = if first_run {
                     queue::record_runtime_lease(&maintenance_app, &maintenance_runtime, true)?;
+                    // Before rebuilding orphaned files, release runs a dead
+                    // process left marked as still capturing - otherwise they
+                    // stay undeletable and keep reporting a live recording.
+                    let interrupted = queue::interrupt_orphaned_captures(
+                        &maintenance_app,
+                        &maintenance_runtime,
+                    )?;
+                    if interrupted > 0 {
+                        warn!(
+                            "meeting.store: released {interrupted} capture(s) stranded by a previous run"
+                        );
+                    }
                     Some(queue::reconcile(&maintenance_app)?)
                 } else {
                     None

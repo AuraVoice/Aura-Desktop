@@ -61,10 +61,11 @@ mod usage;
 mod vocab;
 
 use serde::{Deserialize, Serialize};
+use tauri::{Emitter, Manager};
 
 pub use chord::DICTATION_CHORD;
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DictationStatus {
     /// A hold would actually transcribe right now: consented, signed in, and
@@ -154,8 +155,8 @@ mod platform {
     /// worker is busy with a voice turn.
     const PROBE_TICK: Duration = Duration::from_millis(250);
     const SIGN_IN_REASON: &str = "Sign in to use dictation.";
-    const UNAVAILABLE_REASON: &str = "Dictation is temporarily unavailable. Try again shortly.";
-    const UNAVAILABLE_HUD: &str = "Dictation is temporarily unavailable. Nothing was typed.";
+    const UNAVAILABLE_REASON: &str = "Dictation credential unavailable. Try again shortly.";
+    const UNAVAILABLE_HUD: &str = "Dictation credential unavailable. Nothing was typed.";
 
     enum Message {
         Chord(ChordSignal),
@@ -209,6 +210,7 @@ mod platform {
         /// consent being given or withdrawn.
         pub fn refresh(&self, app: &AppHandle) {
             refresh_status(app, &self.status);
+            super::emit_status_changed(app);
         }
     }
 
@@ -1267,7 +1269,47 @@ pub fn dictation_status(
     state: tauri::State<'_, DictationHandle>,
 ) -> DictationStatus {
     state.refresh(&app);
-    state.status()
+    #[cfg(windows)]
+    {
+        with_listener_health(&app, state.status())
+    }
+    #[cfg(not(windows))]
+    {
+        state.status()
+    }
+}
+
+#[cfg(windows)]
+const LISTENER_UNAVAILABLE_REASON: &str =
+    "Keyboard listener unavailable. Restart Aura. If this continues, another security tool may be blocking keyboard access.";
+
+#[cfg(windows)]
+static LAST_EMITTED_STATUS: std::sync::OnceLock<std::sync::Mutex<Option<DictationStatus>>> =
+    std::sync::OnceLock::new();
+
+#[cfg(windows)]
+fn with_listener_health(app: &tauri::AppHandle, mut status: DictationStatus) -> DictationStatus {
+    if let Some(listener) = app.try_state::<crate::voice_toggle_key::VoiceToggleKeyHandle>() {
+        if !listener.status().available {
+            status.available = false;
+            status.reason = Some(LISTENER_UNAVAILABLE_REASON.to_string());
+            status.biasing_available = false;
+        }
+    }
+    status
+}
+
+#[cfg(windows)]
+pub fn emit_status_changed(app: &tauri::AppHandle) {
+    let Some(handle) = app.try_state::<DictationHandle>() else { return };
+    let next = with_listener_health(app, handle.status());
+    let last = LAST_EMITTED_STATUS.get_or_init(|| std::sync::Mutex::new(None));
+    let mut previous = last.lock().unwrap_or_else(|error| error.into_inner());
+    if previous.as_ref() == Some(&next) {
+        return;
+    }
+    *previous = Some(next.clone());
+    let _ = app.emit("dictation-status-changed", next);
 }
 
 #[derive(Clone, Deserialize, Serialize)]

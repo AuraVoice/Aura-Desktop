@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   DEFAULT_GENERAL_SETTINGS,
   IMPROVEMENT_CONSENT_VERSION,
@@ -8,6 +9,7 @@ import {
   type GeneralSettings,
 } from "../../lib/generalSettings";
 import { logError } from "../../lib/log";
+import { loadDictationStatus, type DictationStatus } from "../../lib/dictationStatus";
 import { resetHotkeyBindings } from "../../lib/hotkeys";
 import { useHotkeyBindings } from "../../state/useHotkeyBindings";
 import { ShortcutEditorDialog } from "../../overlay/ShortcutEditorDialog";
@@ -73,6 +75,7 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
   // failed write shows as off instead of lying. Same source of truth as the
   // tray's "Start with Windows" item, which stays in sync automatically.
   const [launchAtStartup, setLaunchAtStartup] = useState(false);
+  const [dictationStatus, setDictationStatus] = useState<DictationStatus | null>(null);
   const pageCopy = PAGE_COPY[section];
 
   useEffect(() => {
@@ -80,6 +83,23 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
     invoke<boolean>("autostart_enabled")
       .then(setLaunchAtStartup)
       .catch((err) => logError("GeneralPage: read autostart", err));
+  }, [section]);
+
+  useEffect(() => {
+    if (section !== "system") return;
+    let active = true;
+    void loadDictationStatus()
+      .then((status) => {
+        if (active) setDictationStatus(status);
+      })
+      .catch((err) => logError("GeneralPage: load dictation status", err));
+    const pending = listen<DictationStatus>("dictation-status-changed", (event) => {
+      if (active) setDictationStatus(event.payload);
+    });
+    return () => {
+      active = false;
+      void pending.then((unlisten) => unlisten());
+    };
   }, [section]);
 
   useEffect(() => {
@@ -348,6 +368,33 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
                 {resettingShortcuts ? "Resetting..." : "Reset to defaults"}
               </button>
               {shortcutResetError && <span className="db-shortcut-reset-error">{shortcutResetError}</span>}
+            </div>
+          </SettingsSection>
+
+          <SettingsSection
+            title="Dictation"
+            description="A fixed hold shortcut that works in supported text fields."
+          >
+            <div className="db-panel db-shortcut-list">
+              <div className="db-shortcut-row">
+                <span>Hold to dictate</span>
+                <span className="db-shortcut-keys">
+                  {(dictationStatus?.chordLabel ?? "Ctrl + Win").split(" + ").map((key) => (
+                    <kbd key={key}>{key}</kbd>
+                  ))}
+                  <kbd>Fixed</kbd>
+                </span>
+              </div>
+              <div className="db-shortcut-row">
+                <span>Status</span>
+                <span className="db-setting-description">
+                  {dictationStatus === null
+                    ? "Checking listener..."
+                    : dictationStatus.available
+                      ? "Ready"
+                      : dictationStatus.reason}
+                </span>
+              </div>
             </div>
           </SettingsSection>
 

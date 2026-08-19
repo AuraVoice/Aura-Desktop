@@ -23,21 +23,21 @@ export interface TraceUploadLease {
   traceId: string;
   schemaVersion: number;
   recordedAtMs: number;
-  modelId: string;
-  sherpaVersion: string;
-  appVersion: string;
   durationMs: number;
   audioSha256: string;
-  audioBytes: number;
-  asrText: string;
+  sampleRateHz: number;
+  channels: number;
+  language: string;
+  provider: string;
+  providerModel: string;
+  rawTranscript: string;
   insertedText: string;
-  finalText: string | null;
-  groundTruth: string | null;
+  finalText: string;
+  trainingText: string;
   edits: EditOp[];
-  locallyCorrected: boolean;
-  observations: number;
-  app: string;
-  fieldRole: string;
+  labelSource: "observed_field";
+  labelQuality: "silver";
+  normalizationVersion: number;
   consentVersion: number;
 }
 

@@ -28,6 +28,7 @@ const VK_RCONTROL: u32 = 0xA3;
 const VK_LMENU: u32 = 0xA4;
 const VK_RMENU: u32 = 0xA5;
 const VK_LWIN: u32 = 0x5B;
+const VK_RWIN: u32 = 0x5C;
 
 /// Ctrl + Win is the default because it exists on 100% of Windows keyboards,
 /// is comfortable one-handed in the bottom-left corner, and does nothing in
@@ -53,7 +54,7 @@ impl DictationChord {
     /// partner key is down. An empty partner set means a single-key chord.
     pub fn vk_sets(self) -> (&'static [u32], &'static [u32]) {
         match self {
-            DictationChord::CtrlWin => (&[VK_LCONTROL], &[VK_LWIN]),
+            DictationChord::CtrlWin => (&[VK_LCONTROL, VK_RCONTROL], &[VK_LWIN, VK_RWIN]),
             DictationChord::CtrlShift => (&[VK_LCONTROL], &[VK_LSHIFT, VK_RSHIFT]),
             DictationChord::CtrlAlt => (&[VK_LCONTROL], &[VK_LMENU, VK_RMENU]),
             DictationChord::WinShift => (&[VK_LWIN], &[VK_LSHIFT, VK_RSHIFT]),
@@ -81,7 +82,10 @@ impl DictationChord {
     /// document" would fire Win+D, Win+E and Win+R.
     pub fn needs_win_guard(self) -> bool {
         let (anchor, partner) = self.vk_sets();
-        anchor.contains(&VK_LWIN) || partner.contains(&VK_LWIN)
+        anchor.contains(&VK_LWIN)
+            || anchor.contains(&VK_RWIN)
+            || partner.contains(&VK_LWIN)
+            || partner.contains(&VK_RWIN)
     }
 
     /// True when the chord's partner is Alt. A bare Alt release activates the
@@ -141,8 +145,8 @@ pub struct ChordOutcome {
 /// voice_toggle_key's hook thread; never shared, never locked.
 #[derive(Default)]
 pub struct ChordState {
-    anchor_held: bool,
-    partner_held: bool,
+    anchor_held: u8,
+    partner_held: u8,
     prewarmed: bool,
     armed: bool,
 }
@@ -174,23 +178,15 @@ impl ChordState {
         }
         let (anchor, partner) = chord.vk_sets();
         if is_down {
-            if anchor.contains(&vk) {
-                self.anchor_held = true;
-            }
-            if partner.contains(&vk) {
-                self.partner_held = true;
-            }
+            self.anchor_held |= key_mask(anchor, vk);
+            self.partner_held |= key_mask(partner, vk);
         } else if is_up {
-            if anchor.contains(&vk) {
-                self.anchor_held = false;
-            }
-            if partner.contains(&vk) {
-                self.partner_held = false;
-            }
+            self.anchor_held &= !key_mask(anchor, vk);
+            self.partner_held &= !key_mask(partner, vk);
         }
 
         let engaged = self.engaged();
-        let any_held = self.anchor_held || self.partner_held;
+        let any_held = self.anchor_held != 0 || self.partner_held != 0;
         let signal = if engaged && !self.armed {
             self.armed = true;
             self.prewarmed = true;
@@ -213,6 +209,13 @@ impl ChordState {
 
     fn engaged(&self) -> bool {
         let (_, partner) = DICTATION_CHORD.vk_sets();
-        self.anchor_held && (partner.is_empty() || self.partner_held)
+        self.anchor_held != 0 && (partner.is_empty() || self.partner_held != 0)
     }
+}
+
+fn key_mask(keys: &[u32], vk: u32) -> u8 {
+    keys.iter()
+        .position(|key| *key == vk)
+        .map(|index| 1 << index)
+        .unwrap_or(0)
 }

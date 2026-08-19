@@ -52,27 +52,23 @@ pub struct TraceUploadLease {
     pub trace_id: String,
     pub schema_version: u32,
     pub recorded_at_ms: i64,
-    pub model_id: String,
-    pub sherpa_version: String,
-    pub app_version: String,
     pub duration_ms: u32,
     /// SHA-256 of the FLAC body the pump will send, so the server can reject a
     /// mismatched pair rather than storing audio that does not match the label.
     pub audio_sha256: String,
-    pub audio_bytes: usize,
-    /// Raw recognizer output.
-    pub asr_text: String,
-    /// What was typed, after the local correction pass.
+    pub sample_rate_hz: u32,
+    pub channels: u8,
+    pub language: String,
+    pub provider: String,
+    pub provider_model: String,
+    pub raw_transcript: String,
     pub inserted_text: String,
-    /// What the user settled on.
-    pub final_text: Option<String>,
-    /// The training label: `insertedText` with only recognition fixes applied.
-    pub ground_truth: Option<String>,
+    pub final_text: String,
+    pub training_text: String,
     pub edits: Vec<super::record::EditOp>,
-    pub locally_corrected: bool,
-    pub observations: u32,
-    pub app: String,
-    pub field_role: String,
+    pub label_source: String,
+    pub label_quality: String,
+    pub normalization_version: u32,
     pub consent_version: u32,
 }
 
@@ -82,7 +78,10 @@ pub struct TraceUploadLease {
 /// exactly one place a trace can enter the queue and no path that could queue an
 /// unsettled one.
 pub fn mark_eligible(record: &mut TraceRecord, settings: &TraceSettings) {
-    if !settings.shares() || !record.is_shareable() {
+    if !settings.shares()
+        || !record.is_shareable()
+        || record.consent_version != Some(settings.consent_version)
+    {
         return;
     }
     if record.share_state != ShareState::Ineligible {
@@ -91,7 +90,6 @@ pub fn mark_eligible(record: &mut TraceRecord, settings: &TraceSettings) {
     record.share_state = ShareState::Pending;
     record.share_attempts = 0;
     record.share_next_attempt_ms = 0;
-    record.consent_version = Some(settings.consent_version);
 }
 
 /// Queues every already-settled trace that became eligible when the user turned
@@ -125,7 +123,6 @@ pub fn claim(
         return Ok(None);
     }
     let now = store::now_ms();
-    let app_version = env!("CARGO_PKG_VERSION").to_string();
 
     // The record is read here, but the FLAC body is produced separately by
     // `audio_body` - the pump asks for it in a second call, so a large body
@@ -151,24 +148,27 @@ pub fn claim(
 
     Ok(Some(TraceUploadLease {
         trace_id: record.trace_id.clone(),
-        schema_version: super::record::TRACE_SCHEMA_VERSION,
+        schema_version: 2,
         recorded_at_ms: record.recorded_at_ms,
-        model_id: record.model_id.clone(),
-        sherpa_version: super::super::asr::deepgram::RECOGNIZER_API_VERSION.to_string(),
-        app_version,
         duration_ms: record.audio_ms,
         audio_sha256: digest,
-        audio_bytes: flac.len(),
-        asr_text: record.raw_transcript.clone(),
+        sample_rate_hz: 16_000,
+        channels: 1,
+        language: "en-US".to_string(),
+        provider: "deepgram".to_string(),
+        provider_model: record.model_id.clone(),
+        raw_transcript: record.raw_transcript.clone(),
         inserted_text: record.inserted_text.clone(),
-        final_text: record.final_text.clone(),
-        ground_truth: record.ground_truth.clone(),
+        final_text: record
+            .final_text
+            .clone()
+            .unwrap_or_else(|| record.inserted_text.clone()),
+        training_text: record.training_text().to_string(),
         edits: record.edits.clone(),
-        locally_corrected: record.locally_corrected,
-        observations: record.observations,
-        app: record.app.clone(),
-        field_role: record.role.clone(),
-        consent_version: record.consent_version.unwrap_or(settings.consent_version),
+        label_source: "observed_field".to_string(),
+        label_quality: "silver".to_string(),
+        normalization_version: 1,
+        consent_version: settings.consent_version,
     }))
 }
 

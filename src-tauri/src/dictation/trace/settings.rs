@@ -36,7 +36,7 @@ pub const MAX_AUDIO_BYTES: u64 = 512 * 1024 * 1024;
 /// is agreeing to. A stored consent below this number is treated as no consent
 /// at all: sharing switches itself off and the user is asked again, rather than
 /// being silently carried into terms they never read.
-pub const CONSENT_VERSION: u32 = 1;
+pub const CONSENT_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

@@ -527,6 +527,9 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
           "local_missing",
           "integrity_failed",
           "capture_failed_integrity",
+          // A capture a dead process left behind, released at startup. It is
+          // not live, so it must not keep rendering as "recording".
+          "capturing_interrupted",
         ].includes(capture.state);
         recordActivity({
           meetingId: capture.meetingId,

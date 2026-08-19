@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { Download, Mic, Pause, Play, ShieldCheck, Trash2 } from "lucide-react";
 import { logError } from "../../lib/log";
 import {
@@ -24,6 +25,7 @@ import {
   setDictationConsent,
 } from "../../lib/dictationConsent";
 import { dictationConsent as consentCopy } from "../../lib/copy";
+import { loadDictationStatus, type DictationStatus } from "../../lib/dictationStatus";
 import { SettingsPageLayout, SettingsSection } from "../components/SettingsPageLayout";
 import { useDashboardUser } from "../useDashboardUser";
 
@@ -224,6 +226,7 @@ export function DictationPage() {
   // against a service, and the credential for it is minted per session.
   const signedIn = useDashboardUser() !== null;
   const [onlineAccepted, setOnlineAccepted] = useState<boolean | null>(null);
+  const [dictationStatus, setDictationStatus] = useState<DictationStatus | null>(null);
   const [settings, setSettings] = useState<TraceSettings | null>(null);
   const [summary, setSummary] = useState<TraceSummary | null>(null);
   const [traces, setTraces] = useState<TraceRecord[]>([]);
@@ -276,6 +279,22 @@ export function DictationPage() {
       });
     return () => {
       active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    void loadDictationStatus()
+      .then((status) => {
+        if (active) setDictationStatus(status);
+      })
+      .catch((err) => logError("DictationPage: load status", err));
+    const pending = listen<DictationStatus>("dictation-status-changed", (event) => {
+      if (active) setDictationStatus(event.payload);
+    });
+    return () => {
+      active = false;
+      void pending.then((unlisten) => unlisten());
     };
   }, []);
 
@@ -387,6 +406,33 @@ export function DictationPage() {
   return (
     <SettingsPageLayout title="Dictation" description={intro}>
       <SettingsSection
+        title="Dictation keys"
+        description="Hold Ctrl + Win while speaking. Release either key to type the result."
+      >
+        <div className="db-panel db-settings-panel">
+          <div className="db-setting-row">
+            <span>
+              <span className="db-setting-label">Hold to dictate</span>
+              <span className="db-setting-description">
+                {(dictationStatus?.chordLabel ?? "Ctrl + Win")} is fixed for every supported app.
+              </span>
+            </span>
+            <span className="db-setting-label">Fixed</span>
+          </div>
+          <div className="db-setting-row">
+            <span className="db-setting-label">Status</span>
+            <span className="db-setting-description">
+              {dictationStatus === null
+                ? "Checking listener..."
+                : dictationStatus.available
+                  ? "Ready"
+                  : dictationStatus.reason}
+            </span>
+          </div>
+        </div>
+      </SettingsSection>
+
+      <SettingsSection
         title={consentCopy.settingsHeading}
         description={consentCopy.body}
       >
@@ -421,8 +467,8 @@ export function DictationPage() {
 
         <p className="db-trace-privacy">
           <ShieldCheck size={14} />
-          Audio is streamed only while you are holding the keys, and is not kept
-          after the words come back. Nothing is sent between dictations.
+          Online transcription runs only while you are holding the keys. Local
+          recording and cloud sharing are separate choices and start off.
         </p>
       </SettingsSection>
 
@@ -484,7 +530,7 @@ export function DictationPage() {
         <div className="db-panel db-settings-panel">
           <ToggleRow
             label="Help improve dictation for everyone"
-            description="Send corrected recordings to Aura so the speech model can be retrained on the words it gets wrong. Audio is deleted from our servers after 180 days."
+            description="Upload eligible finalized audio and transcript data for speech-model evaluation and training. Server copies expire after 180 days or are deleted earlier when you request it."
             checked={settings.sharingEnabled}
             disabled={!settings.enabled || !signedIn}
             onChange={(value) => void update({ sharingEnabled: value })}

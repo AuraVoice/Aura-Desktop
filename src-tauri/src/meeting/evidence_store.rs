@@ -3356,6 +3356,73 @@ fn map_stored_segment(row: &Row<'_>) -> rusqlite::Result<StoredSegment> {
 }
 
 impl Store {
+    /// Moves capture runs that a DEAD process left in `capturing` over to
+    /// `capturing_interrupted`. Nothing else did this: that state was only ever
+    /// written by the legacy v1 migration, and `reconcile` below rebuilds
+    /// orphaned segment FILES, never the run rows. A run stranded in
+    /// `capturing` is permanently stuck - it reports itself as a live
+    /// recording, and `request_local_deletion` refuses to remove it - so a
+    /// single crash mid-capture leaves an undeletable ghost forever.
+    ///
+    /// Only runs owned by a DIFFERENT runtime instance are touched. This
+    /// method runs at startup under the runtime lease, so a row still carrying
+    /// our own instance id belongs to a capture this process is running.
+    pub fn interrupt_orphaned_captures(
+        &self,
+        runtime_instance_id: &str,
+    ) -> Result<u32, String> {
+        self.initialize()?;
+        let mut conn = self.connect()?;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_error)?;
+        let orphans: Vec<(String, String, String, i64)> = {
+            let mut statement = tx
+                .prepare(
+                    "SELECT capture_run_id, meeting_id, owner_uid, capture_fence
+                     FROM capture_runs
+                     WHERE state='capturing' AND runtime_instance_id!=?1",
+                )
+                .map_err(db_error)?;
+            let rows = statement
+                .query_map(params![runtime_instance_id], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                })
+                .map_err(db_error)?;
+            rows.map(|row| row.map_err(db_error))
+                .collect::<Result<Vec<_>, String>>()?
+        };
+        let timestamp = now_ms();
+        for (capture_run_id, meeting_id, owner_uid, capture_fence) in &orphans {
+            tx.execute(
+                "UPDATE capture_runs
+                 SET state='capturing_interrupted', updated_at_ms=?2
+                 WHERE capture_run_id=?1",
+                params![capture_run_id, timestamp],
+            )
+            .map_err(db_error)?;
+            audit(
+                &tx,
+                "capture_run.interrupted",
+                owner_uid,
+                Some(runtime_instance_id),
+                Some(meeting_id),
+                Some(capture_run_id),
+                Some(*capture_fence),
+                None,
+                None,
+                None,
+                Some("capturing"),
+                Some("capturing_interrupted"),
+                Some("startup_orphaned_capture"),
+                "",
+                &json!({}),
+            )?;
+        }
+        tx.commit().map_err(db_error)?;
+        Ok(orphans.len() as u32)
+    }
+
     pub fn reconcile<F>(&self, decrypt: F) -> Result<ReconciliationReport, String>
     where
         F: Fn(&SegmentRecoveryMetadata, &[u8]) -> Result<Vec<u8>, String>,

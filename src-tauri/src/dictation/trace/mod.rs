@@ -442,7 +442,9 @@ fn capture(app: &AppHandle, settings: &TraceSettings, utterance: Utterance) -> O
         share_attempts: 0,
         share_next_attempt_ms: 0,
         shared_at_ms: None,
-        consent_version: None,
+        consent_version: settings
+            .shares()
+            .then_some(settings.consent_version),
     };
     let anchored = record.state == TraceState::Watching;
     if let Err(error) = store::append(app, record) {

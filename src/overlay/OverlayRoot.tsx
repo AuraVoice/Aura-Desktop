@@ -45,7 +45,6 @@ import { useOutputMode } from "./useOutputMode";
 import { useStatusPillEvents } from "./useStatusPillEvents";
 import { useUpdateReady } from "./useUpdateReady";
 import { UpdateBanner } from "../UpdateBanner";
-import { meetingNotes } from "../lib/meetingCopy";
 
 // Fixed heights remain for fixed-content surfaces. DraftCard reports its own
 // measured content height so a short reply stays compact and a long one grows.
@@ -396,9 +395,12 @@ export function OverlayRoot() {
   const captureNow = meetingCapture.captureNow;
   const stopMeetingCapture = meetingCapture.stopCapture;
   const isMeetingRecording = meetingCapture.recording;
+  // No confirm step. window.confirm renders as a native WebView2 dialog
+  // ("localhost:1420 says ...") anchored to the borderless notch window, where
+  // it clips and blocks the webview. The tray item now reads "Stop recording"
+  // while a capture is live, so the click is already deliberate.
   const handleCaptureAction = useCallback(() => {
     if (isMeetingRecording) {
-      if (!window.confirm(meetingNotes.stopConfirm)) return;
       stopMeetingCapture();
       return;
     }

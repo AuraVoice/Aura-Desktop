@@ -220,6 +220,13 @@ fn read_and_verify(app: &AppHandle, stored: &StoredSegment) -> Result<Vec<u8>, S
     Ok(plain)
 }
 
+pub fn interrupt_orphaned_captures(
+    app: &AppHandle,
+    runtime_instance_id: &str,
+) -> Result<u32, String> {
+    store(app)?.interrupt_orphaned_captures(runtime_instance_id)
+}
+
 pub fn reconcile(app: &AppHandle) -> Result<ReconciliationReport, String> {
     let store = store(app)?;
     #[cfg(windows)]

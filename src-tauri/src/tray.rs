@@ -42,6 +42,12 @@ pub struct TrayHandle(pub tauri::tray::TrayIcon<Wry>);
 /// (`set_recording`) and the two must not clobber each other.
 pub struct NotificationsMenuItem(pub MenuItem<Wry>);
 
+/// Handle to the "Capture now" menu item, so `set_recording` can flip it to
+/// "Stop recording" while a capture is live. The tray menu is the ONLY surface
+/// that can start or stop a capture: the notch pill carries no controls, so a
+/// static label here left a running recording with no reachable stop.
+pub struct CaptureMenuItem(pub MenuItem<Wry>);
+
 pub fn build(app: &AppHandle) -> tauri::Result<()> {
     let open_buddy = MenuItem::with_id(app, OPEN_BUDDY, "Open Buddy", true, None::<&str>)?;
     let open_dashboard =
@@ -97,6 +103,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     app.manage(UpdateMenuItem(update_item));
     app.manage(AutostartMenuItem(autostart_item));
     app.manage(NotificationsMenuItem(notifications_item));
+    app.manage(CaptureMenuItem(capture_now_item));
 
     let icon = app
         .default_window_icon()
@@ -176,7 +183,18 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
 /// Meeting capture started/stopped: the tray tooltip is the always-there
 /// capture indicator (the bar's recording dot only exists while the overlay
 /// is visible). No tooltip when idle, matching the tray's default state.
+///
+/// The menu item is relabelled from the same place, so every stop path (user
+/// click, meeting left, max duration, capture failure, sign-out) leaves the
+/// label matching reality. Both call sites live in meeting/mod.rs, on either
+/// side of the capture's life, which is why this is the one honest hook.
 pub fn set_recording(app: &AppHandle, active: bool) {
+    if let Some(item) = app.try_state::<CaptureMenuItem>() {
+        let label = if active { "Stop recording" } else { "Capture now" };
+        if let Err(e) = item.0.set_text(label) {
+            error!("tray: failed to relabel capture item: {e}");
+        }
+    }
     let Some(handle) = app.try_state::<TrayHandle>() else {
         return;
     };

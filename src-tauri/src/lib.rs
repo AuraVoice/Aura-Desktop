@@ -427,6 +427,8 @@ pub fn run() {
             app.manage(uia::UiaWorker::start());
 
             app.manage(voice_toggle_key::start(app.handle().clone()));
+            #[cfg(windows)]
+            dictation::emit_status_changed(app.handle());
 
             // tauri.conf.json's `skipTaskbar: true` keeps this off the Windows
             // taskbar but has no macOS equivalent - Accessory is the matching

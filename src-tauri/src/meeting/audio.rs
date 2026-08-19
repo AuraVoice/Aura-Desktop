@@ -56,6 +56,18 @@ const MIN_SEGMENT_FRAMES: usize = 1;
 /// section 4); the backend's caps in services/meetings/fields.py carry the
 /// matching clamp note.
 const MAX_CAPTURE: Duration = Duration::from_secs(60 * 60);
+/// The reported capture length, held to MAX_CAPTURE. The backend rejects a
+/// completion whose total_duration_ms exceeds its own matching cap
+/// (services/meetings/fields.py MAX_CAPTURE_MINUTES) with a TERMINAL
+/// invalid_manifest, which discards the whole recording. Our stop check runs
+/// once per ENGINE_TICK and the teardown flush still emits whatever audio is
+/// buffered, so the timeline lands tens of milliseconds past the cap about
+/// half the time - one observed run reported 3_600_061 and was thrown away.
+/// Clamp before the manifest digest is built so the digest and the reported
+/// total agree on the same number.
+fn capped_timeline_ms(emitted_ms: i64) -> i64 {
+    emitted_ms.min(MAX_CAPTURE.as_millis() as i64)
+}
 /// Engine mixing cadence. Capture threads poll faster (their own sleep).
 const ENGINE_TICK: Duration = Duration::from_millis(100);
 const CAPTURE_POLL: Duration = Duration::from_millis(40);
@@ -415,7 +427,7 @@ fn engine_thread(
             &event_id,
             &runtime_instance_id,
             started_at_ms,
-            timeline_base_ms,
+            capped_timeline_ms(timeline_base_ms),
             "max_duration",
         );
         finalization.finish(result);
@@ -568,7 +580,7 @@ fn engine_thread(
         &event_id,
         &runtime_instance_id,
         started_at_ms,
-        emitted_ms,
+        capped_timeline_ms(emitted_ms),
         &stop_reason,
     );
     finalization.finish(result);

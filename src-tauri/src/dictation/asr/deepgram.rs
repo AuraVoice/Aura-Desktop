@@ -57,11 +57,6 @@ const LANGUAGE: &str = "en";
 /// Stamped onto opt-in training traces so a trace can be attributed to the
 /// recognizer that produced it. Not used for anything at runtime.
 pub const RECOGNIZER_ID: &str = "deepgram-nova-3-en";
-/// The provider API surface, alongside `RECOGNIZER_ID`. Occupies the trace
-/// field that used to carry the on-device library version; the field name on
-/// the wire is left alone on purpose, so traces already queued on a user's
-/// machine from the previous build still upload against the live schema.
-pub const RECOGNIZER_API_VERSION: &str = "deepgram-v1-listen";
 /// A hard ceiling on biasing terms sent per utterance. Every term is a query
 /// parameter on the handshake URL, and an unbounded vocabulary would grow that
 /// URL until the request itself started failing.
