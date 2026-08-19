@@ -12,6 +12,7 @@ export const meetingNotes = {
 
   // KebabMenu
   captureNow: "Capture this call",
+  stopCaptureNow: "Stop recording",
   captureNowBusy: "Capturing...",
 
   // MeetingTicker

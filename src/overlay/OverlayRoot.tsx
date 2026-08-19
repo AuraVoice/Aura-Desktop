@@ -23,6 +23,11 @@ import { GlassSurface } from "./GlassSurface";
 import { SetupPanel } from "./SetupPanel";
 import { PointingOverlay } from "./PointingOverlay";
 import { DraftCard, INITIAL_DRAFT_SLOT_HEIGHT } from "./DraftCard";
+import { useInterviewMaterial } from "./interview/useInterviewMaterial";
+import {
+  InterviewPasteCard,
+  INITIAL_INTERVIEW_SLOT_HEIGHT,
+} from "./interview/InterviewPasteCard";
 import { CallbackCard } from "./CallbackCard";
 import { NotificationInboxCard } from "./NotificationInboxCard";
 import { NotchBar } from "./NotchBar";
@@ -40,6 +45,7 @@ import { useOutputMode } from "./useOutputMode";
 import { useStatusPillEvents } from "./useStatusPillEvents";
 import { useUpdateReady } from "./useUpdateReady";
 import { UpdateBanner } from "../UpdateBanner";
+import { meetingNotes } from "../lib/meetingCopy";
 
 // Fixed heights remain for fixed-content surfaces. DraftCard reports its own
 // measured content height so a short reply stays compact and a long one grows.
@@ -229,6 +235,23 @@ export function OverlayRoot() {
   const resetDraftCard = draftCard.reset;
   const showDraftCard = user !== null && draftCard.phase !== "idle";
   const [draftCardHeight, setDraftCardHeight] = useState(INITIAL_DRAFT_SLOT_HEIGHT);
+  // Interview Mode's job-description paste box. Driven entirely by the voice
+  // worker: it exists only while a live interview setup is asking for it, and
+  // "sent" drops straight back to idle rather than lingering as a receipt.
+  const interviewMaterial = useInterviewMaterial(voice.room);
+  const resetInterviewMaterial = interviewMaterial.reset;
+  const showInterviewPaste =
+    user !== null
+    && (interviewMaterial.phase === "open"
+      || interviewMaterial.phase === "sending"
+      || interviewMaterial.phase === "error");
+  const [interviewSlotHeight, setInterviewSlotHeight] = useState(
+    INITIAL_INTERVIEW_SLOT_HEIGHT,
+  );
+
+  useEffect(() => {
+    if (!showInterviewPaste) setInterviewSlotHeight(INITIAL_INTERVIEW_SLOT_HEIGHT);
+  }, [showInterviewPaste]);
   // Reported by ChatSlot from its measured transcript, same contract as the
   // draft card: the window is only ever as tall as what is actually rendered.
   const [chatSlotHeight, setChatSlotHeight] = useState(INITIAL_CHAT_SLOT_HEIGHT);
@@ -268,15 +291,29 @@ export function OverlayRoot() {
   // catch-up are mounted today. Chat outranks everything below it because the
   // user is mid-sentence in it: an arriving draft card must never take the slot
   // out from under them.
-  const showInbox = user !== null && inboxOpen && !showDraftCard;
+  // The interview paste box sits directly under chat and above everything else:
+  // a live voice session has just told the user out loud to look at it, so a
+  // draft or an update banner taking the slot would leave that line unanswered.
+  // Chat still outranks it for the documented reason, and that degradation is
+  // honest: the box never renders, so it is never acknowledged, and the worker's
+  // own fallback asks for the role by voice instead.
+  const showInbox = user !== null && inboxOpen && !showDraftCard && !showInterviewPaste;
   const showUpdateBanner =
     user !== null
     && (updateReady.version !== null || updateReady.updatedNotice !== null)
+    && !showInterviewPaste
     && !showDraftCard
     && !showInbox;
   const showCallbackCard =
-    user !== null && callbackCard.visible && !showDraftCard && !showInbox && !showUpdateBanner;
-  const slotHeight = showDraftCard
+    user !== null
+    && callbackCard.visible
+    && !showInterviewPaste
+    && !showDraftCard
+    && !showInbox
+    && !showUpdateBanner;
+  const slotHeight = showInterviewPaste
+    ? interviewSlotHeight
+    : showDraftCard
     ? draftCardHeight
     : showInbox
       ? NOTIFICATION_INBOX_CARD_HEIGHT
@@ -357,15 +394,26 @@ export function OverlayRoot() {
   // above: the capture itself is a JS concern (useMeetingCapture owns the arm
   // state and the upload queue), so Rust only fires the intent.
   const captureNow = meetingCapture.captureNow;
+  const stopMeetingCapture = meetingCapture.stopCapture;
+  const isMeetingRecording = meetingCapture.recording;
+  const handleCaptureAction = useCallback(() => {
+    if (isMeetingRecording) {
+      if (!window.confirm(meetingNotes.stopConfirm)) return;
+      stopMeetingCapture();
+      return;
+    }
+    captureNow();
+  }, [captureNow, isMeetingRecording, stopMeetingCapture]);
+
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    listen("capture-now-requested", () => captureNow())
+    listen("capture-now-requested", () => handleCaptureAction())
       .then((fn) => {
         unlisten = fn;
       })
       .catch((err) => logError("OverlayRoot: listen capture-now-requested", err));
     return () => unlisten?.();
-  }, [captureNow]);
+  }, [handleCaptureAction]);
 
   const dismissChatOverlay = useCallback(() => {
     chatOpenRef.current = false;
@@ -425,6 +473,9 @@ export function OverlayRoot() {
     if (!user) {
       resetDraftCard();
       resetCallbackCard();
+      // Signing out ends the call that armed the paste box, so a box left on
+      // screen would collect a paste with nowhere to send it.
+      resetInterviewMaterial();
       setChatOpen(false);
       setInboxOpen(false);
       if (guide.armed) guide.stop();
@@ -432,7 +483,14 @@ export function OverlayRoot() {
         logError("OverlayRoot: dismiss_bar after sign-out", err),
       );
     }
-  }, [user, resetDraftCard, resetCallbackCard, guide.armed, guide.stop]);
+  }, [
+    user,
+    resetDraftCard,
+    resetCallbackCard,
+    resetInterviewMaterial,
+    guide.armed,
+    guide.stop,
+  ]);
 
   function handleNotificationAction(notification: StoredNotification) {
     notifications.acknowledgeAction(notification);
@@ -578,7 +636,14 @@ export function OverlayRoot() {
           onHeightChange={setChatSlotHeight}
         />
       )}
-      {!visibleChatOpen && showDraftCard && (
+      {!visibleChatOpen && showInterviewPaste && (
+        <InterviewPasteCard
+          card={interviewMaterial}
+          onHeightChange={setInterviewSlotHeight}
+          visible={presentation === "bar" || presentation === "companion"}
+        />
+      )}
+      {!visibleChatOpen && !showInterviewPaste && showDraftCard && (
         <DraftCard
           card={draftCard}
           onHeightChange={setDraftCardHeight}

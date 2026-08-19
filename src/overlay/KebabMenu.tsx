@@ -7,6 +7,7 @@ import {
   FeedbackIcon,
   NotesIcon,
   RecordDotIcon,
+  StopSquareIcon,
   SettingsIcon,
   SignOutIcon,
   UpdateIcon,
@@ -43,6 +44,7 @@ export function KebabMenu({
   entitlement,
   onCalendar,
   onCaptureNow,
+  onStopCaptureNow,
   capturing,
   onNotifications,
   unreadCount,
@@ -56,6 +58,7 @@ export function KebabMenu({
   onCalendar: () => void;
   /** Manual meeting-notes capture (the Google Meet path, no auto-detect). */
   onCaptureNow: () => void;
+  onStopCaptureNow: () => void;
   capturing: boolean;
   /** Open the notification inbox (below-bar slot). */
   onNotifications: () => void;
@@ -93,6 +96,15 @@ export function KebabMenu({
   const showPlan = entitlement.loaded && entitlement.status !== "unknown";
   const checkoutBusy =
     entitlement.checkout.phase === "opening" || entitlement.checkout.phase === "polling";
+
+  function handleCaptureNow() {
+    onClose();
+    if (capturing) {
+      onStopCaptureNow();
+      return;
+    }
+    onCaptureNow();
+  }
 
   function handleUpgrade() {
     if (checkoutBusy || entitlement.checkout.phase === "upgraded") return;
@@ -135,14 +147,10 @@ export function KebabMenu({
           <button
             type="button"
             className="kebab-menu-item"
-            onClick={() => {
-              onClose();
-              onCaptureNow();
-            }}
-            disabled={capturing}
+            onClick={handleCaptureNow}
           >
-            <RecordDotIcon />
-            <span>{capturing ? notesCopy.captureNowBusy : notesCopy.captureNow}</span>
+            {capturing ? <StopSquareIcon /> : <RecordDotIcon />}
+            <span>{capturing ? notesCopy.stopCaptureNow : notesCopy.captureNow}</span>
           </button>
           <button type="button" className="kebab-menu-item" onClick={onNotifications}>
             <BellIcon />

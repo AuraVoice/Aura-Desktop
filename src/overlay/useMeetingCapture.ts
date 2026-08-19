@@ -473,6 +473,11 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
   }, [ownsRuntime, startCaptureFor]);
 
   const stopCapture = useCallback(() => {
+    if (!recordingRef.current) {
+      logInfo("useMeetingCapture", "stop_capture ignored, no active meeting capture");
+      return;
+    }
+    logInfo("useMeetingCapture", "stop_capture requested by user");
     void invoke("stop_meeting_capture", { reason: "stopped_by_user" }).catch((err) =>
       logError("useMeetingCapture: stop_meeting_capture", err),
     );

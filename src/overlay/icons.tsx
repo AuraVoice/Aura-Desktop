@@ -128,6 +128,14 @@ export function RecordDotIcon() {
   );
 }
 
+export function StopSquareIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor">
+      <rect x="5" y="5" width="14" height="14" rx="2.2" />
+    </svg>
+  );
+}
+
 /** Per-meeting "take notes" toggle in the agenda card: a note sheet with
  * lines. Armed state is conveyed by BarIconButton's active styling. */
 export function NotesIcon() {

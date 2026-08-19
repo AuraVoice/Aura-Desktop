@@ -69,6 +69,11 @@ export type KnownAgentEventType =
   // authority: this only asks, and useGuideMode routes it to the native
   // arm_guide/disarm_guide command (payload.enable decides which).
   | "guide.request"
+  // Interview Mode: show one job-description paste overlay. The desktop must
+  // echo interview.material.overlay_shown only once the box is genuinely on
+  // screen (see overlay/interview/), because the worker speaks a line to the
+  // user off the back of that ack.
+  | "interview.material.request"
   // Desktop control (desktop client only). The verb lives inside
   // payload.id and is validated against the client capability registry
   // (desktopCapabilities.ts), so this stays a single message type no matter
@@ -122,6 +127,8 @@ const FIELD_CAPS: Record<string, number> = {
   instruction: 2_000,
   instruction_id: 128,
   guide_session_id: 64,
+  interview_id: 64,
+  material_type: 64,
   task_id: 64,
   current_step_id: 80,
   current_step_title: 100,
@@ -157,6 +164,7 @@ const KNOWN_TYPES: ReadonlySet<string> = new Set([
   "guide.instruction",
   "guide.failure",
   "guide.request",
+  "interview.material.request",
   "desktop.run",
 ] satisfies KnownAgentEventType[]);
 
