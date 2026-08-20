@@ -36,7 +36,10 @@ export interface TraceUploadLease {
   trainingText: string;
   edits: EditOp[];
   labelSource: "observed_field";
-  labelQuality: "silver";
+  /** The only two labels a client can produce. Rejected and unobserved traces
+   * never reach an upload, and "human_gold" is reviewer-only, written
+   * server-side, so no client can assert its own data is gold. */
+  labelQuality: "unchanged_silver" | "corrected_silver";
   normalizationVersion: number;
   consentVersion: number;
 }

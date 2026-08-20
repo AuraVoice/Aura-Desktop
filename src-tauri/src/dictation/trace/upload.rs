@@ -166,7 +166,9 @@ pub fn claim(
         training_text: record.training_text().to_string(),
         edits: record.edits.clone(),
         label_source: "observed_field".to_string(),
-        label_quality: "silver".to_string(),
+        // Only a Finalized trace reaches this point, so the field really was
+        // observed. What varies is how much the user's own text proves.
+        label_quality: record.label_quality().as_wire().to_string(),
         normalization_version: 1,
         consent_version: settings.consent_version,
     }))

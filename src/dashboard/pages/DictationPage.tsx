@@ -24,8 +24,12 @@ import {
   loadDictationConsent,
   setDictationConsent,
 } from "../../lib/dictationConsent";
-import { dictationConsent as consentCopy } from "../../lib/copy";
-import { loadDictationStatus, type DictationStatus } from "../../lib/dictationStatus";
+import { dictationConsent as consentCopy, dictationChord as chordCopy } from "../../lib/copy";
+import {
+  chordLabelOf,
+  loadDictationStatus,
+  type DictationStatus,
+} from "../../lib/dictationStatus";
 import { SettingsPageLayout, SettingsSection } from "../components/SettingsPageLayout";
 import { useDashboardUser } from "../useDashboardUser";
 
@@ -406,26 +410,26 @@ export function DictationPage() {
   return (
     <SettingsPageLayout title="Dictation" description={intro}>
       <SettingsSection
-        title="Dictation keys"
-        description="Hold Ctrl + Win while speaking. Release either key to type the result."
+        title={chordCopy.sectionHeading}
+        description={chordCopy.sectionDescription(chordLabelOf(dictationStatus))}
       >
         <div className="db-panel db-settings-panel">
           <div className="db-setting-row">
             <span>
-              <span className="db-setting-label">Hold to dictate</span>
+              <span className="db-setting-label">{chordCopy.rowLabel}</span>
               <span className="db-setting-description">
-                {(dictationStatus?.chordLabel ?? "Ctrl + Win")} is fixed for every supported app.
+                {chordCopy.fixedNote(chordLabelOf(dictationStatus))}
               </span>
             </span>
-            <span className="db-setting-label">Fixed</span>
+            <span className="db-setting-label">{chordCopy.fixed}</span>
           </div>
           <div className="db-setting-row">
-            <span className="db-setting-label">Status</span>
+            <span className="db-setting-label">{chordCopy.statusLabel}</span>
             <span className="db-setting-description">
               {dictationStatus === null
-                ? "Checking listener..."
+                ? chordCopy.statusChecking
                 : dictationStatus.available
-                  ? "Ready"
+                  ? chordCopy.statusReady
                   : dictationStatus.reason}
             </span>
           </div>

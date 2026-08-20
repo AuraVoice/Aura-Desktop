@@ -35,6 +35,17 @@ const MAX_TOKENS: usize = 400;
 /// rejecting "send"/"forward".
 const SIMILARITY_FLOOR: f64 = 0.6;
 
+/// Past this share of the typed words being replaced by ground-truth classes,
+/// the utterance is treated as a rewrite rather than a correction. A correction
+/// fixes what the recognizer misheard, so most of the words still stand; once
+/// more than half of them are replaced the classifier is far more likely to
+/// have read a sentence the user simply rewrote as a run of near-miss word
+/// errors, and rebuilding from that produces a transcript stitched out of both
+/// texts that matches neither the audio nor anything the user wrote. 0.5 also
+/// matches the error rate above which pseudo-labelled ASR pairs are normally
+/// discarded as unreliable.
+const REWRITE_REJECT_RATIO: f64 = 0.5;
+
 /// Filler the speaker genuinely said. Removing one of these is a real edit, but
 /// it is not a recognition error, so it gets its own class rather than being
 /// mixed into either bucket.
@@ -140,10 +151,62 @@ pub fn compare(inserted: &str, final_text: &str) -> Comparison {
         word_index += a[block.a.clone()].iter().filter(|t| t.is_word()).count();
     }
 
+    // Whole-utterance guard, deliberately after the per-block pass: the block
+    // rule is only trustworthy when the two texts are the same sentence. Past
+    // the threshold, keep the classified edits - they are still an honest
+    // record of what changed, and the error analysis wants them - but hand back
+    // what Aura typed, so nothing downstream can mistake a stitched string for
+    // a transcript of the audio.
+    if is_substantial_rewrite(inserted, &edits) {
+        return Comparison {
+            edits,
+            ground_truth: inserted.to_string(),
+        };
+    }
+
     Comparison {
         edits,
         ground_truth: ground_truth.trim_start().to_string(),
     }
+}
+
+/// Share of the typed words the user replaced with different ones.
+///
+/// Counted in words rather than characters, and over `inserted` rather than the
+/// final text, because the question is how much of what Aura typed survived.
+///
+/// Disfluency is the one class excluded. Dropping an "um" the speaker really
+/// said leaves a transcript that still matches the audio, so no amount of it
+/// makes the pair untrustworthy. Every other class counts, including style:
+/// a ground-truth-heavy utterance risks a stitched rebuild, and a style-heavy
+/// one means the user threw the sentence away, and both are answers to the same
+/// question - how much of this output did the user actually keep.
+pub fn change_ratio(inserted: &str, edits: &[EditOp]) -> f64 {
+    let total = word_count(inserted);
+    if total == 0 {
+        return 0.0;
+    }
+    let replaced: usize = edits
+        .iter()
+        .filter(|edit| edit.class != EditClass::Disfluency)
+        .map(|edit| word_count(&edit.from))
+        .sum();
+    replaced as f64 / total as f64
+}
+
+/// Whether the user replaced the sentence rather than corrected it. Strictly
+/// greater, so an utterance sitting exactly on the threshold is kept.
+///
+/// Catches the whole-string rewrite the `MAX_TOKENS` path above reports as one
+/// Style edit, which would otherwise read as "the user changed nothing".
+pub fn is_substantial_rewrite(inserted: &str, edits: &[EditOp]) -> bool {
+    change_ratio(inserted, edits) > REWRITE_REJECT_RATIO
+}
+
+/// Words as the rest of this module counts them, so the ratio and `wordIndex`
+/// can never disagree about what a word is.
+fn word_count(text: &str) -> usize {
+    tokenize(text).iter().filter(|token| token.is_word()).count()
 }
 
 /// Splits text into word and punctuation tokens, each carrying the whitespace

@@ -68,6 +68,9 @@ struct ManifestLine<'a> {
     /// True when the user's edits were actually observed. A false here means
     /// "nobody checked", not "the transcript was correct".
     verified: bool,
+    /// How far this line's transcript can be trusted, so a corpus built from
+    /// the manifest can weight it without re-deriving eligibility.
+    label_quality: &'a str,
 }
 
 #[derive(Serialize)]
@@ -150,6 +153,7 @@ pub fn export(
         // happened, it just is not a training pair.
         let trainable = record.has_audio
             && record.state.is_settled()
+            && record.label_quality().is_trainable()
             && (!only_verified || record.is_verified());
         if !trainable || !include_audio {
             result.skipped += 1;
@@ -179,6 +183,7 @@ pub fn export(
                 model_id: &record.model_id,
                 recorded_at_ms: record.recorded_at_ms,
                 verified: record.is_verified(),
+                label_quality: record.label_quality().as_wire(),
             },
         )?;
         result.manifest_lines += 1;

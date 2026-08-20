@@ -209,6 +209,70 @@ pub enum ShareState {
     Failed,
 }
 
+/// How much the transcript on a trace can be trusted as a training label.
+///
+/// Replaces the earlier binary "verified" idea, which could only say whether a
+/// trace settled. That collapsed two very different pieces of evidence: a user
+/// who read the text and fixed a misheard name, and a user who never looked at
+/// it. Both are silver, but only the first is evidence about the recognizer,
+/// and a corpus that cannot tell them apart cannot weight them differently.
+///
+/// Deliberately NOT `Serialize`: `as_wire` below is the single source of the
+/// wire vocabulary. A serde rename beside it would be a second one, and the two
+/// could disagree the first time a variant is added.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LabelQuality {
+    /// The field was never followed, so nothing is known about what the user
+    /// did with the text. Never trainable: a guess here becomes a label.
+    Unobserved,
+    /// Watched, and the user left the text alone. Weak evidence - they may
+    /// simply not have read it - so it trains only after sampling or review.
+    UnchangedSilver,
+    /// Watched, and the user corrected words the recognizer got wrong. The
+    /// strongest signal collected automatically, and the review priority.
+    CorrectedSilver,
+    /// A reviewer listened to the audio and confirmed the transcript.
+    ///
+    /// NOTHING on this device may produce this. `label_quality` has no path to
+    /// it, so a client cannot assert its own data is gold; only the reviewer
+    /// workflow, server-side, can. The variant exists here so the wire format
+    /// and the corpus share one vocabulary.
+    ///
+    /// Never constructed on purpose, hence the allow: the compiler warning this
+    /// silences is the guarantee working, and "fixing" it by deleting the
+    /// variant would let a later edit quietly hand a client a way to claim gold.
+    #[allow(dead_code)]
+    HumanGold,
+    /// Discarded, rewritten rather than corrected, or otherwise unusable. Kept
+    /// locally as a record of what happened, never trained on, never uploaded.
+    Rejected,
+}
+
+impl LabelQuality {
+    /// Whether a trace carrying this label may enter a training corpus, and so
+    /// whether it is worth uploading at all.
+    pub fn is_trainable(&self) -> bool {
+        matches!(
+            self,
+            LabelQuality::UnchangedSilver
+                | LabelQuality::CorrectedSilver
+                | LabelQuality::HumanGold
+        )
+    }
+
+    /// The wire value, and the only place these strings are written. Matches
+    /// `labelSource`'s existing snake_case convention.
+    pub fn as_wire(&self) -> &'static str {
+        match self {
+            LabelQuality::Unobserved => "unobserved",
+            LabelQuality::UnchangedSilver => "unchanged_silver",
+            LabelQuality::CorrectedSilver => "corrected_silver",
+            LabelQuality::HumanGold => "human_gold",
+            LabelQuality::Rejected => "rejected",
+        }
+    }
+}
+
 impl TraceRecord {
     /// The transcript to train against: the ground truth when the user's edits
     /// were seen, and what was typed when they were not. Never `finalText`
@@ -224,6 +288,40 @@ impl TraceRecord {
         matches!(self.state, TraceState::Finalized)
     }
 
+    /// How far this trace's transcript can be trusted.
+    ///
+    /// Derived rather than stored, from `edits` and `insertedText`, which are
+    /// both already on the record. That means no migration, and a trace written
+    /// by an older build - whose classifier may have been wrong - is judged by
+    /// today's rules the moment it is read, rather than carrying a frozen
+    /// verdict nothing can revisit.
+    pub fn label_quality(&self) -> LabelQuality {
+        match self.state {
+            // Still being watched, or the span was never found. Either way the
+            // "what did the user change" half is missing.
+            TraceState::Watching | TraceState::Unanchored | TraceState::AnchorLost => {
+                LabelQuality::Unobserved
+            }
+            // The words were thrown away, so there is no text the recognizer
+            // could have produced that would have been right.
+            TraceState::Discarded => LabelQuality::Rejected,
+            TraceState::Finalized => {
+                if super::diff::is_substantial_rewrite(&self.inserted_text, &self.edits) {
+                    return LabelQuality::Rejected;
+                }
+                // Style and disfluency edits keep Aura's words in the rebuilt
+                // text, so the transcript still matches the audio and this is
+                // NOT a correction of the recognizer. The user changed their
+                // sentence, not what was heard.
+                if self.edits.iter().any(|edit| edit.class.is_ground_truth()) {
+                    LabelQuality::CorrectedSilver
+                } else {
+                    LabelQuality::UnchangedSilver
+                }
+            }
+        }
+    }
+
     pub fn duration_seconds(&self) -> f64 {
         self.audio_ms as f64 / 1000.0
     }
@@ -234,8 +332,12 @@ impl TraceRecord {
     /// was BEFORE the user corrected it, and uploading that would teach the
     /// model that its own mistake was the right answer. Audio is required
     /// because a manifest line without it is not a training pair.
+    ///
+    /// A rejected label is refused here rather than at each call site, because
+    /// both upload gates - `upload::mark_eligible` and the claim filter in
+    /// `store` - already route through this one method and so cannot disagree.
     pub fn is_shareable(&self) -> bool {
-        self.is_verified() && self.has_audio
+        self.is_verified() && self.has_audio && self.label_quality().is_trainable()
     }
 }
 

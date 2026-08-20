@@ -1283,6 +1283,21 @@ pub fn dictation_status(
 const LISTENER_UNAVAILABLE_REASON: &str =
     "Keyboard listener unavailable. Restart Aura. If this continues, another security tool may be blocking keyboard access.";
 
+/// Appends the listener's OWN failure text to the guidance above. The four
+/// install failures in `voice_toggle_key::platform::start` are already logged
+/// and sent to Sentry, but the UI flattened all of them into one sentence, so
+/// the one question a support report needs to answer - WHICH step failed -
+/// was the only thing the user could not see.
+#[cfg(windows)]
+fn listener_unavailable_reason(detail: Option<String>) -> String {
+    match detail {
+        Some(detail) if !detail.trim().is_empty() => {
+            format!("{LISTENER_UNAVAILABLE_REASON} (Details: {})", detail.trim())
+        }
+        _ => LISTENER_UNAVAILABLE_REASON.to_string(),
+    }
+}
+
 #[cfg(windows)]
 static LAST_EMITTED_STATUS: std::sync::OnceLock<std::sync::Mutex<Option<DictationStatus>>> =
     std::sync::OnceLock::new();
@@ -1290,9 +1305,10 @@ static LAST_EMITTED_STATUS: std::sync::OnceLock<std::sync::Mutex<Option<Dictatio
 #[cfg(windows)]
 fn with_listener_health(app: &tauri::AppHandle, mut status: DictationStatus) -> DictationStatus {
     if let Some(listener) = app.try_state::<crate::voice_toggle_key::VoiceToggleKeyHandle>() {
-        if !listener.status().available {
+        let listener_status = listener.status();
+        if !listener_status.available {
             status.available = false;
-            status.reason = Some(LISTENER_UNAVAILABLE_REASON.to_string());
+            status.reason = Some(listener_unavailable_reason(listener_status.reason));
             status.biasing_available = false;
         }
     }

@@ -1,5 +1,4 @@
 import { useRef } from "react";
-import type { PointerEvent } from "react";
 import type { PointerEventHandler } from "react";
 import { GlassSurface } from "./GlassSurface";
 import type { VoiceBarState } from "./useVoiceBar";

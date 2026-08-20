@@ -56,6 +56,30 @@ export const dictationConsent = {
   offNotice: "The dictation keys will not transcribe until this is back on.",
 } as const;
 
+/** The chord's user-facing prose.
+ *
+ * ONE source of truth for the same reason `dictationConsent` is: Settings >
+ * Dictation and Settings > System both describe the same chord, and the
+ * sentence used to be hardcoded in one of them, so flipping `DICTATION_CHORD`
+ * in chord.rs would have left it saying the old keys. Every string that names
+ * the chord takes the live label as an argument instead of baking it in. */
+export const dictationChord = {
+  sectionHeading: "Dictation keys",
+  /** Settings > Dictation, above the rows. */
+  sectionDescription: (label: string) =>
+    `Hold ${label} while speaking. Release either key to type the result.`,
+  /** Settings > System, where the chord sits beside the editable shortcuts and
+   * has to explain why it alone cannot be changed. */
+  systemDescription: "A fixed hold shortcut that works in supported text fields.",
+  rowLabel: "Hold to dictate",
+  fixed: "Fixed",
+  fixedNote: (label: string) => `${label} is fixed for every supported app.`,
+  statusLabel: "Status",
+  /** The window between mount and the first status reply. */
+  statusChecking: "Checking listener...",
+  statusReady: "Ready",
+} as const;
+
 export const onboarding = {
   welcome: {
     headingAccent: "Meet Buddy",

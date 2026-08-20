@@ -9,7 +9,12 @@ import {
   type GeneralSettings,
 } from "../../lib/generalSettings";
 import { logError } from "../../lib/log";
-import { loadDictationStatus, type DictationStatus } from "../../lib/dictationStatus";
+import {
+  chordKeysOf,
+  loadDictationStatus,
+  type DictationStatus,
+} from "../../lib/dictationStatus";
+import { dictationChord as chordCopy } from "../../lib/copy";
 import { resetHotkeyBindings } from "../../lib/hotkeys";
 import { useHotkeyBindings } from "../../state/useHotkeyBindings";
 import { ShortcutEditorDialog } from "../../overlay/ShortcutEditorDialog";
@@ -373,25 +378,25 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
 
           <SettingsSection
             title="Dictation"
-            description="A fixed hold shortcut that works in supported text fields."
+            description={chordCopy.systemDescription}
           >
             <div className="db-panel db-shortcut-list">
               <div className="db-shortcut-row">
-                <span>Hold to dictate</span>
+                <span>{chordCopy.rowLabel}</span>
                 <span className="db-shortcut-keys">
-                  {(dictationStatus?.chordLabel ?? "Ctrl + Win").split(" + ").map((key) => (
+                  {chordKeysOf(dictationStatus).map((key) => (
                     <kbd key={key}>{key}</kbd>
                   ))}
-                  <kbd>Fixed</kbd>
+                  <kbd>{chordCopy.fixed}</kbd>
                 </span>
               </div>
               <div className="db-shortcut-row">
-                <span>Status</span>
+                <span>{chordCopy.statusLabel}</span>
                 <span className="db-setting-description">
                   {dictationStatus === null
-                    ? "Checking listener..."
+                    ? chordCopy.statusChecking
                     : dictationStatus.available
-                      ? "Ready"
+                      ? chordCopy.statusReady
                       : dictationStatus.reason}
                 </span>
               </div>
