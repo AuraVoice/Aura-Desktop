@@ -293,6 +293,11 @@ function canRetryLocally(recording: LocalRecording): boolean {
 
 function localRecordingStatus(recording: LocalRecording): string {
   if (recording.state === "local_deleted") return "Local audio deleted";
+  if (recording.state === "delete_requested") {
+    return recording.deletionState === "retry"
+      ? "Removing local audio. Aura will retry automatically."
+      : "Removing local audio...";
+  }
   // Deliberately ahead of lastErrorCode: a run still waiting to hand off is the
   // useful fact, and an error that has since been retried is not.
   if (recording.state === "needs_attention") return "Waiting to upload. Aura will retry.";
@@ -312,6 +317,9 @@ function localRecordingStatus(recording: LocalRecording): string {
 }
 
 function hasLocalRecordingWarning(recording: LocalRecording): boolean {
+  if (recording.state === "delete_requested") {
+    return recording.deletionState === "retry";
+  }
   return Boolean(
     recording.lastErrorCode
     || (
@@ -361,6 +369,11 @@ function LocalRecoverySection({
 }: ReturnType<typeof useLocalRecordings> & { onListReload: () => void }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<LocalRecording | null>(null);
+  const visibleRecordings = useMemo(
+    () => recordings.filter((recording) => recording.state !== "local_deleted"),
+    [recordings],
+  );
 
   const exportRecording = async (
     recording: LocalRecording,
@@ -442,10 +455,6 @@ function LocalRecoverySection({
   };
 
   const deleteRecording = async (recording: LocalRecording) => {
-    const confirmed = window.confirm(
-      "Delete the retained audio from this device now? Cloud notes and server-side data are not deleted by this action. This cannot be undone.",
-    );
-    if (!confirmed) return;
     const action = `${recording.captureRunId}:delete`;
     setBusy(action);
     setMessage(null);
@@ -454,17 +463,18 @@ function LocalRecoverySection({
         meetingId: recording.meetingId,
         captureRunId: recording.captureRunId,
       });
-      setMessage("Local audio deleted. Aura retained the deletion receipt and evidence metadata.");
+      setMessage("Removing local audio. This recording will disappear when deletion finishes.");
       loadRecordings();
     } catch (err) {
       logError("MeetingsPage: delete local recording", err);
       setMessage("Aura could not finish deletion. It will retain and retry the deletion job.");
     } finally {
+      setPendingDelete(null);
       setBusy(null);
     }
   };
 
-  if (!loading && !error && recordings.length === 0) return null;
+  if (!loading && !error && visibleRecordings.length === 0) return null;
 
   return (
     <section className="db-local-recordings" aria-labelledby="local-recordings-heading">
@@ -478,7 +488,7 @@ function LocalRecoverySection({
           </p>
         </div>
         <div className="db-local-recording-actions">
-          {recordings.some(canRetryLocally) && (
+          {visibleRecordings.some(canRetryLocally) && (
             <button
               type="button"
               className="db-primary-btn"
@@ -495,6 +505,7 @@ function LocalRecoverySection({
             onClick={loadRecordings}
             disabled={loading}
           >
+            <RefreshCw size={15} />
             {loading ? "Checking..." : "Refresh"}
           </button>
         </div>
@@ -506,7 +517,7 @@ function LocalRecoverySection({
         </p>
       ) : (
         <div className="db-local-recording-list">
-          {recordings.map((recording) => {
+          {visibleRecordings.map((recording) => {
             const audioAction = `${recording.captureRunId}:audio`;
             const supportAction = `${recording.captureRunId}:support`;
             const deleteAction = `${recording.captureRunId}:delete`;
@@ -540,7 +551,11 @@ function LocalRecoverySection({
                   <button
                     type="button"
                     className="db-secondary-btn"
-                    disabled={!recording.exportable || busy !== null}
+                    disabled={
+                      !recording.exportable
+                      || recording.state === "delete_requested"
+                      || busy !== null
+                    }
                     onClick={() => void exportRecording(recording, true)}
                   >
                     <Download size={15} />
@@ -558,8 +573,12 @@ function LocalRecoverySection({
                   <button
                     type="button"
                     className="db-local-delete"
-                    disabled={!recording.exportable || busy !== null}
-                    onClick={() => void deleteRecording(recording)}
+                    disabled={
+                      !recording.exportable
+                      || recording.state === "delete_requested"
+                      || busy !== null
+                    }
+                    onClick={() => setPendingDelete(recording)}
                   >
                     <Trash2 size={15} />
                     {busy === deleteAction ? "Deleting..." : "Delete local audio"}
@@ -574,6 +593,53 @@ function LocalRecoverySection({
         <p className="db-local-recordings-message" role="status">
           {message}
         </p>
+      )}
+      {pendingDelete && (
+        <div
+          className="db-local-confirm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="local-delete-title"
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && busy === null) setPendingDelete(null);
+          }}
+        >
+          <button
+            type="button"
+            className="db-local-confirm-scrim"
+            aria-label="Keep local audio"
+            disabled={busy !== null}
+            onClick={() => setPendingDelete(null)}
+          />
+          <div className="db-local-confirm-panel">
+            <span className="db-local-confirm-icon"><Trash2 size={20} /></span>
+            <h2 id="local-delete-title">Delete local audio?</h2>
+            <p>
+              Aura will remove the encrypted recording from this device. Cloud notes and
+              server data stay available. This cannot be undone.
+            </p>
+            <div className="db-local-confirm-actions">
+              <button
+                type="button"
+                className="db-local-confirm-cancel"
+                autoFocus
+                disabled={busy !== null}
+                onClick={() => setPendingDelete(null)}
+              >
+                Keep audio
+              </button>
+              <button
+                type="button"
+                className="db-local-confirm-delete"
+                disabled={busy !== null}
+                onClick={() => void deleteRecording(pendingDelete)}
+              >
+                <Trash2 size={15} />
+                {busy === `${pendingDelete.captureRunId}:delete` ? "Removing..." : "Delete audio"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </section>
   );
