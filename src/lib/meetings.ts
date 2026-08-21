@@ -18,7 +18,7 @@ export class MeetingTransportError extends Error {
   classification: MeetingJobFailureClassification;
   /** The server's own capture fence, present on a `stale_capture_fence` 409.
    * Lets the caller tell "we are simply behind" (adopt it and carry on) from
-   * "we have forked" (unrecoverable). Null on older backends. */
+   * "we have forked" (unrecoverable). */
   serverCaptureFence: number | null;
 
   constructor(
@@ -70,7 +70,6 @@ export interface MeetingClaim {
   captureRunId: string;
   captureFence: number;
   leaseExpiresAt: string | null;
-  protocolVersion: 1 | 2;
   capMinutes: number;
   maxCaptureMinutes: number;
   rejoined: boolean;
@@ -157,7 +156,7 @@ export async function claimMeeting(args: {
   title: string;
   startTime: string;
   endTime: string;
-  deviceId: string;
+  installationId: string;
   runtimeInstanceId: string;
 }): Promise<MeetingClaim> {
   const response = await authFetch("/meetings/claim", {
@@ -168,8 +167,7 @@ export async function claimMeeting(args: {
       title: args.title,
       start_time: args.startTime,
       end_time: args.endTime,
-      device_id: args.deviceId,
-      installation_id: args.deviceId,
+      installation_id: args.installationId,
       runtime_instance_id: args.runtimeInstanceId,
     }),
   });
@@ -191,23 +189,27 @@ export async function claimMeeting(args: {
     capture_run_id?: unknown;
     capture_fence?: unknown;
     lease_expires_at?: unknown;
+    protocol_version?: unknown;
   };
   if (typeof data.meeting_id !== "string" || !data.meeting_id) {
     throw new Error("Meeting claim response missing meeting_id");
   }
-  const hasV2Identity =
-    typeof data.capture_run_id === "string"
-    && data.capture_run_id.length > 0
-    && typeof data.capture_fence === "number"
-    && Number.isSafeInteger(data.capture_fence)
-    && data.capture_fence >= 0;
+  if (
+    typeof data.capture_run_id !== "string"
+    || !data.capture_run_id
+    || typeof data.capture_fence !== "number"
+    || !Number.isSafeInteger(data.capture_fence)
+    || data.capture_fence < 0
+    || data.protocol_version !== 2
+  ) {
+    throw new Error("Meeting claim response is not protocol V2");
+  }
   return {
     meetingId: data.meeting_id,
-    captureRunId: hasV2Identity ? data.capture_run_id as string : crypto.randomUUID(),
-    captureFence: hasV2Identity ? data.capture_fence as number : 0,
+    captureRunId: data.capture_run_id,
+    captureFence: data.capture_fence,
     leaseExpiresAt:
       typeof data.lease_expires_at === "string" ? data.lease_expires_at : null,
-    protocolVersion: hasV2Identity ? 2 : 1,
     capMinutes: typeof data.cap_minutes === "number" ? data.cap_minutes : 60,
     maxCaptureMinutes:
       typeof data.max_capture_minutes === "number" ? data.max_capture_minutes : 240,
@@ -232,7 +234,6 @@ export async function uploadSegment(args: {
   meetingId: string;
   captureRunId: string;
   captureFence: number;
-  protocolVersion: 1 | 2;
   seq: number;
   bytes: Uint8Array;
   startMs: number;
@@ -247,40 +248,26 @@ export async function uploadSegment(args: {
   const timeoutId = setTimeout(() => controller.abort(), 60_000);
   try {
     const body = new Uint8Array(args.bytes).buffer as ArrayBuffer;
-    const path = args.protocolVersion === 2
-      ? `/meetings/${args.meetingId}/capture-runs/${args.captureRunId}/segments/${args.seq}`
-      : `/meetings/${args.meetingId}/segments/${args.seq}`;
-    const response = await authFetch(path, {
-      method: args.protocolVersion === 2 ? "PUT" : "POST",
-      headers: {
-        "Content-Type": "audio/flac",
-        "Idempotency-Key": args.jobId,
-        "X-Capture-Fence": String(args.captureFence),
-        "X-Content-SHA256": args.contentSha256,
-        "X-Byte-Length": String(args.byteLength),
-        "X-Start-Ms": String(args.startMs),
-        "X-Duration-Ms": String(args.durationMs),
-        "X-Channel-Count": String(args.channelCount),
-        "X-Sample-Rate-Hz": String(args.sampleRateHz),
-        "X-Incomplete": args.incomplete ? "true" : "false",
-        // Legacy aliases stay during the compatibility window.
-        "X-Segment-Start-Ms": String(args.startMs),
-        "X-Segment-Duration-Ms": String(args.durationMs),
-        "X-Segment-Incomplete": args.incomplete ? "true" : "false",
+    const response = await authFetch(
+      `/meetings/${args.meetingId}/capture-runs/${args.captureRunId}/segments/${args.seq}`,
+      {
+        method: "PUT",
+        headers: {
+          "Content-Type": "audio/flac",
+          "Idempotency-Key": args.jobId,
+          "X-Capture-Fence": String(args.captureFence),
+          "X-Content-SHA256": args.contentSha256,
+          "X-Byte-Length": String(args.byteLength),
+          "X-Start-Ms": String(args.startMs),
+          "X-Duration-Ms": String(args.durationMs),
+          "X-Channel-Count": String(args.channelCount),
+          "X-Sample-Rate-Hz": String(args.sampleRateHz),
+          "X-Incomplete": args.incomplete ? "true" : "false",
+        },
+        body,
+        signal: controller.signal,
       },
-      body,
-      signal: controller.signal,
-    });
-    if (args.protocolVersion === 1 && response.ok) {
-      return {
-        receiptId: `legacy:${args.jobId}`,
-        object: `legacy/meetings/${args.meetingId}/${args.seq}`,
-        generation: "legacy-unverified",
-        contentSha256: args.contentSha256,
-        byteLength: args.byteLength,
-        acceptedAt: new Date().toISOString(),
-      };
-    }
+    );
     const payload = await readJsonObject(response);
     if (!response.ok && !(response.status === 409 && isSameIdentity(payload))) {
       throw transportError("Segment upload", response.status, payload);
@@ -325,7 +312,6 @@ export async function completeMeeting(args: {
     meetingId: string;
     captureRunId: string;
     captureFence: number;
-    protocolVersion: 1 | 2;
     segmentCount: number;
     totalDurationMs: number;
     reason: string;
@@ -333,16 +319,15 @@ export async function completeMeeting(args: {
     manifestSegments: MeetingCompletionSegment[];
     manifestSha256: string;
   }): Promise<CompletionReceipt> {
-  const path = args.protocolVersion === 2
-    ? `/meetings/${args.meetingId}/capture-runs/${args.captureRunId}/complete`
-    : `/meetings/${args.meetingId}/complete`;
-  const response = await authFetch(path, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Idempotency-Key": args.jobId,
-    },
-    body: JSON.stringify({
+  const response = await authFetch(
+    `/meetings/${args.meetingId}/capture-runs/${args.captureRunId}/complete`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Idempotency-Key": args.jobId,
+      },
+      body: JSON.stringify({
       capture_fence: args.captureFence,
       segment_count: args.segmentCount,
       total_duration_ms: args.totalDurationMs,
@@ -371,15 +356,9 @@ export async function completeMeeting(args: {
         },
       })),
       manifest_sha256: args.manifestSha256,
-    }),
-  });
-  if (args.protocolVersion === 1 && response.ok) {
-    return {
-      receiptId: `legacy:${args.jobId}`,
-      manifestSha256: args.manifestSha256,
-      acceptedAt: new Date().toISOString(),
-    };
-  }
+      }),
+    },
+  );
   const payload = await readJsonObject(response);
   if (!response.ok && !(response.status === 409 && isSameIdentity(payload))) {
     throw transportError("Meeting complete", response.status, payload);
@@ -596,9 +575,7 @@ export function parseMeetingDoc(raw: unknown): MeetingDoc | null {
         sha256: artifact.sha256,
       }
     : null;
-  if (status === "ready" && !transcriptArtifact && row.artifact_revision !== undefined) {
-    // V2 documents may never report ready without an immutable pointer. A
-    // legacy document has no artifact_revision field and stays compatible.
+  if (status === "ready" && !transcriptArtifact) {
     return null;
   }
   return {

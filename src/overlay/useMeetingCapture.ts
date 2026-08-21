@@ -61,7 +61,6 @@ interface QueueCapture {
   meetingId: string;
   captureRunId: string;
   captureFence: number;
-  protocolVersion: 1 | 2;
   eventId: string;
   startedAtMs: number;
   completed: boolean;
@@ -91,7 +90,6 @@ interface QueueJobLease {
   meetingId: string;
   captureRunId: string;
   captureFence: number;
-  protocolVersion: 1 | 2;
   eventId: string;
   seq: number | null;
   startMs: number | null;
@@ -361,7 +359,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
               title,
               startTime,
               endTime,
-              deviceId: runtimeStatus.installationId,
+              installationId: runtimeStatus.installationId,
               runtimeInstanceId: runtimeStatus.runtimeInstanceId,
             });
             if (!isCurrent()) return;
@@ -373,7 +371,6 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
               meetingId: claim.meetingId,
               captureRunId: claim.captureRunId,
               captureFence: claim.captureFence,
-              protocolVersion: claim.protocolVersion,
               eventId,
             });
             if (!isCurrent()) return;
@@ -666,7 +663,6 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
             meetingId: lease.meetingId,
             captureRunId: lease.captureRunId,
             captureFence: lease.captureFence,
-            protocolVersion: lease.protocolVersion,
             seq: lease.seq,
             bytes: asBytes(raw),
             startMs: lease.startMs,
@@ -715,7 +711,6 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
             meetingId: lease.meetingId,
             captureRunId: lease.captureRunId,
             captureFence: lease.captureFence,
-            protocolVersion: lease.protocolVersion,
             segmentCount: lease.segmentCount,
             totalDurationMs: lease.totalDurationMs,
             reason: lease.reason || "ended",

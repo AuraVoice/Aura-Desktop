@@ -55,7 +55,8 @@ const MIN_SEGMENT_FRAMES: usize = 1;
 /// The design ceiling to restore later is 4 hours (MEETING_NOTES_PLAN.md
 /// section 4); the backend's caps in services/meetings/fields.py carry the
 /// matching clamp note.
-const MAX_CAPTURE: Duration = Duration::from_secs(60 * 60);
+const MAX_CAPTURE: Duration =
+    Duration::from_millis(super::evidence_store::MAX_CAPTURE_DURATION_MS as u64);
 /// The reported capture length, held to MAX_CAPTURE. The backend rejects a
 /// completion whose total_duration_ms exceeds its own matching cap
 /// (services/meetings/fields.py MAX_CAPTURE_MINUTES) with a TERMINAL
@@ -118,7 +119,6 @@ pub fn spawn_engine(
     meeting_id: String,
     capture_run_id: String,
     capture_fence: i64,
-    protocol_version: u8,
     owner_uid: String,
     event_id: String,
     runtime_instance_id: String,
@@ -137,7 +137,6 @@ pub fn spawn_engine(
                 meeting_id,
                 capture_run_id,
                 capture_fence,
-                protocol_version,
                 owner_uid,
                 event_id,
                 runtime_instance_id,
@@ -330,6 +329,7 @@ fn open_stream(
 
 /// Everything the engine tracks for one channel between segment closes.
 struct ChannelState {
+    channel: &'static str,
     shared: Arc<StreamShared>,
     /// Frames accumulated toward the current segment (post-fill, i16).
     acc: Vec<i16>,
@@ -340,8 +340,9 @@ struct ChannelState {
 }
 
 impl ChannelState {
-    fn new(shared: Arc<StreamShared>) -> Self {
+    fn new(channel: &'static str, shared: Arc<StreamShared>) -> Self {
         Self {
+            channel,
             shared,
             acc: Vec::new(),
             produced: 0,
@@ -381,7 +382,14 @@ impl ChannelState {
         if deficit > DISCONTINUITY_FRAMES {
             // Suspend/resume or a long stall: the wall clock jumped, the
             // audio didn't. Re-anchor rather than fabricating the gap.
-            warn!("meeting.audio: clock discontinuity ({deficit} frames), re-anchoring");
+            warn!(
+                "meeting.audio: clock discontinuity channel={} deficit_frames={} deficit_ms={} expected_frames={} produced_frames={} action=reanchor",
+                self.channel,
+                deficit,
+                deficit * 1000 / SAMPLE_RATE,
+                expected,
+                self.produced,
+            );
             self.reset_clock();
             return true;
         }
@@ -396,7 +404,6 @@ fn engine_thread(
     meeting_id: String,
     capture_run_id: String,
     capture_fence: i64,
-    protocol_version: u8,
     owner_uid: String,
     event_id: String,
     runtime_instance_id: String,
@@ -440,8 +447,8 @@ fn engine_thread(
     spawn_capture_thread(loopback.clone(), true);
     let capture_epoch = Instant::now();
 
-    let mut mic_state = ChannelState::new(mic.clone());
-    let mut loop_state = ChannelState::new(loopback.clone());
+    let mut mic_state = ChannelState::new("microphone", mic.clone());
+    let mut loop_state = ChannelState::new("system", loopback.clone());
     let mut emitted_ms: i64 = timeline_base_ms;
     let mut segment_start_ms: i64 = timeline_base_ms;
     let mut segment_incomplete = false;
@@ -472,7 +479,6 @@ fn engine_thread(
                     &meeting_id,
                     &capture_run_id,
                     capture_fence,
-                    protocol_version,
                     &owner_uid,
                     &event_id,
                     &runtime_instance_id,
@@ -521,7 +527,6 @@ fn engine_thread(
                 &meeting_id,
                 &capture_run_id,
                 capture_fence,
-                protocol_version,
                 &owner_uid,
                 &event_id,
                 &runtime_instance_id,
@@ -555,7 +560,6 @@ fn engine_thread(
         &meeting_id,
         &capture_run_id,
         capture_fence,
-        protocol_version,
         &owner_uid,
         &event_id,
         &runtime_instance_id,
@@ -599,7 +603,6 @@ fn close_segment(
     meeting_id: &str,
     capture_run_id: &str,
     capture_fence: i64,
-    protocol_version: u8,
     owner_uid: &str,
     event_id: &str,
     runtime_instance_id: &str,
@@ -646,7 +649,6 @@ fn close_segment(
                 meeting_id,
                 capture_run_id,
                 capture_fence,
-                protocol_version,
                 owner_uid,
                 event_id,
                 runtime_instance_id,

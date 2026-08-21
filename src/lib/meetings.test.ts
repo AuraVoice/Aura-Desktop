@@ -17,7 +17,7 @@ import {
 } from "./meetings";
 
 describe("meeting processing contract", () => {
-  it("parses additive processing metadata without changing legacy fields", () => {
+  it("parses processing metadata", () => {
     const doc = parseMeetingDoc({
       meeting_id: "m1",
       event_id: "e1",
@@ -62,6 +62,12 @@ describe("meeting processing contract", () => {
     const base = {
       meeting_id: "m1",
       status: "ready",
+      artifact_revision: 1,
+      transcript_artifact: {
+        object: "transcripts/v2/m1/canonical.json",
+        generation: "1",
+        sha256: "a".repeat(64),
+      },
       note: {
         summary: "A useful meeting",
         transcript: [
@@ -94,6 +100,7 @@ describe("meeting V2 evidence transport", () => {
         meeting_id: "meeting_1",
         capture_run_id: "run_1",
         capture_fence: 7,
+        protocol_version: 2,
         lease_expires_at: "2026-07-29T20:05:00Z",
         cap_minutes: 60,
         max_capture_minutes: 60,
@@ -105,7 +112,7 @@ describe("meeting V2 evidence transport", () => {
       title: "Review",
       startTime: "2026-07-29T20:00:00Z",
       endTime: "2026-07-29T21:00:00Z",
-      deviceId: "install_1",
+      installationId: "install_1",
       runtimeInstanceId: "runtime_1",
     });
 
@@ -113,7 +120,6 @@ describe("meeting V2 evidence transport", () => {
       meetingId: "meeting_1",
       captureRunId: "run_1",
       captureFence: 7,
-      protocolVersion: 2,
     });
     const calls = vi.mocked(authFetch).mock.calls;
     const request = calls[calls.length - 1];
@@ -142,7 +148,6 @@ describe("meeting V2 evidence transport", () => {
       meetingId: "meeting_1",
       captureRunId: "run_1",
       captureFence: 7,
-      protocolVersion: 2,
       seq: 0,
       bytes: new Uint8Array([1, 2, 3]),
       startMs: 0,
@@ -175,7 +180,6 @@ describe("meeting V2 evidence transport", () => {
       meetingId: "meeting_1",
       captureRunId: "run_1",
       captureFence: 7,
-      protocolVersion: 2,
       seq: 0,
       bytes: new Uint8Array([1]),
       startMs: 0,
@@ -208,7 +212,6 @@ describe("meeting V2 evidence transport", () => {
       meetingId: "meeting_1",
       captureRunId: "run_1",
       captureFence: 7,
-      protocolVersion: 2,
       segmentCount: 1,
       totalDurationMs: 1000,
       reason: "ended",
