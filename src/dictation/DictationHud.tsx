@@ -160,6 +160,11 @@ function DictationRecovery({ text, message }: { text: string; message?: string }
         className="dictation-message__copy"
         onClick={copyTranscript}
       >
+        {copied && (
+          <span className="dictation-message__copy-check" aria-hidden="true">
+            ✓
+          </span>
+        )}
         {copied ? "Copied" : "Copy"}
       </button>
     </GlassSurface>

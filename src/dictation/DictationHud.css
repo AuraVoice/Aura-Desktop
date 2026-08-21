@@ -185,6 +185,12 @@ body,
 
 .dictation-message__copy {
   flex: 0 0 auto;
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  width: fit-content;
   height: 28px;
   padding: 0 11px;
   border: 0;
@@ -193,6 +199,12 @@ body,
   color: #111;
   font: 600 12px/1 var(--font-body);
   cursor: pointer;
+}
+
+.dictation-message__copy-check {
+  color: #16a34a;
+  font-size: 15px;
+  line-height: 1;
 }
 
 .dictation-message__copy:hover {
