@@ -10,6 +10,7 @@ import { authFetch } from "./api";
 
 export type DraftChannel = "on_screen" | "email_reply" | "cold_dm" | "snippet";
 export type DraftLength = "short" | "medium" | "detailed";
+export type WritingSkillId = "general" | "linkedin_post" | "tweet" | "email";
 export type RefineChip = "shorter" | "longer" | "more_formal" | "warmer" | "regenerate";
 export type ArtifactKind =
   | "command"
@@ -56,6 +57,7 @@ function chipInstruction(chip: RefineChip, channel: DraftChannel): string {
 
 export interface RefineDraftParams {
   channel: DraftChannel;
+  skillId: WritingSkillId;
   /** The TARGET length (already stepped for shorter/longer). */
   length: DraftLength;
   priorDraft: string;
@@ -85,6 +87,7 @@ export async function refineDraft(params: RefineDraftParams): Promise<RefineDraf
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         channel: params.channel,
+        skill_id: params.skillId,
         length: params.length,
         prior_draft: params.priorDraft,
         refine_instruction: chipInstruction(params.chip, params.channel),

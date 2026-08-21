@@ -14,6 +14,7 @@ import {
   type DraftContentFormat,
   type DraftLength,
   type RefineChip,
+  type WritingSkillId,
 } from "../lib/draft";
 import { logError, logInfo } from "../lib/log";
 import { installDraftDebugInjector } from "../debug/draftDebug";
@@ -30,6 +31,7 @@ export type DraftPhase = "idle" | "generating" | "shown" | "refining" | "error";
 export interface DraftInfo {
   draftId: string;
   channel: DraftChannel;
+  skillId: WritingSkillId;
   length: DraftLength;
   text: string;
   contextSummary: string;
@@ -93,6 +95,17 @@ function asChannel(value: unknown): DraftChannel | null {
 
 function asLength(value: unknown): DraftLength | null {
   return value === "short" || value === "medium" || value === "detailed" ? value : null;
+}
+
+function asWritingSkillId(value: unknown): WritingSkillId {
+  if (
+    value === "linkedin_post" ||
+    value === "tweet" ||
+    value === "email"
+  ) {
+    return value;
+  }
+  return "general";
 }
 
 function asArtifactKind(value: unknown): ArtifactKind | null {
@@ -168,6 +181,7 @@ function parseStructuredArtifact(
   return {
     draftId: artifact.id,
     channel,
+    skillId: asWritingSkillId(payload.skill_id),
     length,
     text: artifact.body,
     contextSummary: typeof payload.context_summary === "string" ? payload.context_summary : "",
@@ -198,6 +212,7 @@ export function parseCreatedDraft(payload: Record<string, unknown>): DraftInfo |
   return {
     draftId,
     channel,
+    skillId: asWritingSkillId(payload.skill_id),
     length,
     text,
     contextSummary: typeof payload.context_summary === "string" ? payload.context_summary : "",
@@ -492,6 +507,7 @@ export function useDraftCard(
       setData((prev) => ({ ...prev, phase: "refining", refineFailed: false }));
       refineDraft({
         channel: draft.channel,
+        skillId: draft.skillId,
         length: targetLength,
         priorDraft: draft.text,
         chip,

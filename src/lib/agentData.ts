@@ -118,6 +118,7 @@ const FIELD_CAPS: Record<string, number> = {
   draft_id: 128,
   client_message_id: 128,
   channel: 64,
+  skill_id: 64,
   length: 64,
   mode: 64,
   reason: 64,

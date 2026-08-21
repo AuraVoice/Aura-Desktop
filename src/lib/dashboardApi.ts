@@ -167,6 +167,7 @@ export async function getSessionDetail(
 // ── Drafts ────────────────────────────────────────────────────────────────
 export interface RawDraft {
   draft_id: string;
+  skill_id: "general" | "linkedin_post" | "tweet" | "email";
   channel: DraftChannel;
   length: DraftLength;
   text: string;
