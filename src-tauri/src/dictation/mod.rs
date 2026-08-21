@@ -123,6 +123,7 @@ mod platform {
     /// on screen before the HUD hides itself.
     const CAPTION_LINGER: Duration = Duration::from_millis(2200);
     const FAILURE_LINGER: Duration = Duration::from_millis(4000);
+    const RECOVERY_LINGER: Duration = Duration::from_millis(15_000);
     /// How long the one-time consent pill stays up. Much longer than a failure
     /// caption because it is asking a question rather than reporting an
     /// outcome, and the user has to read it before answering. It auto-dismisses
@@ -606,20 +607,21 @@ mod platform {
         Some(held)
     }
 
-    /// Drops held text without typing it, and says so. The transcript itself is
-    /// never logged, only the reason.
+    /// Stops waiting for a text box and offers the held transcript for copying.
+    /// The transcript itself is never logged, only the reason.
     fn discard_pending(app: &AppHandle, held: PendingText, reason: &str) {
         info!(
-            "dictation: held text discarded ({reason}) chars={} frames={}",
+            "dictation: held text released for recovery ({reason}) chars={} frames={}",
             held.text.chars().count(),
             held.samples.len()
         );
         finish_with(
             app,
             held.generation,
-            HudUpdate::new(HudPhase::Error)
-                .with_message("No text box, so nothing was typed."),
-            FAILURE_LINGER,
+            HudUpdate::new(HudPhase::Recovery)
+                .with_text(held.text)
+                .with_message("No text box appeared, so nothing was typed."),
+            RECOVERY_LINGER,
         );
     }
 
@@ -1152,27 +1154,27 @@ mod platform {
                 FAILURE_LINGER,
             ),
             InsertOutcome::FocusChanged => (
-                HudUpdate::new(HudPhase::Error)
+                HudUpdate::new(HudPhase::Recovery)
                     .with_text(final_text)
                     .with_message("Focus changed, so nothing was typed."),
-                FAILURE_LINGER,
+                RECOVERY_LINGER,
             ),
             InsertOutcome::KeysHeld => (
-                HudUpdate::new(HudPhase::Error)
+                HudUpdate::new(HudPhase::Recovery)
                     .with_text(final_text)
                     .with_message(format!(
-                        "Release {} and dictate again.",
+                        "Release {}. Nothing was typed.",
                         DICTATION_CHORD.label()
                     )),
-                FAILURE_LINGER,
+                RECOVERY_LINGER,
             ),
             InsertOutcome::Blocked => (
-                HudUpdate::new(HudPhase::Error)
+                HudUpdate::new(HudPhase::Recovery)
                     .with_text(final_text)
                     .with_message(
                         "Windows blocked typing into that window because it runs as administrator.",
                     ),
-                FAILURE_LINGER,
+                RECOVERY_LINGER,
             ),
         };
         finish_with(app, generation, update, linger);

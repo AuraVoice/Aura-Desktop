@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { CSSProperties } from "react";
+import type { ClipboardEvent, CSSProperties } from "react";
 import { currentMonitor } from "@tauri-apps/api/window";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import {
@@ -320,6 +320,13 @@ function screenChipVisible(lane: ChatLane, screen: ChatScreenState): boolean {
 function rendersMarkdown(message: ChatMessage): boolean {
   if (message.role !== "assistant") return false;
   return message.kind === undefined || message.kind === "text";
+}
+
+function copySelectionAsPlainText(event: ClipboardEvent<HTMLDivElement>) {
+  const text = window.getSelection()?.toString();
+  if (!text) return;
+  event.preventDefault();
+  event.clipboardData.setData("text/plain", text);
 }
 
 function localCalendarDay(date: Date): number {
@@ -731,7 +738,7 @@ export function ChatSlot({
         </header>
 
         <div className="chat-slot-body" aria-live="polite" ref={bodyRef} onScroll={handleBodyScroll}>
-          <div className="chat-slot-transcript">
+          <div className="chat-slot-transcript" onCopy={copySelectionAsPlainText}>
           {hasOlderMessages && (
             <button type="button" className="chat-history-more" onClick={onLoadOlder}>
               Load earlier messages

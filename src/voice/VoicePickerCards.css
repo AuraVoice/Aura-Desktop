@@ -181,13 +181,13 @@
   width: 3px;
   min-height: 3px;
   border-radius: 999px;
-  background: color-mix(in srgb, var(--voice-tint) 42%, transparent);
+  background: rgba(177, 179, 180, 0.72);
   transform: scaleY(0.24);
   transition: transform 220ms ease, background 220ms ease;
 }
 
 .voice-waveform.is-active span {
-  background: color-mix(in srgb, var(--voice-tint) 82%, transparent);
+  background: rgba(255, 255, 255, 0.96);
   animation: voice-wave 880ms ease-in-out infinite alternate;
 }
 

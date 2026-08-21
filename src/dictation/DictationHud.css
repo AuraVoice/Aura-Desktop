@@ -162,7 +162,8 @@ body,
 }
 
 /* Held text: the label and the words stack, so the transcript gets the width. */
-.dictation-message.is-pending {
+.dictation-message.is-pending,
+.dictation-message.is-recovery {
   flex-direction: column;
   align-items: stretch;
   gap: 6px;
@@ -175,9 +176,32 @@ body,
 }
 
 .dictation-message__label {
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 12px;
   letter-spacing: 0.02em;
   color: var(--glass-text-dim);
+}
+
+.dictation-message__copy {
+  flex: 0 0 auto;
+  height: 28px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 999px;
+  background: #fff;
+  color: #111;
+  font: 600 12px/1 var(--font-body);
+  cursor: pointer;
+}
+
+.dictation-message__copy:hover {
+  background: #f2f2f2;
+}
+
+.dictation-message__copy:focus-visible {
+  outline: 2px solid var(--glass-text-bright);
+  outline-offset: 2px;
 }
 
 .dictation-message__dot {
@@ -185,7 +209,7 @@ body,
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: #ff8f6b;
+  background: #f00;
 }
 
 /* Amber, not the failure orange: the words are still coming. */

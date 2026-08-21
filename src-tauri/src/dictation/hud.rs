@@ -48,6 +48,7 @@ const HOVER_TOP_HEIGHT: f64 = 63.0;
 const MESSAGE_WIDTH: f64 = 340.0;
 const MESSAGE_HEIGHT: f64 = 44.0;
 const PENDING_HEIGHT: f64 = 78.0;
+const RECOVERY_HEIGHT: f64 = 112.0;
 /// The one-time online-dictation consent prompt. Wider and taller than any
 /// other state because it is the only one that has to carry a disclosure the
 /// user is expected to read and two buttons they have to be able to hit.
@@ -85,9 +86,12 @@ pub enum HudPhase {
     Transcribing,
     Inserted,
     Error,
+    /// A final transcript exists, but Windows could not safely type it. This
+    /// interactive card lets the user copy the words instead of losing them.
+    Recovery,
     /// Decoded, but no text box had focus, so the words are being held until
-    /// one does. The only phase that shows the transcript on screen, and it
-    /// earns that: the user has to know something is waiting, and what.
+    /// one does. The transcript is shown because the user has to know both
+    /// that something is waiting and what it says.
     Pending,
     /// The chord was pressed before the user agreed to online dictation. No
     /// microphone was opened and no audio exists; this asks, and nothing else
@@ -98,11 +102,11 @@ pub enum HudPhase {
 /// Whether the HUD should receive mouse input in this phase.
 ///
 /// Almost every phase is a passive caption that must not steal clicks from the
-/// window underneath, which is the whole point of a dictation HUD. The two
-/// exceptions both need a click to do their job: the resting pill's hover
-/// affordance, and the consent prompt's buttons.
+/// window underneath, which is the whole point of a dictation HUD. The three
+/// exceptions need clicks to do their job: the resting pill's hover affordance,
+/// the recovery card's Copy button, and the consent prompt's buttons.
 fn accepts_clicks(phase: HudPhase) -> bool {
-    matches!(phase, HudPhase::Idle | HudPhase::Consent)
+    matches!(phase, HudPhase::Idle | HudPhase::Recovery | HudPhase::Consent)
 }
 
 #[derive(Clone, Serialize)]
@@ -221,17 +225,17 @@ fn apply_no_activate(_window: &tauri::WebviewWindow) {}
 
 /// Whether this phase needs the window to be activatable.
 ///
-/// Consent is the ONLY phase with controls in it. Every other phase is hover
-/// only or click-through, which is why `apply_no_activate` was safe to set once
-/// at build and forget: a window that cannot activate cannot hand its WebView2
-/// child focus, and a click into an unfocused WebView2 never reaches the DOM.
-/// That is invisible until something in the window has to be clicked.
+/// Recovery and Consent have controls. Every other phase is hover only or
+/// click-through, which is why `apply_no_activate` was safe to set once at build
+/// and forget: a window that cannot activate cannot hand its WebView2 child
+/// focus, and a click into an unfocused WebView2 never reaches the DOM. That is
+/// invisible until something in the window has to be clicked.
 ///
 /// Kept separate from `accepts_clicks` on purpose even though both currently
-/// name Consent: Idle accepts the cursor so Windows can show its hover hint,
-/// and it must NOT become activatable to get that.
+/// name interactive phases: Idle accepts the cursor so Windows can show its
+/// hover hint, and it must NOT become activatable to get that.
 fn needs_activation(phase: HudPhase) -> bool {
-    matches!(phase, HudPhase::Consent)
+    matches!(phase, HudPhase::Recovery | HudPhase::Consent)
 }
 
 /// Adds or removes WS_EX_NOACTIVATE for the current phase, and logs the
@@ -338,6 +342,7 @@ fn surface_size(edge: NotchEdge, phase: HudPhase, _has_caption: bool) -> Logical
         },
         HudPhase::Idle => resting_size(edge),
         HudPhase::Error => LogicalSize::new(MESSAGE_WIDTH, MESSAGE_HEIGHT),
+        HudPhase::Recovery => LogicalSize::new(MESSAGE_WIDTH, RECOVERY_HEIGHT),
         HudPhase::Pending => LogicalSize::new(MESSAGE_WIDTH, PENDING_HEIGHT),
         HudPhase::Consent => LogicalSize::new(CONSENT_WIDTH, CONSENT_HEIGHT),
         _ => oriented_size(edge, ACTIVE_WIDTH, ACTIVE_HEIGHT),

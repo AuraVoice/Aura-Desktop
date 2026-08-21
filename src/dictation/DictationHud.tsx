@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { GlassSurface } from "../overlay/GlassSurface";
 import { dictationConsent } from "../lib/copy";
-import { logInfo } from "../lib/log";
+import { logError, logInfo } from "../lib/log";
 import type { NotchEdge } from "../overlay/notchEdge";
 import { useDictationLevels } from "./useDictationLevels";
 import { useDictationSounds } from "./useDictationSounds";
@@ -21,6 +22,7 @@ export type DictationPhase =
   | "transcribing"
   | "inserted"
   | "error"
+  | "recovery"
   | "pending"
   | "consent";
 
@@ -135,6 +137,35 @@ function DictationConsent() {
   );
 }
 
+function DictationRecovery({ text, message }: { text: string; message?: string }) {
+  const [copied, setCopied] = useState(false);
+
+  const copyTranscript = () => {
+    void writeText(text)
+      .then(() => setCopied(true))
+      .catch((error) => logError("DictationRecovery: copy transcript", error));
+  };
+
+  return (
+    <GlassSurface className="dictation-message is-recovery" draggable={false}>
+      <div className="dictation-message__row">
+        <span className="dictation-message__dot" aria-hidden="true" />
+        <span className="dictation-message__label">
+          {message ?? "Aura could not type this."}
+        </span>
+      </div>
+      <p className="dictation-message__text">{text}</p>
+      <button
+        type="button"
+        className="dictation-message__copy"
+        onClick={copyTranscript}
+      >
+        {copied ? "Copied" : "Copy"}
+      </button>
+    </GlassSurface>
+  );
+}
+
 /// The dictation HUD window: a persistent passive pill between holds, then the
 /// same pill enlarged while the hotkey is held. The pill has no click action;
 /// only the keyboard hook can start capture and recognition.
@@ -200,6 +231,10 @@ export function DictationHud() {
         <p className="dictation-message__text">{update.text}</p>
       </GlassSurface>
     );
+  }
+
+  if (update.phase === "recovery") {
+    return <DictationRecovery text={update.text} message={update.message} />;
   }
 
   // A failure is the only other thing worth words here.

@@ -127,11 +127,11 @@ export function paintBars(
   const clusterWidth = count * barWidth + (count - 1) * gap;
   const startX = edgeInset + Math.max(0, (width - edgeInset * 2 - clusterWidth) / 2);
   const gradient = context.createLinearGradient(0, 0, 0, height);
-  gradient.addColorStop(0, "rgba(104, 221, 205, 0.48)");
-  gradient.addColorStop(0.5, "rgba(151, 240, 225, 0.96)");
-  gradient.addColorStop(1, "rgba(104, 221, 205, 0.48)");
+  gradient.addColorStop(0, "rgba(255, 255, 255, 0.48)");
+  gradient.addColorStop(0.5, "rgba(255, 255, 255, 0.96)");
+  gradient.addColorStop(1, "rgba(255, 255, 255, 0.48)");
   context.fillStyle = gradient;
-  context.shadowColor = "rgba(86, 214, 196, 0.38)";
+  context.shadowColor = "rgba(255, 255, 255, 0.3)";
   context.shadowBlur = 7;
 
   for (let index = 0; index < count; index += 1) {
