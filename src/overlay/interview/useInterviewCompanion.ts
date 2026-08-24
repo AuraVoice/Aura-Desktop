@@ -30,6 +30,17 @@ export type InterviewCompanionPhase =
   | "reflecting"
   | "reflection";
 
+/// The phases that own a live capture session. They are the only ones that must
+/// not be dismissed out from under the user, so both the card's Stop/Cancel
+/// split and OverlayRoot's Escape handling read this one predicate rather than
+/// keeping their own phase lists.
+export function isInterviewCaptureActive(phase: InterviewCompanionPhase): boolean {
+  return phase === "starting"
+    || phase === "listening"
+    || phase === "paused"
+    || phase === "degraded";
+}
+
 interface SupportedCallPayload {
   supported: boolean;
   app: string | null;
@@ -122,6 +133,7 @@ export interface InterviewCompanionState {
   reflection: InterviewReflection | null;
   message: string | null;
   openPreflight: () => void;
+  dismiss: () => void;
   start: () => void;
   pause: () => void;
   resume: () => void;
@@ -147,6 +159,13 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
   const [reflectionSnapshot, setReflectionSnapshot] = useState<ReflectionSnapshot | null>(null);
   const [reflection, setReflection] = useState<InterviewReflection | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  // Mirrors of identityRef/lastRemoteTurnRef for render. The refs are written
+  // outside React's cycle, so deriving the button states from them directly
+  // left Suggest and Screen Sight stale whenever the write happened to land
+  // without a state change beside it (setMessage bails out when the string is
+  // already current, which it is on a second consecutive interviewer turn).
+  const [recoverable, setRecoverable] = useState(false);
+  const [canSuggest, setCanSuggest] = useState(false);
   const identityRef = useRef<{ sessionId: string; epoch: number } | null>(null);
   const recentRef = useRef<InterviewTranscriptTurn[]>([]);
   const reflectionTurnsRef = useRef<InterviewTranscriptTurn[]>([]);
@@ -184,6 +203,7 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
   const replaceAfterSpeechRef = useRef(false);
   const acceptNativeEventsRef = useRef(false);
   const startAttemptRef = useRef(0);
+  const preflightAttemptRef = useRef(0);
   const lastStoppedEpochRef = useRef(0);
 
   briefRef.current = brief;
@@ -205,9 +225,11 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
     if (credentialTimerRef.current) clearTimeout(credentialTimerRef.current);
     credentialTimerRef.current = null;
     identityRef.current = null;
+    setRecoverable(false);
     recentRef.current = [];
     reflectionTurnsRef.current = [];
     lastRemoteTurnRef.current = null;
+    setCanSuggest(false);
     evidenceRef.current = [];
     recentAudioRef.current = [];
     requestSequenceRef.current = 0;
@@ -326,6 +348,7 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
 
   const openPreflight = useCallback(() => {
     if (!signedIn) return;
+    const attempt = ++preflightAttemptRef.current;
     reflectionRequestRef.current?.abort();
     reflectionRequestRef.current = null;
     setReflectionSnapshot(null);
@@ -334,6 +357,7 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
     setMessage(null);
     invoke<SupportedCallPayload>("interview_supported_call")
       .then((result) => {
+        if (preflightAttemptRef.current !== attempt) return;
         if (!result.supported) {
           setPhase("error");
           setCallName(null);
@@ -344,11 +368,32 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
         setPhase("preflight");
       })
       .catch((error) => {
+        if (preflightAttemptRef.current !== attempt) return;
         logError("Interview Companion: call detection", error);
         setPhase("error");
         setMessage("Aura could not check the current call.");
       });
   }, [signedIn]);
+
+  // Closes the card from any phase that is not holding a live capture. Without
+  // this the preflight was a dead end: it renders only "Start", the Stop button
+  // is scoped to the capturing phases, and OverlayRoot suppresses chat and
+  // swallows Escape while the card is up, so opening it from the tray and then
+  // leaving the call left nothing on screen that could dismiss it.
+  const dismiss = useCallback(() => {
+    preflightAttemptRef.current += 1;
+    startAttemptRef.current += 1;
+    reflectionRequestRef.current?.abort();
+    reflectionRequestRef.current = null;
+    savingReflectionRef.current = false;
+    savingReflectionSequenceRef.current += 1;
+    setSavingReflection(false);
+    setReflectionSnapshot(null);
+    setReflection(null);
+    setCallName(null);
+    setMessage(null);
+    setPhase("idle");
+  }, []);
 
   const start = useCallback(() => {
     if (phase !== "preflight") return;
@@ -374,6 +419,7 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
           throw new Error("Interview Companion returned no session identity.");
         }
         identityRef.current = { sessionId: status.sessionId, epoch: status.epoch };
+        setRecoverable(true);
         metricsRef.current = {
           startedAtMs: Date.now(),
           accepted: 0,
@@ -751,6 +797,7 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
       recentRef.current = [...recentTurns, pending.turn].slice(-12);
       rememberReflectionTurn(pending.turn);
       lastRemoteTurnRef.current = pending.turn;
+      setCanSuggest(true);
       evaluate(pending.turn, recentTurns, "automatic");
     };
 
@@ -822,6 +869,7 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
         return;
       }
       identityRef.current = { sessionId: status.sessionId, epoch: status.epoch };
+      setRecoverable(true);
       setCallName(callLabel(status.app));
       setPhase(status.phase);
       if (status.reason === "credential_expired") {
@@ -911,14 +959,15 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
     callName,
     answer,
     briefReady: brief !== null && brief.reviewedAtMs !== null,
-    canSuggest: lastRemoteTurnRef.current !== null,
-    recoverable: identityRef.current !== null,
+    canSuggest,
+    recoverable,
     candidateSpeaking,
     capturingScreen,
     savingReflection,
     reflection,
     message,
     openPreflight,
+    dismiss,
     start,
     pause,
     resume,

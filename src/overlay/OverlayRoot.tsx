@@ -24,7 +24,10 @@ import { SetupPanel } from "./SetupPanel";
 import { PointingOverlay } from "./PointingOverlay";
 import { DraftCard, INITIAL_DRAFT_SLOT_HEIGHT } from "./DraftCard";
 import { useInterviewMaterial } from "./interview/useInterviewMaterial";
-import { useInterviewCompanion } from "./interview/useInterviewCompanion";
+import {
+  isInterviewCaptureActive,
+  useInterviewCompanion,
+} from "./interview/useInterviewCompanion";
 import {
   InterviewCompanionCard,
   INTERVIEW_COMPANION_SLOT_HEIGHT,
@@ -88,6 +91,8 @@ export function OverlayRoot() {
   const voice = useVoiceBar();
   const interviewCompanion = useInterviewCompanion(user !== null);
   const showInterviewCompanion = interviewCompanion.phase !== "idle";
+  const interviewCompanionPhase = interviewCompanion.phase;
+  const dismissInterviewCompanion = interviewCompanion.dismiss;
   useScreenSight(voice.room, voice.status);
   // Ctrl+Alt+M. Mounted here rather than inside useVoiceBar because the mode
   // outlives any one call: it persists, and it rides the next token.
@@ -618,7 +623,15 @@ export function OverlayRoot() {
         setChatHistoryOpen(false);
         return;
       }
-      if (showInterviewCompanion) return;
+      // Escape must never kill a live capture, but it stays the way out of the
+      // preflight, the error state, and the reflection card - those suppress
+      // chat and every other slot surface, so without this they are inescapable.
+      if (showInterviewCompanion) {
+        if (!isInterviewCaptureActive(interviewCompanionPhase)) {
+          dismissInterviewCompanion();
+        }
+        return;
+      }
       setChatOpen(false);
       void endSession();
       invoke("dismiss_bar").catch((err) =>
@@ -627,7 +640,15 @@ export function OverlayRoot() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [user, endSession, visibleChatOpen, chatHistoryOpen, showInterviewCompanion]);
+  }, [
+    user,
+    endSession,
+    visibleChatOpen,
+    chatHistoryOpen,
+    showInterviewCompanion,
+    interviewCompanionPhase,
+    dismissInterviewCompanion,
+  ]);
 
   // Active capture always keeps a visible native indicator and stop control.
   useEffect(() => {

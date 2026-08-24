@@ -452,6 +452,24 @@ pub(crate) fn bar_size(edge: NotchEdge, slot: Option<f64>) -> LogicalSize<f64> {
     }
 }
 
+/// How far the Bar window reaches inward from its docked edge, notch plus any
+/// open slot card. The dictation HUD steps aside by this rather than by the
+/// resting notch alone: a chat composer, draft, or Interview Companion card
+/// grows the bar inward from the SAME edge, and a fixed notch-sized offset
+/// would put the HUD on top of it.
+pub(crate) fn bar_cross_extent(app: &AppHandle) -> f64 {
+    let Some(handle) = state_handle(app) else {
+        return NOTCH_CROSS;
+    };
+    let state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+    let size = bar_size(state.notch_edge, state.slot_height);
+    if state.notch_edge.is_vertical() {
+        size.width
+    } else {
+        size.height
+    }
+}
+
 /// Anchors the Bar window to its edge within the work area. The window contains
 /// the notch (centered on the edge's cross-axis) plus any card growing inward,
 /// so anchoring the whole window flush to the edge keeps the pill centered on it.
@@ -635,14 +653,10 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
     let panel_variant = state.panel_variant;
     let slot_height = state.slot_height;
     let notch_edge = state.notch_edge;
-    // Mutual exclusivity with the dictation HUD normally means "overlay visible
-    // -> suppress the HUD". A bar the user pinned via "show the bar at all
-    // times" is visible permanently, so treating it as suppressing would leave
-    // dictation with no UI at all, forever. A RESTING pinned bar therefore does
-    // not suppress; a bar shown for a live call still does.
-    let suppresses_hud = !(state.always_show_bar
-        && presentation == OverlayPresentation::Bar
-        && !state.voice_active);
+    // Bar surfaces, including text chat, can coexist with dictation: hud.rs
+    // detects a Bar on the same display and offsets the HUD. Suppress only the
+    // larger overlay presentations that cannot share that edge safely.
+    let suppresses_hud = presentation != OverlayPresentation::Bar;
     // A "fresh show" is a real presentation/variant transition (summon from
     // hidden, setup<->bar). A slot-height-only change (opening/closing the kebab
     // menu or a card) or an edge re-dock is NOT one - it must not re-steal OS

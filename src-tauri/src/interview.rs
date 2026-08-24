@@ -599,6 +599,13 @@ fn run_worker(
                     paused = false;
                     reconnects = 0;
                     retry_at = Instant::now();
+                    // Resume is also the card's "Retry transcription". Leaving
+                    // this set makes the reconnect guard below skip forever, so
+                    // the retry emits no status at all and the card sits on the
+                    // "starting" set_paused already painted. If the credential
+                    // really is dead, the next open_streams sets it again and
+                    // re-emits the error - one honest attempt either way.
+                    credential_blocked = false;
                 }
                 RuntimeCommand::UpdateCredential(next_credential) => {
                     credential = next_credential;
@@ -704,6 +711,15 @@ fn run_worker(
                         failure = Some(AsrError::Provider);
                         failure_reason = Some("device_switch");
                         break;
+                    }
+                    // A timing glitch is not a dead stream. Windows sets these
+                    // flags at stream start and whenever a render stream goes
+                    // idle and resumes, so tearing both ASR sockets down here
+                    // would burn the reconnect budget during a normal call.
+                    // Only the turn boundaries are no longer trustworthy.
+                    CaptureEvent::Glitch { .. } => {
+                        candidate_start = None;
+                        remote_start = None;
                     }
                     CaptureEvent::DeviceBound { .. } => {}
                 }

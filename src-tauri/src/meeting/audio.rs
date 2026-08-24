@@ -202,11 +202,16 @@ fn accept_frame(frame: PcmFrame, mic: &mut ChannelState, loopback: &mut ChannelS
 /// Drains the broker without blocking. A disconnected lossless queue or an
 /// explicit device failure must stop Meeting Notes rather than quietly lose
 /// audio while the recording indicator remains active.
+///
+/// `final_drain` marks the one call made AFTER `capture.stop()`, where the
+/// consumer's own sender is already gone by design: there, Disconnected means
+/// the queue is exhausted, not that anything broke.
 fn drain_capture_events(
     capture: &CaptureConsumer,
     mic: &mut ChannelState,
     loopback: &mut ChannelState,
     segment_incomplete: &mut bool,
+    final_drain: bool,
 ) -> bool {
     loop {
         match capture.try_recv() {
@@ -218,7 +223,7 @@ fn drain_capture_events(
                 AudioSource::Microphone => mic.device_id_hash = device_id_hash,
                 AudioSource::Loopback => loopback.device_id_hash = device_id_hash,
             },
-            Ok(CaptureEvent::DeviceRebound { source }) => {
+            Ok(CaptureEvent::DeviceRebound { source } | CaptureEvent::Glitch { source }) => {
                 let _ = source;
                 *segment_incomplete = true;
             }
@@ -228,6 +233,9 @@ fn drain_capture_events(
             }
             Err(TryRecvError::Empty) => return true,
             Err(TryRecvError::Disconnected) => {
+                if final_drain {
+                    return true;
+                }
                 error!("meeting.audio: lossless shared capture consumer disconnected");
                 return false;
             }
@@ -322,6 +330,7 @@ fn engine_thread(
             &mut mic_state,
             &mut loop_state,
             &mut segment_incomplete,
+            false,
         ) {
             break 'run "capture_failed".to_string();
         }
@@ -410,6 +419,7 @@ fn engine_thread(
         &mut mic_state,
         &mut loop_state,
         &mut segment_incomplete,
+        true,
     ) {
         stop_reason = "capture_failed".to_string();
     }

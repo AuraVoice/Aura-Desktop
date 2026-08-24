@@ -21,6 +21,12 @@ pub(crate) const SAMPLE_RATE: usize = 16_000;
 const CAPTURE_POLL: Duration = Duration::from_millis(40);
 const DEVICE_CHECK_EVERY: Duration = Duration::from_secs(2);
 const MAX_REOPEN_ATTEMPTS: u32 = 5;
+// Wait between a failed capture attempt and the next open, scaled by attempt.
+const REOPEN_BACKOFF: Duration = Duration::from_millis(500);
+// How long a stream must survive before it counts as healthy enough to clear
+// the reopen budget. Without this, a device that opens cleanly and then errors
+// on its first read resets the counter on every cycle and never gives up.
+const STREAM_STABLE_AFTER: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AudioSource {
@@ -44,6 +50,15 @@ pub(crate) enum CaptureEvent {
         device_id_hash: String,
     },
     DeviceRebound {
+        source: AudioSource,
+    },
+    /// A packet whose timing did not follow the previous one (WASAPI's
+    /// DATA_DISCONTINUITY / TIMESTAMP_ERROR). Microsoft documents both as a
+    /// stream state transition or timing glitch, NOT a device failure: they are
+    /// set routinely at stream start and whenever a render stream goes idle and
+    /// resumes. A consumer may mark its output non-contiguous, but must never
+    /// treat one as the stream dying - that is what DeviceRebound is for.
+    Glitch {
         source: AudioSource,
     },
     Failed {
@@ -166,7 +181,7 @@ pub(crate) fn subscribe(name: &str, delivery: Delivery) -> Result<CaptureConsume
     };
 
     let replay_sender = sender.clone();
-    let (id, generation, cancellation, origin, start_capture, initial_events) = {
+    let (id, generation, cancellation, origin, start_capture, initial_events, restart_sources) = {
         let mut state = broker().lock().unwrap_or_else(|error| error.into_inner());
         if state.consumers.values().any(|consumer| consumer.name == name) {
             return Err(format!("audio capture consumer '{name}' is already active"));
@@ -185,17 +200,27 @@ pub(crate) fn subscribe(name: &str, delivery: Delivery) -> Result<CaptureConsume
         let cancellation = state.cancellation.clone();
         let origin = state.origin;
         let mut initial_events = Vec::new();
+        let mut restart_sources = Vec::new();
         if !start_capture {
             for source in [AudioSource::Microphone, AudioSource::Loopback] {
-                let status = source_status(&state, source);
+                let status = source_status_mut(&mut state, source);
+                if status.failed {
+                    // The thread that set this has already exited, and only a
+                    // DeviceBound from a LIVE thread ever clears the flag, so
+                    // replaying the failure would sink this consumer and every
+                    // later one for as long as some other consumer keeps the
+                    // broker alive. A new subscriber is exactly the moment to
+                    // retry the device instead.
+                    status.failed = false;
+                    status.device_id_hash = None;
+                    restart_sources.push(source);
+                    continue;
+                }
                 if let Some(device_id_hash) = &status.device_id_hash {
                     initial_events.push(CaptureEvent::DeviceBound {
                         source,
                         device_id_hash: device_id_hash.clone(),
                     });
-                }
-                if status.failed {
-                    initial_events.push(CaptureEvent::Failed { source });
                 }
             }
         }
@@ -214,6 +239,7 @@ pub(crate) fn subscribe(name: &str, delivery: Delivery) -> Result<CaptureConsume
             origin,
             start_capture,
             initial_events,
+            restart_sources,
         )
     };
 
@@ -227,7 +253,19 @@ pub(crate) fn subscribe(name: &str, delivery: Delivery) -> Result<CaptureConsume
             cancellation.clone(),
             origin,
         );
-        spawn_capture_thread(AudioSource::Loopback, generation, cancellation, origin);
+        spawn_capture_thread(
+            AudioSource::Loopback,
+            generation,
+            cancellation.clone(),
+            origin,
+        );
+    }
+    for source in restart_sources {
+        info!(
+            "audio.capture: restarting failed source={} for consumer '{name}'",
+            source_name(source),
+        );
+        spawn_capture_thread(source, generation, cancellation.clone(), origin);
     }
 
     Ok(CaptureConsumer {
@@ -236,13 +274,6 @@ pub(crate) fn subscribe(name: &str, delivery: Delivery) -> Result<CaptureConsume
         overflowed,
         active: true,
     })
-}
-
-fn source_status(state: &BrokerState, source: AudioSource) -> &SourceStatus {
-    match source {
-        AudioSource::Microphone => &state.microphone,
-        AudioSource::Loopback => &state.loopback,
-    }
 }
 
 fn source_status_mut(state: &mut BrokerState, source: AudioSource) -> &mut SourceStatus {
@@ -269,7 +300,9 @@ fn publish(generation: u64, event: CaptureEvent) {
         CaptureEvent::Failed { source } => {
             source_status_mut(&mut state, *source).failed = true;
         }
-        CaptureEvent::Frame(_) | CaptureEvent::DeviceRebound { .. } => {}
+        CaptureEvent::Frame(_)
+        | CaptureEvent::DeviceRebound { .. }
+        | CaptureEvent::Glitch { .. } => {}
     }
     state
         .consumers
@@ -328,6 +361,8 @@ fn capture_thread(
         return;
     }
     let mut reopen_attempts = 0u32;
+    // Set on every successful open, read only by the failure paths below it.
+    let mut stream_started;
 
     'lifetime: loop {
         if cancellation.load(Ordering::Relaxed) {
@@ -335,20 +370,23 @@ fn capture_thread(
         }
         let (client, capture, device_id) = match open_stream(source) {
             Ok(opened) => {
-                reopen_attempts = 0;
+                stream_started = Instant::now();
                 opened
             }
             Err(error) => {
-                reopen_attempts += 1;
                 warn!(
-                    "audio.capture: open source={} failed attempt={reopen_attempts}: {error}",
+                    "audio.capture: open source={} failed: {error}",
                     source_name(source),
                 );
-                if reopen_attempts >= MAX_REOPEN_ATTEMPTS {
-                    publish(generation, CaptureEvent::Failed { source });
+                if !backoff_before_reopen(
+                    source,
+                    generation,
+                    &cancellation,
+                    &mut reopen_attempts,
+                    Duration::ZERO,
+                ) {
                     break;
                 }
-                std::thread::sleep(Duration::from_secs(1));
                 continue;
             }
         };
@@ -384,6 +422,15 @@ fn capture_thread(
                         );
                         let _ = client.stop_stream();
                         publish(generation, CaptureEvent::DeviceRebound { source });
+                        if !backoff_before_reopen(
+                            source,
+                            generation,
+                            &cancellation,
+                            &mut reopen_attempts,
+                            stream_started.elapsed(),
+                        ) {
+                            break 'lifetime;
+                        }
                         continue 'lifetime;
                     }
                 };
@@ -393,7 +440,7 @@ fn capture_thread(
                 match capture.read_from_device_to_deque(&mut raw) {
                     Ok(buffer) => {
                         if buffer.flags.data_discontinuity || buffer.flags.timestamp_error {
-                            publish(generation, CaptureEvent::DeviceRebound { source });
+                            publish(generation, CaptureEvent::Glitch { source });
                         }
                     }
                     Err(error) => {
@@ -403,6 +450,15 @@ fn capture_thread(
                         );
                         let _ = client.stop_stream();
                         publish(generation, CaptureEvent::DeviceRebound { source });
+                        if !backoff_before_reopen(
+                            source,
+                            generation,
+                            &cancellation,
+                            &mut reopen_attempts,
+                            stream_started.elapsed(),
+                        ) {
+                            break 'lifetime;
+                        }
                         continue 'lifetime;
                     }
                 }
@@ -446,6 +502,54 @@ fn capture_thread(
             }
             std::thread::sleep(CAPTURE_POLL);
         }
+    }
+}
+
+/// Charges one failed capture attempt against the reopen budget and waits
+/// before the next open. EVERY failure path funnels through here: without a
+/// wait, a device that opens cleanly and then errors on its first read spins
+/// this thread at full CPU and floods consumers with DeviceRebound. Returns
+/// false once the budget is spent, having published the terminal Failed.
+///
+/// `lived` is how long the stream that just died actually ran (zero when the
+/// open itself failed). Only a stream that ran a real length of time earns a
+/// fresh budget - resetting on every successful open instead would let an
+/// open-then-immediately-fail cycle repeat forever.
+fn backoff_before_reopen(
+    source: AudioSource,
+    generation: u64,
+    cancellation: &AtomicBool,
+    attempts: &mut u32,
+    lived: Duration,
+) -> bool {
+    if lived >= STREAM_STABLE_AFTER {
+        *attempts = 0;
+    }
+    *attempts += 1;
+    warn!(
+        "audio.capture: source={} reopening, attempt={}",
+        source_name(source),
+        *attempts,
+    );
+    if *attempts >= MAX_REOPEN_ATTEMPTS {
+        publish(generation, CaptureEvent::Failed { source });
+        return false;
+    }
+    sleep_unless_cancelled(cancellation, REOPEN_BACKOFF * *attempts);
+    true
+}
+
+/// Sleeps in short slices so a stop request does not have to wait out a whole
+/// backoff before the capture thread notices it.
+fn sleep_unless_cancelled(cancellation: &AtomicBool, total: Duration) {
+    const SLICE: Duration = Duration::from_millis(50);
+    let mut waited = Duration::ZERO;
+    while waited < total {
+        if cancellation.load(Ordering::Relaxed) {
+            return;
+        }
+        std::thread::sleep(SLICE);
+        waited += SLICE;
     }
 }
 

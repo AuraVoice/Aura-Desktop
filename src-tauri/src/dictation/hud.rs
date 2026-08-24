@@ -399,12 +399,20 @@ fn place_window(app: &AppHandle, window: &tauri::WebviewWindow, target: isize, p
     let mut position = overlay::bar_position(edge, work_pos, work_size, size);
 
     if voice_notch_shares_display(app, full_pos, full_size, scale) {
-        let inset = overlay::NOTCH_CROSS + overlay::NOTCH_GAP;
+        // Step past the WHOLE bar window, not just the resting notch: whichever
+        // card holds the slot grows the bar inward from this same edge, so a
+        // fixed notch-sized inset lands the HUD inside the card. Clamped so a
+        // tall card on a short display cannot push the HUD off screen.
+        let inset = overlay::bar_cross_extent(app) + overlay::NOTCH_GAP;
         match edge {
-            NotchEdge::Top => position.y += inset,
-            NotchEdge::Bottom => position.y -= inset,
-            NotchEdge::Left => position.x += inset,
-            NotchEdge::Right => position.x -= inset,
+            NotchEdge::Top => {
+                position.y = (position.y + inset).min(work_pos.y + work_size.height - size.height);
+            }
+            NotchEdge::Bottom => position.y = (position.y - inset).max(work_pos.y),
+            NotchEdge::Left => {
+                position.x = (position.x + inset).min(work_pos.x + work_size.width - size.width);
+            }
+            NotchEdge::Right => position.x = (position.x - inset).max(work_pos.x),
         }
     }
 

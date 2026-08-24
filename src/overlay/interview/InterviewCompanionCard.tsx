@@ -1,4 +1,5 @@
 import { GlassSurface } from "../GlassSurface";
+import { isInterviewCaptureActive } from "./useInterviewCompanion";
 import type { InterviewCompanionState } from "./useInterviewCompanion";
 import "./InterviewCompanionCard.css";
 
@@ -9,9 +10,7 @@ export function InterviewCompanionCard({
 }: {
   companion: InterviewCompanionState;
 }) {
-  const active = ["starting", "listening", "paused", "degraded"].includes(
-    companion.phase,
-  );
+  const active = isInterviewCaptureActive(companion.phase);
   const reflectionMode = ["ended", "reflecting", "reflection"].includes(companion.phase);
   const status = companion.candidateSpeaking
     ? "You are speaking. Answer held."
@@ -34,7 +33,7 @@ export function InterviewCompanionCard({
             <div className="interview-companion-title">Interview Companion</div>
             {status && <div className="interview-companion-status">{status}</div>}
           </div>
-          {(active || companion.phase === "error") && (
+          {active || companion.phase === "error" ? (
             <button
               type="button"
               className="interview-companion-text-button"
@@ -42,6 +41,19 @@ export function InterviewCompanionCard({
             >
               Stop
             </button>
+          ) : (
+            // Every non-capturing phase needs its own way out. Checking and
+            // preflight had none, and the card suppresses chat and Escape while
+            // it is open, so there was nothing left to close it with.
+            !reflectionMode && (
+              <button
+                type="button"
+                className="interview-companion-text-button"
+                onClick={companion.dismiss}
+              >
+                Cancel
+              </button>
+            )
           )}
         </div>
 
