@@ -57,3 +57,4 @@ export const navSections = [
 export const navTitles: Record<string, string> = Object.fromEntries(
   [...primaryNavItems, ...footerNavItems].map((item) => [item.to, item.label]),
 );
+navTitles["/interview"] = "Interview Companion";

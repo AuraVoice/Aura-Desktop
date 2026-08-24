@@ -14,13 +14,22 @@ import type {
 } from "./interviewBrief";
 
 const WORKSPACE_KEY = "interview-companion:workspace:v1";
-const WORKSPACE_VERSION = 1;
+const WORKSPACE_VERSION = 2;
 let mutationQueue: Promise<unknown> = Promise.resolve();
 
-export interface InterviewWorkspace {
+export interface InterviewWorkspaceRecord {
+  interviewId: string;
+  createdAtMs: number;
+  updatedAtMs: number;
   input: InterviewPreparationInput;
   research: CompanyResearchResult | null;
   draftBrief: InterviewBrief | null;
+}
+
+export interface InterviewWorkspace {
+  interviews: InterviewWorkspaceRecord[];
+  currentInterviewId: string | null;
+  activeInterviewId: string | null;
   activeBrief: InterviewBrief | null;
 }
 
@@ -174,16 +183,40 @@ function interviewBrief(value: unknown): value is InterviewBrief {
   return allClaims.every((claim) => claim.sourceIds.every((sourceId) => sourceIds.has(sourceId)));
 }
 
-function workspace(value: unknown): value is StoredInterviewWorkspace {
+function interviewRecord(value: unknown): value is InterviewWorkspaceRecord {
   const item = record(value);
   return Boolean(
     item
-    && item.version === WORKSPACE_VERSION
+    && typeof item.interviewId === "string"
+    && item.interviewId.length > 0
+    && typeof item.createdAtMs === "number"
+    && Number.isFinite(item.createdAtMs)
+    && typeof item.updatedAtMs === "number"
+    && Number.isFinite(item.updatedAtMs)
     && preparationInput(item.input)
     && (item.research === null || companyResearch(item.research))
-    && (item.draftBrief === null || interviewBrief(item.draftBrief))
-    && (item.activeBrief === null || interviewBrief(item.activeBrief)),
+    && (item.draftBrief === null || interviewBrief(item.draftBrief)),
   );
+}
+
+function workspace(value: unknown): value is StoredInterviewWorkspace {
+  const item = record(value);
+  if (
+    !item
+    || item.version !== WORKSPACE_VERSION
+    || !Array.isArray(item.interviews)
+    || !item.interviews.every(interviewRecord)
+    || !(item.currentInterviewId === null || typeof item.currentInterviewId === "string")
+    || !(item.activeInterviewId === null || typeof item.activeInterviewId === "string")
+    || !(item.activeBrief === null || interviewBrief(item.activeBrief))
+  ) return false;
+  const ids = item.interviews.map((interview) => interview.interviewId);
+  const uniqueIds = new Set(ids);
+  if (uniqueIds.size !== ids.length) return false;
+  if (item.currentInterviewId !== null && !uniqueIds.has(item.currentInterviewId)) return false;
+  if (item.activeInterviewId !== null && !uniqueIds.has(item.activeInterviewId)) return false;
+  return (item.activeInterviewId === null) === (item.activeBrief === null)
+    && (item.activeBrief === null || item.activeBrief.reviewedAtMs !== null);
 }
 
 function key(uid: string): string {
@@ -193,8 +226,8 @@ function key(uid: string): string {
 export async function loadInterviewWorkspace(uid: string): Promise<InterviewWorkspace | null> {
   const cached = await readCache<unknown>(key(uid));
   if (!cached || !workspace(cached.data)) return null;
-  const { input, research, draftBrief, activeBrief } = cached.data;
-  return { input, research, draftBrief, activeBrief };
+  const { interviews, currentInterviewId, activeInterviewId, activeBrief } = cached.data;
+  return { interviews, currentInterviewId, activeInterviewId, activeBrief };
 }
 
 export async function saveInterviewWorkspace(uid: string, value: InterviewWorkspace): Promise<boolean> {
