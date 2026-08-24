@@ -2,17 +2,66 @@ export type InterviewVerificationState = "verified" | "unverified";
 
 export type InterviewAnswerLength = "brief" | "balanced" | "detailed";
 
+export type InterviewClaimScope = "target" | "candidate" | "constraint" | "practice";
+
 export type InterviewSourceKind =
   | "company"
   | "role"
   | "resume"
   | "job_description"
-  | "verified_fact"
+  | "candidate_fact"
   | "star_story"
   | "metric"
   | "gap"
   | "do_not_claim"
-  | "question_to_ask";
+  | "company_research"
+  | "likely_interviewer_question";
+
+export type CompanyResearchCategory =
+  | "background"
+  | "products_and_business"
+  | "funding_and_financials"
+  | "company_size"
+  | "leadership_and_team"
+  | "recent_updates"
+  | "vision_and_strategy"
+  | "technology_and_ai"
+  | "role_relevance";
+
+export type CompanyResearchFactStatus = "confirmed" | "estimated" | "conflicting";
+
+export interface CompanyResearchSource {
+  sourceId: string;
+  title: string;
+  url: string;
+}
+
+export interface CompanyResearchFact {
+  factId: string;
+  category: CompanyResearchCategory;
+  statement: string;
+  status: CompanyResearchFactStatus;
+  asOf: string;
+  sourceIds: string[];
+}
+
+export interface LikelyInterviewerQuestion {
+  questionId: string;
+  question: string;
+  whyLikely: string;
+  sourceIds: string[];
+}
+
+export interface CompanyResearchResult {
+  company: string;
+  website: string;
+  researchedAt: string;
+  executiveSummary: string;
+  sources: CompanyResearchSource[];
+  facts: CompanyResearchFact[];
+  likelyInterviewerQuestions: LikelyInterviewerQuestion[];
+  unknowns: string[];
+}
 
 export interface InterviewBriefSource {
   sourceId: string;
@@ -20,6 +69,8 @@ export interface InterviewBriefSource {
   label: string;
   text: string;
   verificationState: InterviewVerificationState;
+  urls: string[];
+  asOf: string;
 }
 
 export interface InterviewBriefClaim {
@@ -27,6 +78,7 @@ export interface InterviewBriefClaim {
   text: string;
   sourceIds: string[];
   verificationState: InterviewVerificationState;
+  scope: InterviewClaimScope;
 }
 
 export interface InterviewStarStory {
@@ -39,12 +91,13 @@ export interface InterviewStarStory {
 }
 
 export interface InterviewBrief {
-  contractVersion: 2;
+  contractVersion: 3;
   briefId: string;
   company: InterviewBriefClaim | null;
   role: InterviewBriefClaim | null;
   sources: InterviewBriefSource[];
-  verifiedFacts: InterviewBriefClaim[];
+  targetFacts: InterviewBriefClaim[];
+  candidateFacts: InterviewBriefClaim[];
   projects: InterviewBriefClaim[];
   starStories: InterviewStarStory[];
   metrics: InterviewBriefClaim[];
@@ -52,17 +105,18 @@ export interface InterviewBrief {
   gaps: InterviewBriefClaim[];
   doNotClaim: InterviewBriefClaim[];
   answerLength: InterviewAnswerLength;
-  questionsToAsk: InterviewBriefClaim[];
+  likelyInterviewerQuestions: InterviewBriefClaim[];
   reviewedAtMs: number | null;
 }
 
 export interface InterviewBriefSlice {
-  contractVersion: 2;
+  contractVersion: 3;
   briefId: string;
   company: InterviewBriefClaim | null;
   role: InterviewBriefClaim | null;
   sources: Array<Omit<InterviewBriefSource, "text">>;
-  verifiedFacts: InterviewBriefClaim[];
+  targetFacts: InterviewBriefClaim[];
+  candidateFacts: InterviewBriefClaim[];
   projects: InterviewBriefClaim[];
   starStories: InterviewStarStory[];
   metrics: InterviewBriefClaim[];
@@ -70,21 +124,21 @@ export interface InterviewBriefSlice {
   gaps: InterviewBriefClaim[];
   doNotClaim: InterviewBriefClaim[];
   answerLength: InterviewAnswerLength;
-  questionsToAsk: InterviewBriefClaim[];
+  likelyInterviewerQuestions: InterviewBriefClaim[];
 }
 
 export interface InterviewPreparationInput {
   company: string;
+  companyUrl: string;
   role: string;
   resume: string;
   jobDescription: string;
-  verifiedFacts: string;
+  candidateFacts: string;
   starStories: string;
   metrics: string;
   gaps: string;
   doNotClaim: string;
   answerLength: InterviewAnswerLength;
-  questionsToAsk: string;
 }
 
 function lines(value: string): string[] {
@@ -101,7 +155,10 @@ function storyBlocks(value: string): string[] {
     .filter(Boolean);
 }
 
-export function preparationSources(input: InterviewPreparationInput): InterviewBriefSource[] {
+export function preparationSources(
+  input: InterviewPreparationInput,
+  research: CompanyResearchResult,
+): InterviewBriefSource[] {
   const sources: InterviewBriefSource[] = [];
   let nextId = 1;
   const add = (
@@ -109,6 +166,8 @@ export function preparationSources(input: InterviewPreparationInput): InterviewB
     label: string,
     text: string,
     verificationState: InterviewVerificationState,
+    urls: string[] = [],
+    asOf = "",
   ) => {
     const trimmed = text.trim();
     if (!trimmed) return;
@@ -118,15 +177,39 @@ export function preparationSources(input: InterviewPreparationInput): InterviewB
       label,
       text: trimmed,
       verificationState,
+      urls,
+      asOf,
     });
   };
+  const researchSourceById = new Map(
+    research.sources.map((source) => [source.sourceId, source]),
+  );
+  const urlsFor = (sourceIds: string[]) => sourceIds.flatMap((sourceId) => {
+    const source = researchSourceById.get(sourceId);
+    return source ? [source.url] : [];
+  });
 
-  add("company", "Company", input.company, "verified");
-  add("role", "Role", input.role, "verified");
+  add("company", "Target company", research.company || input.company, "verified");
+  add("role", "Target role", input.role, "verified");
   add("resume", "Resume", input.resume, "unverified");
   add("job_description", "Job description", input.jobDescription, "unverified");
-  lines(input.verifiedFacts).forEach((text, index) =>
-    add("verified_fact", `Verified fact ${index + 1}`, text, "verified"),
+  research.facts.forEach((fact) => add(
+    "company_research",
+    fact.category.replace(/_/g, " "),
+    fact.statement,
+    "verified",
+    urlsFor(fact.sourceIds),
+    fact.asOf,
+  ));
+  research.likelyInterviewerQuestions.forEach((question) => add(
+    "likely_interviewer_question",
+    "Question the interviewer may ask",
+    question.question,
+    "verified",
+    urlsFor(question.sourceIds),
+  ));
+  lines(input.candidateFacts).forEach((text, index) =>
+    add("candidate_fact", `Candidate highlight ${index + 1}`, text, "unverified"),
   );
   storyBlocks(input.starStories).forEach((text, index) =>
     add("star_story", `STAR story ${index + 1}`, text, "unverified"),
@@ -139,9 +222,6 @@ export function preparationSources(input: InterviewPreparationInput): InterviewB
   );
   lines(input.doNotClaim).forEach((text, index) =>
     add("do_not_claim", `Do not claim ${index + 1}`, text, "verified"),
-  );
-  lines(input.questionsToAsk).forEach((text, index) =>
-    add("question_to_ask", `Question ${index + 1}`, text, "verified"),
   );
   return sources;
 }
@@ -197,32 +277,33 @@ export function relevantInterviewBriefSlice(
   const query = tokens(`${question} ${recentText}`);
   const verifiedStories = brief.starStories.filter(verifiedStory);
   const slice: InterviewBriefSlice = {
-    contractVersion: 2,
+    contractVersion: 3,
     briefId: brief.briefId,
-    company: brief.company?.verificationState === "verified" ? brief.company : null,
-    role: brief.role?.verificationState === "verified" ? brief.role : null,
+    company: brief.company,
+    role: brief.role,
     sources: [],
-    verifiedFacts: ranked(verified(brief.verifiedFacts), (item) => item.text, query, 6),
+    targetFacts: ranked(brief.targetFacts, (item) => item.text, query, 8),
+    candidateFacts: ranked(verified(brief.candidateFacts), (item) => item.text, query, 6),
     projects: ranked(verified(brief.projects), (item) => item.text, query, 5),
     starStories: ranked(verifiedStories, claimText, query, 4),
     metrics: ranked(verified(brief.metrics), (item) => item.text, query, 6),
-    jdRequirements: ranked(verified(brief.jdRequirements), (item) => item.text, query, 6),
+    jdRequirements: ranked(brief.jdRequirements, (item) => item.text, query, 6),
     gaps: brief.gaps.slice(0, 8),
     doNotClaim: brief.doNotClaim.slice(0, 8),
     answerLength: brief.answerLength,
-    questionsToAsk: verified(brief.questionsToAsk).slice(0, 6),
+    likelyInterviewerQuestions: [],
   };
   const claims = [
     ...(slice.company ? [slice.company] : []),
     ...(slice.role ? [slice.role] : []),
-    ...slice.verifiedFacts,
+    ...slice.targetFacts,
+    ...slice.candidateFacts,
     ...slice.projects,
     ...slice.starStories.flatMap(storyClaims),
     ...slice.metrics,
     ...slice.jdRequirements,
     ...slice.gaps,
     ...slice.doNotClaim,
-    ...slice.questionsToAsk,
   ];
   const sourceIds = new Set(claims.flatMap((claim) => claim.sourceIds));
   slice.sources = brief.sources
@@ -231,28 +312,24 @@ export function relevantInterviewBriefSlice(
   return slice;
 }
 
-export function allBriefClaims(brief: InterviewBrief): InterviewBriefClaim[] {
+export function candidateBriefClaims(brief: InterviewBrief): InterviewBriefClaim[] {
   return [
-    ...(brief.company ? [brief.company] : []),
-    ...(brief.role ? [brief.role] : []),
-    ...brief.verifiedFacts,
+    ...brief.candidateFacts,
     ...brief.projects,
     ...brief.starStories.flatMap(storyClaims),
     ...brief.metrics,
-    ...brief.jdRequirements,
-    ...brief.gaps,
-    ...brief.doNotClaim,
-    ...brief.questionsToAsk,
   ];
 }
 
-export function withClaimVerification(
+export function withCandidateVerification(
   brief: InterviewBrief,
   claimId: string,
   verificationState: InterviewVerificationState,
 ): InterviewBrief {
   const update = (claim: InterviewBriefClaim): InterviewBriefClaim =>
-    claim.claimId === claimId ? { ...claim, verificationState } : claim;
+    claim.scope === "candidate" && claim.claimId === claimId
+      ? { ...claim, verificationState }
+      : claim;
   const updateStory = (story: InterviewStarStory): InterviewStarStory => ({
     ...story,
     situation: update(story.situation),
@@ -262,15 +339,9 @@ export function withClaimVerification(
   });
   return {
     ...brief,
-    company: brief.company ? update(brief.company) : null,
-    role: brief.role ? update(brief.role) : null,
-    verifiedFacts: brief.verifiedFacts.map(update),
+    candidateFacts: brief.candidateFacts.map(update),
     projects: brief.projects.map(update),
     starStories: brief.starStories.map(updateStory),
     metrics: brief.metrics.map(update),
-    jdRequirements: brief.jdRequirements.map(update),
-    gaps: brief.gaps.map(update),
-    doNotClaim: brief.doNotClaim.map(update),
-    questionsToAsk: brief.questionsToAsk.map(update),
   };
 }

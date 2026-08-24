@@ -5,9 +5,13 @@ import type {
   InterviewBriefClaim,
   InterviewBriefSlice,
   InterviewBriefSource,
+  InterviewClaimScope,
   InterviewSourceKind,
   InterviewStarStory,
   InterviewVerificationState,
+  CompanyResearchCategory,
+  CompanyResearchFactStatus,
+  CompanyResearchResult,
 } from "./interviewBrief";
 
 export interface InterviewTranscriptTurn {
@@ -269,13 +273,15 @@ const SOURCE_KINDS = new Set<InterviewSourceKind>([
   "role",
   "resume",
   "job_description",
-  "verified_fact",
+  "candidate_fact",
   "star_story",
   "metric",
   "gap",
   "do_not_claim",
-  "question_to_ask",
+  "company_research",
+  "likely_interviewer_question",
 ]);
+const CLAIM_SCOPES = new Set<InterviewClaimScope>(["target", "candidate", "constraint", "practice"]);
 const ANSWER_LENGTHS = new Set<InterviewAnswerLength>(["brief", "balanced", "detailed"]);
 
 function wireClaim(claim: InterviewBriefClaim) {
@@ -284,6 +290,7 @@ function wireClaim(claim: InterviewBriefClaim) {
     text: claim.text,
     source_ids: claim.sourceIds,
     verification_state: claim.verificationState,
+    scope: claim.scope,
   };
 }
 
@@ -300,7 +307,7 @@ function wireStory(story: InterviewStarStory) {
 
 function wireBriefSlice(brief: InterviewBriefSlice) {
   return {
-    contract_version: 2,
+    contract_version: 3,
     brief_id: brief.briefId,
     company: brief.company ? wireClaim(brief.company) : null,
     role: brief.role ? wireClaim(brief.role) : null,
@@ -309,8 +316,11 @@ function wireBriefSlice(brief: InterviewBriefSlice) {
       kind: source.kind,
       label: source.label,
       verification_state: source.verificationState,
+      urls: source.urls,
+      as_of: source.asOf,
     })),
-    verified_facts: brief.verifiedFacts.map(wireClaim),
+    target_facts: brief.targetFacts.map(wireClaim),
+    candidate_facts: brief.candidateFacts.map(wireClaim),
     projects: brief.projects.map(wireClaim),
     star_stories: brief.starStories.map(wireStory),
     metrics: brief.metrics.map(wireClaim),
@@ -318,7 +328,7 @@ function wireBriefSlice(brief: InterviewBriefSlice) {
     gaps: brief.gaps.map(wireClaim),
     do_not_claim: brief.doNotClaim.map(wireClaim),
     answer_length: brief.answerLength,
-    questions_to_ask: brief.questionsToAsk.map(wireClaim),
+    likely_interviewer_questions: brief.likelyInterviewerQuestions.map(wireClaim),
   };
 }
 
@@ -337,6 +347,9 @@ function parseSource(value: unknown): InterviewBriefSource | null {
     || typeof item.text !== "string"
     || typeof item.verification_state !== "string"
     || !VERIFICATION_STATES.has(item.verification_state as InterviewVerificationState)
+    || !Array.isArray(item.urls)
+    || !item.urls.every((url) => typeof url === "string")
+    || typeof item.as_of !== "string"
   ) return null;
   return {
     sourceId: item.source_id,
@@ -344,6 +357,8 @@ function parseSource(value: unknown): InterviewBriefSource | null {
     label: item.label,
     text: item.text,
     verificationState: item.verification_state as InterviewVerificationState,
+    urls: item.urls,
+    asOf: item.as_of,
   };
 }
 
@@ -353,6 +368,8 @@ function parseClaim(value: unknown, sourceIds: Set<string>): InterviewBriefClaim
   if (
     typeof item.verification_state !== "string"
     || !VERIFICATION_STATES.has(item.verification_state as InterviewVerificationState)
+    || typeof item.scope !== "string"
+    || !CLAIM_SCOPES.has(item.scope as InterviewClaimScope)
     || !Array.isArray(item.source_ids)
   ) return null;
   const claimSources = item.source_ids.filter((sourceId): sourceId is string =>
@@ -364,6 +381,7 @@ function parseClaim(value: unknown, sourceIds: Set<string>): InterviewBriefClaim
     text: item.text,
     sourceIds: claimSources,
     verificationState: item.verification_state as InterviewVerificationState,
+    scope: item.scope as InterviewClaimScope,
   };
 }
 
@@ -387,7 +405,7 @@ function parseStory(value: unknown, sourceIds: Set<string>): InterviewStarStory 
 
 function parseInterviewBrief(value: unknown): InterviewBrief {
   const item = asRecord(value);
-  if (!item || item.contract_version !== 2 || typeof item.brief_id !== "string") {
+  if (!item || item.contract_version !== 3 || typeof item.brief_id !== "string") {
     throw new Error("Interview preparation returned an invalid brief.");
   }
   if (!Array.isArray(item.sources)) throw new Error("Interview preparation returned no sources.");
@@ -399,37 +417,40 @@ function parseInterviewBrief(value: unknown): InterviewBrief {
   if (sourceIds.size !== sources.length) throw new Error("Interview preparation repeated a source ID.");
   const company = item.company === null ? null : parseClaim(item.company, sourceIds);
   const role = item.role === null ? null : parseClaim(item.role, sourceIds);
-  const verifiedFacts = parseClaims(item.verified_facts, sourceIds);
+  const targetFacts = parseClaims(item.target_facts, sourceIds);
+  const candidateFacts = parseClaims(item.candidate_facts, sourceIds);
   const projects = parseClaims(item.projects, sourceIds);
   const metrics = parseClaims(item.metrics, sourceIds);
   const jdRequirements = parseClaims(item.jd_requirements, sourceIds);
   const gaps = parseClaims(item.gaps, sourceIds);
   const doNotClaim = parseClaims(item.do_not_claim, sourceIds);
-  const questionsToAsk = parseClaims(item.questions_to_ask, sourceIds);
+  const likelyInterviewerQuestions = parseClaims(item.likely_interviewer_questions, sourceIds);
   const rawStories = Array.isArray(item.star_stories) ? item.star_stories : null;
   const starStories = rawStories?.map((story) => parseStory(story, sourceIds)) ?? null;
   if (
     (item.company !== null && !company)
     || (item.role !== null && !role)
-    || !verifiedFacts
+    || !targetFacts
+    || !candidateFacts
     || !projects
     || !metrics
     || !jdRequirements
     || !gaps
     || !doNotClaim
-    || !questionsToAsk
+    || !likelyInterviewerQuestions
     || !starStories
     || !starStories.every((story): story is InterviewStarStory => story !== null)
     || typeof item.answer_length !== "string"
     || !ANSWER_LENGTHS.has(item.answer_length as InterviewAnswerLength)
   ) throw new Error("Interview preparation returned unsupported claims.");
   return {
-    contractVersion: 2,
+    contractVersion: 3,
     briefId: item.brief_id,
     company,
     role,
     sources,
-    verifiedFacts,
+    targetFacts,
+    candidateFacts,
     projects,
     starStories,
     metrics,
@@ -437,9 +458,136 @@ function parseInterviewBrief(value: unknown): InterviewBrief {
     gaps,
     doNotClaim,
     answerLength: item.answer_length as InterviewAnswerLength,
-    questionsToAsk,
+    likelyInterviewerQuestions,
     reviewedAtMs: null,
   };
+}
+
+const RESEARCH_CATEGORIES = new Set<CompanyResearchCategory>([
+  "background",
+  "products_and_business",
+  "funding_and_financials",
+  "company_size",
+  "leadership_and_team",
+  "recent_updates",
+  "vision_and_strategy",
+  "technology_and_ai",
+  "role_relevance",
+]);
+const RESEARCH_STATUSES = new Set<CompanyResearchFactStatus>([
+  "confirmed",
+  "estimated",
+  "conflicting",
+]);
+
+function parseCompanyResearch(value: unknown): CompanyResearchResult {
+  const item = asRecord(value);
+  if (
+    !item
+    || typeof item.company !== "string"
+    || typeof item.website !== "string"
+    || typeof item.researched_at !== "string"
+    || typeof item.executive_summary !== "string"
+    || !Array.isArray(item.sources)
+    || !Array.isArray(item.facts)
+    || !Array.isArray(item.likely_interviewer_questions)
+    || !Array.isArray(item.unknowns)
+    || !item.unknowns.every((unknown) => typeof unknown === "string")
+  ) throw new Error("Company research returned an invalid dossier.");
+  const sources = item.sources.flatMap((value) => {
+    const source = asRecord(value);
+    return source
+      && typeof source.source_id === "string"
+      && typeof source.title === "string"
+      && typeof source.url === "string"
+      ? [{ sourceId: source.source_id, title: source.title, url: source.url }]
+      : [];
+  });
+  if (sources.length !== item.sources.length) {
+    throw new Error("Company research returned invalid sources.");
+  }
+  const sourceIds = new Set(sources.map((source) => source.sourceId));
+  const facts = item.facts.flatMap((value) => {
+    const fact = asRecord(value);
+    if (
+      !fact
+      || typeof fact.fact_id !== "string"
+      || typeof fact.category !== "string"
+      || !RESEARCH_CATEGORIES.has(fact.category as CompanyResearchCategory)
+      || typeof fact.statement !== "string"
+      || typeof fact.status !== "string"
+      || !RESEARCH_STATUSES.has(fact.status as CompanyResearchFactStatus)
+      || typeof fact.as_of !== "string"
+      || !Array.isArray(fact.source_ids)
+      || !fact.source_ids.every((sourceId) => typeof sourceId === "string" && sourceIds.has(sourceId))
+    ) return [];
+    return [{
+      factId: fact.fact_id,
+      category: fact.category as CompanyResearchCategory,
+      statement: fact.statement,
+      status: fact.status as CompanyResearchFactStatus,
+      asOf: fact.as_of,
+      sourceIds: fact.source_ids as string[],
+    }];
+  });
+  const likelyInterviewerQuestions = item.likely_interviewer_questions.flatMap((value) => {
+    const question = asRecord(value);
+    if (
+      !question
+      || typeof question.question_id !== "string"
+      || typeof question.question !== "string"
+      || typeof question.why_likely !== "string"
+      || !Array.isArray(question.source_ids)
+      || !question.source_ids.every((sourceId) => typeof sourceId === "string" && sourceIds.has(sourceId))
+    ) return [];
+    return [{
+      questionId: question.question_id,
+      question: question.question,
+      whyLikely: question.why_likely,
+      sourceIds: question.source_ids as string[],
+    }];
+  });
+  if (facts.length !== item.facts.length || likelyInterviewerQuestions.length !== item.likely_interviewer_questions.length) {
+    throw new Error("Company research returned unsupported evidence.");
+  }
+  return {
+    company: item.company,
+    website: item.website,
+    researchedAt: item.researched_at,
+    executiveSummary: item.executive_summary,
+    sources,
+    facts,
+    likelyInterviewerQuestions,
+    unknowns: item.unknowns as string[],
+  };
+}
+
+export async function researchInterviewCompany({
+  company,
+  companyUrl,
+  role,
+  jobDescription,
+  signal,
+}: {
+  company: string;
+  companyUrl: string;
+  role: string;
+  jobDescription: string;
+  signal?: AbortSignal;
+}): Promise<CompanyResearchResult> {
+  const response = await authFetch("/interview-companion/company-research", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      company: company.trim(),
+      company_url: companyUrl.trim() || null,
+      role: role.trim(),
+      job_description: jobDescription.trim(),
+    }),
+    signal,
+  });
+  if (!response.ok) throw new Error(`Company research failed (${response.status}).`);
+  return parseCompanyResearch(await response.json());
 }
 
 export async function buildInterviewBrief(
@@ -451,13 +599,15 @@ export async function buildInterviewBrief(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      contract_version: 2,
+      contract_version: 3,
       sources: sources.map((source) => ({
         source_id: source.sourceId,
         kind: source.kind,
         label: source.label,
         text: source.text,
         verification_state: source.verificationState,
+        urls: source.urls,
+        as_of: source.asOf,
       })),
       answer_length: answerLength,
     }),

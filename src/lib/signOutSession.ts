@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { signOut } from "firebase/auth";
 import { auth } from "./firebase";
 import { clearDashboardCache } from "./dashboardCache";
+import { flushInterviewWorkspaceWrites } from "./interviewWorkspace";
 import { logError } from "./log";
 import { revokeSavedImages } from "./savedImageCache";
 
@@ -46,6 +47,7 @@ async function performSignOut(): Promise<void> {
 
     revokeSavedImages();
     await signOut(auth);
+    await flushInterviewWorkspaceWrites();
     await clearDashboardCache(departingUid);
   } catch (err) {
     // A failed Firebase sign-out leaves the user authenticated. Restore the

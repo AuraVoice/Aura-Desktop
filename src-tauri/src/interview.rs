@@ -317,7 +317,7 @@ pub fn set_interview_companion_brief(
     let object = brief
         .as_object()
         .ok_or_else(|| "Interview brief must be an object.".to_string())?;
-    if object.get("contractVersion").and_then(serde_json::Value::as_u64) != Some(2)
+    if object.get("contractVersion").and_then(serde_json::Value::as_u64) != Some(3)
         || object.get("briefId").and_then(serde_json::Value::as_str).is_none()
         || object.get("reviewedAtMs").and_then(serde_json::Value::as_u64).is_none()
     {
@@ -347,6 +347,16 @@ pub fn interview_companion_brief(app: AppHandle) -> Result<Option<serde_json::Va
         .unwrap_or_else(|error| error.into_inner())
         .clone();
     Ok(brief)
+}
+
+#[tauri::command]
+pub fn clear_interview_companion_brief(app: AppHandle) -> Result<(), String> {
+    crate::security::authorize(
+        &app,
+        crate::security::Operation::StartInterviewCompanion,
+    )?;
+    clear_preparation(&app);
+    Ok(())
 }
 
 pub fn clear_preparation(app: &AppHandle) {

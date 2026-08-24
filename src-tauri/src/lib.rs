@@ -376,6 +376,7 @@ pub fn run() {
             interview::update_interview_companion_credential,
             interview::set_interview_companion_brief,
             interview::interview_companion_brief,
+            interview::clear_interview_companion_brief,
             interview::stop_interview_companion,
             interview::save_interview_reflection,
             dictation::trace_commands::dictation_trace_settings,

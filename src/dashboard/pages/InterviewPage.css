@@ -1,60 +1,115 @@
 .db-interview-page {
+  --interview-glass: color-mix(in srgb, var(--db-surface) 76%, transparent);
+  --interview-glass-soft: color-mix(in srgb, var(--db-bg) 62%, transparent);
+  --interview-glass-border: color-mix(in srgb, var(--db-border) 74%, white 26%);
+  --interview-glass-shadow: 0 16px 42px rgba(18, 28, 27, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.52);
   display: flex;
   flex-direction: column;
-  gap: 24px;
-  padding-bottom: 48px;
+  align-items: flex-start;
+  gap: 18px;
+  padding-bottom: 56px;
+}
+
+.db-interview-page h1,
+.db-interview-page h2,
+.db-interview-page h3,
+.db-interview-page h4,
+.db-interview-page summary {
+  font-weight: 750;
 }
 
 .db-interview-intro {
-  max-width: 760px;
+  width: min(100%, 820px);
+  padding: 4px 2px 0;
 }
 
-.db-interview-eyebrow {
+.db-interview-eyebrow,
+.db-interview-step-label {
   display: block;
-  color: var(--db-teal-deep-a);
-  font-size: 12px;
-  font-weight: 700;
+  color: var(--db-text-dim);
+  font-size: 11px;
+  font-weight: 750;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
-.db-interview-intro h1,
-.db-interview-review-head h2 {
-  margin: 7px 0 8px;
-  color: var(--db-text);
-  letter-spacing: -0.025em;
-}
-
 .db-interview-intro h1 {
-  font-size: 32px;
+  max-width: 760px;
+  margin: 8px 0 9px;
+  color: var(--db-text);
+  font-size: 34px;
+  letter-spacing: -0.035em;
+  line-height: 1.12;
 }
 
 .db-interview-intro p,
-.db-interview-review-head p {
+.db-interview-section-head p,
+.db-interview-review-head p,
+.db-interview-predictions > div > p {
   margin: 0;
   color: var(--db-text-dim);
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.55;
 }
 
 .db-interview-builder,
+.db-interview-dossier,
 .db-interview-review {
-  padding: 22px;
-  border: 1px solid var(--db-border);
+  width: min(100%, 1100px);
+  box-sizing: border-box;
+  border: 1px solid var(--interview-glass-border);
   border-radius: 20px;
-  background: var(--db-surface);
-  box-shadow: var(--db-shadow-sm);
+  background: linear-gradient(145deg, color-mix(in srgb, var(--interview-glass) 92%, white 8%), var(--interview-glass));
+  box-shadow: var(--interview-glass-shadow);
+  backdrop-filter: blur(20px) saturate(1.08);
 }
 
-.db-interview-builder {
+.db-interview-builder,
+.db-interview-review,
+.db-interview-dossier {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  padding: 22px;
+}
+
+.db-interview-section-head,
+.db-interview-review-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.db-interview-section-head > div,
+.db-interview-review-head > div:first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.db-interview-section-head h2,
+.db-interview-review-head h2 {
+  margin: 3px 0 5px;
+  color: var(--db-text);
+  font-size: 21px;
+  letter-spacing: -0.025em;
+}
+
+.db-interview-ready {
+  flex: 0 0 auto;
+  padding: 7px 10px;
+  border: 1px solid var(--db-border);
+  border-radius: 999px;
+  background: var(--interview-glass-soft);
+  color: var(--db-text);
+  font-size: 11px;
+  font-weight: 750;
 }
 
 .db-interview-grid {
   display: grid;
-  gap: 14px;
+  align-items: start;
+  gap: 13px;
 }
 
 .db-interview-grid-two {
@@ -72,7 +127,21 @@
   min-width: 0;
   color: var(--db-text);
   font-size: 12px;
-  font-weight: 650;
+  font-weight: 700;
+}
+
+.db-interview-field > span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.db-interview-field > span small,
+.db-interview-optional summary span {
+  color: var(--db-text-dim);
+  font-size: 10px;
+  font-weight: 400;
 }
 
 .db-interview-field input,
@@ -80,134 +149,402 @@
 .db-interview-field select {
   width: 100%;
   box-sizing: border-box;
-  border: 1px solid var(--db-border);
+  border: 1px solid var(--interview-glass-border);
   border-radius: 12px;
   outline: none;
-  background: var(--db-bg);
+  background: color-mix(in srgb, var(--db-bg) 58%, transparent);
   color: var(--db-text);
   font: inherit;
   font-size: 13px;
   font-weight: 450;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.46);
+  backdrop-filter: blur(12px);
+  transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
 }
 
 .db-interview-field input,
 .db-interview-field select {
-  height: 42px;
-  padding: 0 12px;
+  height: 44px;
+  padding: 0 13px;
+  border-radius: 999px;
 }
 
 .db-interview-field textarea {
-  min-height: 132px;
-  padding: 11px 12px;
-  resize: vertical;
-  line-height: 1.48;
-}
-
-.db-interview-grid-three .db-interview-field textarea {
-  min-height: 104px;
+  min-height: 96px;
+  padding: 11px 13px;
+  resize: none;
+  line-height: 1.5;
 }
 
 .db-interview-field input:focus,
 .db-interview-field textarea:focus,
 .db-interview-field select:focus {
-  border-color: color-mix(in srgb, var(--db-teal) 68%, var(--db-border));
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--db-teal) 12%, transparent);
+  border-color: color-mix(in srgb, var(--db-teal) 64%, var(--db-teal-deep-a));
+  background: color-mix(in srgb, var(--db-bg) 70%, white 30%);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--db-teal) 12%, transparent), inset 0 1px 0 rgba(255, 255, 255, 0.62);
 }
 
 .db-interview-builder-footer,
-.db-interview-review-footer,
-.db-interview-review-head {
+.db-interview-review-footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 18px;
+  justify-content: flex-end;
+  gap: 14px;
 }
 
-.db-interview-builder-footer > span,
+.db-interview-review-footer {
+  justify-content: space-between;
+  padding-top: 16px;
+  border-top: 1px solid var(--db-border);
+}
+
 .db-interview-review-footer > span {
-  display: flex;
-  align-items: center;
-  gap: 7px;
   color: var(--db-text-dim);
-  font-size: 12px;
+  font-size: 11.5px;
+  line-height: 1.45;
 }
 
 .db-interview-builder-footer button,
-.db-interview-review-footer button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  min-width: 138px;
-  height: 40px;
-  border: 0;
+.db-interview-review-footer > button {
+  min-width: 150px;
+  min-height: 42px;
+  padding: 0 16px;
+  border: 1px solid color-mix(in srgb, var(--db-text) 84%, transparent);
   border-radius: 999px;
-  background: var(--db-teal);
-  color: #08312b;
+  background: var(--db-text);
+  color: var(--db-bg);
   font: inherit;
   font-size: 12px;
-  font-weight: 700;
+  font-weight: 750;
+  box-shadow: 0 8px 20px rgba(18, 28, 27, 0.14);
   cursor: pointer;
 }
 
 .db-interview-builder-footer button:disabled,
-.db-interview-review-footer button:disabled {
+.db-interview-review-footer > button:disabled {
   cursor: default;
-  opacity: 0.55;
-}
-
-.db-interview-builder-footer svg,
-.db-interview-review-footer button svg {
-  flex: 0 0 auto;
-}
-
-.db-interview-builder-footer button svg,
-.db-interview-review-footer button svg {
-  animation: db-interview-spin 0.8s linear infinite;
-}
-
-.db-interview-builder-footer button svg:not(.lucide-loader-circle),
-.db-interview-review-footer button svg:not(.lucide-loader-circle) {
-  animation: none;
-}
-
-@keyframes db-interview-spin {
-  to { transform: rotate(360deg); }
+  opacity: 0.42;
+  box-shadow: none;
 }
 
 .db-interview-error {
+  width: min(100%, 1100px);
+  box-sizing: border-box;
+  padding: 12px 14px;
+  border: 1px solid rgba(185, 28, 28, 0.28);
+  border-radius: 13px;
+  background: rgba(185, 28, 28, 0.07);
+  color: #a91f1f;
+  font-size: 12.5px;
+  font-weight: 650;
+}
+
+.db-interview-summary,
+.db-interview-dossier-section,
+.db-interview-predictions,
+.db-interview-unknowns,
+.db-interview-resume,
+.db-interview-optional,
+.db-interview-stories article,
+.db-interview-claim {
+  border: 1px solid var(--interview-glass-border);
+  background: var(--interview-glass-soft);
+  box-shadow: 0 9px 26px rgba(18, 28, 27, 0.055), inset 0 1px 0 rgba(255, 255, 255, 0.48);
+  backdrop-filter: blur(16px) saturate(1.05);
+}
+
+.db-interview-summary {
+  align-self: flex-start;
+  max-width: 820px;
+  padding: 14px 15px;
+  border-radius: 14px;
+}
+
+.db-interview-summary p {
+  margin: 0;
+  color: var(--db-text);
+  font-size: 13px;
+  line-height: 1.62;
+}
+
+.db-interview-dossier-grid {
+  width: 100%;
+  columns: 2 360px;
+  column-gap: 12px;
+}
+
+.db-interview-dossier-section {
+  display: inline-block;
+  width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
+  margin: 0 0 12px;
+  border-radius: 15px;
+  break-inside: avoid;
+}
+
+.db-interview-dossier-section h3 {
+  margin: 0;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--db-border);
+  color: var(--db-text);
+  font-size: 12px;
+}
+
+.db-interview-dossier-section article {
+  padding: 13px 14px;
+}
+
+.db-interview-dossier-section article + article {
+  border-top: 1px solid color-mix(in srgb, var(--db-border) 72%, transparent);
+}
+
+.db-interview-dossier-section article p {
+  margin: 6px 0 8px;
+  color: var(--db-text);
+  font-size: 12.5px;
+  line-height: 1.52;
+}
+
+.db-interview-fact-meta {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
-  padding: 12px 14px;
-  border: 1px solid rgba(185, 28, 28, 0.34);
-  border-radius: 12px;
-  background: rgba(185, 28, 28, 0.08);
-  color: #b91c1c;
-  font-size: 13px;
 }
 
-.db-interview-review {
+.db-interview-fact-meta span {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--db-text) 7%, transparent);
+  color: var(--db-text-dim);
+  font-size: 9px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.db-interview-fact-meta span.is-estimated,
+.db-interview-fact-meta span.is-conflicting {
+  background: rgba(180, 83, 9, 0.08);
+  color: #934508;
+}
+
+.db-interview-fact-meta time {
+  color: var(--db-text-dim);
+  font-size: 9.5px;
+}
+
+.db-interview-source-buttons {
   display: flex;
-  flex-direction: column;
-  gap: 22px;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  color: var(--db-text);
+  font-size: 12.5px;
+  line-height: 1.45;
 }
 
-.db-interview-review-head {
+.db-interview-source-buttons button,
+.db-interview-sources button {
+  max-width: 100%;
+  overflow: hidden;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--db-text);
+  font: inherit;
+  font-size: inherit;
+  font-weight: 750;
+  text-align: left;
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--db-text) 35%, transparent);
+  text-underline-offset: 2px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.db-interview-predictions,
+.db-interview-unknowns {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 16px;
+  border-radius: 15px;
+}
+
+.db-interview-predictions h3,
+.db-interview-unknowns h3 {
+  margin: 4px 0 5px;
+  color: var(--db-text);
+  font-size: 15px;
+}
+
+.db-interview-predictions ol {
+  display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
+  gap: 8px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: interview-question;
 }
 
-.db-interview-review-head h2 {
-  font-size: 22px;
+.db-interview-predictions li {
+  position: relative;
+  display: flex;
+  flex: 1 1 300px;
+  flex-direction: column;
+  gap: 4px;
+  box-sizing: border-box;
+  padding: 11px 12px 11px 41px;
+  border: 1px solid var(--db-border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--db-surface) 64%, transparent);
+  counter-increment: interview-question;
+}
+
+.db-interview-predictions li::before {
+  content: counter(interview-question);
+  position: absolute;
+  top: 11px;
+  left: 12px;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--db-text) 7%, transparent);
+  color: var(--db-text);
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.db-interview-predictions li strong {
+  color: var(--db-text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.db-interview-predictions li > span:not(.db-interview-source-buttons),
+.db-interview-predictions .db-interview-source-buttons {
+  color: var(--db-text-dim);
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+
+.db-interview-unknowns p {
+  margin: 7px 0 0;
+  color: var(--db-text-dim);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.db-interview-candidate-builder {
+  gap: 14px;
+}
+
+.db-interview-resume {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  align-self: flex-start;
+  min-width: min(100%, 420px);
+  max-width: 100%;
+  box-sizing: border-box;
+  padding: 12px 13px;
+  border-radius: 14px;
+}
+
+.db-interview-resume input {
+  display: none;
+}
+
+.db-interview-resume > div:first-of-type {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.db-interview-resume strong {
+  color: var(--db-text);
+  font-size: 12.5px;
+}
+
+.db-interview-resume span {
+  margin-top: 2px;
+  color: var(--db-text-dim);
+  font-size: 10.5px;
+}
+
+.db-interview-resume-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.db-interview-resume-actions button,
+.db-interview-remove-button {
+  min-height: 34px;
+  border: 1px solid var(--db-border);
+  border-radius: 999px;
+  padding: 0 11px;
+  background: color-mix(in srgb, var(--db-surface) 66%, transparent);
+  color: var(--db-text);
+  font: inherit;
+  font-size: 10.5px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.db-interview-optional {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0 14px;
+  border-radius: 14px;
+}
+
+.db-interview-optional summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 13px 0;
+  color: var(--db-text);
+  font-size: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.db-interview-optional summary::-webkit-details-marker {
+  display: none;
+}
+
+.db-interview-optional[open] summary {
+  margin-bottom: 13px;
+  border-bottom: 1px solid var(--db-border);
+}
+
+.db-interview-optional .db-interview-grid {
+  padding-bottom: 14px;
+}
+
+.db-interview-final-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.3fr) minmax(0, 1fr);
+  align-items: end;
+  gap: 18px;
 }
 
 .db-interview-review-count {
   display: flex;
+  flex: 0 0 auto;
   flex-direction: column;
   align-items: flex-end;
-  min-width: 94px;
+  min-width: 140px;
   color: var(--db-text-dim);
-  font-size: 11px;
+  font-size: 10px;
+  text-align: right;
 }
 
 .db-interview-review-count strong {
@@ -218,38 +555,45 @@
 .db-interview-review-section {
   display: flex;
   flex-direction: column;
-  gap: 9px;
+  align-self: flex-start;
+  width: 100%;
+  gap: 8px;
 }
 
 .db-interview-review-section h3,
 .db-interview-stories h4 {
   margin: 0;
   color: var(--db-text);
+  font-size: 13px;
 }
 
-.db-interview-review-section h3 {
-  font-size: 13px;
+.db-interview-section-copy {
+  margin: -3px 0 2px;
+  color: var(--db-text-dim);
+  font-size: 10.5px;
 }
 
 .db-interview-claims,
 .db-interview-stories {
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 8px;
+  width: 100%;
 }
 
 .db-interview-stories article {
   display: flex;
   flex-direction: column;
   gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
   padding: 13px;
-  border: 1px solid var(--db-border);
   border-radius: 14px;
-  background: var(--db-bg);
 }
 
 .db-interview-stories h4 {
   padding: 0 2px 3px;
-  font-size: 13px;
 }
 
 .db-interview-claim {
@@ -257,10 +601,16 @@
   align-items: center;
   justify-content: space-between;
   gap: 14px;
+  width: fit-content;
+  max-width: 100%;
+  box-sizing: border-box;
   padding: 11px 12px;
-  border: 1px solid var(--db-border);
   border-radius: 12px;
-  background: var(--db-bg);
+}
+
+.db-interview-claim.is-constraint {
+  border-color: rgba(180, 83, 9, 0.18);
+  background: rgba(180, 83, 9, 0.045);
 }
 
 .db-interview-claim > div {
@@ -270,27 +620,37 @@
 .db-interview-claim p {
   margin: 0 0 4px;
   color: var(--db-text);
-  font-size: 12.5px;
+  font-size: 12px;
   line-height: 1.45;
-}
-
-.db-interview-claim-prefix,
-.db-interview-sources {
-  color: var(--db-text-dim);
-  font-size: 10.5px;
 }
 
 .db-interview-claim-prefix {
   display: block;
   margin-bottom: 3px;
-  font-weight: 700;
+  color: var(--db-text-dim);
+  font-size: 9.5px;
+  font-weight: 750;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
-.db-interview-claim button {
+.db-interview-sources {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 5px;
+  gap: 4px 9px;
+  color: var(--db-text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.db-interview-sources strong {
+  font-size: inherit;
+  font-weight: 750;
+}
+
+.db-interview-claim > button,
+.db-interview-claim-status {
   flex: 0 0 auto;
   border: 1px solid var(--db-border);
   border-radius: 999px;
@@ -298,24 +658,36 @@
   background: transparent;
   color: var(--db-text-dim);
   font: inherit;
-  font-size: 11px;
-  font-weight: 650;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.db-interview-claim > button {
   cursor: pointer;
 }
 
-.db-interview-claim button.is-verified {
-  border-color: color-mix(in srgb, var(--db-teal) 38%, var(--db-border));
-  background: color-mix(in srgb, var(--db-teal) 10%, transparent);
-  color: var(--db-teal-deep-a);
+.db-interview-claim > button.is-verified,
+.db-interview-claim-status {
+  background: color-mix(in srgb, var(--db-text) 6%, transparent);
+  color: var(--db-text);
 }
 
-.db-interview-review-footer {
-  padding-top: 18px;
-  border-top: 1px solid var(--db-border);
+.db-interview-claim.is-constraint .db-interview-claim-status {
+  border-color: rgba(180, 83, 9, 0.2);
+  background: rgba(180, 83, 9, 0.06);
+  color: #8f4409;
 }
 
 @media (max-width: 940px) {
   .db-interview-grid-three {
+    grid-template-columns: 1fr;
+  }
+
+  .db-interview-dossier-grid {
+    columns: 1;
+  }
+
+  .db-interview-final-row {
     grid-template-columns: 1fr;
   }
 }
@@ -327,12 +699,35 @@
 
   .db-interview-builder-footer,
   .db-interview-review-footer,
-  .db-interview-review-head {
+  .db-interview-review-head,
+  .db-interview-section-head {
     align-items: stretch;
     flex-direction: column;
   }
 
+  .db-interview-builder-footer button,
+  .db-interview-review-footer > button {
+    width: 100%;
+  }
+
   .db-interview-review-count {
     align-items: flex-start;
+    text-align: left;
+  }
+
+  .db-interview-resume {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  .db-interview-resume-actions {
+    width: 100%;
+  }
+
+  .db-interview-claim {
+    align-items: flex-start;
+    flex-direction: column;
+    width: 100%;
   }
 }
