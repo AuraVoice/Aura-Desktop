@@ -96,11 +96,13 @@ pub enum Operation {
     CaptureScreen,
     CaptureTurnScreen,
     CaptureChatScreen,
+    CaptureInterviewScreen,
     CaptureGuide,
     PointAt,
     DesktopControl,
     ArmScreenSight,
     StartMeetingCapture,
+    StartInterviewCompanion,
     QueueSnapshot,
     ReadSegment,
     MarkSegmentUploaded,
@@ -208,6 +210,14 @@ impl SecurityState {
                     return Err(Denied::ModeConflict);
                 }
             }
+            // Interview Companion has no global armed mode. Its explicit
+            // one-shot button is the authorizing gesture, and the capture
+            // command separately requires a live Interview Companion session.
+            Operation::CaptureInterviewScreen => {
+                if self.guide_armed {
+                    return Err(Denied::ModeConflict);
+                }
+            }
             Operation::CaptureGuide => {
                 if !self.voice_active {
                     return Err(Denied::VoiceInactive);
@@ -253,6 +263,7 @@ impl SecurityState {
             // feedback.ts already catches the error and sends the email with
             // "(no log lines available)".
             Operation::StartMeetingCapture
+            | Operation::StartInterviewCompanion
             | Operation::QueueSnapshot
             | Operation::ReadSegment
             | Operation::MarkSegmentUploaded
@@ -494,6 +505,8 @@ pub fn session_changed(app: &AppHandle, signed_in: bool, uid: Option<String>) {
     }
     if transition.revoked {
         crate::meeting::request_stop(app, "signed_out");
+        crate::interview::request_stop(app, "signed_out");
+        crate::interview::clear_preparation(app);
         crate::meeting::stop_all_join_watches(app);
         // A frame captured under the previous account must never survive into
         // the next one, and the chat buffer is plaintext in memory.
@@ -615,15 +628,17 @@ mod tests {
         s
     }
 
-    const GATED_OPS: [Operation; 14] = [
+    const GATED_OPS: [Operation; 16] = [
         Operation::CaptureScreen,
         Operation::CaptureTurnScreen,
         Operation::CaptureChatScreen,
+        Operation::CaptureInterviewScreen,
         Operation::CaptureGuide,
         Operation::PointAt,
         Operation::DesktopControl,
         Operation::ArmScreenSight,
         Operation::StartMeetingCapture,
+        Operation::StartInterviewCompanion,
         Operation::QueueSnapshot,
         Operation::ReadSegment,
         Operation::MarkSegmentUploaded,

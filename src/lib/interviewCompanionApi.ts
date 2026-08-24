@@ -1,0 +1,518 @@
+import { authFetch } from "./api";
+import type {
+  InterviewAnswerLength,
+  InterviewBrief,
+  InterviewBriefClaim,
+  InterviewBriefSlice,
+  InterviewBriefSource,
+  InterviewSourceKind,
+  InterviewStarStory,
+  InterviewVerificationState,
+} from "./interviewBrief";
+
+export interface InterviewTranscriptTurn {
+  sessionId: string;
+  epoch: number;
+  turnId: string;
+  source: "candidate" | "remote";
+  startMs: number;
+  endMs: number;
+  text: string;
+  isFinal: boolean;
+  remoteSpeakerId?: string | null;
+  speakerOverlap?: boolean;
+  finalWordAtMs?: number | null;
+}
+
+export type InterviewAnswerAction =
+  | "automatic"
+  | "suggest"
+  | "shorter"
+  | "another_example"
+  | "more_technical"
+  | "screen_sight";
+
+export interface InterviewScreenSightFrame {
+  mimeType: "image/jpeg";
+  data: string;
+  widthPx: number;
+  heightPx: number;
+  capturedAtMs: number;
+}
+
+export interface InterviewReflection {
+  summary: string;
+  strengths: string[];
+  improvements: string[];
+  followUpActions: string[];
+}
+
+export type InterviewAnswerFrame =
+  | {
+      type: "decision";
+      accepted: boolean;
+      gateMs: number | null;
+      target: string | null;
+      intent: string | null;
+    }
+  | { type: "answer_delta"; delta: string }
+  | {
+      type: "answer_done";
+      generated: boolean;
+      evidence: Array<{ sourceId: string; verificationState: "verified" }>;
+      answerMs: number | null;
+    }
+  | { type: "error"; code: string; message: string }
+  | { type: "terminator" };
+
+export interface InterviewCredential {
+  accessToken: string;
+  expiresInSeconds: number;
+}
+
+export async function mintInterviewCredential(): Promise<InterviewCredential> {
+  const response = await authFetch("/interview-companion/stt-token", { method: "POST" });
+  if (!response.ok) {
+    throw new Error(`Interview transcription is unavailable (${response.status}).`);
+  }
+  const body: unknown = await response.json();
+  if (!body || typeof body !== "object") {
+    throw new Error("Interview transcription returned an invalid credential.");
+  }
+  const accessToken = (body as Record<string, unknown>).accessToken;
+  const expiresInSeconds = (body as Record<string, unknown>).expiresInSeconds;
+  if (
+    typeof accessToken !== "string"
+    || accessToken.trim() === ""
+    || typeof expiresInSeconds !== "number"
+    || !Number.isFinite(expiresInSeconds)
+    || expiresInSeconds <= 0
+  ) {
+    throw new Error("Interview transcription returned an invalid credential.");
+  }
+  return { accessToken, expiresInSeconds };
+}
+
+function wireTurn(turn: InterviewTranscriptTurn) {
+  return {
+    session_id: turn.sessionId,
+    epoch: turn.epoch,
+    turn_id: turn.turnId,
+    source: turn.source,
+    start_ms: turn.startMs,
+    end_ms: turn.endMs,
+    text: turn.text,
+    is_final: turn.isFinal,
+    remote_speaker_id: turn.remoteSpeakerId ?? null,
+    speaker_overlap: turn.speakerOverlap ?? false,
+    final_word_at_ms: turn.finalWordAtMs ?? null,
+  };
+}
+
+function parseFrame(
+  raw: string,
+  expected: InterviewTranscriptTurn,
+): InterviewAnswerFrame | null {
+  const data = raw
+    .split("\n")
+    .filter((line) => line.startsWith("data:"))
+    .map((line) => line.slice(5).replace(/^ /, ""))
+    .join("\n");
+  if (!data) return null;
+  if (data === "[DONE]") return { type: "terminator" };
+  let payload: unknown;
+  try {
+    payload = JSON.parse(data);
+  } catch {
+    throw new Error("Interview answer stream returned unreadable data.");
+  }
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Interview answer stream returned invalid data.");
+  }
+  const frame = payload as Record<string, unknown>;
+  if (
+    frame.session_id !== expected.sessionId
+    || frame.epoch !== expected.epoch
+    || frame.turn_id !== expected.turnId
+  ) {
+    return null;
+  }
+  switch (frame.type) {
+    case "decision":
+      return typeof frame.accepted === "boolean"
+        ? {
+            type: "decision",
+            accepted: frame.accepted,
+            gateMs: typeof frame.gate_ms === "number" ? frame.gate_ms : null,
+            target: typeof frame.target === "string" ? frame.target : null,
+            intent: typeof frame.intent === "string" ? frame.intent : null,
+          }
+        : null;
+    case "answer_delta":
+      return typeof frame.delta === "string"
+        ? { type: "answer_delta", delta: frame.delta }
+        : null;
+    case "answer_done":
+      if (typeof frame.generated !== "boolean" || !Array.isArray(frame.evidence)) return null;
+      return {
+        type: "answer_done",
+        generated: frame.generated,
+        answerMs: typeof frame.answer_ms === "number" ? frame.answer_ms : null,
+        evidence: frame.evidence.flatMap((value) => {
+          const item = asRecord(value);
+          return item?.verification_state === "verified" && typeof item.source_id === "string"
+            ? [{ sourceId: item.source_id, verificationState: "verified" as const }]
+            : [];
+        }),
+      };
+    case "error":
+      return typeof frame.message === "string"
+        ? {
+            type: "error",
+            code: typeof frame.code === "string" ? frame.code : "stream_error",
+            message: frame.message,
+          }
+        : null;
+    default:
+      return null;
+  }
+}
+
+export async function streamInterviewAnswer({
+  turn,
+  recentTurns,
+  brief,
+  action = "automatic",
+  currentAnswer = "",
+  screenSight = null,
+  signal,
+  onFrame,
+}: {
+  turn: InterviewTranscriptTurn;
+  recentTurns: InterviewTranscriptTurn[];
+  brief: InterviewBriefSlice | null;
+  action?: InterviewAnswerAction;
+  currentAnswer?: string;
+  screenSight?: InterviewScreenSightFrame | null;
+  signal: AbortSignal;
+  onFrame: (frame: InterviewAnswerFrame) => void;
+}): Promise<void> {
+  if (turn.source !== "remote" || !turn.isFinal) {
+    throw new Error("Only completed remote turns can request an interview answer.");
+  }
+  const response = await authFetch("/interview-companion/answer", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contract_version: 3,
+      turn: wireTurn(turn),
+      recent_turns: recentTurns.slice(-12).map(wireTurn),
+      brief: brief ? wireBriefSlice(brief) : null,
+      action,
+      current_answer: currentAnswer,
+      screen_sight: screenSight ? {
+        mime_type: screenSight.mimeType,
+        data: screenSight.data,
+        width_px: screenSight.widthPx,
+        height_px: screenSight.heightPx,
+        captured_at_ms: screenSight.capturedAtMs,
+      } : null,
+    }),
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(`Interview answer request failed (${response.status}).`);
+  }
+  if (!response.body) {
+    throw new Error("Interview answer response had no stream.");
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let terminated = false;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      buffer = buffer.replace(/\r\n/g, "\n");
+      let separator = buffer.indexOf("\n\n");
+      while (separator >= 0) {
+        const frame = parseFrame(buffer.slice(0, separator), turn);
+        buffer = buffer.slice(separator + 2);
+        if (frame) {
+          onFrame(frame);
+          if (frame.type === "terminator") terminated = true;
+        }
+        separator = buffer.indexOf("\n\n");
+      }
+      if (done) break;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (buffer.trim()) {
+    const frame = parseFrame(buffer, turn);
+    if (frame) {
+      onFrame(frame);
+      if (frame.type === "terminator") terminated = true;
+    }
+  }
+  if (!terminated) {
+    throw new Error("Interview answer stream ended early.");
+  }
+}
+
+const VERIFICATION_STATES = new Set<InterviewVerificationState>(["verified", "unverified"]);
+const SOURCE_KINDS = new Set<InterviewSourceKind>([
+  "company",
+  "role",
+  "resume",
+  "job_description",
+  "verified_fact",
+  "star_story",
+  "metric",
+  "gap",
+  "do_not_claim",
+  "question_to_ask",
+]);
+const ANSWER_LENGTHS = new Set<InterviewAnswerLength>(["brief", "balanced", "detailed"]);
+
+function wireClaim(claim: InterviewBriefClaim) {
+  return {
+    claim_id: claim.claimId,
+    text: claim.text,
+    source_ids: claim.sourceIds,
+    verification_state: claim.verificationState,
+  };
+}
+
+function wireStory(story: InterviewStarStory) {
+  return {
+    story_id: story.storyId,
+    title: story.title,
+    situation: wireClaim(story.situation),
+    task: wireClaim(story.task),
+    action: wireClaim(story.action),
+    result: wireClaim(story.result),
+  };
+}
+
+function wireBriefSlice(brief: InterviewBriefSlice) {
+  return {
+    contract_version: 2,
+    brief_id: brief.briefId,
+    company: brief.company ? wireClaim(brief.company) : null,
+    role: brief.role ? wireClaim(brief.role) : null,
+    sources: brief.sources.map((source) => ({
+      source_id: source.sourceId,
+      kind: source.kind,
+      label: source.label,
+      verification_state: source.verificationState,
+    })),
+    verified_facts: brief.verifiedFacts.map(wireClaim),
+    projects: brief.projects.map(wireClaim),
+    star_stories: brief.starStories.map(wireStory),
+    metrics: brief.metrics.map(wireClaim),
+    jd_requirements: brief.jdRequirements.map(wireClaim),
+    gaps: brief.gaps.map(wireClaim),
+    do_not_claim: brief.doNotClaim.map(wireClaim),
+    answer_length: brief.answerLength,
+    questions_to_ask: brief.questionsToAsk.map(wireClaim),
+  };
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" ? value as Record<string, unknown> : null;
+}
+
+function parseSource(value: unknown): InterviewBriefSource | null {
+  const item = asRecord(value);
+  if (!item) return null;
+  if (
+    typeof item.source_id !== "string"
+    || typeof item.kind !== "string"
+    || !SOURCE_KINDS.has(item.kind as InterviewSourceKind)
+    || typeof item.label !== "string"
+    || typeof item.text !== "string"
+    || typeof item.verification_state !== "string"
+    || !VERIFICATION_STATES.has(item.verification_state as InterviewVerificationState)
+  ) return null;
+  return {
+    sourceId: item.source_id,
+    kind: item.kind as InterviewSourceKind,
+    label: item.label,
+    text: item.text,
+    verificationState: item.verification_state as InterviewVerificationState,
+  };
+}
+
+function parseClaim(value: unknown, sourceIds: Set<string>): InterviewBriefClaim | null {
+  const item = asRecord(value);
+  if (!item || typeof item.claim_id !== "string" || typeof item.text !== "string") return null;
+  if (
+    typeof item.verification_state !== "string"
+    || !VERIFICATION_STATES.has(item.verification_state as InterviewVerificationState)
+    || !Array.isArray(item.source_ids)
+  ) return null;
+  const claimSources = item.source_ids.filter((sourceId): sourceId is string =>
+    typeof sourceId === "string" && sourceIds.has(sourceId),
+  );
+  if (claimSources.length === 0 || claimSources.length !== item.source_ids.length) return null;
+  return {
+    claimId: item.claim_id,
+    text: item.text,
+    sourceIds: claimSources,
+    verificationState: item.verification_state as InterviewVerificationState,
+  };
+}
+
+function parseClaims(value: unknown, sourceIds: Set<string>): InterviewBriefClaim[] | null {
+  if (!Array.isArray(value)) return null;
+  const claims = value.map((item) => parseClaim(item, sourceIds));
+  return claims.every((claim): claim is InterviewBriefClaim => claim !== null) ? claims : null;
+}
+
+function parseStory(value: unknown, sourceIds: Set<string>): InterviewStarStory | null {
+  const item = asRecord(value);
+  if (!item || typeof item.story_id !== "string" || typeof item.title !== "string") return null;
+  const situation = parseClaim(item.situation, sourceIds);
+  const task = parseClaim(item.task, sourceIds);
+  const action = parseClaim(item.action, sourceIds);
+  const result = parseClaim(item.result, sourceIds);
+  return situation && task && action && result
+    ? { storyId: item.story_id, title: item.title, situation, task, action, result }
+    : null;
+}
+
+function parseInterviewBrief(value: unknown): InterviewBrief {
+  const item = asRecord(value);
+  if (!item || item.contract_version !== 2 || typeof item.brief_id !== "string") {
+    throw new Error("Interview preparation returned an invalid brief.");
+  }
+  if (!Array.isArray(item.sources)) throw new Error("Interview preparation returned no sources.");
+  const sources = item.sources.map(parseSource);
+  if (!sources.every((source): source is InterviewBriefSource => source !== null)) {
+    throw new Error("Interview preparation returned invalid sources.");
+  }
+  const sourceIds = new Set(sources.map((source) => source.sourceId));
+  if (sourceIds.size !== sources.length) throw new Error("Interview preparation repeated a source ID.");
+  const company = item.company === null ? null : parseClaim(item.company, sourceIds);
+  const role = item.role === null ? null : parseClaim(item.role, sourceIds);
+  const verifiedFacts = parseClaims(item.verified_facts, sourceIds);
+  const projects = parseClaims(item.projects, sourceIds);
+  const metrics = parseClaims(item.metrics, sourceIds);
+  const jdRequirements = parseClaims(item.jd_requirements, sourceIds);
+  const gaps = parseClaims(item.gaps, sourceIds);
+  const doNotClaim = parseClaims(item.do_not_claim, sourceIds);
+  const questionsToAsk = parseClaims(item.questions_to_ask, sourceIds);
+  const rawStories = Array.isArray(item.star_stories) ? item.star_stories : null;
+  const starStories = rawStories?.map((story) => parseStory(story, sourceIds)) ?? null;
+  if (
+    (item.company !== null && !company)
+    || (item.role !== null && !role)
+    || !verifiedFacts
+    || !projects
+    || !metrics
+    || !jdRequirements
+    || !gaps
+    || !doNotClaim
+    || !questionsToAsk
+    || !starStories
+    || !starStories.every((story): story is InterviewStarStory => story !== null)
+    || typeof item.answer_length !== "string"
+    || !ANSWER_LENGTHS.has(item.answer_length as InterviewAnswerLength)
+  ) throw new Error("Interview preparation returned unsupported claims.");
+  return {
+    contractVersion: 2,
+    briefId: item.brief_id,
+    company,
+    role,
+    sources,
+    verifiedFacts,
+    projects,
+    starStories,
+    metrics,
+    jdRequirements,
+    gaps,
+    doNotClaim,
+    answerLength: item.answer_length as InterviewAnswerLength,
+    questionsToAsk,
+    reviewedAtMs: null,
+  };
+}
+
+export async function buildInterviewBrief(
+  sources: InterviewBriefSource[],
+  answerLength: InterviewAnswerLength,
+  signal?: AbortSignal,
+): Promise<InterviewBrief> {
+  const response = await authFetch("/interview-companion/brief", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contract_version: 2,
+      sources: sources.map((source) => ({
+        source_id: source.sourceId,
+        kind: source.kind,
+        label: source.label,
+        text: source.text,
+        verification_state: source.verificationState,
+      })),
+      answer_length: answerLength,
+    }),
+    signal,
+  });
+  if (!response.ok) throw new Error(`Interview preparation failed (${response.status}).`);
+  return parseInterviewBrief(await response.json());
+}
+
+function stringList(value: unknown): string[] | null {
+  return Array.isArray(value) && value.every((item) => typeof item === "string")
+    ? value
+    : null;
+}
+
+export async function createInterviewReflection({
+  sessionId,
+  startedAtMs,
+  endedAtMs,
+  turns,
+  brief,
+  signal,
+}: {
+  sessionId: string;
+  startedAtMs: number;
+  endedAtMs: number;
+  turns: InterviewTranscriptTurn[];
+  brief: InterviewBriefSlice | null;
+  signal?: AbortSignal;
+}): Promise<InterviewReflection> {
+  const response = await authFetch("/interview-companion/reflection", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contract_version: 1,
+      session_id: sessionId,
+      started_at_ms: startedAtMs,
+      ended_at_ms: endedAtMs,
+      turns: turns.filter((turn) => turn.isFinal).slice(-120).map(wireTurn),
+      brief: brief ? wireBriefSlice(brief) : null,
+    }),
+    signal,
+  });
+  if (!response.ok) throw new Error(`Interview reflection failed (${response.status}).`);
+  const item = asRecord(await response.json());
+  const strengths = stringList(item?.strengths);
+  const improvements = stringList(item?.improvements);
+  const followUpActions = stringList(item?.follow_up_actions);
+  if (!item || typeof item.summary !== "string" || !strengths || !improvements || !followUpActions) {
+    throw new Error("Interview reflection returned an invalid response.");
+  }
+  return {
+    summary: item.summary,
+    strengths,
+    improvements,
+    followUpActions,
+  };
+}

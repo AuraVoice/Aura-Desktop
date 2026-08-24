@@ -148,6 +148,42 @@ pub async fn capture_cursor_display_with_geometry(
     Ok(frame.into_response())
 }
 
+/// One frame for an explicit Interview Companion Screen Sight action. Unlike
+/// voice screen sight and turn capture, this path never writes or queues the
+/// JPEG. The active interview and auth epoch are checked both before and after
+/// capture so stop, sign-out, or account switch drops an in-flight frame.
+#[tauri::command]
+pub async fn capture_interview_screen_with_geometry(
+    app: AppHandle,
+) -> Result<Response, String> {
+    let ticket = crate::security::authorize(
+        &app,
+        crate::security::Operation::CaptureInterviewScreen,
+    )?;
+    if !crate::interview::is_active(&app) {
+        return Err("Interview Companion is not active.".to_string());
+    }
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    let cursor = window.cursor_position().map_err(|e| e.to_string())?;
+    let cursor_x = cursor.x as i32;
+    let cursor_y = cursor.y as i32;
+    let frame = tauri::async_runtime::spawn_blocking(move || capture_frame(cursor_x, cursor_y))
+        .await
+        .map_err(|e| e.to_string())??;
+    crate::security::recheck(
+        &app,
+        crate::security::Operation::CaptureInterviewScreen,
+        &ticket,
+    )?;
+    if !crate::interview::is_active(&app) {
+        return Err("Interview Companion stopped during screen capture.".to_string());
+    }
+    emit_capture_stages(&app, &frame.stages);
+    Ok(frame.into_response())
+}
+
 /// The per-spoken-turn capture. Unlike the explicit capture above, this one
 /// hands persistence to the background queue and returns immediately: the
 /// frame's job is to reach the model, and making the user wait on AES-GCM plus

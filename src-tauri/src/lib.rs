@@ -1,4 +1,6 @@
 mod audio_ducking;
+#[cfg(windows)]
+mod audio_capture;
 mod auth_cache;
 mod autostart;
 mod chat_cache;
@@ -8,6 +10,7 @@ mod dictation;
 mod entitlement;
 mod guide;
 mod hotkeys;
+mod interview;
 mod logging;
 mod meeting;
 mod overlay;
@@ -255,6 +258,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(OverlayStateHandle::default())
         .manage(hotkeys::HotkeyState::default())
+        .manage(interview::InterviewHandle::default())
         .manage(security::SecurityHandle::default())
         .manage(guide::GuideRuntimeHandle::default())
         .manage(guide::GuideCaptureHandle::default())
@@ -313,6 +317,7 @@ pub fn run() {
             logging::read_recent_log_lines,
             screenshot::capture_cursor_display_with_geometry,
             screenshot::capture_turn_screen_with_geometry,
+            screenshot::capture_interview_screen_with_geometry,
             screenshot::take_chat_capture,
             screenshot::refresh_chat_capture,
             screenshot::discard_chat_capture,
@@ -363,6 +368,16 @@ pub fn run() {
             dictation::dictation_vocabulary,
             dictation::dictation_add_vocabulary,
             dictation::dictation_record_correction,
+            interview::interview_supported_call,
+            interview::start_interview_companion,
+            interview::pause_interview_companion,
+            interview::resume_interview_companion,
+            interview::interview_companion_status,
+            interview::update_interview_companion_credential,
+            interview::set_interview_companion_brief,
+            interview::interview_companion_brief,
+            interview::stop_interview_companion,
+            interview::save_interview_reflection,
             dictation::trace_commands::dictation_trace_settings,
             dictation::trace_commands::dictation_set_trace_settings,
             dictation::trace_commands::dictation_trace_summary,

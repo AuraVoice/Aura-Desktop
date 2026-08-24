@@ -189,7 +189,7 @@ fn watch_thread(
 
 /// One desktop scan. Returns ("zoom" | "teams", window title) for the first
 /// visible in-call window found.
-fn find_meeting_window() -> Option<(String, String)> {
+pub(crate) fn find_meeting_window() -> Option<(String, String)> {
     let mut windows: Vec<(isize, String)> = Vec::new();
     unsafe {
         // HWNDs are collected as raw isize (win_focus.rs rule) and consumed

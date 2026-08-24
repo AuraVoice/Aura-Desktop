@@ -11,6 +11,7 @@ import {
   HelpCircle,
   Mic,
   Search,
+  Briefcase,
   type LucideIcon,
 } from "lucide-react";
 
@@ -29,6 +30,7 @@ export const primaryNavItems: NavItem[] = [
   { to: "/drafts", label: "Drafts", Icon: FileText },
   { to: "/saved", label: "Saved", Icon: Bookmark },
   { to: "/meetings", label: "Meetings", Icon: Video, beta: true },
+  { to: "/interview", label: "Interview", Icon: Briefcase, beta: true },
   { to: "/research", label: "Research", Icon: Search, beta: true },
   { to: "/insights", label: "Insights", Icon: LineChart },
   { to: "/dictation", label: "Dictation", Icon: Mic },
