@@ -122,8 +122,15 @@ export function InterviewCompanionCard({
         )}
 
         {active && (
-          <div className="interview-companion-answer" aria-live="polite">
-            {companion.answer || "Answers will appear here."}
+          <div className="interview-companion-response">
+            <div className="interview-companion-transcript" aria-live="polite">
+              <span>Interviewer</span>
+              <div>{companion.question || "Questions will appear here."}</div>
+            </div>
+            <div className="interview-companion-answer" aria-live="polite">
+              <span>Suggested answer</span>
+              <div>{companion.answer || "Answers will appear here."}</div>
+            </div>
           </div>
         )}
 
@@ -140,28 +147,6 @@ export function InterviewCompanionCard({
             >
               {companion.capturingScreen ? "Looking..." : "Screen Sight"}
             </button>
-          </div>
-        )}
-
-        {active && companion.phase !== "starting" && (
-          <div className="interview-companion-controls">
-            {companion.phase === "paused" ? (
-              <button
-                type="button"
-                className="interview-companion-primary"
-                onClick={companion.resume}
-              >
-                Resume
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="interview-companion-secondary"
-                onClick={companion.pause}
-              >
-                Pause
-              </button>
-            )}
           </div>
         )}
 

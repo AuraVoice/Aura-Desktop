@@ -65,7 +65,7 @@ function callLabel(app: string | null): string {
   }
 }
 
-const PANEL_ASSEMBLY_MS = 350;
+const PANEL_ASSEMBLY_MS = 150;
 const ECHO_WINDOW_MS = 2_500;
 const MAX_CREDENTIAL_RETRIES = 3;
 const CALL_DETECTION_RETRY_MS = 1_500;
@@ -124,6 +124,7 @@ interface ReflectionSnapshot {
 export interface InterviewCompanionState {
   phase: InterviewCompanionPhase;
   callName: string | null;
+  question: string;
   answer: string;
   briefReady: boolean;
   canSuggest: boolean;
@@ -153,6 +154,7 @@ export interface InterviewCompanionState {
 export function useInterviewCompanion(signedIn: boolean): InterviewCompanionState {
   const [phase, setPhase] = useState<InterviewCompanionPhase>("idle");
   const [callName, setCallName] = useState<string | null>(null);
+  const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
   const [brief, setBrief] = useState<InterviewBrief | null>(null);
   const [candidateSpeaking, setCandidateSpeaking] = useState(false);
@@ -248,6 +250,7 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
     savingReflectionRef.current = false;
     savingReflectionSequenceRef.current += 1;
     setSavingReflection(false);
+    setQuestion("");
     setAnswer("");
     setCallName(null);
     setMessage(null);
@@ -828,6 +831,7 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
       rememberReflectionTurn(pending.turn);
       lastRemoteTurnRef.current = pending.turn;
       setCanSuggest(true);
+      setQuestion(pending.turn.text);
       evaluate(pending.turn, recentTurns, "automatic");
     };
 
@@ -987,8 +991,12 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
         return;
       }
 
-      if (!turn.isFinal) return;
+      if (!turn.isFinal) {
+        if (turn.text.trim()) setQuestion(turn.text);
+        return;
+      }
       if (!turn.text.trim() || isEchoOrRepeat(turn)) return;
+      setQuestion(turn.text);
       queueRemoteTurn(turn);
     })
       .then((unlisten) => { unlistenTranscript = unlisten; })
@@ -1005,6 +1013,7 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
   return {
     phase,
     callName,
+    question,
     answer,
     briefReady: brief !== null && brief.reviewedAtMs !== null,
     canSuggest,

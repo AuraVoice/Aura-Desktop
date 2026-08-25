@@ -25,7 +25,7 @@ const TRANSCRIPT_EVENT: &str = "interview-companion-transcript";
 const BRIEF_EVENT: &str = "interview-brief-updated";
 const MAX_BRIEF_BYTES: usize = 128_000;
 #[cfg(windows)]
-const ENDPOINTING_MS: u16 = 600;
+const ENDPOINTING_MS: u16 = 300;
 #[cfg(windows)]
 const MAX_RECONNECTS: u8 = 10;
 #[cfg(windows)]
