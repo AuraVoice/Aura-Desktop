@@ -30,6 +30,7 @@ import {
 } from "./interview/useInterviewCompanion";
 import {
   InterviewCompanionCard,
+  InterviewCompanionControlBar,
   INTERVIEW_COMPANION_SLOT_HEIGHT,
 } from "./interview/InterviewCompanionCard";
 import {
@@ -91,8 +92,12 @@ export function OverlayRoot() {
   const voice = useVoiceBar();
   const interviewCompanion = useInterviewCompanion(user !== null);
   const showInterviewCompanion = interviewCompanion.phase !== "idle";
+  const [interviewCompanionHidden, setInterviewCompanionHidden] = useState(false);
   const interviewCompanionPhase = interviewCompanion.phase;
   const dismissInterviewCompanion = interviewCompanion.dismiss;
+  useEffect(() => {
+    if (!showInterviewCompanion) setInterviewCompanionHidden(false);
+  }, [showInterviewCompanion]);
   useScreenSight(voice.room, voice.status);
   // Ctrl+Alt+M. Mounted here rather than inside useVoiceBar because the mode
   // outlives any one call: it persists, and it rides the next token.
@@ -329,7 +334,7 @@ export function OverlayRoot() {
     && !showInbox
     && !showUpdateBanner;
   const slotHeight = showInterviewCompanion
-    ? INTERVIEW_COMPANION_SLOT_HEIGHT
+    ? interviewCompanionHidden ? 0 : INTERVIEW_COMPANION_SLOT_HEIGHT
     : showInterviewPaste
       ? interviewSlotHeight
       : showDraftCard
@@ -346,10 +351,18 @@ export function OverlayRoot() {
   const appliedSlotHeight = visibleChatOpen ? chatSlotHeight : slotHeight;
 
   useEffect(() => {
-    invoke("set_slot_height", { height: appliedSlotHeight }).catch((err) =>
-      logError("OverlayRoot: set_slot_height", err),
-    );
-  }, [appliedSlotHeight]);
+    let cancelled = false;
+    invoke("set_slot_height", { height: appliedSlotHeight, centered: showInterviewCompanion })
+      .then(() => {
+        if (!cancelled && appliedSlotHeight === null) {
+          return invoke("dismiss_idle_bar");
+        }
+      })
+      .catch((err) => logError("OverlayRoot: set_slot_height", err));
+    return () => {
+      cancelled = true;
+    };
+  }, [appliedSlotHeight, showInterviewCompanion]);
 
   // The subtitle used to be the only place notices surfaced. With it gone,
   // route the ones that matter - an actionable voice error, the voice shortcut
@@ -384,16 +397,16 @@ export function OverlayRoot() {
     );
   }, [unreadCount]);
 
-  // "Show the Aura bar at all times". Pushed from here rather than from the
-  // Settings page, because the overlay always runs while the dashboard window
-  // may never be opened at all - a user who enabled this and then restarted
-  // would otherwise get no bar until they next visited Settings.
-  const alwaysShowBar = generalSettings.alwaysShowBar;
+  // The separate dictation HUD is Aura's persistent resting pill. The larger
+  // main waveform is only a live voice surface and must not remain after chat,
+  // Interview Companion, or another temporary slot closes. Clear the retired
+  // preference in native state as well so an existing enabled value cannot
+  // keep the main bar visible during this process.
   useEffect(() => {
-    invoke("set_always_show_bar", { enabled: alwaysShowBar }).catch((err) =>
+    invoke("set_always_show_bar", { enabled: false }).catch((err) =>
       logError("OverlayRoot: set_always_show_bar", err),
     );
-  }, [alwaysShowBar]);
+  }, []);
 
   // Tray "Notifications" item: Rust summons the bar, then hands off here to
   // fill the below-bar slot with the inbox.
@@ -680,6 +693,8 @@ export function OverlayRoot() {
     <div
       className={`notch-column notch-column-${notchEdge}${
         appliedSlotHeight !== null ? " notch-column-with-draft" : ""
+      }${showInterviewCompanion ? " notch-column-interview" : ""
+      }${showInterviewCompanion && interviewCompanionHidden ? " notch-column-interview-collapsed" : ""
       }`}
     >
       {visibleChatOpen && (
@@ -703,7 +718,7 @@ export function OverlayRoot() {
           onHeightChange={setChatSlotHeight}
         />
       )}
-      {!visibleChatOpen && showInterviewCompanion && (
+      {!visibleChatOpen && showInterviewCompanion && !interviewCompanionHidden && (
         <InterviewCompanionCard companion={interviewCompanion} />
       )}
       {!visibleChatOpen && !showInterviewCompanion && showInterviewPaste && (
@@ -738,15 +753,29 @@ export function OverlayRoot() {
         />
       )}
       {!visibleChatOpen && showCallbackCard && <CallbackCard card={callbackCard} />}
-      <NotchBar
-        key={presentation}
-        voice={voice}
-        edge={notchEdge}
-        dragHandlers={notchMove.dragHandlers}
-        guideArmed={guide.armed}
-        guideActive={guide.active}
-        outputMuted={outputMode.muted}
-      />
+      {showInterviewCompanion ? (
+        <InterviewCompanionControlBar
+          expanded={!interviewCompanionHidden}
+          onToggle={() => setInterviewCompanionHidden((hidden) => !hidden)}
+          onStop={
+            isInterviewCaptureActive(interviewCompanion.phase) || interviewCompanion.phase === "error"
+              ? interviewCompanion.stop
+              : ["ended", "reflecting", "reflection"].includes(interviewCompanion.phase)
+                ? interviewCompanion.dismissReflection
+                : interviewCompanion.dismiss
+          }
+        />
+      ) : (
+        <NotchBar
+          key={presentation}
+          voice={voice}
+          edge={notchEdge}
+          dragHandlers={notchMove.dragHandlers}
+          guideArmed={guide.armed}
+          guideActive={guide.active}
+          outputMuted={outputMode.muted}
+        />
+      )}
     </div>
   );
 }

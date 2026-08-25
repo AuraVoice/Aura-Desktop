@@ -1,9 +1,51 @@
+import iconUrl from "../../assets/icons/Aura-Icon.png";
 import { GlassSurface } from "../GlassSurface";
+import { StopSquareIcon } from "../icons";
 import { isInterviewCaptureActive } from "./useInterviewCompanion";
 import type { InterviewCompanionState } from "./useInterviewCompanion";
 import "./InterviewCompanionCard.css";
 
 export const INTERVIEW_COMPANION_SLOT_HEIGHT = 360;
+
+export function InterviewCompanionControlBar({
+  expanded,
+  onToggle,
+  onStop,
+}: {
+  expanded: boolean;
+  onToggle: () => void;
+  onStop: () => void;
+}) {
+  return (
+    <GlassSurface className="interview-companion-control-bar">
+      <div className="interview-companion-control-inner">
+        <div className="interview-companion-aura-mark" aria-label="Aura">
+          <img src={iconUrl} alt="" />
+        </div>
+        <button
+          type="button"
+          className="interview-companion-visibility-button"
+          onClick={onToggle}
+          aria-expanded={expanded}
+        >
+          <svg viewBox="0 0 20 20" aria-hidden="true">
+            <path d={expanded ? "M5 7.5 10 12.5 15 7.5" : "M5 12.5 10 7.5 15 12.5"} />
+          </svg>
+          {expanded ? "Hide" : "Unhide"}
+        </button>
+        <button
+          type="button"
+          className="interview-companion-stop-button"
+          onClick={onStop}
+          aria-label="Stop Interview Companion"
+          title="Stop Interview Companion"
+        >
+          <StopSquareIcon />
+        </button>
+      </div>
+    </GlassSurface>
+  );
+}
 
 export function InterviewCompanionCard({
   companion,
@@ -26,35 +68,13 @@ export function InterviewCompanionCard({
               : null);
 
   return (
-    <GlassSurface className="interview-companion-card" draggable={false}>
+    <GlassSurface className="interview-companion-card">
       <div className="interview-companion-inner">
         <div className="interview-companion-header">
           <div>
             <div className="interview-companion-title">Interview Companion</div>
             {status && <div className="interview-companion-status">{status}</div>}
           </div>
-          {active || companion.phase === "error" ? (
-            <button
-              type="button"
-              className="interview-companion-text-button"
-              onClick={companion.stop}
-            >
-              Stop
-            </button>
-          ) : (
-            // Every non-capturing phase needs its own way out. Checking and
-            // preflight had none, and the card suppresses chat and Escape while
-            // it is open, so there was nothing left to close it with.
-            !reflectionMode && (
-              <button
-                type="button"
-                className="interview-companion-text-button"
-                onClick={companion.dismiss}
-              >
-                Cancel
-              </button>
-            )
-          )}
         </div>
 
         {(companion.phase === "preflight" || companion.phase === "checking") && (
@@ -92,6 +112,13 @@ export function InterviewCompanionCard({
           >
             {companion.recoverable ? "Retry transcription" : "Check again"}
           </button>
+        )}
+
+        {companion.errorDetail && (
+          <details className="interview-companion-error-detail">
+            <summary>Error details</summary>
+            <code>{companion.errorDetail}</code>
+          </details>
         )}
 
         {active && (

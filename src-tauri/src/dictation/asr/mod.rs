@@ -30,6 +30,7 @@
 use std::time::Instant;
 
 pub mod deepgram;
+pub mod openai;
 
 /// Every ASR model here expects 16 kHz mono.
 pub const SAMPLE_RATE: i32 = 16_000;
@@ -168,7 +169,15 @@ pub trait AsrProvider: Send + Sync {
 
 /// The one place the concrete provider is named.
 pub fn provider() -> &'static dyn AsrProvider {
+    deepgram_provider()
+}
+
+pub fn deepgram_provider() -> &'static dyn AsrProvider {
     &deepgram::DeepgramProvider
+}
+
+pub fn openai_provider() -> &'static dyn AsrProvider {
+    &openai::OpenAiProvider
 }
 
 /// Accumulates a provider's segment stream into the two strings the worker

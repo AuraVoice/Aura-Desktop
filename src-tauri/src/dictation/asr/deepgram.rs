@@ -187,7 +187,6 @@ fn build_continuous_url(config: &ContinuousSessionConfig) -> String {
         query.append_pair("tag", "aura-desktop-interview");
         query.append_pair("no_delay", "true");
         if config.diarize {
-            query.append_pair("diarize", "true");
             query.append_pair("diarize_model", "latest");
         }
         for term in config.keyterms.iter().take(MAX_KEYTERMS) {
@@ -391,7 +390,7 @@ impl Drop for DeepgramContinuousSession {
 /// rustls config with the crypto provider named explicitly. See the Cargo.toml
 /// comment: this tree carries both ring and aws-lc-rs, so letting rustls pick
 /// for itself is a runtime panic waiting to happen.
-fn tls_connector() -> Connector {
+pub(super) fn tls_connector() -> Connector {
     let mut roots = rustls::RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     let config = rustls::ClientConfig::builder_with_provider(Arc::new(
@@ -594,12 +593,32 @@ async fn run_continuous_socket(
     )
     .await
     {
-        Ok(Ok((socket, _))) => socket,
+        Ok(Ok((socket, response))) => {
+            info!(
+                "dictation.asr: provider=deepgram mode=continuous phase=connect state=ready status={}",
+                response.status().as_u16()
+            );
+            socket
+        }
         Ok(Err(error)) => {
-            let _ = events.send(ContinuousAsrEvent::Failed(map_handshake_error(&error)));
+            let failure = map_handshake_error(&error);
+            let status = match &error {
+                tokio_tungstenite::tungstenite::Error::Http(response) => {
+                    response.status().as_u16()
+                }
+                _ => 0,
+            };
+            warn!(
+                "dictation.asr: provider=deepgram mode=continuous phase=connect state=failed code={} status={status}",
+                failure.category()
+            );
+            let _ = events.send(ContinuousAsrEvent::Failed(failure));
             return;
         }
         Err(_) => {
+            warn!(
+                "dictation.asr: provider=deepgram mode=continuous phase=connect state=failed code=network status=0"
+            );
             let _ = events.send(ContinuousAsrEvent::Failed(AsrError::Network));
             return;
         }

@@ -70,6 +70,29 @@
   grid-area: 1 / 1;
 }
 
+/* Interview Companion uses its own floating control bar and never inherits the
+   resting notch edge. The native window starts centered, then keeps the user's
+   free-form screen position while this combined surface expands or collapses. */
+.notch-column-with-draft.notch-column-interview {
+  grid-template-columns: 1fr;
+  grid-template-rows: 52px minmax(0, 1fr);
+  row-gap: 8px;
+}
+.notch-column-with-draft.notch-column-interview.notch-column-interview-collapsed {
+  grid-template-rows: 52px;
+  row-gap: 0;
+}
+.notch-column-with-draft.notch-column-interview > .interview-companion-control-bar {
+  grid-area: 1 / 1;
+}
+.notch-column-with-draft.notch-column-interview > .interview-companion-card {
+  grid-area: 2 / 1;
+  align-self: stretch;
+  justify-self: stretch;
+  width: 100%;
+  height: 100%;
+}
+
 /* Cards fill whichever cell they land in (width now driven by the grid track,
    not a fixed 460). */
 .notch-column > .draft-card,

@@ -65,8 +65,8 @@ fn set_panel_variant(app: AppHandle, variant: PanelVariant) {
 /// (OverlayRoot) resolves which surface - draft, catch-up, calendar agenda, or
 /// kebab menu - wins the single slot and passes its fixed height here.
 #[tauri::command]
-fn set_slot_height(app: AppHandle, height: Option<f64>) {
-    overlay::set_slot_height(&app, height);
+fn set_slot_height(app: AppHandle, height: Option<f64>, centered: bool) {
+    overlay::set_slot_height(&app, height, centered);
 }
 
 #[tauri::command]
@@ -144,6 +144,11 @@ where
 #[tauri::command]
 fn dismiss_bar(app: AppHandle) {
     overlay::dismiss_bar(&app);
+}
+
+#[tauri::command]
+fn dismiss_idle_bar(app: AppHandle) {
+    overlay::dismiss_idle_bar(&app);
 }
 
 /// Guarded natively: pointing takes the window fullscreen and click-through,
@@ -291,6 +296,7 @@ pub fn run() {
             open_dashboard_route,
             connector_oauth::take_connector_oauth_completion,
             dismiss_bar,
+            dismiss_idle_bar,
             point_at,
             cancel_pointing,
             set_notch_edge,

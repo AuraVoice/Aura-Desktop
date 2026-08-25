@@ -71,6 +71,7 @@ export type InterviewAnswerFrame =
 
 export interface InterviewCredential {
   accessToken: string;
+  openaiAccessToken: string;
   expiresInSeconds: number;
 }
 
@@ -83,18 +84,21 @@ export async function mintInterviewCredential(): Promise<InterviewCredential> {
   if (!body || typeof body !== "object") {
     throw new Error("Interview transcription returned an invalid credential.");
   }
-  const accessToken = (body as Record<string, unknown>).accessToken;
-  const expiresInSeconds = (body as Record<string, unknown>).expiresInSeconds;
+  const record = body as Record<string, unknown>;
+  const accessToken = record.deepgramAccessToken ?? record.accessToken ?? "";
+  const openaiAccessToken = record.openaiAccessToken ?? "";
+  const expiresInSeconds = record.expiresInSeconds;
   if (
     typeof accessToken !== "string"
-    || accessToken.trim() === ""
+    || typeof openaiAccessToken !== "string"
+    || (accessToken.trim() === "" && openaiAccessToken.trim() === "")
     || typeof expiresInSeconds !== "number"
     || !Number.isFinite(expiresInSeconds)
     || expiresInSeconds <= 0
   ) {
     throw new Error("Interview transcription returned an invalid credential.");
   }
-  return { accessToken, expiresInSeconds };
+  return { accessToken, openaiAccessToken, expiresInSeconds };
 }
 
 function wireTurn(turn: InterviewTranscriptTurn) {

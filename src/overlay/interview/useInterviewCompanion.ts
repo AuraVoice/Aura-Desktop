@@ -68,6 +68,7 @@ function callLabel(app: string | null): string {
 const PANEL_ASSEMBLY_MS = 350;
 const ECHO_WINDOW_MS = 2_500;
 const MAX_CREDENTIAL_RETRIES = 3;
+const CALL_DETECTION_RETRY_MS = 1_500;
 
 function reflectionMarkdown(reflection: InterviewReflection): string {
   const section = (title: string, items: string[]) =>
@@ -132,6 +133,7 @@ export interface InterviewCompanionState {
   savingReflection: boolean;
   reflection: InterviewReflection | null;
   message: string | null;
+  errorDetail: string | null;
   openPreflight: () => void;
   dismiss: () => void;
   start: () => void;
@@ -159,6 +161,7 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
   const [reflectionSnapshot, setReflectionSnapshot] = useState<ReflectionSnapshot | null>(null);
   const [reflection, setReflection] = useState<InterviewReflection | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [errorDetail, setErrorDetail] = useState<string | null>(null);
   // Mirrors of identityRef/lastRemoteTurnRef for render. The refs are written
   // outside React's cycle, so deriving the button states from them directly
   // left Suggest and Screen Sight stale whenever the write happened to land
@@ -248,6 +251,7 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
     setAnswer("");
     setCallName(null);
     setMessage(null);
+    setErrorDetail(null);
   }, []);
 
   const recordSessionEnd = useCallback((reason: string) => {
@@ -309,6 +313,7 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
         sessionId: identity.sessionId,
         epoch: identity.epoch,
         accessToken: credential.accessToken,
+        openaiAccessToken: credential.openaiAccessToken,
       }).then(() => credential))
       .then((credential) => {
         credentialRefreshInFlightRef.current = false;
@@ -341,6 +346,7 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
           }, (2 ** (credentialRetryRef.current - 1)) * 1_000);
         } else {
           setMessage("Transcription credentials could not be refreshed. Restart Interview Companion.");
+          setErrorDetail("Error code: credential_refresh_failed. Automatic credential retries were exhausted.");
         }
       });
   }, [armCredentialRefresh]);
@@ -348,32 +354,51 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
 
   const openPreflight = useCallback(() => {
     if (!signedIn) return;
-    const attempt = ++preflightAttemptRef.current;
+    preflightAttemptRef.current += 1;
     reflectionRequestRef.current?.abort();
     reflectionRequestRef.current = null;
     setReflectionSnapshot(null);
     setReflection(null);
+    setCallName(null);
     setPhase("checking");
-    setMessage(null);
-    invoke<SupportedCallPayload>("interview_supported_call")
-      .then((result) => {
-        if (preflightAttemptRef.current !== attempt) return;
-        if (!result.supported) {
-          setPhase("error");
-          setCallName(null);
-          setMessage("Open a Zoom, Teams, or Google Meet call first.");
-          return;
-        }
-        setCallName(callLabel(result.app));
-        setPhase("preflight");
-      })
-      .catch((error) => {
-        if (preflightAttemptRef.current !== attempt) return;
-        logError("Interview Companion: call detection", error);
-        setPhase("error");
-        setMessage("Aura could not check the current call.");
-      });
+    setMessage("Waiting for Zoom, Teams, or Google Meet. Aura checks automatically.");
+    setErrorDetail(null);
   }, [signedIn]);
+
+  useEffect(() => {
+    if (!signedIn || phase !== "checking") return;
+    const attempt = preflightAttemptRef.current;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const check = () => {
+      invoke<SupportedCallPayload>("interview_supported_call")
+        .then((result) => {
+          if (cancelled || preflightAttemptRef.current !== attempt) return;
+          if (result.supported) {
+            setCallName(callLabel(result.app));
+            setMessage(null);
+            setPhase("preflight");
+            return;
+          }
+          setMessage("Waiting for Zoom, Teams, or Google Meet. Aura checks automatically.");
+          timer = setTimeout(check, CALL_DETECTION_RETRY_MS);
+        })
+        .catch((error) => {
+          if (cancelled || preflightAttemptRef.current !== attempt) return;
+          logError("Interview Companion: call detection", error);
+          setMessage("Call detection was interrupted. Aura is retrying automatically.");
+          setErrorDetail("Error code: call_detection_failed. The next automatic check is still scheduled.");
+          timer = setTimeout(check, CALL_DETECTION_RETRY_MS);
+        });
+    };
+
+    check();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+    };
+  }, [phase, signedIn]);
 
   // Closes the card from any phase that is not holding a live capture. Without
   // this the preflight was a dead end: it renders only "Start", the Stop button
@@ -392,6 +417,7 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
     setReflection(null);
     setCallName(null);
     setMessage(null);
+    setErrorDetail(null);
     setPhase("idle");
   }, []);
 
@@ -401,11 +427,13 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
     acceptNativeEventsRef.current = true;
     setPhase("starting");
     setMessage(null);
+    setErrorDetail(null);
     mintInterviewCredential()
       .then((credential) => {
         if (startAttemptRef.current !== attempt) return null;
         return invoke<StatusPayload>("start_interview_companion", {
           accessToken: credential.accessToken,
+          openaiAccessToken: credential.openaiAccessToken,
         }).then((status) => ({ status, credential }));
       })
       .then((started) => {
@@ -441,7 +469,9 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
         acceptNativeEventsRef.current = false;
         logError("Interview Companion: start", error);
         setPhase("error");
-        setMessage(error instanceof Error ? error.message : "Interview Companion could not start.");
+        const message = error instanceof Error ? error.message : "Interview Companion could not start.";
+        setMessage(message);
+        setErrorDetail(`Start error: ${message}`);
       });
   }, [armCredentialRefresh, phase]);
 
@@ -874,19 +904,30 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
       setPhase(status.phase);
       if (status.reason === "credential_expired") {
         setMessage("Refreshing transcription credentials...");
+        setErrorDetail("Error code: credential_expired. Aura is refreshing the transcription credential automatically.");
         rotateCredentialRef.current?.();
-      } else if (status.reason === "device_switch") {
+      } else if (status.reason === "device_switch" || status.reason?.endsWith("_device_switch")) {
         if (metricsRef.current) metricsRef.current.deviceSwitches += 1;
         trackEvent("interview_companion_recovery", { kind: "device_switch" });
-        setMessage("Audio device changed. Aura is reconnecting transcription.");
-      } else if (status.reason === "device_unavailable") {
+        setMessage(`${status.reason?.startsWith("candidate_") ? "Microphone" : "Call audio device"} changed. Aura is reconnecting transcription.`);
+        setErrorDetail(`Error code: ${status.reason}. Automatic reconnection is in progress.`);
+      } else if (status.reason === "device_unavailable" || status.reason?.endsWith("_device_unavailable")) {
         if (metricsRef.current) metricsRef.current.errors += 1;
-        trackEvent("interview_companion_error", { code: "device_unavailable", stage: "capture" });
-        setMessage("Aura cannot access one of the call audio devices. Check the selected devices; Aura will retry safely.");
+        trackEvent("interview_companion_error", { code: status.reason ?? "device_unavailable", stage: "capture" });
+        setMessage(`Aura cannot access the ${status.reason?.startsWith("candidate_") ? "microphone" : "call audio device"}. Check it in Windows; Aura will retry safely.`);
+        setErrorDetail(`Error code: ${status.reason ?? "device_unavailable"}. ${status.phase === "error" ? "Automatic retries were exhausted." : "Automatic retry is in progress."}`);
       } else if (status.reason === "reconnected" || status.reason === "device_recovered") {
         if (metricsRef.current) metricsRef.current.reconnects += 1;
         trackEvent("interview_companion_recovery", { kind: status.reason });
         setMessage(null);
+        setErrorDetail(null);
+      } else if (status.reason === "fallback_openai") {
+        if (metricsRef.current) metricsRef.current.reconnects += 1;
+        trackEvent("interview_companion_recovery", { kind: "fallback_openai" });
+        setMessage(status.phase === "listening"
+          ? "Deepgram was unavailable. Transcription is continuing with OpenAI."
+          : "Deepgram was unavailable. Aura is switching transcription to OpenAI.");
+        setErrorDetail("Error code: fallback_openai. Candidate and call audio remain source-separated.");
       } else {
         if (status.phase === "degraded" || status.phase === "error") {
           if (metricsRef.current) metricsRef.current.errors += 1;
@@ -896,8 +937,15 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
           });
         }
         setMessage(
+          status.phase === "degraded"
+            ? "Transcription was interrupted. Aura is retrying automatically."
+            : status.phase === "error"
+              ? "Transcription stopped after 10 automatic retries."
+              : null,
+        );
+        setErrorDetail(
           status.phase === "degraded" || status.phase === "error"
-            ? "Transcription was interrupted. Aura is retrying safely."
+            ? `Error code: ${status.reason ?? "transcription_interrupted"}. ${status.phase === "error" ? "Automatic retries were exhausted." : "Automatic retry is in progress."}`
             : null,
         );
       }
@@ -966,6 +1014,7 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
     savingReflection,
     reflection,
     message,
+    errorDetail,
     openPreflight,
     dismiss,
     start,

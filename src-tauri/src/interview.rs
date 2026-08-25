@@ -27,15 +27,48 @@ const MAX_BRIEF_BYTES: usize = 128_000;
 #[cfg(windows)]
 const ENDPOINTING_MS: u16 = 600;
 #[cfg(windows)]
-const MAX_RECONNECTS: u8 = 3;
+const MAX_RECONNECTS: u8 = 10;
+#[cfg(windows)]
+const DEEPGRAM_RECONNECTS: u8 = 5;
+#[cfg(windows)]
+const MAX_RECONNECT_BACKOFF_SECS: u64 = 30;
 #[cfg(windows)]
 const SESSION_LIMIT: Duration = Duration::from_secs(2 * 60 * 60);
 
 enum RuntimeCommand {
     Pause,
     Resume,
-    UpdateCredential(String),
+    UpdateCredentials(TranscriptionCredentials),
     Stop,
+}
+
+struct TranscriptionCredentials {
+    deepgram: String,
+    openai: String,
+}
+
+#[cfg(windows)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TranscriptionProvider {
+    Deepgram,
+    OpenAi,
+}
+
+#[cfg(windows)]
+impl TranscriptionProvider {
+    fn credential<'a>(self, credentials: &'a TranscriptionCredentials) -> &'a str {
+        match self {
+            Self::Deepgram => &credentials.deepgram,
+            Self::OpenAi => &credentials.openai,
+        }
+    }
+
+    fn retry_floor(self) -> u8 {
+        match self {
+            Self::Deepgram => 0,
+            Self::OpenAi => DEEPGRAM_RECONNECTS,
+        }
+    }
 }
 
 struct ActiveInterview {
@@ -147,8 +180,13 @@ pub async fn interview_supported_call(app: AppHandle) -> Result<SupportedCallPay
 pub async fn start_interview_companion(
     app: AppHandle,
     access_token: String,
+    openai_access_token: Option<String>,
 ) -> Result<InterviewStatusPayload, String> {
-    if access_token.trim().is_empty() {
+    let credentials = TranscriptionCredentials {
+        deepgram: access_token,
+        openai: openai_access_token.unwrap_or_default(),
+    };
+    if credentials.deepgram.trim().is_empty() && credentials.openai.trim().is_empty() {
         return Err("transcription credential is required".to_string());
     }
     let cancel_generation = app.state::<InterviewHandle>().1.load(Ordering::Relaxed);
@@ -212,7 +250,7 @@ pub async fn start_interview_companion(
             .spawn(move || {
                 run_worker(
                     worker_app,
-                    access_token,
+                    credentials,
                     session_id,
                     app_name,
                     epoch,
@@ -285,8 +323,13 @@ pub fn update_interview_companion_credential(
     session_id: String,
     epoch: u64,
     access_token: String,
+    openai_access_token: Option<String>,
 ) -> Result<(), String> {
-    if access_token.trim().is_empty() {
+    let credentials = TranscriptionCredentials {
+        deepgram: access_token,
+        openai: openai_access_token.unwrap_or_default(),
+    };
+    if credentials.deepgram.trim().is_empty() && credentials.openai.trim().is_empty() {
         return Err("transcription credential is required".to_string());
     }
     crate::security::authorize(
@@ -301,7 +344,7 @@ pub fn update_interview_companion_credential(
         .ok_or_else(|| "Interview Companion session is no longer active.".to_string())?;
     active
         .commands
-        .send(RuntimeCommand::UpdateCredential(access_token))
+        .send(RuntimeCommand::UpdateCredentials(credentials))
         .map_err(|_| "Interview Companion worker is unavailable.".to_string())
 }
 
@@ -479,6 +522,24 @@ fn emit_status(
     app_name: Option<&str>,
     reason: Option<&str>,
 ) {
+    match phase {
+        "error" => log::error!(
+            "interview.companion: phase=error reason={} epoch={}",
+            reason.unwrap_or("unknown"),
+            epoch.unwrap_or_default()
+        ),
+        "degraded" => log::warn!(
+            "interview.companion: phase=degraded reason={} epoch={}",
+            reason.unwrap_or("unknown"),
+            epoch.unwrap_or_default()
+        ),
+        _ if reason.is_some() => log::info!(
+            "interview.companion: phase={phase} reason={} epoch={}",
+            reason.unwrap_or("unknown"),
+            epoch.unwrap_or_default()
+        ),
+        _ => {}
+    }
     if let (Some(epoch), Some(handle)) = (epoch, app.try_state::<InterviewHandle>()) {
         let mut state = handle.0.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(active) = state.as_mut().filter(|active| active.epoch == epoch) {
@@ -506,12 +567,20 @@ struct Streams {
 }
 
 #[cfg(windows)]
-fn open_streams(credential: &str) -> Result<Streams, AsrError> {
+fn open_streams(
+    provider: TranscriptionProvider,
+    credentials: &TranscriptionCredentials,
+) -> Result<Streams, AsrError> {
     let capture = audio_capture::subscribe(
         "interview-companion",
         Delivery::Bounded { capacity: 512 },
     )
     .map_err(|_| AsrError::Provider)?;
+    let credential = provider.credential(credentials);
+    let asr_provider = match provider {
+        TranscriptionProvider::Deepgram => asr::deepgram_provider(),
+        TranscriptionProvider::OpenAi => asr::openai_provider(),
+    };
     let config = |diarize| ContinuousSessionConfig {
         sample_rate: asr::SAMPLE_RATE,
         keyterms: Vec::new(),
@@ -519,8 +588,8 @@ fn open_streams(credential: &str) -> Result<Streams, AsrError> {
         endpointing_ms: ENDPOINTING_MS,
         diarize,
     };
-    let mut candidate = asr::provider().start_continuous(config(false))?;
-    let remote = match asr::provider().start_continuous(config(true)) {
+    let mut candidate = asr_provider.start_continuous(config(false))?;
+    let remote = match asr_provider.start_continuous(config(true)) {
         Ok(session) => session,
         Err(error) => {
             candidate.cancel();
@@ -535,6 +604,12 @@ fn open_streams(credential: &str) -> Result<Streams, AsrError> {
 }
 
 #[cfg(windows)]
+fn reconnect_delay(next_attempt: u8) -> Duration {
+    let exponent = next_attempt.saturating_sub(1).min(5);
+    Duration::from_secs((1u64 << exponent).min(MAX_RECONNECT_BACKOFF_SECS))
+}
+
+#[cfg(windows)]
 fn close_streams(streams: &mut Option<Streams>) {
     if let Some(mut live) = streams.take() {
         live.candidate.cancel();
@@ -544,23 +619,52 @@ fn close_streams(streams: &mut Option<Streams>) {
 }
 
 #[cfg(windows)]
+fn source_failure_code(source: TranscriptSource, error: AsrError) -> &'static str {
+    match (source, error) {
+        (TranscriptSource::Candidate, AsrError::NotAuthenticated) => "candidate_no_credential",
+        (TranscriptSource::Candidate, AsrError::Rejected) => "candidate_auth_rejected",
+        (TranscriptSource::Candidate, AsrError::Network) => "candidate_network",
+        (TranscriptSource::Candidate, AsrError::Timeout) => "candidate_timeout",
+        (TranscriptSource::Candidate, AsrError::Provider) => "candidate_provider_error",
+        (TranscriptSource::Remote, AsrError::NotAuthenticated) => "remote_no_credential",
+        (TranscriptSource::Remote, AsrError::Rejected) => "remote_auth_rejected",
+        (TranscriptSource::Remote, AsrError::Network) => "remote_network",
+        (TranscriptSource::Remote, AsrError::Timeout) => "remote_timeout",
+        (TranscriptSource::Remote, AsrError::Provider) => "remote_provider_error",
+    }
+}
+
+#[cfg(windows)]
 fn run_worker(
     app: AppHandle,
-    mut credential: String,
+    mut credentials: TranscriptionCredentials,
     session_id: String,
     app_name: String,
     epoch: u64,
     commands: mpsc::Receiver<RuntimeCommand>,
 ) {
     let started_at = Instant::now();
-    let (mut streams, mut credential_blocked) = match open_streams(&credential) {
-        Ok(streams) => (Some(streams), false),
-        Err(AsrError::NotAuthenticated | AsrError::Rejected) => (None, true),
-        Err(_) => (None, false),
+    let mut provider = if credentials.deepgram.trim().is_empty() {
+        TranscriptionProvider::OpenAi
+    } else {
+        TranscriptionProvider::Deepgram
+    };
+    let (mut streams, mut credential_blocked, initial_failure) = match open_streams(provider, &credentials) {
+        Ok(streams) => (Some(streams), false, None),
+        Err(error) => (
+            None,
+            matches!(error, AsrError::NotAuthenticated | AsrError::Rejected),
+            Some(error.category()),
+        ),
     };
     let mut paused = false;
-    let mut reconnects = 0u8;
-    let mut retry_at = Instant::now();
+    let mut reconnects = provider.retry_floor();
+    let mut retry_at = Instant::now()
+        + if streams.is_some() {
+            Duration::ZERO
+        } else {
+            reconnect_delay(1)
+        };
     let mut stable_since = streams.as_ref().map(|_| Instant::now());
     let mut candidate_start = None;
     let mut remote_start = None;
@@ -587,7 +691,7 @@ fn run_worker(
             Some(if credential_blocked {
                 "credential_expired"
             } else {
-                "transcription_unavailable"
+                initial_failure.unwrap_or("transcription_unavailable")
             }),
         );
     }
@@ -607,7 +711,7 @@ fn run_worker(
                 }
                 RuntimeCommand::Resume => {
                     paused = false;
-                    reconnects = 0;
+                    reconnects = provider.retry_floor();
                     retry_at = Instant::now();
                     // Resume is also the card's "Retry transcription". Leaving
                     // this set makes the reconnect guard below skip forever, so
@@ -617,10 +721,17 @@ fn run_worker(
                     // re-emits the error - one honest attempt either way.
                     credential_blocked = false;
                 }
-                RuntimeCommand::UpdateCredential(next_credential) => {
-                    credential = next_credential;
+                RuntimeCommand::UpdateCredentials(next_credentials) => {
+                    credentials = next_credentials;
+                    if provider.credential(&credentials).trim().is_empty() {
+                        provider = if credentials.deepgram.trim().is_empty() {
+                            TranscriptionProvider::OpenAi
+                        } else {
+                            TranscriptionProvider::Deepgram
+                        };
+                    }
                     credential_blocked = false;
-                    reconnects = 0;
+                    reconnects = provider.retry_floor();
                     retry_at = Instant::now();
                 }
                 RuntimeCommand::Stop => break 'runtime,
@@ -633,8 +744,15 @@ fn run_worker(
             && reconnects < MAX_RECONNECTS
             && Instant::now() >= retry_at
         {
+            let next_provider = if reconnects < DEEPGRAM_RECONNECTS {
+                TranscriptionProvider::Deepgram
+            } else {
+                TranscriptionProvider::OpenAi
+            };
+            let switched_provider = provider != next_provider;
+            provider = next_provider;
             reconnects += 1;
-            match open_streams(&credential) {
+            match open_streams(provider, &credentials) {
                 Ok(next_streams) => {
                     streams = Some(next_streams);
                     stable_since = Some(Instant::now());
@@ -644,33 +762,51 @@ fn run_worker(
                         Some(&session_id),
                         Some(epoch),
                         Some(&app_name),
-                        Some("reconnected"),
+                        Some(if switched_provider {
+                            "fallback_openai"
+                        } else {
+                            "reconnected"
+                        }),
                     );
                 }
                 Err(AsrError::NotAuthenticated | AsrError::Rejected) => {
-                    credential_blocked = true;
-                    emit_status(
-                        &app,
-                        "error",
-                        Some(&session_id),
-                        Some(epoch),
-                        Some(&app_name),
-                        Some("credential_expired"),
-                    );
-                }
-                Err(_) => {
-                    let delay_s = 1u64 << (reconnects - 1).min(2);
-                    retry_at = Instant::now() + Duration::from_secs(delay_s);
-                    if reconnects == MAX_RECONNECTS {
+                    if provider == TranscriptionProvider::Deepgram
+                        && !credentials.openai.trim().is_empty()
+                    {
+                        reconnects = DEEPGRAM_RECONNECTS;
+                        retry_at = Instant::now();
+                        emit_status(
+                            &app,
+                            "degraded",
+                            Some(&session_id),
+                            Some(epoch),
+                            Some(&app_name),
+                            Some("fallback_openai"),
+                        );
+                    } else {
+                        credential_blocked = true;
                         emit_status(
                             &app,
                             "error",
                             Some(&session_id),
                             Some(epoch),
                             Some(&app_name),
-                            Some("transcription_unavailable"),
+                            Some("credential_expired"),
                         );
                     }
+                }
+                Err(error) => {
+                    let failure_code = error.category();
+                    retry_at = Instant::now()
+                        + reconnect_delay((reconnects % DEEPGRAM_RECONNECTS).saturating_add(1));
+                    emit_status(
+                        &app,
+                        if reconnects == MAX_RECONNECTS { "error" } else { "degraded" },
+                        Some(&session_id),
+                        Some(epoch),
+                        Some(&app_name),
+                        Some(failure_code),
+                    );
                 }
             }
         }
@@ -679,7 +815,7 @@ fn run_worker(
         let mut failure_reason = None;
         if let Some(live) = streams.as_mut() {
             if stable_since.is_some_and(|since| since.elapsed() >= Duration::from_secs(10)) {
-                reconnects = 0;
+                reconnects = provider.retry_floor();
                 stable_since = None;
             }
             if live.capture.take_overflowed() {
@@ -706,20 +842,33 @@ fn run_worker(
                             AudioSource::Loopback => live.remote.send_pcm(&pcm, captured_at_ms),
                         };
                         if let Err(error) = result {
+                            failure_reason = Some(source_failure_code(
+                                match frame.source {
+                                    AudioSource::Microphone => TranscriptSource::Candidate,
+                                    AudioSource::Loopback => TranscriptSource::Remote,
+                                },
+                                error,
+                            ));
                             failure = Some(error);
                             break;
                         }
                     }
-                    CaptureEvent::Failed { .. } => {
+                    CaptureEvent::Failed { source } => {
                         failure = Some(AsrError::Provider);
-                        failure_reason = Some("device_unavailable");
+                        failure_reason = Some(match source {
+                            AudioSource::Microphone => "candidate_device_unavailable",
+                            AudioSource::Loopback => "remote_device_unavailable",
+                        });
                         break;
                     }
-                    CaptureEvent::DeviceRebound { .. } => {
+                    CaptureEvent::DeviceRebound { source } => {
                         candidate_start = None;
                         remote_start = None;
                         failure = Some(AsrError::Provider);
-                        failure_reason = Some("device_switch");
+                        failure_reason = Some(match source {
+                            AudioSource::Microphone => "candidate_device_switch",
+                            AudioSource::Loopback => "remote_device_switch",
+                        });
                         break;
                     }
                     // A timing glitch is not a dead stream. Windows sets these
@@ -735,7 +884,7 @@ fn run_worker(
                 }
             }
             if failure.is_none() {
-                failure = drain_asr(
+                if let Some(error) = drain_asr(
                     &app,
                     &session_id,
                     epoch,
@@ -743,9 +892,12 @@ fn run_worker(
                     &mut candidate_turn,
                     &mut candidate_start,
                     live.candidate.as_mut(),
-                );
+                ) {
+                    failure_reason = Some(source_failure_code(TranscriptSource::Candidate, error));
+                    failure = Some(error);
+                }
                 if failure.is_none() {
-                    failure = drain_asr(
+                    if let Some(error) = drain_asr(
                         &app,
                         &session_id,
                         epoch,
@@ -753,34 +905,61 @@ fn run_worker(
                         &mut remote_turn,
                         &mut remote_start,
                         live.remote.as_mut(),
-                    );
+                    ) {
+                        failure_reason = Some(source_failure_code(TranscriptSource::Remote, error));
+                        failure = Some(error);
+                    }
                 }
             }
         }
         if let Some(error) = failure {
+            let failure_code = failure_reason.unwrap_or_else(|| error.category());
             close_streams(&mut streams);
             stable_since = None;
             candidate_start = None;
             remote_start = None;
             if matches!(error, AsrError::NotAuthenticated | AsrError::Rejected) {
-                credential_blocked = true;
-                emit_status(
-                    &app,
-                    "error",
-                    Some(&session_id),
-                    Some(epoch),
-                    Some(&app_name),
-                    Some("credential_expired"),
-                );
+                if provider == TranscriptionProvider::Deepgram
+                    && !credentials.openai.trim().is_empty()
+                {
+                    reconnects = DEEPGRAM_RECONNECTS;
+                    retry_at = Instant::now();
+                    emit_status(
+                        &app,
+                        "degraded",
+                        Some(&session_id),
+                        Some(epoch),
+                        Some(&app_name),
+                        Some("fallback_openai"),
+                    );
+                } else {
+                    credential_blocked = true;
+                    emit_status(
+                        &app,
+                        "error",
+                        Some(&session_id),
+                        Some(epoch),
+                        Some(&app_name),
+                        Some("credential_expired"),
+                    );
+                }
             } else {
-                retry_at = Instant::now() + Duration::from_secs(1);
+                retry_at = Instant::now()
+                    + reconnect_delay((reconnects % DEEPGRAM_RECONNECTS).saturating_add(1));
+                let fallback_ready = provider == TranscriptionProvider::Deepgram
+                    && reconnects >= DEEPGRAM_RECONNECTS
+                    && !credentials.openai.trim().is_empty();
                 emit_status(
                     &app,
                     if reconnects >= MAX_RECONNECTS { "error" } else { "degraded" },
                     Some(&session_id),
                     Some(epoch),
                     Some(&app_name),
-                    Some(failure_reason.unwrap_or("stream_interrupted")),
+                    Some(if fallback_ready {
+                        "fallback_openai"
+                    } else {
+                        failure_code
+                    }),
                 );
             }
         }
