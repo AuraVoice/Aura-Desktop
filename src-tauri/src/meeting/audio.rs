@@ -1,13 +1,10 @@
 //! The WASAPI capture engine: mic + render-loopback -> 16 kHz 2-channel FLAC
 //! segments on disk (encrypted by mod.rs's record_segment).
 //!
-//! Three dedicated std::threads per capture, never Tauri's main thread
-//! (screenshot.rs main-thread rule):
-//!   - mic thread: default capture device, shared mode
-//!   - loopback thread: default RENDER device opened with Direction::Capture,
-//!     which is how WASAPI expresses loopback (AUDCLNT_STREAMFLAGS_LOOPBACK)
-//!   - engine thread: drains both, aligns by wall clock, encodes segments,
-//!     watches the stop channel / session lock / 4h cap
+//! The shared audio-capture broker owns the default mic and render-loopback
+//! devices. This engine is its lossless Meeting Notes consumer: it aligns both
+//! labeled streams by wall clock, encodes segments, and watches the stop
+//! channel / session lock / 4h cap on a dedicated std::thread.
 //!
 //! Format strategy: both clients are initialized shared-mode with
 //! autoconvert, requesting 16 kHz mono f32 directly - the Windows audio
@@ -29,19 +26,19 @@
 
 #![cfg(windows)]
 
-use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
 use flacenc::component::BitRepr;
 use flacenc::error::Verify;
 use log::{error, info, warn};
 use tauri::AppHandle;
-use wasapi::{DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat};
 
-const SAMPLE_RATE: usize = 16_000;
+use crate::audio_capture::{
+    self, AudioSource, CaptureConsumer, CaptureEvent, Delivery, PcmFrame,
+};
+
+const SAMPLE_RATE: usize = audio_capture::SAMPLE_RATE;
 /// 5-minute segments: ~10 MB of 2ch FLAC, comfortably under the backend's
 /// 30 MB body cap, and small enough that losing one to a crash loses minutes.
 const SEGMENT_FRAMES: usize = SAMPLE_RATE * 300;
@@ -69,10 +66,8 @@ const MAX_CAPTURE: Duration =
 fn capped_timeline_ms(emitted_ms: i64) -> i64 {
     emitted_ms.min(MAX_CAPTURE.as_millis() as i64)
 }
-/// Engine mixing cadence. Capture threads poll faster (their own sleep).
+/// Engine mixing cadence. The broker capture threads poll faster.
 const ENGINE_TICK: Duration = Duration::from_millis(100);
-const CAPTURE_POLL: Duration = Duration::from_millis(40);
-const DEVICE_CHECK_EVERY: Duration = Duration::from_secs(2);
 /// Wall-clock deficit before a stream is silence-filled. Big enough to never
 /// race real packets (device period is ~10ms), small enough that channel
 /// alignment error stays inaudible to STT.
@@ -82,33 +77,6 @@ const FILL_GUARD_FRAMES: usize = SAMPLE_RATE / 5; // 200ms
 /// hours of zeros and stamp audio the machine never captured. Reset the
 /// stream clock instead and mark the segment incomplete.
 const DISCONTINUITY_FRAMES: usize = SAMPLE_RATE * 10; // 10s
-/// Consecutive failed re-opens before the stream reports itself dead.
-const MAX_REOPEN_ATTEMPTS: u32 = 5;
-
-struct StreamShared {
-    /// Mono f32 frames at 16 kHz, appended by the capture thread, drained by
-    /// the engine. Bounded implicitly by the engine's 100ms drain cadence.
-    buf: Mutex<Vec<f32>>,
-    stop: AtomicBool,
-    failed: AtomicBool,
-    /// A device re-bind happened (or was attempted); the engine marks the
-    /// current segment incomplete when it sees this set, then clears it.
-    rebound: AtomicBool,
-    device_id_hash: Mutex<String>,
-}
-
-impl StreamShared {
-    fn new() -> Arc<Self> {
-        Arc::new(Self {
-            buf: Mutex::new(Vec::new()),
-            stop: AtomicBool::new(false),
-            failed: AtomicBool::new(false),
-            rebound: AtomicBool::new(false),
-            device_id_hash: Mutex::new(String::new()),
-        })
-    }
-}
-
 /// Spawns the engine (which spawns the two capture threads). Returns
 /// immediately; capture-init failures surface asynchronously as a
 /// `capture_failed` finalize, matching the ambient-surface rule. The caller
@@ -151,202 +119,28 @@ pub fn spawn_engine(
     Ok(stop_tx)
 }
 
-fn spawn_capture_thread(shared: Arc<StreamShared>, loopback: bool) {
-    let name = if loopback {
-        "meeting-loopback"
-    } else {
-        "meeting-mic"
-    };
-    let result = std::thread::Builder::new()
-        .name(name.to_string())
-        .spawn(move || capture_thread(shared, loopback));
-    if let Err(e) = result {
-        error!("meeting.audio: failed to spawn {name}: {e}");
-    }
-}
-
-/// One capture stream's whole life: open default device, drain packets,
-/// watch for default-device changes, re-open as needed.
-fn capture_thread(shared: Arc<StreamShared>, loopback: bool) {
-    if wasapi::initialize_mta().is_err() {
-        error!("meeting.audio: COM init failed on capture thread");
-        shared.failed.store(true, Ordering::Relaxed);
-        return;
-    }
-    let mut reopen_attempts: u32 = 0;
-
-    'lifetime: loop {
-        if shared.stop.load(Ordering::Relaxed) {
-            break;
-        }
-        let (client, capture, device_id) = match open_stream(loopback) {
-            Ok(opened) => {
-                reopen_attempts = 0;
-                opened
-            }
-            Err(e) => {
-                reopen_attempts += 1;
-                warn!(
-                    "meeting.audio: open {} failed (attempt {reopen_attempts}): {e}",
-                    if loopback { "loopback" } else { "mic" }
-                );
-                if reopen_attempts >= MAX_REOPEN_ATTEMPTS {
-                    shared.failed.store(true, Ordering::Relaxed);
-                    break;
-                }
-                std::thread::sleep(Duration::from_secs(1));
-                continue;
-            }
-        };
-        {
-            use sha2::{Digest, Sha256};
-            let mut stored = shared
-                .device_id_hash
-                .lock()
-                .unwrap_or_else(|error| error.into_inner());
-            *stored = format!("{:x}", Sha256::digest(device_id.as_bytes()));
-        }
-
-        let mut raw: VecDeque<u8> = VecDeque::new();
-        let mut last_device_check = Instant::now();
-        loop {
-            if shared.stop.load(Ordering::Relaxed) {
-                let _ = client.stop_stream();
-                break 'lifetime;
-            }
-            // GetBuffer returns ONE WASAPI packet. Polling every 40 ms while
-            // reading only once dropped the other queued ~10 ms packets; the
-            // engine then replaced that missing speech with zeros to preserve
-            // wall-clock alignment. Drain the shared-mode queue completely on
-            // every poll so audio reaches FLAC continuously.
-            loop {
-                let packet_frames = match capture.get_next_packet_size() {
-                    Ok(Some(frames)) => frames,
-                    Ok(None) => 0,
-                    Err(e) => {
-                        warn!("meeting.audio: packet query failed, re-opening: {e}");
-                        let _ = client.stop_stream();
-                        shared.rebound.store(true, Ordering::Relaxed);
-                        continue 'lifetime;
-                    }
-                };
-                if packet_frames == 0 {
-                    break;
-                }
-                match capture.read_from_device_to_deque(&mut raw) {
-                    Ok(buffer) => {
-                        if buffer.flags.data_discontinuity || buffer.flags.timestamp_error {
-                            shared.rebound.store(true, Ordering::Relaxed);
-                        }
-                    }
-                    Err(e) => {
-                        warn!("meeting.audio: read failed, re-opening: {e}");
-                        let _ = client.stop_stream();
-                        shared.rebound.store(true, Ordering::Relaxed);
-                        continue 'lifetime;
-                    }
-                }
-            }
-            // f32 mono frames: 4 bytes each. Partial trailing bytes stay in
-            // the deque for the next read.
-            let full = raw.len() / 4;
-            if full > 0 {
-                let mut samples = Vec::with_capacity(full);
-                for _ in 0..full {
-                    let bytes = [
-                        raw.pop_front().unwrap_or(0),
-                        raw.pop_front().unwrap_or(0),
-                        raw.pop_front().unwrap_or(0),
-                        raw.pop_front().unwrap_or(0),
-                    ];
-                    samples.push(f32::from_le_bytes(bytes));
-                }
-                let mut buf = shared.buf.lock().unwrap_or_else(|e| e.into_inner());
-                buf.extend_from_slice(&samples);
-            }
-            if last_device_check.elapsed() >= DEVICE_CHECK_EVERY {
-                last_device_check = Instant::now();
-                if default_device_id(loopback).is_some_and(|current| current != device_id) {
-                    info!(
-                        "meeting.audio: default {} device changed, re-binding",
-                        if loopback { "render" } else { "capture" }
-                    );
-                    let _ = client.stop_stream();
-                    shared.rebound.store(true, Ordering::Relaxed);
-                    continue 'lifetime;
-                }
-            }
-            std::thread::sleep(CAPTURE_POLL);
-        }
-    }
-}
-
-fn default_device_id(loopback: bool) -> Option<String> {
-    let direction = if loopback {
-        Direction::Render
-    } else {
-        Direction::Capture
-    };
-    DeviceEnumerator::new()
-        .ok()?
-        .get_default_device(&direction)
-        .ok()?
-        .get_id()
-        .ok()
-}
-
-fn open_stream(
-    loopback: bool,
-) -> Result<(wasapi::AudioClient, wasapi::AudioCaptureClient, String), String> {
-    let enumerator = DeviceEnumerator::new().map_err(|e| e.to_string())?;
-    let device_direction = if loopback {
-        Direction::Render
-    } else {
-        Direction::Capture
-    };
-    let device = enumerator
-        .get_default_device(&device_direction)
-        .map_err(|e| e.to_string())?;
-    let device_id = device.get_id().map_err(|e| e.to_string())?;
-    let mut client = device.get_iaudioclient().map_err(|e| e.to_string())?;
-
-    let format = WaveFormat::new(32, 32, &SampleType::Float, SAMPLE_RATE, 1, None);
-    let mode = StreamMode::PollingShared {
-        autoconvert: true,
-        // 400ms device buffer (units of 100ns): tolerant of engine stalls
-        // (FLAC encode of a closing segment) without dropping packets.
-        buffer_duration_hns: 4_000_000,
-    };
-    // Direction::Capture on a Render device = loopback (the crate sets
-    // AUDCLNT_STREAMFLAGS_LOOPBACK from exactly this combination).
-    client
-        .initialize_client(&format, &Direction::Capture, &mode)
-        .map_err(|e| e.to_string())?;
-    let capture = client.get_audiocaptureclient().map_err(|e| e.to_string())?;
-    client.start_stream().map_err(|e| e.to_string())?;
-    Ok((client, capture, device_id))
-}
-
 /// Everything the engine tracks for one channel between segment closes.
 struct ChannelState {
     channel: &'static str,
-    shared: Arc<StreamShared>,
+    pending: Vec<f32>,
     /// Frames accumulated toward the current segment (post-fill, i16).
     acc: Vec<i16>,
     /// Total frames this channel has produced (drained + filled) since the
     /// current clock epoch - compared against wall time for silence fill.
     produced: usize,
     epoch: Instant,
+    device_id_hash: String,
 }
 
 impl ChannelState {
-    fn new(channel: &'static str, shared: Arc<StreamShared>) -> Self {
+    fn new(channel: &'static str) -> Self {
         Self {
             channel,
-            shared,
+            pending: Vec::new(),
             acc: Vec::new(),
             produced: 0,
             epoch: Instant::now(),
+            device_id_hash: String::new(),
         }
     }
 
@@ -360,10 +154,7 @@ impl ChannelState {
     /// samples instead of accumulating them. Returns true when a clock
     /// discontinuity was detected (the caller marks the segment incomplete).
     fn pump(&mut self, discard: bool) -> bool {
-        let drained: Vec<f32> = {
-            let mut buf = self.shared.buf.lock().unwrap_or_else(|e| e.into_inner());
-            std::mem::take(&mut *buf)
-        };
+        let drained = std::mem::take(&mut self.pending);
         if discard {
             return false;
         }
@@ -396,6 +187,59 @@ impl ChannelState {
         self.acc.extend(std::iter::repeat(0i16).take(deficit));
         self.produced += deficit;
         false
+    }
+}
+
+fn accept_frame(frame: PcmFrame, mic: &mut ChannelState, loopback: &mut ChannelState) {
+    let _captured_at_ms = frame.captured_at_ms;
+    let channel = match frame.source {
+        AudioSource::Microphone => mic,
+        AudioSource::Loopback => loopback,
+    };
+    channel.pending.extend(frame.samples.iter().copied());
+}
+
+/// Drains the broker without blocking. A disconnected lossless queue or an
+/// explicit device failure must stop Meeting Notes rather than quietly lose
+/// audio while the recording indicator remains active.
+///
+/// `final_drain` marks the one call made AFTER `capture.stop()`, where the
+/// consumer's own sender is already gone by design: there, Disconnected means
+/// the queue is exhausted, not that anything broke.
+fn drain_capture_events(
+    capture: &CaptureConsumer,
+    mic: &mut ChannelState,
+    loopback: &mut ChannelState,
+    segment_incomplete: &mut bool,
+    final_drain: bool,
+) -> bool {
+    loop {
+        match capture.try_recv() {
+            Ok(CaptureEvent::Frame(frame)) => accept_frame(frame, mic, loopback),
+            Ok(CaptureEvent::DeviceBound {
+                source,
+                device_id_hash,
+            }) => match source {
+                AudioSource::Microphone => mic.device_id_hash = device_id_hash,
+                AudioSource::Loopback => loopback.device_id_hash = device_id_hash,
+            },
+            Ok(CaptureEvent::DeviceRebound { source } | CaptureEvent::Glitch { source }) => {
+                let _ = source;
+                *segment_incomplete = true;
+            }
+            Ok(CaptureEvent::Failed { source }) => {
+                error!("meeting.audio: shared capture failed source={source:?}");
+                return false;
+            }
+            Err(TryRecvError::Empty) => return true,
+            Err(TryRecvError::Disconnected) => {
+                if final_drain {
+                    return true;
+                }
+                error!("meeting.audio: lossless shared capture consumer disconnected");
+                return false;
+            }
+        }
     }
 }
 
@@ -441,14 +285,30 @@ fn engine_thread(
         return;
     }
 
-    let mic = StreamShared::new();
-    let loopback = StreamShared::new();
-    spawn_capture_thread(mic.clone(), false);
-    spawn_capture_thread(loopback.clone(), true);
+    let mut capture = match audio_capture::subscribe("meeting-notes", Delivery::Lossless) {
+        Ok(capture) => capture,
+        Err(error) => {
+            error!("meeting.audio: failed to subscribe to shared capture: {error}");
+            let result = super::finalize_capture(
+                &app,
+                &meeting_id,
+                &capture_run_id,
+                capture_fence,
+                &owner_uid,
+                &event_id,
+                &runtime_instance_id,
+                started_at_ms,
+                capped_timeline_ms(timeline_base_ms),
+                "capture_failed",
+            );
+            finalization.finish(result);
+            return;
+        }
+    };
     let capture_epoch = Instant::now();
 
-    let mut mic_state = ChannelState::new("microphone", mic.clone());
-    let mut loop_state = ChannelState::new("system", loopback.clone());
+    let mut mic_state = ChannelState::new("microphone");
+    let mut loop_state = ChannelState::new("system");
     let mut emitted_ms: i64 = timeline_base_ms;
     let mut segment_start_ms: i64 = timeline_base_ms;
     let mut segment_incomplete = false;
@@ -463,8 +323,15 @@ fn engine_thread(
         if capture_epoch.elapsed() >= session_budget {
             break 'run "max_duration".to_string();
         }
-        // 3. A capture stream died for good.
-        if mic.failed.load(Ordering::Relaxed) || loopback.failed.load(Ordering::Relaxed) {
+        // 3. Drain shared capture. A device stream that died for good is an
+        //    explicit Meeting Notes failure.
+        if !drain_capture_events(
+            &capture,
+            &mut mic_state,
+            &mut loop_state,
+            &mut segment_incomplete,
+            false,
+        ) {
             break 'run "capture_failed".to_string();
         }
         // 4. Session lock transitions.
@@ -511,11 +378,9 @@ fn engine_thread(
         // 5. Pump both channels (locked = drain-and-discard). A detected
         //    clock discontinuity taints the segment like a re-bind does.
         let discontinuity = mic_state.pump(paused) | loop_state.pump(paused);
-        // 6. A device re-bind mid-segment taints the segment as incomplete.
-        if discontinuity
-            || mic.rebound.swap(false, Ordering::Relaxed)
-                | loopback.rebound.swap(false, Ordering::Relaxed)
-        {
+        // 6. A clock discontinuity taints the segment. Broker re-bind events
+        //    set the same flag while the capture queue is drained above.
+        if discontinuity {
             segment_incomplete = true;
         }
         // 7. Segment full? A persistence failure (disk full, key unwrap,
@@ -548,8 +413,16 @@ fn engine_thread(
 
     // Final flush + teardown, one funnel for every stop reason. The teardown
     // close's own failure is logged inside; the capture is ending either way.
-    mic.stop.store(true, Ordering::Relaxed);
-    loopback.stop.store(true, Ordering::Relaxed);
+    capture.stop();
+    if !drain_capture_events(
+        &capture,
+        &mut mic_state,
+        &mut loop_state,
+        &mut segment_incomplete,
+        true,
+    ) {
+        stop_reason = "capture_failed".to_string();
+    }
     if !paused {
         if mic_state.pump(false) | loop_state.pump(false) {
             segment_incomplete = true;
@@ -659,7 +532,7 @@ fn close_segment(
                 duration_ms,
                 &flac,
                 incomplete,
-                segment_audio_metrics(&mic_frames, &loop_frames, &mic.shared, &loopback.shared),
+                segment_audio_metrics(&mic_frames, &loop_frames, mic, loopback),
             ) {
                 Ok(()) => {
                     info!(
@@ -707,8 +580,8 @@ fn drain_committed(acc: &mut Vec<i16>, frames: usize) {
 fn segment_audio_metrics(
     mic: &[i16],
     system: &[i16],
-    mic_shared: &StreamShared,
-    system_shared: &StreamShared,
+    mic_state: &ChannelState,
+    system_state: &ChannelState,
 ) -> super::queue::SegmentAudioMetrics {
     let mic_values = channel_metrics(mic);
     let system_values = channel_metrics(system);
@@ -721,16 +594,8 @@ fn segment_audio_metrics(
         system_zero_ratio: system_values.2,
         mic_vad_speech_ms: mic_values.3,
         system_vad_speech_ms: system_values.3,
-        mic_device_id_hash: mic_shared
-            .device_id_hash
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clone(),
-        system_device_id_hash: system_shared
-            .device_id_hash
-            .lock()
-            .unwrap_or_else(|error| error.into_inner())
-            .clone(),
+        mic_device_id_hash: mic_state.device_id_hash.clone(),
+        system_device_id_hash: system_state.device_id_hash.clone(),
     }
 }
 

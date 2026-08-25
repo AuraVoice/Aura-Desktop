@@ -25,6 +25,15 @@ import { PointingOverlay } from "./PointingOverlay";
 import { DraftCard, INITIAL_DRAFT_SLOT_HEIGHT } from "./DraftCard";
 import { useInterviewMaterial } from "./interview/useInterviewMaterial";
 import {
+  isInterviewCaptureActive,
+  useInterviewCompanion,
+} from "./interview/useInterviewCompanion";
+import {
+  InterviewCompanionCard,
+  InterviewCompanionControlBar,
+  INTERVIEW_COMPANION_SLOT_HEIGHT,
+} from "./interview/InterviewCompanionCard";
+import {
   InterviewPasteCard,
   INITIAL_INTERVIEW_SLOT_HEIGHT,
 } from "./interview/InterviewPasteCard";
@@ -81,6 +90,14 @@ export function OverlayRoot() {
   // every other write tool for surface="desktop", not anything decided here.
   const chatEnabled = user !== null;
   const voice = useVoiceBar();
+  const interviewCompanion = useInterviewCompanion(user !== null);
+  const showInterviewCompanion = interviewCompanion.phase !== "idle";
+  const [interviewCompanionHidden, setInterviewCompanionHidden] = useState(false);
+  const interviewCompanionPhase = interviewCompanion.phase;
+  const dismissInterviewCompanion = interviewCompanion.dismiss;
+  useEffect(() => {
+    if (!showInterviewCompanion) setInterviewCompanionHidden(false);
+  }, [showInterviewCompanion]);
   useScreenSight(voice.room, voice.status);
   // Ctrl+Alt+M. Mounted here rather than inside useVoiceBar because the mode
   // outlives any one call: it persists, and it rides the next token.
@@ -90,7 +107,7 @@ export function OverlayRoot() {
     room: voice.room,
   });
   useStatusPillEvents();
-  const visibleChatOpen = chatEnabled && chatOpen;
+  const visibleChatOpen = chatEnabled && chatOpen && !showInterviewCompanion;
   const chatOpenRef = useRef(visibleChatOpen);
   chatOpenRef.current = visibleChatOpen;
   const screenCapture = useChatScreenCapture(visibleChatOpen);
@@ -285,51 +302,67 @@ export function OverlayRoot() {
     enabled: generalSettings.dailyCatchUp,
   });
 
-  // Slot priority (CLAUDE.md): chat > draft > inbox > update > daily
-  // catch-up. Only chat, draft, the inbox (opened from the tray), and the daily
-  // catch-up are mounted today. Chat outranks everything below it because the
-  // user is mid-sentence in it: an arriving draft card must never take the slot
-  // out from under them.
+  // Slot priority (CLAUDE.md): active Interview Companion > chat > draft >
+  // inbox > update > daily catch-up. The live companion must keep its capture
+  // indicator and stop control visible; outside that explicit session, chat
+  // keeps its existing priority because the user may be mid-sentence.
   // The interview paste box sits directly under chat and above everything else:
   // a live voice session has just told the user out loud to look at it, so a
   // draft or an update banner taking the slot would leave that line unanswered.
   // Chat still outranks it for the documented reason, and that degradation is
   // honest: the box never renders, so it is never acknowledged, and the worker's
   // own fallback asks for the role by voice instead.
-  const showInbox = user !== null && inboxOpen && !showDraftCard && !showInterviewPaste;
+  const showInbox =
+    user !== null
+    && inboxOpen
+    && !showInterviewCompanion
+    && !showDraftCard
+    && !showInterviewPaste;
   const showUpdateBanner =
     user !== null
     && (updateReady.version !== null || updateReady.updatedNotice !== null)
+    && !showInterviewCompanion
     && !showInterviewPaste
     && !showDraftCard
     && !showInbox;
   const showCallbackCard =
     user !== null
     && callbackCard.visible
+    && !showInterviewCompanion
     && !showInterviewPaste
     && !showDraftCard
     && !showInbox
     && !showUpdateBanner;
-  const slotHeight = showInterviewPaste
-    ? interviewSlotHeight
-    : showDraftCard
-    ? draftCardHeight
-    : showInbox
-      ? NOTIFICATION_INBOX_CARD_HEIGHT
-      : showUpdateBanner
-        ? updateReady.version !== null
-          ? UPDATE_BANNER_HEIGHT
-          : UPDATED_NOTICE_HEIGHT
-        : showCallbackCard
-          ? CALLBACK_CARD_HEIGHT
-          : null;
+  const slotHeight = showInterviewCompanion
+    ? interviewCompanionHidden ? 0 : INTERVIEW_COMPANION_SLOT_HEIGHT
+    : showInterviewPaste
+      ? interviewSlotHeight
+      : showDraftCard
+        ? draftCardHeight
+        : showInbox
+          ? NOTIFICATION_INBOX_CARD_HEIGHT
+          : showUpdateBanner
+            ? updateReady.version !== null
+              ? UPDATE_BANNER_HEIGHT
+              : UPDATED_NOTICE_HEIGHT
+            : showCallbackCard
+              ? CALLBACK_CARD_HEIGHT
+              : null;
   const appliedSlotHeight = visibleChatOpen ? chatSlotHeight : slotHeight;
 
   useEffect(() => {
-    invoke("set_slot_height", { height: appliedSlotHeight }).catch((err) =>
-      logError("OverlayRoot: set_slot_height", err),
-    );
-  }, [appliedSlotHeight]);
+    let cancelled = false;
+    invoke("set_slot_height", { height: appliedSlotHeight, centered: showInterviewCompanion })
+      .then(() => {
+        if (!cancelled && appliedSlotHeight === null) {
+          return invoke("dismiss_idle_bar");
+        }
+      })
+      .catch((err) => logError("OverlayRoot: set_slot_height", err));
+    return () => {
+      cancelled = true;
+    };
+  }, [appliedSlotHeight, showInterviewCompanion]);
 
   // The subtitle used to be the only place notices surfaced. With it gone,
   // route the ones that matter - an actionable voice error, the voice shortcut
@@ -364,16 +397,16 @@ export function OverlayRoot() {
     );
   }, [unreadCount]);
 
-  // "Show the Aura bar at all times". Pushed from here rather than from the
-  // Settings page, because the overlay always runs while the dashboard window
-  // may never be opened at all - a user who enabled this and then restarted
-  // would otherwise get no bar until they next visited Settings.
-  const alwaysShowBar = generalSettings.alwaysShowBar;
+  // The separate dictation HUD is Aura's persistent resting pill. The larger
+  // main waveform is only a live voice surface and must not remain after chat,
+  // Interview Companion, or another temporary slot closes. Clear the retired
+  // preference in native state as well so an existing enabled value cannot
+  // keep the main bar visible during this process.
   useEffect(() => {
-    invoke("set_always_show_bar", { enabled: alwaysShowBar }).catch((err) =>
+    invoke("set_always_show_bar", { enabled: false }).catch((err) =>
       logError("OverlayRoot: set_always_show_bar", err),
     );
-  }, [alwaysShowBar]);
+  }, []);
 
   // Tray "Notifications" item: Rust summons the bar, then hands off here to
   // fill the below-bar slot with the inbox.
@@ -388,6 +421,26 @@ export function OverlayRoot() {
       );
     return () => unlisten?.();
   }, []);
+
+  // Tray entry point for the explicit preflight. It closes chat so the
+  // microphone/call source labels cannot be hidden beneath the higher-priority
+  // composer while the user is deciding whether to start capture.
+  const openInterviewPreflight = interviewCompanion.openPreflight;
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    listen("open-interview-companion-requested", () => {
+      setChatOpen(false);
+      setInboxOpen(false);
+      openInterviewPreflight();
+    })
+      .then((fn) => {
+        unlisten = fn;
+      })
+      .catch((err) =>
+        logError("OverlayRoot: listen open-interview-companion-requested", err),
+      );
+    return () => unlisten?.();
+  }, [openInterviewPreflight]);
 
   // Tray "Capture now" item. Same hand-off shape as the notifications item
   // above: the capture itself is a JS concern (useMeetingCapture owns the arm
@@ -583,6 +636,15 @@ export function OverlayRoot() {
         setChatHistoryOpen(false);
         return;
       }
+      // Escape must never kill a live capture, but it stays the way out of the
+      // preflight, the error state, and the reflection card - those suppress
+      // chat and every other slot surface, so without this they are inescapable.
+      if (showInterviewCompanion) {
+        if (!isInterviewCaptureActive(interviewCompanionPhase)) {
+          dismissInterviewCompanion();
+        }
+        return;
+      }
       setChatOpen(false);
       void endSession();
       invoke("dismiss_bar").catch((err) =>
@@ -591,7 +653,23 @@ export function OverlayRoot() {
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [user, endSession, visibleChatOpen, chatHistoryOpen]);
+  }, [
+    user,
+    endSession,
+    visibleChatOpen,
+    chatHistoryOpen,
+    showInterviewCompanion,
+    interviewCompanionPhase,
+    dismissInterviewCompanion,
+  ]);
+
+  // Active capture always keeps a visible native indicator and stop control.
+  useEffect(() => {
+    if (!showInterviewCompanion || presentation !== "hidden") return;
+    invoke("summon_bar").catch((err) =>
+      logError("OverlayRoot: keep Interview Companion visible", err),
+    );
+  }, [presentation, showInterviewCompanion]);
 
   if (presentation === "pointing") {
     return <PointingOverlay />;
@@ -615,6 +693,8 @@ export function OverlayRoot() {
     <div
       className={`notch-column notch-column-${notchEdge}${
         appliedSlotHeight !== null ? " notch-column-with-draft" : ""
+      }${showInterviewCompanion ? " notch-column-interview" : ""
+      }${showInterviewCompanion && interviewCompanionHidden ? " notch-column-interview-collapsed" : ""
       }`}
     >
       {visibleChatOpen && (
@@ -638,20 +718,26 @@ export function OverlayRoot() {
           onHeightChange={setChatSlotHeight}
         />
       )}
-      {!visibleChatOpen && showInterviewPaste && (
+      {!visibleChatOpen && showInterviewCompanion && !interviewCompanionHidden && (
+        <InterviewCompanionCard companion={interviewCompanion} />
+      )}
+      {!visibleChatOpen && !showInterviewCompanion && showInterviewPaste && (
         <InterviewPasteCard
           card={interviewMaterial}
           onHeightChange={setInterviewSlotHeight}
           visible={presentation === "bar" || presentation === "companion"}
         />
       )}
-      {!visibleChatOpen && !showInterviewPaste && showDraftCard && (
-        <DraftCard
-          card={draftCard}
-          onHeightChange={setDraftCardHeight}
-          visible={presentation === "bar" || presentation === "companion"}
-        />
-      )}
+      {!visibleChatOpen
+        && !showInterviewCompanion
+        && !showInterviewPaste
+        && showDraftCard && (
+          <DraftCard
+            card={draftCard}
+            onHeightChange={setDraftCardHeight}
+            visible={presentation === "bar" || presentation === "companion"}
+          />
+        )}
       {!visibleChatOpen && showInbox && (
         <NotificationInboxCard
           notifications={notifications}
@@ -667,15 +753,29 @@ export function OverlayRoot() {
         />
       )}
       {!visibleChatOpen && showCallbackCard && <CallbackCard card={callbackCard} />}
-      <NotchBar
-        key={presentation}
-        voice={voice}
-        edge={notchEdge}
-        dragHandlers={notchMove.dragHandlers}
-        guideArmed={guide.armed}
-        guideActive={guide.active}
-        outputMuted={outputMode.muted}
-      />
+      {showInterviewCompanion ? (
+        <InterviewCompanionControlBar
+          expanded={!interviewCompanionHidden}
+          onToggle={() => setInterviewCompanionHidden((hidden) => !hidden)}
+          onStop={
+            isInterviewCaptureActive(interviewCompanion.phase) || interviewCompanion.phase === "error"
+              ? interviewCompanion.stop
+              : ["ended", "reflecting", "reflection"].includes(interviewCompanion.phase)
+                ? interviewCompanion.dismissReflection
+                : interviewCompanion.dismiss
+          }
+        />
+      ) : (
+        <NotchBar
+          key={presentation}
+          voice={voice}
+          edge={notchEdge}
+          dragHandlers={notchMove.dragHandlers}
+          guideArmed={guide.armed}
+          guideActive={guide.active}
+          outputMuted={outputMode.muted}
+        />
+      )}
     </div>
   );
 }

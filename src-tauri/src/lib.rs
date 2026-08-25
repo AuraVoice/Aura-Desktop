@@ -1,4 +1,6 @@
 mod audio_ducking;
+#[cfg(windows)]
+mod audio_capture;
 mod auth_cache;
 mod autostart;
 mod chat_cache;
@@ -8,6 +10,7 @@ mod dictation;
 mod entitlement;
 mod guide;
 mod hotkeys;
+mod interview;
 mod logging;
 mod meeting;
 mod overlay;
@@ -62,8 +65,8 @@ fn set_panel_variant(app: AppHandle, variant: PanelVariant) {
 /// (OverlayRoot) resolves which surface - draft, catch-up, calendar agenda, or
 /// kebab menu - wins the single slot and passes its fixed height here.
 #[tauri::command]
-fn set_slot_height(app: AppHandle, height: Option<f64>) {
-    overlay::set_slot_height(&app, height);
+fn set_slot_height(app: AppHandle, height: Option<f64>, centered: bool) {
+    overlay::set_slot_height(&app, height, centered);
 }
 
 #[tauri::command]
@@ -141,6 +144,11 @@ where
 #[tauri::command]
 fn dismiss_bar(app: AppHandle) {
     overlay::dismiss_bar(&app);
+}
+
+#[tauri::command]
+fn dismiss_idle_bar(app: AppHandle) {
+    overlay::dismiss_idle_bar(&app);
 }
 
 /// Guarded natively: pointing takes the window fullscreen and click-through,
@@ -255,6 +263,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .manage(OverlayStateHandle::default())
         .manage(hotkeys::HotkeyState::default())
+        .manage(interview::InterviewHandle::default())
         .manage(security::SecurityHandle::default())
         .manage(guide::GuideRuntimeHandle::default())
         .manage(guide::GuideCaptureHandle::default())
@@ -287,6 +296,7 @@ pub fn run() {
             open_dashboard_route,
             connector_oauth::take_connector_oauth_completion,
             dismiss_bar,
+            dismiss_idle_bar,
             point_at,
             cancel_pointing,
             set_notch_edge,
@@ -313,6 +323,7 @@ pub fn run() {
             logging::read_recent_log_lines,
             screenshot::capture_cursor_display_with_geometry,
             screenshot::capture_turn_screen_with_geometry,
+            screenshot::capture_interview_screen_with_geometry,
             screenshot::take_chat_capture,
             screenshot::refresh_chat_capture,
             screenshot::discard_chat_capture,
@@ -363,6 +374,17 @@ pub fn run() {
             dictation::dictation_vocabulary,
             dictation::dictation_add_vocabulary,
             dictation::dictation_record_correction,
+            interview::interview_supported_call,
+            interview::start_interview_companion,
+            interview::pause_interview_companion,
+            interview::resume_interview_companion,
+            interview::interview_companion_status,
+            interview::update_interview_companion_credential,
+            interview::set_interview_companion_brief,
+            interview::interview_companion_brief,
+            interview::clear_interview_companion_brief,
+            interview::stop_interview_companion,
+            interview::save_interview_reflection,
             dictation::trace_commands::dictation_trace_settings,
             dictation::trace_commands::dictation_set_trace_settings,
             dictation::trace_commands::dictation_trace_summary,

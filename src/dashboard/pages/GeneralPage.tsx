@@ -245,12 +245,6 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
                 onChange={(value) => void updateLaunchAtStartup(value)}
               />
               <ToggleRow
-                label="Show the Aura bar at all times"
-                description="Keep the bar on screen instead of hiding it until you summon it."
-                checked={settings.alwaysShowBar}
-                onChange={(value) => void update("alwaysShowBar", value)}
-              />
-              <ToggleRow
                 label="Show Aura in the taskbar"
                 description="Give this window a taskbar button. Aura stays reachable from the tray either way."
                 checked={settings.showInTaskbar}

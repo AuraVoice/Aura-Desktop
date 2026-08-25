@@ -115,7 +115,11 @@ fn handle_downloaded(app: &AppHandle, update: Update, bytes: Vec<u8>, auto_insta
     // The voice gate still matters at startup: a fast user can summon and
     // start a call while the download is in flight. Meeting capture gates the
     // same way - a restart must never eat a recording.
-    if auto_install && !overlay::is_voice_active(app) && !meeting::is_capture_active(app) {
+    if auto_install
+        && !overlay::is_voice_active(app)
+        && !meeting::is_capture_active(app)
+        && !crate::interview::is_active(app)
+    {
         info!("update check: installing v{} at startup", update.version);
         match update.install(&bytes) {
             // On Windows this line is unreachable: install() launches the
@@ -163,6 +167,10 @@ pub fn install_pending_update(app: &AppHandle) -> Result<bool, String> {
     }
     if meeting::is_capture_active(app) {
         info!("install_pending_update: meeting capture active, deferring install");
+        return Ok(false);
+    }
+    if crate::interview::is_active(app) {
+        info!("install_pending_update: Interview Companion active, deferring install");
         return Ok(false);
     }
     let Some(handle) = app.try_state::<PendingUpdate>() else {

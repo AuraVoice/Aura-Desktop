@@ -30,6 +30,7 @@ import { InsightsPage } from "./pages/InsightsPage";
 import { GeneralPage } from "./pages/GeneralPage";
 import { DictationPage } from "./pages/DictationPage";
 import { ResearchPage } from "./pages/ResearchPage";
+import { InterviewPage } from "./pages/InterviewPage";
 import { DashboardOnboarding } from "./DashboardOnboarding";
 import {
   fetchAccountOnboarding,
@@ -55,6 +56,7 @@ export const dashboardPages: Record<string, ReactElement> = {
   "/drafts": <DraftsPage />,
   "/saved": <SavedPage />,
   "/meetings": <MeetingsPage />,
+  "/interview": <InterviewPage />,
   "/research": <ResearchPage />,
   "/insights": <InsightsPage />,
   "/general": <GeneralPage />,

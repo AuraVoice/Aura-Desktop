@@ -82,15 +82,27 @@ export async function readCache<T>(key: string): Promise<CacheEntry<T> | null> {
 }
 
 /** Persists `data` under `key` with the latest successful validation time. */
-export async function writeCache<T>(key: string, data: T, cachedAt: number): Promise<void> {
+export async function writeCache<T>(key: string, data: T, cachedAt: number): Promise<boolean> {
   try {
     const hash = hashPayload(data);
     const store = await getStore();
     const env: CacheEnvelope<T> = { v: SCHEMA_VERSION, data, cachedAt, hash };
     await store.set(key, env);
     await store.save();
+    return true;
   } catch (err) {
     logError(`dashboardCache: write ${key}`, err);
+    return false;
+  }
+}
+
+export async function deleteCache(key: string): Promise<void> {
+  try {
+    const store = await getStore();
+    await store.delete(key);
+    await store.save();
+  } catch (err) {
+    logError(`dashboardCache: delete ${key}`, err);
   }
 }
 

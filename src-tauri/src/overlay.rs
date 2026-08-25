@@ -40,6 +40,10 @@ pub(crate) const NOTCH_CROSS: f64 = 29.0;
 // via set_slot_height). On Top/Bottom the card grows the window along its height; on
 // Left/Right it sits beside the notch and grows the window along its width.
 const CARD_CROSS: f64 = 380.0;
+const INTERVIEW_COMPANION_WIDTH: f64 = 720.0;
+const INTERVIEW_CONTROL_WIDTH: f64 = 228.0;
+const INTERVIEW_CONTROL_HEIGHT: f64 = 52.0;
+const INTERVIEW_CONTROL_GAP: f64 = 8.0;
 // Gap between the notch and an open card (matches the CSS grid gap).
 pub(crate) const NOTCH_GAP: f64 = 6.0;
 const SETUP_WIDTH: f64 = 600.0;
@@ -161,11 +165,14 @@ pub struct OverlayState {
     // booleans collapsed into this single field once the priority tiebreak
     // moved entirely into OverlayRoot.tsx.
     slot_height: Option<f64>,
+    centered_slot: bool,
+    centered_slot_anchor: Option<(f64, f64)>,
     user_center: Option<(f64, f64)>,
     notch_edge: NotchEdge,
     applied_presentation: Option<OverlayPresentation>,
     applied_variant: Option<PanelVariant>,
     applied_slot_height: Option<Option<f64>>,
+    applied_centered_slot: Option<bool>,
     // The edge that was last applied to the window, so an edge change forces a
     // reposition even when presentation/variant/slot are unchanged.
     applied_notch_edge: Option<NotchEdge>,
@@ -188,11 +195,14 @@ impl Default for OverlayState {
             onboarding_step: OnboardingStep::Welcome,
             voice_active: false,
             slot_height: None,
+            centered_slot: false,
+            centered_slot_anchor: None,
             user_center: None,
             notch_edge: NotchEdge::default(),
             applied_presentation: None,
             applied_variant: None,
             applied_slot_height: None,
+            applied_centered_slot: None,
             applied_notch_edge: None,
             applying_bounds: false,
             pre_pointing: None,
@@ -452,6 +462,27 @@ pub(crate) fn bar_size(edge: NotchEdge, slot: Option<f64>) -> LogicalSize<f64> {
     }
 }
 
+/// How far the Bar window reaches inward from its docked edge, notch plus any
+/// open slot card. The dictation HUD steps aside by this rather than by the
+/// resting notch alone: a chat composer, draft, or Interview Companion card
+/// grows the bar inward from the SAME edge, and a fixed notch-sized offset
+/// would put the HUD on top of it.
+pub(crate) fn bar_cross_extent(app: &AppHandle) -> f64 {
+    let Some(handle) = state_handle(app) else {
+        return NOTCH_CROSS;
+    };
+    let state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+    if state.centered_slot {
+        return NOTCH_CROSS;
+    }
+    let size = bar_size(state.notch_edge, state.slot_height);
+    if state.notch_edge.is_vertical() {
+        size.width
+    } else {
+        size.height
+    }
+}
+
 /// Anchors the Bar window to its edge within the work area. The window contains
 /// the notch (centered on the edge's cross-axis) plus any card growing inward,
 /// so anchoring the whole window flush to the edge keeps the pill centered on it.
@@ -510,6 +541,16 @@ fn position_for(
     // The notch docks to one of four screen edges (persisted as an edge, not a
     // position). A card grows the window inward from that edge. The notch ignores
     // the companion's persisted drag center entirely.
+    if state.presentation == OverlayPresentation::Bar && state.centered_slot {
+        let (work_pos, work_size) = active_display_work_area(window);
+        return state.centered_slot_anchor.map_or_else(
+            || LogicalPosition::new(
+                work_pos.x + (work_size.width - size.width) / 2.0,
+                work_pos.y,
+            ),
+            |(center_x, top_y)| LogicalPosition::new(center_x - size.width / 2.0, top_y),
+        );
+    }
     if state.presentation == OverlayPresentation::Bar {
         let (work_pos, work_size) = active_display_work_area(window);
         return bar_position(state.notch_edge, work_pos, work_size, size);
@@ -536,6 +577,9 @@ fn position_for(
 
 fn size_for(state: &OverlayState) -> LogicalSize<f64> {
     match (state.presentation, state.panel_variant) {
+        (OverlayPresentation::Bar, _) if state.centered_slot => {
+            centered_slot_size(state.slot_height)
+        }
         (OverlayPresentation::Bar, _) => bar_size(state.notch_edge, state.slot_height),
         (OverlayPresentation::Companion, _) => LogicalSize::new(
             COMPANION_WIDTH,
@@ -550,6 +594,15 @@ fn size_for(state: &OverlayState) -> LogicalSize<f64> {
         }
         _ => LogicalSize::new(COMPANION_WIDTH, COMPANION_HEIGHT),
     }
+}
+
+fn centered_slot_size(slot: Option<f64>) -> LogicalSize<f64> {
+    let slot_height = slot.unwrap_or(0.0);
+    LogicalSize::new(
+        if slot_height > 0.0 { INTERVIEW_COMPANION_WIDTH } else { INTERVIEW_CONTROL_WIDTH },
+        INTERVIEW_CONTROL_HEIGHT
+            + if slot_height > 0.0 { INTERVIEW_CONTROL_GAP + slot_height } else { 0.0 },
+    )
 }
 
 pub fn snapshot(app: &AppHandle) -> OverlaySnapshot {
@@ -597,6 +650,7 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
     let unchanged = state.applied_presentation == Some(state.presentation)
         && state.applied_variant == Some(state.panel_variant)
         && state.applied_slot_height == Some(state.slot_height)
+        && state.applied_centered_slot == Some(state.centered_slot)
         && state.applied_notch_edge == Some(state.notch_edge);
     if unchanged {
         return Ok(());
@@ -609,6 +663,7 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
         let presentation = state.presentation;
         let panel_variant = state.panel_variant;
         let slot_height = state.slot_height;
+        let centered_slot = state.centered_slot;
         let notch_edge = state.notch_edge;
         drop(state);
         info!("overlay::apply: hiding (from {from:?})");
@@ -620,6 +675,7 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
             state.applied_presentation = Some(presentation);
             state.applied_variant = Some(panel_variant);
             state.applied_slot_height = Some(slot_height);
+            state.applied_centered_slot = Some(centered_slot);
             state.applied_notch_edge = Some(notch_edge);
         }
         crate::dictation::set_overlay_visible(app, false);
@@ -634,15 +690,12 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
     let presentation = state.presentation;
     let panel_variant = state.panel_variant;
     let slot_height = state.slot_height;
+    let centered_slot = state.centered_slot;
     let notch_edge = state.notch_edge;
-    // Mutual exclusivity with the dictation HUD normally means "overlay visible
-    // -> suppress the HUD". A bar the user pinned via "show the bar at all
-    // times" is visible permanently, so treating it as suppressing would leave
-    // dictation with no UI at all, forever. A RESTING pinned bar therefore does
-    // not suppress; a bar shown for a live call still does.
-    let suppresses_hud = !(state.always_show_bar
-        && presentation == OverlayPresentation::Bar
-        && !state.voice_active);
+    // Bar surfaces, including text chat, can coexist with dictation: hud.rs
+    // detects a Bar on the same display and offsets the HUD. Suppress only the
+    // larger overlay presentations that cannot share that edge safely.
+    let suppresses_hud = presentation != OverlayPresentation::Bar;
     // A "fresh show" is a real presentation/variant transition (summon from
     // hidden, setup<->bar). A slot-height-only change (opening/closing the kebab
     // menu or a card) or an edge re-dock is NOT one - it must not re-steal OS
@@ -689,6 +742,7 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
         state.applied_presentation = Some(presentation);
         state.applied_variant = Some(panel_variant);
         state.applied_slot_height = Some(slot_height);
+        state.applied_centered_slot = Some(centered_slot);
         state.applied_notch_edge = Some(notch_edge);
     }
     emit_overlay_changed(app);
@@ -1091,13 +1145,11 @@ pub fn set_panel_variant(app: &AppHandle, variant: PanelVariant) {
 
 /// The draft slot's extra height, driven by React. The height is remembered
 /// across a temporary pointing takeover.
-pub fn set_slot_height(app: &AppHandle, height: Option<f64>) {
+pub fn set_slot_height(app: &AppHandle, height: Option<f64>, centered: bool) {
     if let Some(handle) = state_handle(app) {
-        handle
-            .0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .slot_height = height;
+        let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        state.slot_height = height;
+        state.centered_slot = centered && height.is_some();
     }
     apply(app);
 }
@@ -1120,36 +1172,54 @@ pub fn capture_user_position(app: &AppHandle, x: f64, y: f64) {
     let Some(handle) = state_handle(app) else {
         return;
     };
-    let center = {
+    let (centered_slot_anchor, user_center) = {
         let state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
         if state.applying_bounds
             || matches!(
                 state.presentation,
-                OverlayPresentation::Hidden
-                    | OverlayPresentation::Bar
-                    | OverlayPresentation::MovingNotch
+                OverlayPresentation::Hidden | OverlayPresentation::MovingNotch
             )
         {
             return;
         }
         let size = size_for(&state);
-        // With the slot open, user_center keeps meaning the owl base center,
-        // so dragging while a card shows cannot shift the owl when it closes.
-        if slot_showing(&state) {
-            (
-                x + size.width / 2.0,
-                y + state.slot_height.unwrap_or(0.0) + COMPANION_HEIGHT / 2.0,
-            )
+        if state.presentation == OverlayPresentation::Bar {
+            if state.centered_slot {
+                (Some((x + size.width / 2.0, y)), None)
+            } else {
+                return;
+            }
         } else {
-            (x + size.width / 2.0, y + size.height / 2.0)
+            // With the slot open, user_center keeps meaning the owl base center,
+            // so dragging while a card shows cannot shift the owl when it closes.
+            let center = if slot_showing(&state) {
+                (
+                    x + size.width / 2.0,
+                    y + state.slot_height.unwrap_or(0.0) + COMPANION_HEIGHT / 2.0,
+                )
+            } else {
+                (x + size.width / 2.0, y + size.height / 2.0)
+            };
+            (None, Some(center))
         }
+    };
+    if let Some(anchor) = centered_slot_anchor {
+        handle
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .centered_slot_anchor = Some(anchor);
+        return;
+    }
+    let Some(position) = user_center else {
+        return;
     };
     handle
         .0
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .user_center = Some(center);
-    persist_center(app, center.0, center.1);
+        .user_center = Some(position);
+    persist_center(app, position.0, position.1);
 }
 
 /// Takes the window fullscreen over the target monitor and click-through, for

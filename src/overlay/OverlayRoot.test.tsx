@@ -164,7 +164,7 @@ describe("OverlayRoot meeting background services", () => {
     expect(text).not.toContain("Check now");
     expect(text).not.toContain("Still checking");
     expect(text).toContain('"children":["draft"]');
-    expect(mocks.invoke).toHaveBeenCalledWith("set_slot_height", { height: 180 });
+    expect(mocks.invoke).toHaveBeenCalledWith("set_slot_height", { height: 180, centered: false });
     expect(mocks.startBridgedSession).toHaveBeenCalledWith("guide");
   });
 
@@ -182,6 +182,6 @@ describe("OverlayRoot meeting background services", () => {
     });
 
     expect(mocks.guideStop).toHaveBeenCalled();
-    expect(mocks.invoke).toHaveBeenCalledWith("set_slot_height", { height: null });
+    expect(mocks.invoke).toHaveBeenCalledWith("set_slot_height", { height: null, centered: false });
   });
 });

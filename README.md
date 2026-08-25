@@ -108,6 +108,11 @@ stateDiagram-v2
 | `commit_notch_move` | `edge` | Persists the selected edge and restores the bar |
 | `cancel_notch_move` | - | Restores the bar without changing edge |
 | `capture_cursor_display_with_geometry` | - | Captures the monitor under the cursor as JPEG; async, off the main thread; returns a raw `ArrayBuffer` (28-byte geometry header + JPEG bytes, no base64) |
+| `capture_interview_screen_with_geometry` | - | Captures one explicitly requested Interview Companion frame in memory; requires an active companion and never enters screenshot persistence |
+| `interview_supported_call` | - | Checks for a current Zoom, Teams, or Google Meet call without starting capture |
+| `start_interview_companion` | `accessToken` | Starts the explicit source-separated Interview Companion capture and STT session |
+| `pause_interview_companion` / `resume_interview_companion` / `stop_interview_companion` | - | Controls only Interview Companion; Meeting Notes and LiveKit voice keep their own lifecycles |
+| `save_interview_reflection` | `markdown` | Writes an explicitly saved reflection to Downloads; unsaved reflection and transcript remain memory-only |
 
 **Selected events** (Rust emits, React listens with `listen("name", cb)`):
 

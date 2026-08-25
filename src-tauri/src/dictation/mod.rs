@@ -42,7 +42,7 @@
 pub mod chord;
 
 #[cfg(windows)]
-mod asr;
+pub(crate) mod asr;
 #[cfg(windows)]
 mod audio;
 #[cfg(windows)]
