@@ -11,7 +11,7 @@ const OPEN_BUDDY: &str = "open_buddy";
 const OPEN_DASHBOARD: &str = "open_dashboard";
 const OPEN_NOTIFICATIONS: &str = "open_notifications";
 const CAPTURE_NOW: &str = "capture_now";
-const INTERVIEW_COMPANION: &str = "interview_companion";
+const INTERVIEW_HACKER: &str = "interview_hacker";
 const SIGN_OUT: &str = "sign_out";
 const AUTOSTART: &str = "autostart";
 const VERSION: &str = "version";
@@ -60,9 +60,9 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     // the OPEN_NOTIFICATIONS shape: Rust only fires the intent.
     let capture_now_item =
         MenuItem::with_id(app, CAPTURE_NOW, "Capture now", true, None::<&str>)?;
-    let interview_companion_item = MenuItem::with_id(
+    let interview_hacker_item = MenuItem::with_id(
         app,
-        INTERVIEW_COMPANION,
+        INTERVIEW_HACKER,
         "Interview Companion",
         true,
         None::<&str>,
@@ -100,7 +100,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             &open_dashboard,
             &notifications_item,
             &capture_now_item,
-            &interview_companion_item,
+            &interview_hacker_item,
             &autostart_item,
             &version_item,
             &update_item,
@@ -167,10 +167,10 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
                     error!("tray: failed to emit capture-now-requested: {e}");
                 }
             }
-            INTERVIEW_COMPANION => {
+            INTERVIEW_HACKER => {
                 overlay::summon(app);
-                if let Err(e) = app.emit("open-interview-companion-requested", ()) {
-                    error!("tray: failed to emit open-interview-companion-requested: {e}");
+                if let Err(e) = app.emit("open-interview-hacker-requested", ()) {
+                    error!("tray: failed to emit open-interview-hacker-requested: {e}");
                 }
             }
             // Same entry point Ctrl+Shift+D uses: it revokes the native command

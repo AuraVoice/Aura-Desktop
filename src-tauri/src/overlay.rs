@@ -40,7 +40,7 @@ pub(crate) const NOTCH_CROSS: f64 = 29.0;
 // via set_slot_height). On Top/Bottom the card grows the window along its height; on
 // Left/Right it sits beside the notch and grows the window along its width.
 const CARD_CROSS: f64 = 380.0;
-const INTERVIEW_COMPANION_WIDTH: f64 = 720.0;
+const INTERVIEW_HACKER_WIDTH: f64 = 720.0;
 const INTERVIEW_CONTROL_WIDTH: f64 = 228.0;
 const INTERVIEW_CONTROL_HEIGHT: f64 = 52.0;
 const INTERVIEW_CONTROL_GAP: f64 = 8.0;
@@ -599,7 +599,7 @@ fn size_for(state: &OverlayState) -> LogicalSize<f64> {
 fn centered_slot_size(slot: Option<f64>) -> LogicalSize<f64> {
     let slot_height = slot.unwrap_or(0.0);
     LogicalSize::new(
-        if slot_height > 0.0 { INTERVIEW_COMPANION_WIDTH } else { INTERVIEW_CONTROL_WIDTH },
+        if slot_height > 0.0 { INTERVIEW_HACKER_WIDTH } else { INTERVIEW_CONTROL_WIDTH },
         INTERVIEW_CONTROL_HEIGHT
             + if slot_height > 0.0 { INTERVIEW_CONTROL_GAP + slot_height } else { 0.0 },
     )

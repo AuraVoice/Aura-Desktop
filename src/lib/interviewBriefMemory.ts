@@ -5,16 +5,16 @@ import type { InterviewBrief } from "./interviewBrief";
 const BRIEF_EVENT = "interview-brief-updated";
 
 export async function loadInterviewBrief(): Promise<InterviewBrief | null> {
-  const brief = await invoke<InterviewBrief | null>("interview_companion_brief");
+  const brief = await invoke<InterviewBrief | null>("interview_hacker_brief");
   return brief?.contractVersion === 3 ? brief : null;
 }
 
 export function storeInterviewBrief(brief: InterviewBrief): Promise<void> {
-  return invoke("set_interview_companion_brief", { brief });
+  return invoke("set_interview_hacker_brief", { brief });
 }
 
 export function clearInterviewBrief(): Promise<void> {
-  return invoke("clear_interview_companion_brief");
+  return invoke("clear_interview_hacker_brief");
 }
 
 export function listenForInterviewBrief(

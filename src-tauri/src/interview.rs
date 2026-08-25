@@ -20,8 +20,8 @@ use crate::dictation::asr::{
     self, AsrError, ContinuousAsrEvent, ContinuousAsrSession, ContinuousSessionConfig,
 };
 
-const STATUS_EVENT: &str = "interview-companion-status";
-const TRANSCRIPT_EVENT: &str = "interview-companion-transcript";
+const STATUS_EVENT: &str = "interview-hacker-status";
+const TRANSCRIPT_EVENT: &str = "interview-hacker-transcript";
 const BRIEF_EVENT: &str = "interview-brief-updated";
 const MAX_BRIEF_BYTES: usize = 128_000;
 #[cfg(windows)]
@@ -157,7 +157,7 @@ fn stopped_status(reason: Option<&str>) -> InterviewStatusPayload {
 pub async fn interview_supported_call(app: AppHandle) -> Result<SupportedCallPayload, String> {
     let ticket = crate::security::authorize(
         &app,
-        crate::security::Operation::StartInterviewCompanion,
+        crate::security::Operation::StartInterviewHacker,
     )?;
     #[cfg(windows)]
     let detected = tauri::async_runtime::spawn_blocking(crate::meeting::detect::find_meeting_window)
@@ -167,7 +167,7 @@ pub async fn interview_supported_call(app: AppHandle) -> Result<SupportedCallPay
     let detected: Option<(String, String)> = None;
     crate::security::recheck(
         &app,
-        crate::security::Operation::StartInterviewCompanion,
+        crate::security::Operation::StartInterviewHacker,
         &ticket,
     )?;
     Ok(SupportedCallPayload {
@@ -177,7 +177,7 @@ pub async fn interview_supported_call(app: AppHandle) -> Result<SupportedCallPay
 }
 
 #[tauri::command]
-pub async fn start_interview_companion(
+pub async fn start_interview_hacker(
     app: AppHandle,
     access_token: String,
     openai_access_token: Option<String>,
@@ -192,7 +192,7 @@ pub async fn start_interview_companion(
     let cancel_generation = app.state::<InterviewHandle>().1.load(Ordering::Relaxed);
     let ticket = crate::security::authorize(
         &app,
-        crate::security::Operation::StartInterviewCompanion,
+        crate::security::Operation::StartInterviewHacker,
     )?;
     #[cfg(windows)]
     let detected = tauri::async_runtime::spawn_blocking(crate::meeting::detect::find_meeting_window)
@@ -202,7 +202,7 @@ pub async fn start_interview_companion(
     let detected: Option<(String, String)> = None;
     crate::security::recheck(
         &app,
-        crate::security::Operation::StartInterviewCompanion,
+        crate::security::Operation::StartInterviewHacker,
         &ticket,
     )?;
     let Some((app_name, _)) = detected else {
@@ -267,12 +267,12 @@ pub async fn start_interview_companion(
 }
 
 #[tauri::command]
-pub fn pause_interview_companion(app: AppHandle) -> Result<InterviewStatusPayload, String> {
+pub fn pause_interview_hacker(app: AppHandle) -> Result<InterviewStatusPayload, String> {
     set_paused(&app, true)
 }
 
 #[tauri::command]
-pub fn resume_interview_companion(app: AppHandle) -> Result<InterviewStatusPayload, String> {
+pub fn resume_interview_hacker(app: AppHandle) -> Result<InterviewStatusPayload, String> {
     set_paused(&app, false)
 }
 
@@ -313,12 +313,12 @@ fn snapshot_locked(active: &ActiveInterview) -> InterviewStatusPayload {
 }
 
 #[tauri::command]
-pub fn interview_companion_status(app: AppHandle) -> InterviewStatusPayload {
+pub fn interview_hacker_status(app: AppHandle) -> InterviewStatusPayload {
     snapshot(&app.state::<InterviewHandle>())
 }
 
 #[tauri::command]
-pub fn update_interview_companion_credential(
+pub fn update_interview_hacker_credential(
     app: AppHandle,
     session_id: String,
     epoch: u64,
@@ -334,7 +334,7 @@ pub fn update_interview_companion_credential(
     }
     crate::security::authorize(
         &app,
-        crate::security::Operation::StartInterviewCompanion,
+        crate::security::Operation::StartInterviewHacker,
     )?;
     let handle = app.state::<InterviewHandle>();
     let state = handle.0.lock().unwrap_or_else(|error| error.into_inner());
@@ -349,13 +349,13 @@ pub fn update_interview_companion_credential(
 }
 
 #[tauri::command]
-pub fn set_interview_companion_brief(
+pub fn set_interview_hacker_brief(
     app: AppHandle,
     brief: serde_json::Value,
 ) -> Result<(), String> {
     crate::security::authorize(
         &app,
-        crate::security::Operation::StartInterviewCompanion,
+        crate::security::Operation::StartInterviewHacker,
     )?;
     let object = brief
         .as_object()
@@ -378,10 +378,10 @@ pub fn set_interview_companion_brief(
 }
 
 #[tauri::command]
-pub fn interview_companion_brief(app: AppHandle) -> Result<Option<serde_json::Value>, String> {
+pub fn interview_hacker_brief(app: AppHandle) -> Result<Option<serde_json::Value>, String> {
     crate::security::authorize(
         &app,
-        crate::security::Operation::StartInterviewCompanion,
+        crate::security::Operation::StartInterviewHacker,
     )?;
     let handle = app.state::<InterviewHandle>();
     let brief = handle
@@ -393,10 +393,10 @@ pub fn interview_companion_brief(app: AppHandle) -> Result<Option<serde_json::Va
 }
 
 #[tauri::command]
-pub fn clear_interview_companion_brief(app: AppHandle) -> Result<(), String> {
+pub fn clear_interview_hacker_brief(app: AppHandle) -> Result<(), String> {
     crate::security::authorize(
         &app,
-        crate::security::Operation::StartInterviewCompanion,
+        crate::security::Operation::StartInterviewHacker,
     )?;
     clear_preparation(&app);
     Ok(())
@@ -418,7 +418,7 @@ pub fn clear_preparation(app: &AppHandle) {
 }
 
 #[tauri::command]
-pub fn stop_interview_companion(app: AppHandle) -> InterviewStatusPayload {
+pub fn stop_interview_hacker(app: AppHandle) -> InterviewStatusPayload {
     request_stop(&app, "user");
     stopped_status(Some("user"))
 }
@@ -477,7 +477,7 @@ pub async fn save_interview_reflection(
     }
     let ticket = crate::security::authorize(
         &app,
-        crate::security::Operation::StartInterviewCompanion,
+        crate::security::Operation::StartInterviewHacker,
     )?;
     let destination = app
         .path()
@@ -506,7 +506,7 @@ pub async fn save_interview_reflection(
     .map_err(|error| error.to_string())??;
     crate::security::recheck(
         &app,
-        crate::security::Operation::StartInterviewCompanion,
+        crate::security::Operation::StartInterviewHacker,
         &ticket,
     )?;
     Ok(InterviewReflectionExport {
@@ -572,7 +572,7 @@ fn open_streams(
     credentials: &TranscriptionCredentials,
 ) -> Result<Streams, AsrError> {
     let capture = audio_capture::subscribe(
-        "interview-companion",
+        "interview-hacker",
         Delivery::Bounded { capacity: 512 },
     )
     .map_err(|_| AsrError::Provider)?;

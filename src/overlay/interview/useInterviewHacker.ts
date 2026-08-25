@@ -9,7 +9,7 @@ import {
   type InterviewReflection,
   type InterviewScreenSightFrame,
   type InterviewTranscriptTurn,
-} from "../../lib/interviewCompanionApi";
+} from "../../lib/interviewHackerApi";
 import { relevantInterviewBriefSlice, type InterviewBrief } from "../../lib/interviewBrief";
 import { listenForInterviewBrief, loadInterviewBrief } from "../../lib/interviewBriefMemory";
 import { toBase64 } from "../../lib/chatScreenCapture";
@@ -17,7 +17,7 @@ import { asArrayBuffer, parseCapturedFrame } from "../../lib/screenFrame";
 import { trackEvent } from "../../lib/analytics";
 import { logError } from "../../lib/log";
 
-export type InterviewCompanionPhase =
+export type InterviewHackerPhase =
   | "idle"
   | "checking"
   | "preflight"
@@ -34,7 +34,7 @@ export type InterviewCompanionPhase =
 /// not be dismissed out from under the user, so both the card's Stop/Cancel
 /// split and OverlayRoot's Escape handling read this one predicate rather than
 /// keeping their own phase lists.
-export function isInterviewCaptureActive(phase: InterviewCompanionPhase): boolean {
+export function isInterviewCaptureActive(phase: InterviewHackerPhase): boolean {
   return phase === "starting"
     || phase === "listening"
     || phase === "paused"
@@ -121,8 +121,8 @@ interface ReflectionSnapshot {
   brief: ReturnType<typeof relevantInterviewBriefSlice>;
 }
 
-export interface InterviewCompanionState {
-  phase: InterviewCompanionPhase;
+export interface InterviewHackerState {
+  phase: InterviewHackerPhase;
   callName: string | null;
   question: string;
   answer: string;
@@ -151,8 +151,8 @@ export interface InterviewCompanionState {
   dismissReflection: () => void;
 }
 
-export function useInterviewCompanion(signedIn: boolean): InterviewCompanionState {
-  const [phase, setPhase] = useState<InterviewCompanionPhase>("idle");
+export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
+  const [phase, setPhase] = useState<InterviewHackerPhase>("idle");
   const [callName, setCallName] = useState<string | null>(null);
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
@@ -312,7 +312,7 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
     if (!identity || credentialRefreshInFlightRef.current) return;
     credentialRefreshInFlightRef.current = true;
     void mintInterviewCredential()
-      .then((credential) => invoke("update_interview_companion_credential", {
+      .then((credential) => invoke("update_interview_hacker_credential", {
         sessionId: identity.sessionId,
         epoch: identity.epoch,
         accessToken: credential.accessToken,
@@ -434,7 +434,7 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
     mintInterviewCredential()
       .then((credential) => {
         if (startAttemptRef.current !== attempt) return null;
-        return invoke<StatusPayload>("start_interview_companion", {
+        return invoke<StatusPayload>("start_interview_hacker", {
           accessToken: credential.accessToken,
           openaiAccessToken: credential.openaiAccessToken,
         }).then((status) => ({ status, credential }));
@@ -443,7 +443,7 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
         if (!started) return;
         const { status, credential } = started;
         if (startAttemptRef.current !== attempt) {
-          void invoke("stop_interview_companion");
+          void invoke("stop_interview_hacker");
           return;
         }
         if (!status.sessionId || status.epoch === null) {
@@ -479,13 +479,13 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
   }, [armCredentialRefresh, phase]);
 
   const pause = useCallback(() => {
-    invoke("pause_interview_companion").catch((error) =>
+    invoke("pause_interview_hacker").catch((error) =>
       logError("Interview Companion: pause", error),
     );
   }, []);
 
   const resume = useCallback(() => {
-    invoke("resume_interview_companion").catch((error) =>
+    invoke("resume_interview_hacker").catch((error) =>
       logError("Interview Companion: resume", error),
     );
   }, []);
@@ -500,7 +500,7 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
     setReflectionSnapshot(snapshot);
     setReflection(null);
     setPhase(snapshot ? "ended" : "idle");
-    invoke("stop_interview_companion").catch((error) =>
+    invoke("stop_interview_hacker").catch((error) =>
       logError("Interview Companion: stop", error),
     );
   }, [clearSession, recordSessionEnd, reflectionSnapshotForCurrentSession]);
@@ -871,7 +871,7 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
       return duplicate;
     };
 
-    listen<StatusPayload>("interview-companion-status", (event) => {
+    listen<StatusPayload>("interview-hacker-status", (event) => {
       const status = event.payload;
       if (status.phase === "stopped") {
         if (status.epoch !== null && status.epoch <= lastStoppedEpochRef.current) return;
@@ -957,7 +957,7 @@ export function useInterviewCompanion(signedIn: boolean): InterviewCompanionStat
       .then((unlisten) => { unlistenStatus = unlisten; })
       .catch((error) => logError("Interview Companion: status listener", error));
 
-    listen<InterviewTranscriptTurn>("interview-companion-transcript", (event) => {
+    listen<InterviewTranscriptTurn>("interview-hacker-transcript", (event) => {
       const turn = event.payload;
       const identity = identityRef.current;
       if (

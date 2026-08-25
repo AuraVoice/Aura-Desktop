@@ -82,10 +82,10 @@
   grid-template-rows: 52px;
   row-gap: 0;
 }
-.notch-column-with-draft.notch-column-interview > .interview-companion-control-bar {
+.notch-column-with-draft.notch-column-interview > .interview-hacker-control-bar {
   grid-area: 1 / 1;
 }
-.notch-column-with-draft.notch-column-interview > .interview-companion-card {
+.notch-column-with-draft.notch-column-interview > .interview-hacker-card {
   grid-area: 2 / 1;
   align-self: stretch;
   justify-self: stretch;

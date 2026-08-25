@@ -26,13 +26,13 @@ import { DraftCard, INITIAL_DRAFT_SLOT_HEIGHT } from "./DraftCard";
 import { useInterviewMaterial } from "./interview/useInterviewMaterial";
 import {
   isInterviewCaptureActive,
-  useInterviewCompanion,
-} from "./interview/useInterviewCompanion";
+  useInterviewHacker,
+} from "./interview/useInterviewHacker";
 import {
-  InterviewCompanionCard,
-  InterviewCompanionControlBar,
-  INTERVIEW_COMPANION_SLOT_HEIGHT,
-} from "./interview/InterviewCompanionCard";
+  InterviewHackerCard,
+  InterviewHackerControlBar,
+  INTERVIEW_HACKER_SLOT_HEIGHT,
+} from "./interview/InterviewHackerCard";
 import {
   InterviewPasteCard,
   INITIAL_INTERVIEW_SLOT_HEIGHT,
@@ -90,14 +90,14 @@ export function OverlayRoot() {
   // every other write tool for surface="desktop", not anything decided here.
   const chatEnabled = user !== null;
   const voice = useVoiceBar();
-  const interviewCompanion = useInterviewCompanion(user !== null);
-  const showInterviewCompanion = interviewCompanion.phase !== "idle";
-  const [interviewCompanionHidden, setInterviewCompanionHidden] = useState(false);
-  const interviewCompanionPhase = interviewCompanion.phase;
-  const dismissInterviewCompanion = interviewCompanion.dismiss;
+  const interviewHacker = useInterviewHacker(user !== null);
+  const showInterviewHacker = interviewHacker.phase !== "idle";
+  const [interviewHackerHidden, setInterviewHackerHidden] = useState(false);
+  const interviewHackerPhase = interviewHacker.phase;
+  const dismissInterviewHacker = interviewHacker.dismiss;
   useEffect(() => {
-    if (!showInterviewCompanion) setInterviewCompanionHidden(false);
-  }, [showInterviewCompanion]);
+    if (!showInterviewHacker) setInterviewHackerHidden(false);
+  }, [showInterviewHacker]);
   useScreenSight(voice.room, voice.status);
   // Ctrl+Alt+M. Mounted here rather than inside useVoiceBar because the mode
   // outlives any one call: it persists, and it rides the next token.
@@ -107,7 +107,7 @@ export function OverlayRoot() {
     room: voice.room,
   });
   useStatusPillEvents();
-  const visibleChatOpen = chatEnabled && chatOpen && !showInterviewCompanion;
+  const visibleChatOpen = chatEnabled && chatOpen && !showInterviewHacker;
   const chatOpenRef = useRef(visibleChatOpen);
   chatOpenRef.current = visibleChatOpen;
   const screenCapture = useChatScreenCapture(visibleChatOpen);
@@ -315,26 +315,26 @@ export function OverlayRoot() {
   const showInbox =
     user !== null
     && inboxOpen
-    && !showInterviewCompanion
+    && !showInterviewHacker
     && !showDraftCard
     && !showInterviewPaste;
   const showUpdateBanner =
     user !== null
     && (updateReady.version !== null || updateReady.updatedNotice !== null)
-    && !showInterviewCompanion
+    && !showInterviewHacker
     && !showInterviewPaste
     && !showDraftCard
     && !showInbox;
   const showCallbackCard =
     user !== null
     && callbackCard.visible
-    && !showInterviewCompanion
+    && !showInterviewHacker
     && !showInterviewPaste
     && !showDraftCard
     && !showInbox
     && !showUpdateBanner;
-  const slotHeight = showInterviewCompanion
-    ? interviewCompanionHidden ? 0 : INTERVIEW_COMPANION_SLOT_HEIGHT
+  const slotHeight = showInterviewHacker
+    ? interviewHackerHidden ? 0 : INTERVIEW_HACKER_SLOT_HEIGHT
     : showInterviewPaste
       ? interviewSlotHeight
       : showDraftCard
@@ -352,7 +352,7 @@ export function OverlayRoot() {
 
   useEffect(() => {
     let cancelled = false;
-    invoke("set_slot_height", { height: appliedSlotHeight, centered: showInterviewCompanion })
+    invoke("set_slot_height", { height: appliedSlotHeight, centered: showInterviewHacker })
       .then(() => {
         if (!cancelled && appliedSlotHeight === null) {
           return invoke("dismiss_idle_bar");
@@ -362,7 +362,7 @@ export function OverlayRoot() {
     return () => {
       cancelled = true;
     };
-  }, [appliedSlotHeight, showInterviewCompanion]);
+  }, [appliedSlotHeight, showInterviewHacker]);
 
   // The subtitle used to be the only place notices surfaced. With it gone,
   // route the ones that matter - an actionable voice error, the voice shortcut
@@ -425,10 +425,10 @@ export function OverlayRoot() {
   // Tray entry point for the explicit preflight. It closes chat so the
   // microphone/call source labels cannot be hidden beneath the higher-priority
   // composer while the user is deciding whether to start capture.
-  const openInterviewPreflight = interviewCompanion.openPreflight;
+  const openInterviewPreflight = interviewHacker.openPreflight;
   useEffect(() => {
     let unlisten: (() => void) | undefined;
-    listen("open-interview-companion-requested", () => {
+    listen("open-interview-hacker-requested", () => {
       setChatOpen(false);
       setInboxOpen(false);
       openInterviewPreflight();
@@ -437,7 +437,7 @@ export function OverlayRoot() {
         unlisten = fn;
       })
       .catch((err) =>
-        logError("OverlayRoot: listen open-interview-companion-requested", err),
+        logError("OverlayRoot: listen open-interview-hacker-requested", err),
       );
     return () => unlisten?.();
   }, [openInterviewPreflight]);
@@ -639,9 +639,9 @@ export function OverlayRoot() {
       // Escape must never kill a live capture, but it stays the way out of the
       // preflight, the error state, and the reflection card - those suppress
       // chat and every other slot surface, so without this they are inescapable.
-      if (showInterviewCompanion) {
-        if (!isInterviewCaptureActive(interviewCompanionPhase)) {
-          dismissInterviewCompanion();
+      if (showInterviewHacker) {
+        if (!isInterviewCaptureActive(interviewHackerPhase)) {
+          dismissInterviewHacker();
         }
         return;
       }
@@ -658,18 +658,18 @@ export function OverlayRoot() {
     endSession,
     visibleChatOpen,
     chatHistoryOpen,
-    showInterviewCompanion,
-    interviewCompanionPhase,
-    dismissInterviewCompanion,
+    showInterviewHacker,
+    interviewHackerPhase,
+    dismissInterviewHacker,
   ]);
 
   // Active capture always keeps a visible native indicator and stop control.
   useEffect(() => {
-    if (!showInterviewCompanion || presentation !== "hidden") return;
+    if (!showInterviewHacker || presentation !== "hidden") return;
     invoke("summon_bar").catch((err) =>
       logError("OverlayRoot: keep Interview Companion visible", err),
     );
-  }, [presentation, showInterviewCompanion]);
+  }, [presentation, showInterviewHacker]);
 
   if (presentation === "pointing") {
     return <PointingOverlay />;
@@ -693,8 +693,8 @@ export function OverlayRoot() {
     <div
       className={`notch-column notch-column-${notchEdge}${
         appliedSlotHeight !== null ? " notch-column-with-draft" : ""
-      }${showInterviewCompanion ? " notch-column-interview" : ""
-      }${showInterviewCompanion && interviewCompanionHidden ? " notch-column-interview-collapsed" : ""
+      }${showInterviewHacker ? " notch-column-interview" : ""
+      }${showInterviewHacker && interviewHackerHidden ? " notch-column-interview-collapsed" : ""
       }`}
     >
       {visibleChatOpen && (
@@ -718,10 +718,10 @@ export function OverlayRoot() {
           onHeightChange={setChatSlotHeight}
         />
       )}
-      {!visibleChatOpen && showInterviewCompanion && !interviewCompanionHidden && (
-        <InterviewCompanionCard companion={interviewCompanion} />
+      {!visibleChatOpen && showInterviewHacker && !interviewHackerHidden && (
+        <InterviewHackerCard hacker={interviewHacker} />
       )}
-      {!visibleChatOpen && !showInterviewCompanion && showInterviewPaste && (
+      {!visibleChatOpen && !showInterviewHacker && showInterviewPaste && (
         <InterviewPasteCard
           card={interviewMaterial}
           onHeightChange={setInterviewSlotHeight}
@@ -729,7 +729,7 @@ export function OverlayRoot() {
         />
       )}
       {!visibleChatOpen
-        && !showInterviewCompanion
+        && !showInterviewHacker
         && !showInterviewPaste
         && showDraftCard && (
           <DraftCard
@@ -753,16 +753,16 @@ export function OverlayRoot() {
         />
       )}
       {!visibleChatOpen && showCallbackCard && <CallbackCard card={callbackCard} />}
-      {showInterviewCompanion ? (
-        <InterviewCompanionControlBar
-          expanded={!interviewCompanionHidden}
-          onToggle={() => setInterviewCompanionHidden((hidden) => !hidden)}
+      {showInterviewHacker ? (
+        <InterviewHackerControlBar
+          expanded={!interviewHackerHidden}
+          onToggle={() => setInterviewHackerHidden((hidden) => !hidden)}
           onStop={
-            isInterviewCaptureActive(interviewCompanion.phase) || interviewCompanion.phase === "error"
-              ? interviewCompanion.stop
-              : ["ended", "reflecting", "reflection"].includes(interviewCompanion.phase)
-                ? interviewCompanion.dismissReflection
-                : interviewCompanion.dismiss
+            isInterviewCaptureActive(interviewHacker.phase) || interviewHacker.phase === "error"
+              ? interviewHacker.stop
+              : ["ended", "reflecting", "reflection"].includes(interviewHacker.phase)
+                ? interviewHacker.dismissReflection
+                : interviewHacker.dismiss
           }
         />
       ) : (

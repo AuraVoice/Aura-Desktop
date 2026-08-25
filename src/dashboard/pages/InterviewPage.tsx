@@ -24,7 +24,7 @@ import {
 import {
   buildInterviewBrief,
   researchInterviewCompany,
-} from "../../lib/interviewCompanionApi";
+} from "../../lib/interviewHackerApi";
 import { clearInterviewBrief, loadInterviewBrief, storeInterviewBrief } from "../../lib/interviewBriefMemory";
 import {
   loadInterviewWorkspace,

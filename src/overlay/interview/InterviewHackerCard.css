@@ -1,4 +1,4 @@
-.glass-surface.interview-companion-control-bar {
+.glass-surface.interview-hacker-control-bar {
   width: 228px;
   height: 52px;
   justify-self: center;
@@ -11,7 +11,7 @@
     inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
-.interview-companion-control-inner {
+.interview-hacker-control-inner {
   display: grid;
   grid-template-columns: 40px 1fr 40px;
   align-items: center;
@@ -22,8 +22,8 @@
   box-sizing: border-box;
 }
 
-.interview-companion-aura-mark,
-.interview-companion-stop-button {
+.interview-hacker-aura-mark,
+.interview-hacker-stop-button {
   display: grid;
   place-items: center;
   width: 38px;
@@ -31,19 +31,19 @@
   border-radius: 50%;
 }
 
-.interview-companion-aura-mark {
+.interview-hacker-aura-mark {
   background: rgba(255, 255, 255, 0.96);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.72);
 }
 
-.interview-companion-aura-mark img {
+.interview-hacker-aura-mark img {
   width: 29px;
   height: 29px;
   object-fit: contain;
 }
 
-.interview-companion-visibility-button,
-.interview-companion-stop-button {
+.interview-hacker-visibility-button,
+.interview-hacker-stop-button {
   border: 1px solid rgba(255, 255, 255, 0.14);
   color: rgba(255, 255, 255, 0.92);
   background: rgba(255, 255, 255, 0.08);
@@ -51,7 +51,7 @@
   cursor: pointer;
 }
 
-.interview-companion-visibility-button {
+.interview-hacker-visibility-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -65,7 +65,7 @@
   font-weight: 650;
 }
 
-.interview-companion-visibility-button svg {
+.interview-hacker-visibility-button svg {
   width: 15px;
   height: 15px;
   fill: none;
@@ -75,34 +75,34 @@
   stroke-linejoin: round;
 }
 
-.interview-companion-stop-button {
+.interview-hacker-stop-button {
   padding: 0;
 }
 
-.interview-companion-stop-button svg {
+.interview-hacker-stop-button svg {
   width: 17px;
   height: 17px;
 }
 
-.interview-companion-visibility-button:hover,
-.interview-companion-stop-button:hover {
+.interview-hacker-visibility-button:hover,
+.interview-hacker-stop-button:hover {
   background: rgba(255, 255, 255, 0.14);
 }
 
-.interview-companion-visibility-button:focus-visible,
-.interview-companion-stop-button:focus-visible {
+.interview-hacker-visibility-button:focus-visible,
+.interview-hacker-stop-button:focus-visible {
   outline: 2px solid rgba(126, 216, 255, 0.9);
   outline-offset: 2px;
 }
 
-.glass-surface.interview-companion-card {
+.glass-surface.interview-hacker-card {
   flex: 1 1 auto;
   min-height: 0;
   border-radius: 28px;
-  animation: interview-companion-enter 0.22s cubic-bezier(0.2, 0.8, 0.3, 1);
+  animation: interview-hacker-enter 0.22s cubic-bezier(0.2, 0.8, 0.3, 1);
 }
 
-@keyframes interview-companion-enter {
+@keyframes interview-hacker-enter {
   from {
     opacity: 0;
     transform: translateY(-8px);
@@ -113,7 +113,7 @@
   }
 }
 
-.interview-companion-inner {
+.interview-hacker-inner {
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -123,33 +123,33 @@
   box-sizing: border-box;
 }
 
-.interview-companion-header,
-.interview-companion-controls,
-.interview-companion-source {
+.interview-hacker-header,
+.interview-hacker-controls,
+.interview-hacker-source {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
 }
 
-.interview-companion-header > div {
+.interview-hacker-header > div {
   width: 100%;
   text-align: center;
 }
 
-.interview-companion-title {
+.interview-hacker-title {
   color: var(--text-primary, rgba(255, 255, 255, 0.92));
   font-size: 15px;
   font-weight: 650;
 }
 
-.interview-companion-status {
+.interview-hacker-status {
   margin-top: 3px;
   color: var(--text-muted, rgba(255, 255, 255, 0.52));
   font-size: 13.5px;
 }
 
-.interview-companion-preflight {
+.interview-hacker-preflight {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
@@ -159,24 +159,24 @@
   background: var(--surface-sunken, rgba(0, 0, 0, 0.18));
 }
 
-.interview-companion-source {
+.interview-hacker-source {
   flex-direction: column;
   justify-content: center;
   text-align: center;
 }
 
-.interview-companion-source span {
+.interview-hacker-source span {
   color: var(--text-muted, rgba(255, 255, 255, 0.52));
   font-size: 13.5px;
 }
 
-.interview-companion-source strong {
+.interview-hacker-source strong {
   color: var(--text-primary, rgba(255, 255, 255, 0.9));
   font-size: 13.5px;
   font-weight: 600;
 }
 
-.interview-companion-response {
+.interview-hacker-response {
   display: grid;
   grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
   gap: 8px;
@@ -184,8 +184,8 @@
   min-height: 72px;
 }
 
-.interview-companion-transcript,
-.interview-companion-answer {
+.interview-hacker-transcript,
+.interview-hacker-answer {
   min-width: 0;
   overflow: auto;
   padding: 11px 12px;
@@ -196,13 +196,13 @@
   line-height: 1.48;
 }
 
-.interview-companion-inner > .interview-companion-answer {
+.interview-hacker-inner > .interview-hacker-answer {
   flex: 1 1 auto;
   min-height: 72px;
 }
 
-.interview-companion-transcript > span,
-.interview-companion-answer > span {
+.interview-hacker-transcript > span,
+.interview-hacker-answer > span {
   display: block;
   margin-bottom: 6px;
   color: var(--text-muted, rgba(255, 255, 255, 0.52));
@@ -210,14 +210,14 @@
   font-weight: 650;
 }
 
-.interview-companion-answer-actions {
+.interview-hacker-answer-actions {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
   gap: 6px;
 }
 
-.interview-companion-answer-actions button {
+.interview-hacker-answer-actions button {
   border: 1px solid var(--surface-border, rgba(255, 255, 255, 0.14));
   border-radius: 999px;
   padding: 5px 9px;
@@ -229,12 +229,12 @@
   cursor: pointer;
 }
 
-.interview-companion-answer-actions button:disabled {
+.interview-hacker-answer-actions button:disabled {
   cursor: default;
   opacity: 0.38;
 }
 
-.interview-companion-error-detail {
+.interview-hacker-error-detail {
   padding: 9px 11px;
   border: 1px solid rgba(255, 163, 102, 0.24);
   border-radius: 12px;
@@ -243,13 +243,13 @@
   font-size: 13px;
 }
 
-.interview-companion-error-detail summary {
+.interview-hacker-error-detail summary {
   color: var(--text-primary, rgba(255, 255, 255, 0.9));
   cursor: pointer;
   font-weight: 600;
 }
 
-.interview-companion-error-detail code {
+.interview-hacker-error-detail code {
   display: block;
   margin-top: 7px;
   white-space: normal;
@@ -257,23 +257,23 @@
   font: inherit;
 }
 
-.interview-companion-reflection p,
-.interview-companion-reflection ul {
+.interview-hacker-reflection p,
+.interview-hacker-reflection ul {
   margin: 0;
 }
 
-.interview-companion-reflection h4 {
+.interview-hacker-reflection h4 {
   margin: 10px 0 4px;
   font-size: 13px;
 }
 
-.interview-companion-reflection ul {
+.interview-hacker-reflection ul {
   padding-left: 17px;
 }
 
-.interview-companion-primary,
-.interview-companion-secondary,
-.interview-companion-text-button {
+.interview-hacker-primary,
+.interview-hacker-secondary,
+.interview-hacker-text-button {
   border: 0;
   border-radius: 999px;
   padding: 7px 14px;
@@ -283,18 +283,18 @@
   cursor: pointer;
 }
 
-.interview-companion-primary {
+.interview-hacker-primary {
   align-self: flex-end;
   color: var(--text-on-accent, #0d1117);
   background: var(--accent, rgba(150, 190, 255, 0.92));
 }
 
-.interview-companion-secondary,
-.interview-companion-text-button {
+.interview-hacker-secondary,
+.interview-hacker-text-button {
   color: var(--text-primary, rgba(255, 255, 255, 0.9));
   background: rgba(255, 255, 255, 0.09);
 }
 
-.interview-companion-text-button {
+.interview-hacker-text-button {
   padding: 5px 11px;
 }

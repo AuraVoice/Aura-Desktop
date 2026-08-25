@@ -102,7 +102,7 @@ pub enum Operation {
     DesktopControl,
     ArmScreenSight,
     StartMeetingCapture,
-    StartInterviewCompanion,
+    StartInterviewHacker,
     QueueSnapshot,
     ReadSegment,
     MarkSegmentUploaded,
@@ -263,7 +263,7 @@ impl SecurityState {
             // feedback.ts already catches the error and sends the email with
             // "(no log lines available)".
             Operation::StartMeetingCapture
-            | Operation::StartInterviewCompanion
+            | Operation::StartInterviewHacker
             | Operation::QueueSnapshot
             | Operation::ReadSegment
             | Operation::MarkSegmentUploaded
@@ -638,7 +638,7 @@ mod tests {
         Operation::DesktopControl,
         Operation::ArmScreenSight,
         Operation::StartMeetingCapture,
-        Operation::StartInterviewCompanion,
+        Operation::StartInterviewHacker,
         Operation::QueueSnapshot,
         Operation::ReadSegment,
         Operation::MarkSegmentUploaded,
