@@ -402,13 +402,18 @@ fn capture(app: &AppHandle, settings: &TraceSettings, utterance: Utterance) -> O
     }
 
     let audio_ms = wav::duration_ms(&utterance.samples);
-    let has_audio = settings.capture_audio && !utterance.samples.is_empty();
-    if has_audio {
+    let has_audio = if settings.capture_audio && !utterance.samples.is_empty() {
         let encoded = wav::encode(&utterance.samples);
-        if let Err(error) = store::save_audio(app, &trace_id, &encoded) {
-            warn!("dictation.trace: audio could not be stored: {error}");
+        match store::save_audio(app, &trace_id, &encoded) {
+            Ok(()) => true,
+            Err(error) => {
+                warn!("dictation.trace: audio could not be stored: {error}");
+                false
+            }
         }
-    }
+    } else {
+        false
+    };
 
     let record = TraceRecord {
         trace_id: trace_id.clone(),

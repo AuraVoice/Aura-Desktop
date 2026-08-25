@@ -33,9 +33,9 @@ use std::time::{Duration, Instant};
 use sha2::{Digest, Sha256};
 use windows::core::BSTR;
 use windows::Win32::UI::Accessibility::{
-    IUIAutomation, IUIAutomationElement, IUIAutomationTextPattern, IUIAutomationValuePattern,
-    TextPatternRangeEndpoint_End, TextPatternRangeEndpoint_Start, TextUnit_Character,
-    UIA_TextPatternId, UIA_ValuePatternId,
+    IUIAutomation, IUIAutomationElement, IUIAutomationTextPattern, IUIAutomationTextRange,
+    IUIAutomationValuePattern, TextPatternRangeEndpoint_End, TextPatternRangeEndpoint_Start,
+    TextUnit_Character, UIA_TextPatternId, UIA_ValuePatternId,
 };
 
 use super::span::{self, Relocation, Span};
@@ -56,6 +56,14 @@ const MAX_SPANS_PER_ANCHOR: usize = 12;
 /// immediately follows it. Past this the field has had time to change underneath
 /// us and the "before" no longer describes what was typed into.
 const PENDING_BASELINE_TTL: Duration = Duration::from_secs(5);
+/// Context retained on each side of an insertion in a document too large to
+/// read whole. The after-read also includes the inserted text and stays below
+/// `MAX_FIELD_CHARS` for any ordinary dictation.
+const CARET_CONTEXT_CHARS: usize = 4_096;
+/// UI Automation providers can publish text shortly after `SendInput` returns.
+/// Every attempt still has to prove the exact insertion against the baseline.
+const INSERT_CONFIRM_ATTEMPTS: usize = 3;
+const INSERT_CONFIRM_RETRY_DELAY: Duration = Duration::from_millis(25);
 
 /// Automation ids, class names and control names that mean "this field holds a
 /// credential". Matched case-insensitively as substrings, because the naming is
@@ -107,7 +115,13 @@ pub struct FieldIdentity {
 /// One field's text as it was read, plus everything needed to judge it.
 struct FieldText {
     chars: Vec<char>,
-    truncated: bool,
+    scope: FieldScope,
+}
+
+enum FieldScope {
+    Whole,
+    Caret(IUIAutomationTextRange),
+    Truncated,
 }
 
 /// What a focus probe parked for the insert that is about to happen.
@@ -132,12 +146,18 @@ struct LiveSpan {
 struct LiveAnchor {
     id: AnchorId,
     element: IUIAutomationElement,
-    /// The field's full text as of the last successful read. Memory only: this
+    target: AnchorTarget,
+    /// The field's tracked text as of the last successful read. Memory only: this
     /// is the value that must never be written down, and it dies with the
     /// anchor.
     baseline: Vec<char>,
     spans: Vec<LiveSpan>,
     created_at: Instant,
+}
+
+enum AnchorTarget {
+    Element,
+    Range(IUIAutomationTextRange),
 }
 
 /// What one span looked like on one observation. This is the entire payload
@@ -243,28 +263,69 @@ impl AnchorStore {
         if is_sensitive_element(&pending.element) {
             return refuse("field_sensitive");
         }
-        let Some(after) = read_field_text(&pending.element) else {
-            return refuse("read_failed");
-        };
-        // A truncated read cannot support `locate_insertion`, whose whole
-        // guarantee is that the two texts differ by exactly the insertion.
-        if pending.text.truncated || after.truncated {
+        if matches!(&pending.text.scope, FieldScope::Truncated) {
             return refuse("field_too_large");
         }
         let inserted_chars: Vec<char> = inserted.chars().collect();
-        let Some(span) = span::locate_insertion(&pending.text.chars, &after.chars, &inserted_chars)
-        else {
-            return refuse("insert_not_verbatim");
+        if matches!(&pending.text.scope, FieldScope::Caret(_))
+            && inserted_chars.len() + CARET_CONTEXT_CHARS * 2 > MAX_FIELD_CHARS
+        {
+            return refuse("field_too_large");
+        }
+
+        let mut after = None;
+        let mut span = None;
+        let mut read_succeeded = false;
+        for attempt in 0..INSERT_CONFIRM_ATTEMPTS {
+            let candidate = if matches!(&pending.text.scope, FieldScope::Caret(_)) {
+                read_caret_field_text(
+                    &pending.element,
+                    CARET_CONTEXT_CHARS + inserted_chars.len(),
+                    CARET_CONTEXT_CHARS,
+                )
+            } else {
+                read_field_text(&pending.element)
+            };
+            if let Some(candidate) = candidate {
+                if matches!(&candidate.scope, FieldScope::Truncated)
+                    || matches!(&pending.text.scope, FieldScope::Whole)
+                        != matches!(&candidate.scope, FieldScope::Whole)
+                {
+                    return refuse("field_too_large");
+                }
+                read_succeeded = true;
+                if let Some(located) =
+                    span::locate_insertion(&pending.text.chars, &candidate.chars, &inserted_chars)
+                {
+                    span = Some(located);
+                    after = Some(candidate);
+                    break;
+                }
+            }
+            if attempt + 1 < INSERT_CONFIRM_ATTEMPTS {
+                std::thread::sleep(INSERT_CONFIRM_RETRY_DELAY);
+            }
+        }
+        let Some(after) = after else {
+            return refuse(if read_succeeded {
+                "insert_not_verbatim"
+            } else {
+                "read_failed"
+            });
         };
+        let span = span.expect("a confirmed after-read always has a span");
 
         // Same element as an anchor already being watched? Then this is a second
         // dictation into the same box, and it joins that anchor so both spans
         // are relocated together and clipped against each other.
-        let existing = self.anchors.iter().position(|anchor| {
-            unsafe { automation.CompareElements(&anchor.element, &pending.element) }
-                .map(|same| same.as_bool())
-                .unwrap_or(false)
-        });
+        let existing = matches!(&after.scope, FieldScope::Whole).then(|| {
+            self.anchors.iter().position(|anchor| {
+                matches!(&anchor.target, AnchorTarget::Element)
+                    && unsafe { automation.CompareElements(&anchor.element, &pending.element) }
+                        .map(|same| same.as_bool())
+                        .unwrap_or(false)
+            })
+        }).flatten();
 
         let new_span = LiveSpan {
             trace_id: trace_id.to_string(),
@@ -304,6 +365,11 @@ impl AnchorStore {
             baseline: after.chars,
             spans: vec![new_span],
             created_at: Instant::now(),
+            target: match after.scope {
+                FieldScope::Whole => AnchorTarget::Element,
+                FieldScope::Caret(range) => AnchorTarget::Range(range),
+                FieldScope::Truncated => return refuse("field_too_large"),
+            },
         });
         AnchorOutcome {
             anchor_id: Some(id),
@@ -334,7 +400,7 @@ impl AnchorStore {
                 }
                 continue;
             }
-            let Some(current) = read_field_text(&anchor.element) else {
+            let Some(current) = read_anchor_text(anchor) else {
                 // The window closed, the control was destroyed, or the app
                 // stopped answering. All three mean the same thing: stop
                 // guessing about this field.
@@ -515,7 +581,11 @@ fn read_value_pattern(element: &IUIAutomationElement) -> Option<FieldText> {
         } else {
             chars
         },
-        truncated,
+        scope: if truncated {
+            FieldScope::Truncated
+        } else {
+            FieldScope::Whole
+        },
     })
 }
 
@@ -538,24 +608,37 @@ fn read_text_pattern(element: &IUIAutomationElement) -> Option<FieldText> {
             if chars.len() <= MAX_FIELD_CHARS {
                 return Some(FieldText {
                     chars,
-                    truncated: false,
+                    scope: FieldScope::Whole,
                 });
             }
         }
     }
 
-    caret_window(&pattern)
+    caret_window(&pattern, CARET_CONTEXT_CHARS, CARET_CONTEXT_CHARS)
 }
 
 /// A bounded window of text either side of the caret.
 ///
 /// `MoveEndpointByUnit` is asked to walk backwards then forwards by characters
 /// from the selection, which is what turns "somewhere in a huge document" into
-/// a readable neighbourhood. Marked truncated on the way out, because a windowed
-/// read cannot support `locate_insertion` - that check needs to see the whole
-/// before and after.
-fn caret_window(pattern: &IUIAutomationTextPattern) -> Option<FieldText> {
-    let half = (MAX_FIELD_CHARS / 2) as i32;
+/// a readable neighbourhood. Before and after windows use the same boundaries
+/// relative to the insertion, so exact insertion verification remains possible.
+fn read_caret_field_text(
+    element: &IUIAutomationElement,
+    left: usize,
+    right: usize,
+) -> Option<FieldText> {
+    let pattern =
+        unsafe { element.GetCurrentPatternAs::<IUIAutomationTextPattern>(UIA_TextPatternId) }
+            .ok()?;
+    caret_window(&pattern, left, right)
+}
+
+fn caret_window(
+    pattern: &IUIAutomationTextPattern,
+    left: usize,
+    right: usize,
+) -> Option<FieldText> {
     let selection = unsafe { pattern.GetSelection() }.ok()?;
     if unsafe { selection.Length() }.unwrap_or(0) < 1 {
         return None;
@@ -563,16 +646,40 @@ fn caret_window(pattern: &IUIAutomationTextPattern) -> Option<FieldText> {
     let range = unsafe { selection.GetElement(0) }.ok()?;
     let window = unsafe { range.Clone() }.ok()?;
     let _ = unsafe {
-        window.MoveEndpointByUnit(TextPatternRangeEndpoint_Start, TextUnit_Character, -half)
+        window.MoveEndpointByUnit(
+            TextPatternRangeEndpoint_Start,
+            TextUnit_Character,
+            -(left as i32),
+        )
     };
     let _ = unsafe {
-        window.MoveEndpointByUnit(TextPatternRangeEndpoint_End, TextUnit_Character, half)
+        window.MoveEndpointByUnit(
+            TextPatternRangeEndpoint_End,
+            TextUnit_Character,
+            right as i32,
+        )
     };
     let text = unsafe { window.GetText(MAX_FIELD_CHARS as i32) }.ok()?;
     Some(FieldText {
         chars: text.to_string().chars().collect(),
-        truncated: true,
+        scope: FieldScope::Caret(window),
     })
+}
+
+fn read_anchor_text(anchor: &LiveAnchor) -> Option<FieldText> {
+    match &anchor.target {
+        AnchorTarget::Element => {
+            let text = read_field_text(&anchor.element)?;
+            matches!(&text.scope, FieldScope::Whole).then_some(text)
+        }
+        AnchorTarget::Range(range) => {
+            let text = unsafe { range.GetText(MAX_FIELD_CHARS as i32) }.ok()?;
+            Some(FieldText {
+                chars: text.to_string().chars().collect(),
+                scope: FieldScope::Whole,
+            })
+        }
+    }
 }
 
 fn bstr(value: Option<BSTR>) -> String {
