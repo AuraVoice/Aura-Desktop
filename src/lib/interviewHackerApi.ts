@@ -1,4 +1,5 @@
 import { authFetch } from "./api";
+import type { AnswerShape } from "./interviewPolicy";
 import type {
   InterviewAnswerLength,
   InterviewBrief,
@@ -60,12 +61,7 @@ export type InterviewAnswerFrame =
       intent: string | null;
     }
   | { type: "answer_delta"; delta: string }
-  | {
-      type: "answer_done";
-      generated: boolean;
-      evidence: Array<{ sourceId: string; verificationState: "verified" }>;
-      answerMs: number | null;
-    }
+  | { type: "answer_done"; generated: boolean; answerMs: number | null }
   | { type: "error"; code: string; message: string }
   | { type: "terminator" };
 
@@ -161,17 +157,11 @@ function parseFrame(
         ? { type: "answer_delta", delta: frame.delta }
         : null;
     case "answer_done":
-      if (typeof frame.generated !== "boolean" || !Array.isArray(frame.evidence)) return null;
+      if (typeof frame.generated !== "boolean") return null;
       return {
         type: "answer_done",
         generated: frame.generated,
         answerMs: typeof frame.answer_ms === "number" ? frame.answer_ms : null,
-        evidence: frame.evidence.flatMap((value) => {
-          const item = asRecord(value);
-          return item?.verification_state === "verified" && typeof item.source_id === "string"
-            ? [{ sourceId: item.source_id, verificationState: "verified" as const }]
-            : [];
-        }),
       };
     case "error":
       return typeof frame.message === "string"
@@ -190,6 +180,7 @@ export async function streamInterviewAnswer({
   turn,
   recentTurns,
   brief,
+  answerShape,
   action = "automatic",
   currentAnswer = "",
   screenSight = null,
@@ -199,6 +190,7 @@ export async function streamInterviewAnswer({
   turn: InterviewTranscriptTurn;
   recentTurns: InterviewTranscriptTurn[];
   brief: InterviewBriefSlice | null;
+  answerShape: AnswerShape;
   action?: InterviewAnswerAction;
   currentAnswer?: string;
   screenSight?: InterviewScreenSightFrame | null;
@@ -212,10 +204,10 @@ export async function streamInterviewAnswer({
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      contract_version: 3,
       turn: wireTurn(turn),
       recent_turns: recentTurns.slice(-12).map(wireTurn),
       brief: brief ? wireBriefSlice(brief) : null,
+      answer_shape: answerShape,
       action,
       current_answer: currentAnswer,
       screen_sight: screenSight ? {

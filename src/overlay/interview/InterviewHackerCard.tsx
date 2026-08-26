@@ -1,9 +1,10 @@
+import { useEffect, useRef } from "react";
 import iconUrl from "../../assets/icons/Aura-Icon.png";
 import { GlassSurface } from "../GlassSurface";
 import { StopSquareIcon } from "../icons";
 import { PLANNED_MINUTES_OPTIONS, ROUND_KIND_OPTIONS } from "../../lib/interviewPolicy";
 import { isInterviewCaptureActive } from "./useInterviewHacker";
-import type { InterviewHackerState } from "./useInterviewHacker";
+import type { InterviewExchange, InterviewHackerState } from "./useInterviewHacker";
 import "./InterviewHackerCard.css";
 
 export const INTERVIEW_HACKER_SLOT_HEIGHT = 360;
@@ -46,6 +47,42 @@ function OverlayChoice<T extends string | number>({
         ))}
       </div>
     </div>
+  );
+}
+
+/** Distance from the bottom, in px, within which the thread counts as "being
+ * followed" and keeps auto-scrolling. Above it the reader has deliberately
+ * scrolled back and must not be yanked forward by the next delta. */
+const FOLLOW_THRESHOLD_PX = 48;
+
+function Exchange({
+  question,
+  answer,
+  unverified,
+  live = false,
+}: {
+  question: string;
+  answer: string;
+  unverified: boolean;
+  live?: boolean;
+}) {
+  return (
+    <>
+      {question && (
+        <div className="interview-hacker-bubble is-question">{question}</div>
+      )}
+      {answer && (
+        <div
+          className="interview-hacker-bubble is-answer"
+          aria-live={live ? "polite" : undefined}
+        >
+          {unverified && (
+            <span className="interview-hacker-unverified">Not from your brief</span>
+          )}
+          <div className="interview-hacker-answer-text">{answer}</div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -94,33 +131,55 @@ export function InterviewHackerCard({
 }: {
   hacker: InterviewHackerState;
 }) {
+  const threadRef = useRef<HTMLDivElement | null>(null);
+  // Whether the reader is pinned to the bottom. Tracked from scroll events
+  // rather than measured inside the effect, because by the time the effect runs
+  // the new content is already in the DOM and "was I at the bottom?" can no
+  // longer be answered from the current scroll position.
+  const followingRef = useRef(true);
+  const handleThreadScroll = () => {
+    const thread = threadRef.current;
+    if (!thread) return;
+    followingRef.current =
+      thread.scrollHeight - thread.scrollTop - thread.clientHeight <= FOLLOW_THRESHOLD_PX;
+  };
+  useEffect(() => {
+    const thread = threadRef.current;
+    if (thread && followingRef.current) thread.scrollTop = thread.scrollHeight;
+  }, [hacker.history, hacker.question, hacker.answer, hacker.interimQuestion]);
+
   const active = isInterviewCaptureActive(hacker.phase);
+  const threadIsEmpty =
+    hacker.history.length === 0
+    && !hacker.question
+    && !hacker.answer
+    && !hacker.interimQuestion;
   const reflectionMode = ["ended", "reflecting", "reflection"].includes(hacker.phase);
+  // Steady-state "listening" has no caption on purpose: the card being on
+  // screen already says it is listening, and a line that never changes is chrome
+  // in the one place the answer needs the room. Only actionable states speak.
   const status = hacker.candidateSpeaking
     ? "You are speaking. Answer held."
     : hacker.message
       ?? (hacker.phase === "paused"
         ? "Paused"
-        : hacker.phase === "listening"
-          ? "Listening for interviewer questions"
-          : hacker.phase === "starting"
-            ? "Starting transcription..."
-            : hacker.phase === "checking"
-              ? "Checking the active call..."
-              : null);
+        : hacker.phase === "starting"
+          ? "Starting transcription..."
+          : hacker.phase === "checking"
+            ? "Checking the active call..."
+            : null);
 
   return (
     <GlassSurface className="interview-hacker-card">
       <div className="interview-hacker-inner">
-        <div className="interview-hacker-header">
-          <div>
-            <div className="interview-hacker-title">Interview Companion</div>
-            {status && <div className="interview-hacker-status">{status}</div>}
+        {(status || (active && hacker.pacingCaption)) && (
+          <div className="interview-hacker-header">
+            <div>{status && <div className="interview-hacker-status">{status}</div>}</div>
+            {active && hacker.pacingCaption && (
+              <div className="interview-hacker-pacing" aria-live="polite">{hacker.pacingCaption}</div>
+            )}
           </div>
-          {active && hacker.pacingCaption && (
-            <div className="interview-hacker-pacing" aria-live="polite">{hacker.pacingCaption}</div>
-          )}
-        </div>
+        )}
 
         {(hacker.phase === "preflight" || hacker.phase === "checking") && (
           <div className="interview-hacker-preflight">
@@ -216,15 +275,37 @@ export function InterviewHackerCard({
         )}
 
         {active && (
-          <div className="interview-hacker-response">
-            <div className="interview-hacker-transcript" aria-live="polite">
-              <span>Interviewer</span>
-              <div>{hacker.question || "Questions will appear here."}</div>
-            </div>
-            <div className="interview-hacker-answer" aria-live="polite">
-              <span>Suggested answer</span>
-              <div>{hacker.answer || "Answers will appear here."}</div>
-            </div>
+          <div
+            className="interview-hacker-thread"
+            ref={threadRef}
+            onScroll={handleThreadScroll}
+          >
+            {hacker.history.map((exchange: InterviewExchange) => (
+              <Exchange
+                key={exchange.id}
+                question={exchange.question}
+                answer={exchange.answer}
+                unverified={exchange.unverified}
+              />
+            ))}
+            {(hacker.question || hacker.answer) && (
+              <Exchange
+                question={hacker.question}
+                answer={hacker.answer}
+                unverified={!hacker.briefReady}
+                live
+              />
+            )}
+            {hacker.interimQuestion && (
+              <div className="interview-hacker-bubble is-question is-pending">
+                {hacker.interimQuestion}
+              </div>
+            )}
+            {threadIsEmpty && (
+              <div className="interview-hacker-thread-empty">
+                Questions and answers appear here.
+              </div>
+            )}
           </div>
         )}
 

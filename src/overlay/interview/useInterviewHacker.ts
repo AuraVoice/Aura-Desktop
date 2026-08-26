@@ -15,8 +15,10 @@ import { listenForInterviewBrief, loadInterviewBrief } from "../../lib/interview
 import {
   DEFAULT_PLANNED_MINUTES,
   DEFAULT_ROUND_KIND,
+  answerShapeFor,
   assemblyMsFor,
   pacingCaption,
+  type AnswerShape,
   type PlannedMinutes,
   type RoundKind,
 } from "../../lib/interviewPolicy";
@@ -25,6 +27,16 @@ import { toBase64 } from "../../lib/chatScreenCapture";
 import { asArrayBuffer, parseCapturedFrame } from "../../lib/screenFrame";
 import { trackEvent } from "../../lib/analytics";
 import { logError } from "../../lib/log";
+
+/** One answered question, kept so the card can show the whole conversation
+ * rather than only the turn in flight. Memory-only, same lifetime as the
+ * session: nothing here is ever written to disk or sent anywhere. */
+export interface InterviewExchange {
+  id: string;
+  question: string;
+  answer: string;
+  unverified: boolean;
+}
 
 export type InterviewHackerPhase =
   | "idle"
@@ -83,6 +95,9 @@ const PITCH_COLLAPSE_AFTER_ACCEPTED = 2;
 const ECHO_WINDOW_MS = 2_500;
 const MAX_CREDENTIAL_RETRIES = 3;
 const CALL_DETECTION_RETRY_MS = 1_500;
+// A 30 minute round runs 15-25 questions, so this is headroom rather than a
+// limit anyone should hit. Strings only, no images, so the cost is negligible.
+const MAX_HISTORY_EXCHANGES = 40;
 
 function reflectionMarkdown(reflection: InterviewReflection): string {
   const section = (title: string, items: string[]) =>
@@ -138,8 +153,10 @@ interface ReflectionSnapshot {
 export interface InterviewHackerState {
   phase: InterviewHackerPhase;
   callName: string | null;
+  history: InterviewExchange[];
   question: string;
   answer: string;
+  interimQuestion: string;
   briefReady: boolean;
   canSuggest: boolean;
   recoverable: boolean;
@@ -176,8 +193,10 @@ export interface InterviewHackerState {
 export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   const [phase, setPhase] = useState<InterviewHackerPhase>("idle");
   const [callName, setCallName] = useState<string | null>(null);
+  const [history, setHistory] = useState<InterviewExchange[]>([]);
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
+  const [interimQuestion, setInterimQuestion] = useState("");
   const [brief, setBrief] = useState<InterviewBrief | null>(null);
   const [candidateSpeaking, setCandidateSpeaking] = useState(false);
   const [capturingScreen, setCapturingScreen] = useState(false);
@@ -204,7 +223,9 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   const briefRef = useRef<InterviewBrief | null>(null);
   const answerRef = useRef("");
   const lastRemoteTurnRef = useRef<InterviewTranscriptTurn | null>(null);
-  const evidenceRef = useRef<Array<{ sourceId: string; verificationState: "verified" }>>([]);
+  // Tracks whether the answer currently on screen was produced without a
+  // reviewed brief, so it carries that flag with it when it becomes history.
+  const activeUnverifiedRef = useRef(false);
   const generationRef = useRef<AbortController | null>(null);
   const reflectionRequestRef = useRef<AbortController | null>(null);
   const screenCaptureInFlightRef = useRef(false);
@@ -241,6 +262,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   // transcript listener, which is set up once and must not close over a
   // changing state value.
   const assemblyMsRef = useRef(PANEL_ASSEMBLY_MS);
+  const answerShapeRef = useRef<AnswerShape>(answerShapeFor(DEFAULT_ROUND_KIND));
   const plannedMinutesRef = useRef<PlannedMinutes>(DEFAULT_PLANNED_MINUTES);
 
   briefRef.current = brief;
@@ -267,7 +289,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     reflectionTurnsRef.current = [];
     lastRemoteTurnRef.current = null;
     setCanSuggest(false);
-    evidenceRef.current = [];
+    activeUnverifiedRef.current = false;
     recentAudioRef.current = [];
     requestSequenceRef.current = 0;
     acceptedSequenceRef.current = 0;
@@ -282,8 +304,10 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     savingReflectionRef.current = false;
     savingReflectionSequenceRef.current += 1;
     setSavingReflection(false);
+    setHistory([]);
     setQuestion("");
     setAnswer("");
+    setInterimQuestion("");
     setCallName(null);
     setMessage(null);
     setErrorDetail(null);
@@ -293,6 +317,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     setPitchExpanded(true);
     setCaption(null);
     assemblyMsRef.current = PANEL_ASSEMBLY_MS;
+    answerShapeRef.current = answerShapeFor(DEFAULT_ROUND_KIND);
   }, []);
 
   const recordSessionEnd = useCallback((reason: string) => {
@@ -469,6 +494,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     // The round picked here is the session's, frozen now so nothing can move it
     // mid-interview.
     assemblyMsRef.current = assemblyMsFor(roundKind);
+    answerShapeRef.current = answerShapeFor(roundKind);
     plannedMinutesRef.current = plannedMinutes;
     // Assembled locally from claims the user already confirmed, so it is on
     // screen before a word is spoken and cannot invent experience. No network
@@ -637,8 +663,32 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       });
       generationRef.current?.abort();
       generationRef.current = controller;
+      // Archive the exchange this answer belonged to before its text is cleared
+      // below. A DIFFERENT turn means a new question, so the old pair becomes
+      // history. The SAME turn means Shorter / Another example / More technical,
+      // which refine the answer in place and must never stack up as duplicates.
+      const previousTurn = activeAnswerTurnRef.current;
+      const previousAnswer = answerRef.current;
+      const previousUnverified = activeUnverifiedRef.current;
+      if (previousTurn && previousTurn.turnId !== turn.turnId && previousAnswer.trim()) {
+        setHistory((current) => [
+          ...current,
+          {
+            id: previousTurn.turnId,
+            question: previousTurn.text,
+            answer: previousAnswer,
+            unverified: previousUnverified,
+          },
+        ].slice(-MAX_HISTORY_EXCHANGES));
+      }
       activeAnswerTurnRef.current = turn;
       activeAnswerActionRef.current = action;
+      activeUnverifiedRef.current =
+        briefRef.current === null || briefRef.current.reviewedAtMs === null;
+      // The answered question is set HERE, not from the raw transcript, so a
+      // turn the gate rejects can never re-label the answer already on screen.
+      setQuestion(turn.text);
+      setInterimQuestion("");
       activated = true;
       if (candidateSpeakingRef.current) {
         frozenDeltasRef.current = "";
@@ -647,17 +697,17 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
         answerRef.current = "";
         setAnswer("");
       }
-      setMessage("Drafting an answer...");
+      setMessage(null);
       return true;
     };
 
     if (action !== "automatic") activate();
-    setMessage(action === "automatic" ? "Checking the question..." : "Drafting an answer...");
     const recentText = recentTurns.slice(-6).map((item) => item.text).join(" ");
     void streamInterviewAnswer({
       turn,
       recentTurns,
       brief: relevantInterviewBriefSlice(briefRef.current, turn.text, recentText),
+      answerShape: answerShapeRef.current,
       action,
       currentAnswer: previousAnswer,
       screenSight,
@@ -719,7 +769,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
                 setAnswer("");
               }
             }
-            setMessage(generationRef.current === null ? null : "Drafting an answer...");
+            setMessage(null);
           }
         } else if (frame.type === "answer_delta") {
           if (!activated || generationRef.current !== controller) return;
@@ -742,12 +792,10 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
           }
         } else if (frame.type === "answer_done") {
           if (!activated || generationRef.current !== controller) return;
-          evidenceRef.current = frame.evidence;
           trackEvent("interview_companion_answer_completed", {
             action,
             generated: frame.generated,
             answer_ms: frame.answerMs,
-            evidence_count: frame.evidence.length,
           });
           setMessage(frame.generated ? null : "No answer needed for that turn.");
         } else if (frame.type === "error") {
@@ -914,7 +962,6 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       rememberReflectionTurn(pending.turn);
       lastRemoteTurnRef.current = pending.turn;
       setCanSuggest(true);
-      setQuestion(pending.turn.text);
       evaluate(pending.turn, recentTurns, "automatic");
     };
 
@@ -1075,11 +1122,11 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       }
 
       if (!turn.isFinal) {
-        if (turn.text.trim()) setQuestion(turn.text);
+        if (turn.text.trim()) setInterimQuestion(turn.text);
         return;
       }
       if (!turn.text.trim() || isEchoOrRepeat(turn)) return;
-      setQuestion(turn.text);
+      setInterimQuestion(turn.text);
       queueRemoteTurn(turn);
     })
       .then((unlisten) => { unlistenTranscript = unlisten; })
@@ -1096,8 +1143,10 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   return {
     phase,
     callName,
+    history,
     question,
     answer,
+    interimQuestion,
     briefReady: brief !== null && brief.reviewedAtMs !== null,
     canSuggest,
     recoverable,

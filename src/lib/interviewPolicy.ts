@@ -25,6 +25,16 @@ export type RoundKind =
 
 export type PlannedMinutes = 15 | 30 | 45 | 60;
 
+/**
+ * How the live answer is shaped on screen.
+ *
+ * Nobody reads a paragraph aloud while listening, so the default for most rounds
+ * is a hook the candidate can say verbatim followed by keywords to riff on.
+ * `prose` survives only for system design, where the precise phrasing of a
+ * tradeoff is the answer and a bullet loses it.
+ */
+export type AnswerShape = "hook_bullets" | "star_bullets" | "concept_steps" | "prose";
+
 export type Segment = "intro" | "core" | "wrap";
 
 export interface InterviewProfile {
@@ -53,12 +63,28 @@ export interface AnswerPolicy {
  * the shipped 150ms so the added latency is opt-in.
  */
 const ASSEMBLY_MS: Record<RoundKind, number> = {
-  hr_screen: 150,
-  technical: 150,
+  hr_screen: 0,
+  technical: 0,
   system_design: 800,
   behavioral: 300,
   hiring_manager: 300,
   final_exec: 400,
+};
+
+/**
+ * Answer shape per round, resolved on the desktop and frozen at Start.
+ *
+ * This travels as a TOP-LEVEL request field, never inside InterviewBriefSlice:
+ * that model is `extra="forbid"` on the server, so a field added there would 422
+ * every request from a client that shipped ahead of the backend deploy.
+ */
+const ANSWER_SHAPE: Record<RoundKind, AnswerShape> = {
+  hr_screen: "hook_bullets",
+  technical: "concept_steps",
+  system_design: "prose",
+  behavioral: "star_bullets",
+  hiring_manager: "hook_bullets",
+  final_exec: "hook_bullets",
 };
 
 export const DEFAULT_ROUND_KIND: RoundKind = "technical";
@@ -118,6 +144,10 @@ export function assemblyMsFor(roundKind: RoundKind): number {
   return ASSEMBLY_MS[roundKind] ?? ASSEMBLY_MS[DEFAULT_ROUND_KIND];
 }
 
+export function answerShapeFor(roundKind: RoundKind): AnswerShape {
+  return ANSWER_SHAPE[roundKind] ?? ANSWER_SHAPE[DEFAULT_ROUND_KIND];
+}
+
 export function resolveSegment(profile: InterviewProfile, clock: SessionClock): Segment {
   const planned = plannedMs(profile.plannedMinutes);
   const introUntil = Math.max(INTRO_FLOOR_MS, planned * INTRO_RATIO);
@@ -153,6 +183,7 @@ export function pacingCaption(
     const minutesLeft = Math.max(1, Math.round((planned - elapsedMs) / 60_000));
     return `~${minutesLeft} min left. Ask your questions.`;
   }
-  if (ratio < INTRO_RATIO) return "Intro";
+  // No "Intro" caption. It said nothing the candidate did not already know and
+  // occupied the header for the first minutes of every round.
   return null;
 }
