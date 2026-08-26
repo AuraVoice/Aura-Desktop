@@ -229,3 +229,67 @@ export function SignOutIcon() {
     </svg>
   );
 }
+
+/** Microphone capsule and stand. Used by the Interview Companion preflight,
+ * beside the live level meter that proves the device actually hears you. */
+export function MicIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none">
+      <rect x="9" y="3" width="6" height="10" rx="3" fill="currentColor" />
+      <path
+        d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M9 21h6"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
+/** Microphone with a slash, for "blocked" or "no device". */
+export function MicOffIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none">
+      <rect x="9" y="3" width="6" height="10" rx="3" fill="currentColor" />
+      <path
+        d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21M9 21h6"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+      <path d="M4 3.5 20 20" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** Chunky upload arrow. The Interview Companion's "attach your resume" slot,
+ * where the cell is a button and the glyph has to read as an action rather than
+ * a status at 20px. */
+export function UploadArrowIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor">
+      <path d="M12 2.6 21.4 12h-5.6v9.4H8.2V12H2.6L12 2.6Z" />
+    </svg>
+  );
+}
+
+/** Sheet of paper with a folded corner. The Interview Companion's brief slot. */
+export function DocumentIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none">
+      <path
+        d="M6 3.2h7.2L18.5 8.5V20.8H6V3.2Z"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinejoin="round"
+      />
+      <path d="M13 3.4V9h5.3" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+      <path
+        d="M8.8 12.6h6.4M8.8 16h4.4"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}

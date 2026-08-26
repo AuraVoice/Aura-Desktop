@@ -23,7 +23,11 @@ use crate::dictation::asr::{
 const STATUS_EVENT: &str = "interview-hacker-status";
 const TRANSCRIPT_EVENT: &str = "interview-hacker-transcript";
 const BRIEF_EVENT: &str = "interview-brief-updated";
+const RESUME_EVENT: &str = "interview-resume-updated";
 const MAX_BRIEF_BYTES: usize = 128_000;
+// Generous next to the 12,000 characters the backend accepts, so a resume is
+// rejected by the extractor's own limit rather than truncated silently here.
+const MAX_RESUME_BYTES: usize = 64_000;
 #[cfg(windows)]
 const ENDPOINTING_MS: u16 = 300;
 #[cfg(windows)]
@@ -85,6 +89,9 @@ pub struct InterviewHandle(
     Mutex<Option<ActiveInterview>>,
     AtomicU64,
     Mutex<Option<serde_json::Value>>,
+    // Plain resume text, kept beside the brief because it is the same class of
+    // preparation: user-supplied, cleared on sign-out, never persisted to disk.
+    Mutex<Option<String>>,
 );
 
 #[derive(Clone, Serialize)]
@@ -402,7 +409,67 @@ pub fn clear_interview_hacker_brief(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn set_interview_resume(app: AppHandle, resume: String) -> Result<(), String> {
+    crate::security::authorize(
+        &app,
+        crate::security::Operation::StartInterviewHacker,
+    )?;
+    let resume = resume.trim().to_string();
+    if resume.is_empty() {
+        return Err("Resume text is empty.".to_string());
+    }
+    if resume.len() > MAX_RESUME_BYTES {
+        return Err("Resume is too large.".to_string());
+    }
+    let handle = app.state::<InterviewHandle>();
+    *handle.3.lock().unwrap_or_else(|error| error.into_inner()) = Some(resume.clone());
+    let _ = app.emit(RESUME_EVENT, resume);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn interview_resume(app: AppHandle) -> Result<Option<String>, String> {
+    crate::security::authorize(
+        &app,
+        crate::security::Operation::StartInterviewHacker,
+    )?;
+    let handle = app.state::<InterviewHandle>();
+    let resume = handle
+        .3
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone();
+    Ok(resume)
+}
+
+#[tauri::command]
+pub fn clear_interview_resume(app: AppHandle) -> Result<(), String> {
+    crate::security::authorize(
+        &app,
+        crate::security::Operation::StartInterviewHacker,
+    )?;
+    clear_stored_resume(&app);
+    Ok(())
+}
+
+fn clear_stored_resume(app: &AppHandle) {
+    let Some(handle) = app.try_state::<InterviewHandle>() else {
+        return;
+    };
+    let removed = handle
+        .3
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .take()
+        .is_some();
+    if removed {
+        let _ = app.emit(RESUME_EVENT, Option::<String>::None);
+    }
+}
+
 pub fn clear_preparation(app: &AppHandle) {
+    clear_stored_resume(app);
     let Some(handle) = app.try_state::<InterviewHandle>() else {
         return;
     };

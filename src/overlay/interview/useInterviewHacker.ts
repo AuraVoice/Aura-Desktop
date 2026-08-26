@@ -13,6 +13,19 @@ import {
 import { relevantInterviewBriefSlice, type InterviewBrief } from "../../lib/interviewBrief";
 import { listenForInterviewBrief, loadInterviewBrief } from "../../lib/interviewBriefMemory";
 import {
+  listenForInterviewResume,
+  loadInterviewResume,
+  storeInterviewResume,
+} from "../../lib/interviewResumeMemory";
+import {
+  RESUME_MAX_CHARS,
+  ResumeExtractionError,
+  extractResumeText,
+  resumeStats,
+} from "../../lib/resumeText";
+import { loadInterviewWorkspace } from "../../lib/interviewWorkspace";
+import { useAuth } from "../../state/AuthProvider";
+import {
   DEFAULT_PLANNED_MINUTES,
   DEFAULT_ROUND_KIND,
   answerShapeFor,
@@ -99,6 +112,19 @@ const CALL_DETECTION_RETRY_MS = 1_500;
 // limit anyone should hit. Strings only, no images, so the cost is negligible.
 const MAX_HISTORY_EXCHANGES = 40;
 
+/** Whether a ranked slice actually says anything about the candidate. Drives
+ * the resume fallback: an empty slice means the model has nothing of the user's
+ * own history to answer from. */
+function hasCandidateEvidence(
+  slice: ReturnType<typeof relevantInterviewBriefSlice>,
+): boolean {
+  if (!slice) return false;
+  return slice.candidateFacts.length > 0
+    || slice.projects.length > 0
+    || slice.starStories.length > 0
+    || slice.metrics.length > 0;
+}
+
 function reflectionMarkdown(reflection: InterviewReflection): string {
   const section = (title: string, items: string[]) =>
     items.length > 0 ? `\n## ${title}\n\n${items.map((item) => `- ${item}`).join("\n")}\n` : "";
@@ -153,11 +179,20 @@ interface ReflectionSnapshot {
 export interface InterviewHackerState {
   phase: InterviewHackerPhase;
   callName: string | null;
+  /** Raw detector id ("zoom" | "zoom-web" | "google-meet" | "teams" |
+   *  "teams-web"), so the card can draw the app's own mark. `callName` stays the
+   *  humanized string for copy. */
+  callApp: string | null;
   history: InterviewExchange[];
   question: string;
   answer: string;
   interimQuestion: string;
   briefReady: boolean;
+  /** Word count of the attached resume, or null when none is attached. */
+  resumeWords: number | null;
+  attachingResume: boolean;
+  resumeError: string | null;
+  attachResume: (file: File) => void;
   canSuggest: boolean;
   recoverable: boolean;
   candidateSpeaking: boolean;
@@ -191,8 +226,14 @@ export interface InterviewHackerState {
 }
 
 export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
+  const { user } = useAuth();
   const [phase, setPhase] = useState<InterviewHackerPhase>("idle");
   const [callName, setCallName] = useState<string | null>(null);
+  const [callApp, setCallApp] = useState<string | null>(null);
+  // `resumeText`, not `resume`: `resume` is already the pause/resume action.
+  const [resumeText, setResumeText] = useState<string | null>(null);
+  const [attachingResume, setAttachingResume] = useState(false);
+  const [resumeError, setResumeError] = useState<string | null>(null);
   const [history, setHistory] = useState<InterviewExchange[]>([]);
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
@@ -221,6 +262,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   const recentRef = useRef<InterviewTranscriptTurn[]>([]);
   const reflectionTurnsRef = useRef<InterviewTranscriptTurn[]>([]);
   const briefRef = useRef<InterviewBrief | null>(null);
+  const resumeTextRef = useRef<string | null>(null);
   const answerRef = useRef("");
   const lastRemoteTurnRef = useRef<InterviewTranscriptTurn | null>(null);
   // Tracks whether the answer currently on screen was produced without a
@@ -266,6 +308,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   const plannedMinutesRef = useRef<PlannedMinutes>(DEFAULT_PLANNED_MINUTES);
 
   briefRef.current = brief;
+  resumeTextRef.current = resumeText;
   answerRef.current = answer;
 
   const clearSession = useCallback(() => {
@@ -309,6 +352,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     setAnswer("");
     setInterimQuestion("");
     setCallName(null);
+    setCallApp(null);
     setMessage(null);
     setErrorDetail(null);
     // The pitch is memory-only and dies with the session, same lifetime as the
@@ -426,6 +470,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     setReflectionSnapshot(null);
     setReflection(null);
     setCallName(null);
+    setCallApp(null);
     setPhase("checking");
     setMessage("Waiting for Zoom, Teams, or Google Meet. Aura checks automatically.");
     setErrorDetail(null);
@@ -443,6 +488,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
           if (cancelled || preflightAttemptRef.current !== attempt) return;
           if (result.supported) {
             setCallName(callLabel(result.app));
+            setCallApp(result.app);
             setMessage(null);
             setPhase("preflight");
             return;
@@ -482,6 +528,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     setReflectionSnapshot(null);
     setReflection(null);
     setCallName(null);
+    setCallApp(null);
     setMessage(null);
     setErrorDetail(null);
     setPhase("idle");
@@ -538,6 +585,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
         });
         armCredentialRefresh(credential.expiresInSeconds);
         setCallName(callLabel(status.app));
+        setCallApp(status.app);
         setPhase(status.phase === "paused" ? "paused" : "listening");
       })
       .catch((error) => {
@@ -607,6 +655,77 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       unlisten?.();
     };
   }, [signedIn]);
+
+  // The resume the preflight can attach when no brief exists. Read from the
+  // process-wide Rust slot first; if that is empty, fall back to the resume the
+  // user already imported in the dashboard's Interview page.
+  //
+  // Read-only on the workspace, deliberately: that store is saved whole, so an
+  // overlay write would race the dashboard and could wipe prepared interviews.
+  useEffect(() => {
+    if (!signedIn) {
+      setResumeText(null);
+      return;
+    }
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    loadInterviewResume()
+      .then(async (stored) => {
+        if (!active) return;
+        if (stored) {
+          setResumeText(stored);
+          return;
+        }
+        if (!user?.uid) return;
+        const workspace = await loadInterviewWorkspace(user.uid);
+        if (!active || !workspace) return;
+        const current = workspace.interviews.find(
+          (record) => record.interviewId === workspace.currentInterviewId,
+        );
+        const fromWorkspace = current?.input.resume.trim();
+        if (fromWorkspace) setResumeText(fromWorkspace);
+      })
+      .catch((error) => logError("Interview Companion: load resume", error));
+    listenForInterviewResume((stored) => {
+      if (active) setResumeText(stored);
+    })
+      .then((stopListening) => { unlisten = stopListening; })
+      .catch((error) => logError("Interview Companion: resume listener", error));
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, [signedIn, user?.uid]);
+
+  const attachResume = useCallback((file: File) => {
+    setAttachingResume(true);
+    setResumeError(null);
+    void extractResumeText(file)
+      .then((text) => {
+        const trimmed = text.slice(0, RESUME_MAX_CHARS);
+        return storeInterviewResume(trimmed).then(() => {
+          setResumeText(trimmed);
+          trackEvent("interview_companion_resume_attached", {
+            words: resumeStats(trimmed).words,
+          });
+        });
+      })
+      .catch((error: unknown) => {
+        if (error instanceof ResumeExtractionError) {
+          setResumeError(
+            error.code === "unsupported"
+              ? "PDF, DOCX, TXT or MD only"
+              : error.code === "empty"
+                ? "No text found in that file"
+                : "Could not read that file",
+          );
+          return;
+        }
+        logError("Interview Companion: attach resume", error);
+        setResumeError("Could not read that file");
+      })
+      .finally(() => setAttachingResume(false));
+  }, []);
 
   // Seed the preflight pickers from the brief envelope, which is the only
   // channel that reaches the overlay: the dashboard's workspace record never
@@ -703,10 +822,15 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
 
     if (action !== "automatic") activate();
     const recentText = recentTurns.slice(-6).map((item) => item.text).join(" ");
+    const slice = relevantInterviewBriefSlice(briefRef.current, turn.text, recentText);
     void streamInterviewAnswer({
       turn,
       recentTurns,
-      brief: relevantInterviewBriefSlice(briefRef.current, turn.text, recentText),
+      brief: slice,
+      // Only when the ranked slice carries no evidence about the candidate.
+      // A prepared user already sends stronger, verified material, and paying
+      // for the whole resume on top of it on every single turn is waste.
+      resume: hasCandidateEvidence(slice) ? "" : (resumeTextRef.current ?? ""),
       answerShape: answerShapeRef.current,
       action,
       currentAnswer: previousAnswer,
@@ -1035,6 +1159,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       identityRef.current = { sessionId: status.sessionId, epoch: status.epoch };
       setRecoverable(true);
       setCallName(callLabel(status.app));
+      setCallApp(status.app);
       setPhase(status.phase);
       if (status.reason === "credential_expired") {
         setMessage("Refreshing transcription credentials...");
@@ -1143,11 +1268,16 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   return {
     phase,
     callName,
+    callApp,
     history,
     question,
     answer,
     interimQuestion,
     briefReady: brief !== null && brief.reviewedAtMs !== null,
+    resumeWords: resumeText ? resumeStats(resumeText).words : null,
+    attachingResume,
+    resumeError,
+    attachResume,
     canSuggest,
     recoverable,
     candidateSpeaking,

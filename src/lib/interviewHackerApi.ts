@@ -1,5 +1,6 @@
 import { authFetch } from "./api";
 import type { AnswerShape } from "./interviewPolicy";
+import { RESUME_MAX_CHARS } from "./resumeText";
 import type {
   InterviewAnswerLength,
   InterviewBrief,
@@ -180,6 +181,7 @@ export async function streamInterviewAnswer({
   turn,
   recentTurns,
   brief,
+  resume = "",
   answerShape,
   action = "automatic",
   currentAnswer = "",
@@ -190,6 +192,9 @@ export async function streamInterviewAnswer({
   turn: InterviewTranscriptTurn;
   recentTurns: InterviewTranscriptTurn[];
   brief: InterviewBriefSlice | null;
+  /** Raw resume text, sent only when the brief has no candidate evidence to
+   *  ground against. Truncated to the backend's own limit. */
+  resume?: string;
   answerShape: AnswerShape;
   action?: InterviewAnswerAction;
   currentAnswer?: string;
@@ -207,6 +212,7 @@ export async function streamInterviewAnswer({
       turn: wireTurn(turn),
       recent_turns: recentTurns.slice(-12).map(wireTurn),
       brief: brief ? wireBriefSlice(brief) : null,
+      resume: resume.slice(0, RESUME_MAX_CHARS),
       answer_shape: answerShape,
       action,
       current_answer: currentAnswer,

@@ -1,13 +1,20 @@
 import { useEffect, useRef } from "react";
 import iconUrl from "../../assets/icons/Aura-Icon.png";
 import { GlassSurface } from "../GlassSurface";
-import { StopSquareIcon } from "../icons";
+import { DocumentIcon, MicIcon, MicOffIcon, StopSquareIcon, UploadArrowIcon } from "../icons";
+import { callVisual } from "./callIcons";
+import { useMicPreflightLevel } from "./useMicPreflightLevel";
+import { RESUME_ACCEPT } from "../../lib/resumeText";
 import { PLANNED_MINUTES_OPTIONS, ROUND_KIND_OPTIONS } from "../../lib/interviewPolicy";
 import { isInterviewCaptureActive } from "./useInterviewHacker";
 import type { InterviewExchange, InterviewHackerState } from "./useInterviewHacker";
 import "./InterviewHackerCard.css";
 
 export const INTERVIEW_HACKER_SLOT_HEIGHT = 360;
+/** Preflight is the tallest non-pitch state: three widgets with icon bands, both
+ * pickers with their pills wrapped, and the Start button. Measured against the
+ * six-option Round row wrapping to three lines, which is the worst case. */
+export const INTERVIEW_HACKER_PREFLIGHT_SLOT_HEIGHT = 420;
 /** Taller slot while the opening pitch is expanded. See OverlayRoot's slotHeight. */
 export const INTERVIEW_HACKER_PITCH_SLOT_HEIGHT = 480;
 
@@ -83,6 +90,119 @@ function Exchange({
         </div>
       )}
     </>
+  );
+}
+
+/**
+ * The three preflight widgets.
+ *
+ * Each one answers "is this leg actually working" rather than restating what the
+ * feature is: the mic shows live level, the call shows the app's own mark, and
+ * the brief is the place a resume gets attached when nothing was prepared.
+ */
+
+function MicSource({ active }: { active: boolean }) {
+  const mic = useMicPreflightLevel(active);
+  const blocked = mic.status === "denied" || mic.status === "no-device";
+  const caption =
+    mic.status === "denied"
+      ? "Blocked"
+      : mic.status === "no-device"
+        ? "No mic found"
+        : mic.status === "requesting"
+          ? "Checking..."
+          : "Speak to test";
+  return (
+    <div className={`interview-hacker-source${blocked ? " is-warning" : ""}`}>
+      <span>You</span>
+      <div className="interview-hacker-source-body">
+        <i className="interview-hacker-source-icon" aria-hidden="true">
+          {blocked ? <MicOffIcon /> : <MicIcon />}
+        </i>
+        <div
+          className="interview-hacker-meter"
+          role="img"
+          aria-label={mic.status === "live" ? "Microphone level" : caption}
+        >
+          {mic.bars.map((height, index) => (
+            <span
+              key={index}
+              style={{ transform: `scaleY(${0.16 + (blocked ? 0 : height) * 0.84})` }}
+            />
+          ))}
+        </div>
+      </div>
+      <strong>{caption}</strong>
+    </div>
+  );
+}
+
+function CallSource({ app, name }: { app: string | null; name: string | null }) {
+  const visual = callVisual(app);
+  return (
+    <div className="interview-hacker-source">
+      <span>Call</span>
+      <div className="interview-hacker-source-body">
+        <i className="interview-hacker-source-icon" aria-hidden="true">{visual.icon}</i>
+      </div>
+      <strong>{visual.name ?? name ?? "Checking..."}</strong>
+    </div>
+  );
+}
+
+function BriefSource({ hacker }: { hacker: InterviewHackerState }) {
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const caption = hacker.briefReady
+    ? "Reviewed and ready"
+    : hacker.attachingResume
+      ? "Reading resume..."
+      : hacker.resumeError
+        ?? (hacker.resumeWords !== null
+          ? `Resume added, ${hacker.resumeWords} words`
+          : "Add your resume");
+  const body = (
+    <>
+      <div className="interview-hacker-source-body">
+        <i className="interview-hacker-source-icon" aria-hidden="true">
+          {hacker.briefReady ? <DocumentIcon /> : <UploadArrowIcon />}
+        </i>
+      </div>
+      <strong>{caption}</strong>
+    </>
+  );
+  if (hacker.briefReady) {
+    return (
+      <div className="interview-hacker-source">
+        <span>Brief</span>
+        {body}
+      </div>
+    );
+  }
+  return (
+    <div className={`interview-hacker-source${hacker.resumeError ? " is-warning" : ""}`}>
+      <span>Brief</span>
+      <button
+        type="button"
+        className="interview-hacker-source-action"
+        onClick={() => fileRef.current?.click()}
+        disabled={hacker.attachingResume}
+        title="Attach a resume for this call"
+      >
+        {body}
+      </button>
+      <input
+        ref={fileRef}
+        type="file"
+        accept={RESUME_ACCEPT}
+        hidden
+        onChange={(event) => {
+          const file = event.target.files?.[0];
+          // Cleared immediately so re-picking the same file fires onChange again.
+          event.target.value = "";
+          if (file) hacker.attachResume(file);
+        }}
+      />
+    </div>
   );
 }
 
@@ -183,18 +303,9 @@ export function InterviewHackerCard({
 
         {(hacker.phase === "preflight" || hacker.phase === "checking") && (
           <div className="interview-hacker-preflight">
-            <div className="interview-hacker-source">
-              <span>You</span>
-              <strong>Microphone</strong>
-            </div>
-            <div className="interview-hacker-source">
-              <span>Call</span>
-              <strong>{hacker.callName ?? "Checking..."}</strong>
-            </div>
-            <div className="interview-hacker-source">
-              <span>Brief</span>
-              <strong>{hacker.briefReady ? "Reviewed and ready" : "Not prepared"}</strong>
-            </div>
+            <MicSource active={hacker.phase === "preflight" || hacker.phase === "checking"} />
+            <CallSource app={hacker.callApp} name={hacker.callName} />
+            <BriefSource hacker={hacker} />
           </div>
         )}
 

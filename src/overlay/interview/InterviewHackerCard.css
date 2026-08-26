@@ -145,6 +145,9 @@
 
 .interview-hacker-preflight {
   display: grid;
+  /* Pinned at its content height. Without this the row would shrink to feed
+     .interview-hacker-round, which now claims the card's leftover space. */
+  flex: 0 0 auto;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
   padding: 10px 12px;
@@ -168,6 +171,85 @@
   color: var(--text-primary, rgba(255, 255, 255, 0.9));
   font-size: 13.5px;
   font-weight: 600;
+}
+
+/* Icon + meter band between the label and the value. Fixed height so a cell
+   whose icon is missing does not sit shorter than its neighbours. */
+.interview-hacker-source-body {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 22px;
+  margin: 3px 0 2px;
+}
+
+.interview-hacker-source-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  color: var(--text-primary, rgba(255, 255, 255, 0.88));
+}
+
+.interview-hacker-source-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+/* Live microphone level. Bars scale from their own centre so the meter reads as
+   a waveform rather than a bar chart growing off a baseline. */
+.interview-hacker-meter {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 18px;
+}
+
+.interview-hacker-meter span {
+  display: block;
+  width: 2.5px;
+  height: 18px;
+  border-radius: 999px;
+  background: var(--accent, rgba(150, 190, 255, 0.92));
+  transform: scaleY(0.16);
+  transition: transform 90ms linear;
+}
+
+/* The Brief cell is the only interactive one, and only while no brief exists.
+   A real button, not a div: the overlay's drag region lets real controls through
+   automatically and nothing else does. */
+.interview-hacker-source-action {
+  display: contents;
+  border: 0;
+  padding: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+.interview-hacker-source-action:disabled {
+  cursor: progress;
+}
+
+.interview-hacker-source-action:hover strong,
+.interview-hacker-source-action:focus-visible strong {
+  color: var(--accent, rgba(150, 190, 255, 0.92));
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.interview-hacker-source.is-warning .interview-hacker-source-icon,
+.interview-hacker-source.is-warning strong {
+  color: var(--warning, rgba(255, 196, 120, 0.95));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .interview-hacker-meter span {
+    transition: none;
+  }
 }
 
 /* Stacked chat thread. Question left, answer right, same as any chat client.
@@ -302,15 +384,29 @@
   white-space: nowrap;
 }
 
+/* Only rendered in preflight, which is why the breathing room lives here rather
+   than on .interview-hacker-inner: the live card must not grow with it. The gap
+   separates the Round pills from the "Planned length" label under them, and the
+   bottom padding keeps the last pill row off the Start button. */
 .interview-hacker-round {
   display: flex;
   flex-direction: column;
-  gap: 9px;
+  justify-content: center;
+  /* Takes the card's leftover height instead of letting it pool under the Start
+     button. That is what distributes preflight the way it should read: the three
+     widgets at the top, the pickers centred in the space between, Start near the
+     bottom. The live card has no .interview-hacker-round, so its thread keeps
+     the flex space there. */
+  flex: 1 1 auto;
+  min-height: 0;
+  gap: 16px;
+  padding-bottom: 6px;
 }
 
 .interview-hacker-choice > span {
   display: block;
   margin-bottom: 5px;
+  text-align: center;
   color: var(--text-muted, rgba(255, 255, 255, 0.52));
   font-size: 12px;
   font-weight: 650;
@@ -319,6 +415,7 @@
 .interview-hacker-choice > div {
   display: flex;
   flex-wrap: wrap;
+  justify-content: center;
   gap: 6px;
 }
 
@@ -456,7 +553,8 @@
 }
 
 .interview-hacker-primary {
-  align-self: flex-end;
+  align-self: center;
+  margin-bottom: 6px;
   color: var(--text-on-accent, #0d1117);
   background: var(--accent, rgba(150, 190, 255, 0.92));
 }
