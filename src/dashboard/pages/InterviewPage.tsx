@@ -2,12 +2,18 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   ArrowRight,
+  ArrowUpRight,
   BriefcaseBusiness,
   Building2,
   CheckCircle2,
+  ClipboardPaste,
+  FileText,
   History,
+  Loader2,
   Plus,
+  Search,
   Trash2,
+  Upload,
 } from "lucide-react";
 import {
   candidateBriefClaims,
@@ -22,9 +28,27 @@ import {
   type InterviewPreparationInput,
 } from "../../lib/interviewBrief";
 import {
+  DEFAULT_PLANNED_MINUTES,
+  DEFAULT_ROUND_KIND,
+  PLANNED_MINUTES_OPTIONS,
+  ROUND_KIND_OPTIONS,
+} from "../../lib/interviewPolicy";
+import {
   buildInterviewBrief,
-  researchInterviewCompany,
+  streamInterviewCompanyResearch,
+  type CompanyResearchProgress,
 } from "../../lib/interviewHackerApi";
+import { DetailModal } from "../components/DetailModal";
+import { SegmentedChoice } from "../components/SegmentedChoice";
+import { SiteIcon } from "../components/SiteIcon";
+import {
+  RESUME_ACCEPT,
+  RESUME_MAX_CHARS,
+  ResumeExtractionError,
+  extractResumeText,
+  resumeStats,
+} from "../../lib/resumeText";
+import { readText as readClipboardText } from "@tauri-apps/plugin-clipboard-manager";
 import { clearInterviewBrief, loadInterviewBrief, storeInterviewBrief } from "../../lib/interviewBriefMemory";
 import {
   loadInterviewWorkspace,
@@ -108,6 +132,72 @@ const CATEGORY_LABELS: Record<CompanyResearchCategory, string> = {
   role_relevance: "Why this role matters",
 };
 
+/** The four fields company research actually consumes. Used to decide whether
+ * a finished dossier still matches what the user is looking at. */
+function targetSignature(input: InterviewPreparationInput): string {
+  return [
+    input.company.trim(),
+    input.companyUrl.trim(),
+    input.role.trim(),
+    input.jobDescription.trim(),
+  ].join("\u0000");
+}
+
+const ANSWER_LENGTH_OPTIONS: Array<{ value: InterviewAnswerLength; label: string; hint: string }> = [
+  // Hints mirror the backend's own length instructions so the control never
+  // promises something the answer generator will not do.
+  { value: "brief", label: "Brief", hint: "1 to 2 sentences" },
+  { value: "balanced", label: "Balanced", hint: "2 to 4 sentences" },
+  { value: "detailed", label: "Detailed", hint: "4 to 6 sentences" },
+];
+
+/** The three-phase rail across the top of the builder. Phase 1 previously had
+ * no label at all while phase 2 did, so there was no sense of where you were. */
+function InterviewSteps({
+  company,
+  hasResearch,
+  hasResume,
+  claimCount,
+  hasBrief,
+}: {
+  company: string;
+  hasResearch: boolean;
+  hasResume: boolean;
+  claimCount: number;
+  hasBrief: boolean;
+}) {
+  const steps = [
+    {
+      label: "Target",
+      detail: company.trim() || "Add a company",
+      state: hasResearch ? "done" : "active",
+    },
+    {
+      label: "Evidence",
+      detail: hasResume ? "Resume added" : "Optional context",
+      state: !hasResearch ? "pending" : hasBrief ? "done" : "active",
+    },
+    {
+      label: "Review",
+      detail: hasBrief ? `${claimCount} ${claimCount === 1 ? "claim" : "claims"}` : "Confirm claims",
+      state: hasBrief ? "active" : "pending",
+    },
+  ];
+  return (
+    <ol className="db-interview-steps">
+      {steps.map((step, index) => (
+        <li key={step.label} className={`is-${step.state}`}>
+          <span className="db-interview-step-index" aria-hidden>{index + 1}</span>
+          <span className="db-interview-step-copy">
+            <strong>{step.label}</strong>
+            <small>{step.detail}</small>
+          </span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 function Field({
   label,
   optional = true,
@@ -135,6 +225,32 @@ function Field({
   );
 }
 
+/** Host without the www prefix, e.g. "rivian.com". Falls back to the raw value
+ * so a malformed URL still renders something a person can recognise. */
+function sourceHost(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return url.replace(/^https?:\/\//, "").split("/")[0] || url;
+  }
+}
+
+function SourceChip({ url, title }: { url: string; title?: string }) {
+  const host = sourceHost(url);
+  return (
+    <button
+      type="button"
+      className="db-interview-source-chip"
+      title={title ? `${title} - ${url}` : url}
+      onClick={() => void openUrl(url).catch((err) => logError("InterviewPage: open source", err))}
+    >
+      <SiteIcon host={host} size={18} />
+      <span className="db-interview-source-host">{host}</span>
+      <ArrowUpRight size={13} aria-hidden />
+    </button>
+  );
+}
+
 function SourceButtons({
   sourceIds,
   sourceById,
@@ -150,13 +266,7 @@ function SourceButtons({
   return (
     <span className="db-interview-source-buttons">
       {sources.map((source, index) => (
-        <button
-          type="button"
-          key={`${source.url}:${index}`}
-          onClick={() => void openUrl(source.url).catch((err) => logError("InterviewPage: open source", err))}
-        >
-          {source.title}
-        </button>
+        <SourceChip key={`${source.url}:${index}`} url={source.url} title={source.title} />
       ))}
     </span>
   );
@@ -240,65 +350,395 @@ function CompanyDossier({ research }: { research: CompanyResearchResult }) {
   );
 }
 
+type ResearchSearchRow = {
+  callId: string;
+  query: string;
+  urls: string[];
+  kind: "search" | "read";
+  done: boolean;
+};
+
+function elapsedLabel(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, "0")}`;
+}
+
+/**
+ * Live account of the research call.
+ *
+ * Every row here is created by a real server-sent event. Nothing advances on a
+ * timer except the elapsed clock, so a row that says a query was searched means
+ * the model actually searched it. When the backend has no streaming route the
+ * event list stays empty and this falls back to an honest indeterminate state
+ * rather than inventing steps.
+ */
+function ResearchProgressPanel({
+  company,
+  startedAtMs,
+  events,
+  onCancel,
+}: {
+  company: string;
+  startedAtMs: number;
+  events: CompanyResearchProgress[];
+  onCancel: () => void;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const { rows, writing, sourceCount } = useMemo(() => {
+    const byCall = new Map<string, ResearchSearchRow>();
+    const order: string[] = [];
+    let isWriting = false;
+    const seenUrls = new Set<string>();
+
+    for (const event of events) {
+      if (event.stage === "writing") {
+        isWriting = true;
+        continue;
+      }
+      if (event.stage === "started") continue;
+      const key = event.callId || `call-${order.length}`;
+      const existing = byCall.get(key);
+      if (!existing) order.push(key);
+      const merged: ResearchSearchRow = {
+        callId: key,
+        query: event.query || existing?.query || "",
+        urls: event.urls.length ? event.urls : existing?.urls ?? [],
+        kind: event.stage === "reading" ? "read" : existing?.kind ?? "search",
+        done: event.stage !== "search_started" || (existing?.done ?? false),
+      };
+      byCall.set(key, merged);
+      for (const url of merged.urls) seenUrls.add(url);
+    }
+
+    return {
+      rows: order.flatMap((key) => {
+        const row = byCall.get(key);
+        return row ? [row] : [];
+      }),
+      writing: isWriting,
+      sourceCount: seenUrls.size,
+    };
+  }, [events]);
+
+  const streaming = events.length > 0;
+
+  return (
+    <section className="db-interview-progress" aria-live="polite">
+      <header className="db-interview-progress-head">
+        <span className="db-interview-progress-title">
+          <Loader2 size={15} className="db-interview-spin" aria-hidden />
+          Researching {company.trim() || "the company"}
+        </span>
+        <span className="db-interview-progress-right">
+          <time className="db-interview-progress-clock">{elapsedLabel(now - startedAtMs)}</time>
+          <button type="button" className="db-interview-progress-cancel" onClick={onCancel}>
+            Cancel
+          </button>
+        </span>
+      </header>
+
+      {streaming ? (
+        <ol className="db-interview-progress-steps">
+          <li className="is-done">
+            <span className="db-interview-progress-dot" aria-hidden />
+            <span className="db-interview-progress-text">Contacting the research model</span>
+          </li>
+          {rows.map((row) => (
+            <li key={row.callId} className={row.done ? "is-done" : "is-active"}>
+              <span className="db-interview-progress-dot" aria-hidden />
+              <span className="db-interview-progress-text">
+                <span className="db-interview-progress-verb">
+                  {row.kind === "read" ? "Read" : row.done ? "Searched" : "Searching"}
+                </span>
+                {row.query ? (
+                  <span className="db-interview-progress-query">{row.query}</span>
+                ) : (
+                  <span className="db-interview-progress-query is-pending">the web</span>
+                )}
+              </span>
+              {row.urls.length > 0 && (
+                <span className="db-interview-progress-sources">
+                  {row.urls.map((url) => <SourceChip key={url} url={url} />)}
+                </span>
+              )}
+            </li>
+          ))}
+          <li className={writing ? "is-active" : "is-pending"}>
+            <span className="db-interview-progress-dot" aria-hidden />
+            <span className="db-interview-progress-text">Writing the dossier</span>
+          </li>
+        </ol>
+      ) : (
+        <p className="db-interview-progress-note">
+          <Search size={14} aria-hidden />
+          Searching public sources. This usually takes 30 to 60 seconds.
+        </p>
+      )}
+
+      {sourceCount > 0 && (
+        <footer className="db-interview-progress-foot">
+          {sourceCount} {sourceCount === 1 ? "source" : "sources"} consulted so far
+        </footer>
+      )}
+    </section>
+  );
+}
+
+type ResumeTab = "upload" | "paste";
+
+/**
+ * Resume intake, as a modal rather than an inline strip.
+ *
+ * Extracted text is always shown in an editable box before it is accepted. That
+ * is what makes the character cap survivable: a long CV becomes "trim this"
+ * instead of an outright rejection, and the user can see exactly what Aura will
+ * be grounded on.
+ */
+function ResumeImportDialog({
+  open,
+  initialValue,
+  onClose,
+  onSave,
+}: {
+  open: boolean;
+  initialValue: string;
+  onClose: () => void;
+  onSave: (value: string) => void;
+}) {
+  const [tab, setTab] = useState<ResumeTab>("upload");
+  const [text, setText] = useState(initialValue);
+  const [sourceLabel, setSourceLabel] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const [notice, setNotice] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setText(initialValue);
+    setSourceLabel(initialValue ? "Saved resume" : "");
+    setNotice("");
+    setDragging(false);
+    setTab(initialValue ? "paste" : "upload");
+  }, [open, initialValue]);
+
+  const takeFile = async (file: File) => {
+    setBusy(true);
+    setNotice("");
+    try {
+      const extracted = await extractResumeText(file);
+      setText(extracted);
+      setSourceLabel(file.name);
+      setTab("paste");
+    } catch (err) {
+      if (err instanceof ResumeExtractionError) {
+        setNotice(err.message);
+      } else {
+        logError("InterviewPage: extract resume", err);
+        setNotice("Aura could not read that resume file.");
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const takeClipboard = async () => {
+    setBusy(true);
+    setNotice("");
+    try {
+      // Tauri's clipboard plugin, not navigator.clipboard: the WebView API
+      // triggers a Chromium permission prompt on tauri.localhost, while this
+      // resolves in Rust against the capability grant with no dialog.
+      const clipboard = (await readClipboardText()) ?? "";
+      if (!clipboard.trim()) {
+        setNotice("The clipboard has no text to import.");
+        return;
+      }
+      setText(clipboard.trim());
+      setSourceLabel("Clipboard");
+      setTab("paste");
+    } catch (err) {
+      logError("InterviewPage: import resume clipboard", err);
+      setNotice("Aura could not read the clipboard. Choose a file or paste the text instead.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const stats = resumeStats(text);
+  const overLimit = stats.characters > RESUME_MAX_CHARS;
+
+  return (
+    <DetailModal
+      open={open}
+      title="Add your resume"
+      onClose={onClose}
+      panelClassName="db-interview-glass-panel"
+    >
+      <div className="db-resume-dialog">
+        <div className="db-resume-tabs" role="tablist" aria-label="Resume source">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "upload"}
+            className={tab === "upload" ? "is-active" : ""}
+            onClick={() => setTab("upload")}
+          >
+            Upload file
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "paste"}
+            className={tab === "paste" ? "is-active" : ""}
+            onClick={() => setTab("paste")}
+          >
+            Paste text
+          </button>
+        </div>
+
+        {tab === "upload" ? (
+          <>
+            <div
+              className={`db-resume-drop${dragging ? " is-dragging" : ""}${busy ? " is-busy" : ""}`}
+              onDragOver={(event) => {
+                event.preventDefault();
+                setDragging(true);
+              }}
+              onDragLeave={() => setDragging(false)}
+              onDrop={(event) => {
+                event.preventDefault();
+                setDragging(false);
+                const file = event.dataTransfer.files?.[0];
+                if (file) void takeFile(file);
+              }}
+            >
+              {busy ? (
+                <Loader2 size={22} className="db-interview-spin" aria-hidden />
+              ) : (
+                <Upload size={22} aria-hidden />
+              )}
+              <strong>{busy ? "Reading your resume" : "Drop your resume here"}</strong>
+              <button
+                type="button"
+                className="db-resume-choose"
+                disabled={busy}
+                onClick={() => fileRef.current?.click()}
+              >
+                or choose a file
+              </button>
+              <span>PDF, Word (.docx), or plain text</span>
+              <input
+                ref={fileRef}
+                type="file"
+                accept={RESUME_ACCEPT}
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) void takeFile(file);
+                  event.target.value = "";
+                }}
+              />
+            </div>
+            <button
+              type="button"
+              className="db-resume-clipboard"
+              disabled={busy}
+              onClick={() => void takeClipboard()}
+            >
+              <ClipboardPaste size={15} aria-hidden />
+              Paste from clipboard
+            </button>
+          </>
+        ) : (
+          <label className="db-resume-editor">
+            <span>
+              Resume text
+              {sourceLabel && <small>from {sourceLabel}</small>}
+            </span>
+            <textarea
+              value={text}
+              onChange={(event) => setText(event.target.value)}
+              placeholder="Paste your resume here"
+              spellCheck={false}
+            />
+          </label>
+        )}
+
+        {notice && <p className="db-resume-notice">{notice}</p>}
+
+        <footer className="db-resume-foot">
+          <span className={`db-resume-count${overLimit ? " is-over" : ""}`}>
+            {text.trim()
+              ? `${stats.words.toLocaleString()} words, ${stats.characters.toLocaleString()} characters`
+              : "Nothing added yet"}
+            {overLimit && `, trim to ${RESUME_MAX_CHARS.toLocaleString()}`}
+          </span>
+          <span className="db-resume-actions">
+            {initialValue && (
+              <button
+                type="button"
+                className="db-resume-remove"
+                onClick={() => {
+                  onSave("");
+                  onClose();
+                }}
+              >
+                Remove
+              </button>
+            )}
+            <button type="button" className="db-resume-cancel" onClick={onClose}>Cancel</button>
+            <button
+              type="button"
+              className="db-resume-save"
+              disabled={busy || overLimit || !text.trim()}
+              onClick={() => {
+                onSave(text.trim());
+                onClose();
+              }}
+            >
+              Use resume
+            </button>
+          </span>
+        </footer>
+      </div>
+    </DetailModal>
+  );
+}
+
 function ResumeImport({
   value,
   onChange,
-  onError,
 }: {
   value: string;
   onChange: (value: string) => void;
-  onError: (message: string) => void;
 }) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const useText = (text: string) => {
-    const trimmed = text.trim();
-    if (!trimmed) {
-      onError("Aura could not find resume text to import.");
-      return;
-    }
-    if (trimmed.length > 12_000) {
-      onError("This resume is over 12,000 characters. Import a focused version for this role.");
-      return;
-    }
-    onError("");
-    onChange(trimmed);
-  };
-  const importClipboard = () => {
-    void navigator.clipboard.readText()
-      .then(useText)
-      .catch((err) => {
-        logError("InterviewPage: import resume clipboard", err);
-        onError("Aura could not read the clipboard. Choose a text file instead.");
-      });
-  };
+  const [open, setOpen] = useState(false);
+  const stats = resumeStats(value);
   return (
     <div className={`db-interview-resume${value ? " has-resume" : ""}`}>
-      <input
-        ref={inputRef}
-        type="file"
-        accept=".txt,.md,text/plain,text/markdown"
-        onChange={(event) => {
-          const file = event.target.files?.[0];
-          if (!file) return;
-          void file.text().then(useText).catch((err) => {
-            logError("InterviewPage: import resume file", err);
-            onError("Aura could not read that resume file.");
-          });
-          event.target.value = "";
-        }}
+      <span className="db-interview-resume-icon" aria-hidden>
+        <FileText size={20} />
+      </span>
+      <strong>{value ? "Resume ready" : "Add your resume"}</strong>
+      <span className="db-interview-resume-sub">
+        {value
+          ? `${stats.words.toLocaleString()} words Aura can ground answers on`
+          : "PDF, Word, or plain text. Optional, but answers get much sharper with it."}
+      </span>
+      <button type="button" className="db-interview-resume-cta" onClick={() => setOpen(true)}>
+        {value ? "Review resume" : "Add resume"}
+      </button>
+      <ResumeImportDialog
+        open={open}
+        initialValue={value}
+        onClose={() => setOpen(false)}
+        onSave={onChange}
       />
-      <div>
-        <strong>{value ? "Resume ready" : "Add your resume"}</strong>
-        <span>{value ? `${value.split(/\s+/).length} words imported` : "Optional"}</span>
-      </div>
-      {value ? (
-        <button type="button" className="db-interview-remove-button" onClick={() => onChange("")}>Remove</button>
-      ) : (
-        <div className="db-interview-resume-actions">
-          <button type="button" onClick={importClipboard}>Import clipboard</button>
-          <button type="button" onClick={() => inputRef.current?.click()}>Choose text file</button>
-        </div>
-      )}
     </div>
   );
 }
@@ -318,13 +758,7 @@ function ClaimSources({
     <span className="db-interview-sources">
       {supporting.map((source, sourceIndex) => source.urls.length > 0 ? (
         source.urls.slice(0, 2).map((url, urlIndex) => (
-          <button
-            type="button"
-            key={`${url}:${urlIndex}`}
-            onClick={() => void openUrl(url).catch((err) => logError("InterviewPage: open brief source", err))}
-          >
-            {source.label}{source.urls.length > 1 ? ` ${urlIndex + 1}` : ""}
-          </button>
+          <SourceChip key={`${url}:${urlIndex}`} url={url} title={source.label} />
         ))
       ) : (
         <strong key={`${source.sourceId}:${sourceIndex}`}>{source.label}</strong>
@@ -601,6 +1035,11 @@ export function InterviewPage() {
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [deletingInterviewId, setDeletingInterviewId] = useState<string | null>(null);
   const [error, setError] = useState("");
+  const [researchEvents, setResearchEvents] = useState<CompanyResearchProgress[]>([]);
+  const [researchStartedAtMs, setResearchStartedAtMs] = useState(0);
+  const [researchPanelDue, setResearchPanelDue] = useState(false);
+  const researchAbortRef = useRef<AbortController | null>(null);
+  const researchPanelTimer = useRef<number | null>(null);
   const persistenceRevision = useRef(0);
   const tabTransitionTimer = useRef<number | null>(null);
   const workspaceRef = useRef(workspace);
@@ -714,6 +1153,8 @@ export function InterviewPage() {
 
   useEffect(() => () => {
     if (tabTransitionTimer.current !== null) window.clearTimeout(tabTransitionTimer.current);
+    researchAbortRef.current?.abort();
+    if (researchPanelTimer.current !== null) window.clearTimeout(researchPanelTimer.current);
   }, []);
 
   const setBusy = (
@@ -746,6 +1187,15 @@ export function InterviewPage() {
       input: { ...interview.input, [key]: value },
       draftBrief: null,
     }));
+  };
+  // Round and planned length are session pacing, not evidence. Unlike `update`
+  // they must NOT clear draftBrief: changing the round does not invalidate a
+  // brief the user already reviewed and confirmed claim by claim.
+  const updateProfile = (
+    patch: Partial<Pick<InterviewWorkspaceRecord, "lastRoundKind" | "plannedMinutes">>,
+  ) => {
+    if (!currentInterview) return;
+    updateInterview(currentInterview.interviewId, (interview) => ({ ...interview, ...patch }));
   };
   const updateTarget = (key: "company" | "companyUrl" | "role" | "jobDescription", value: string) => {
     if (!currentInterview) return;
@@ -848,24 +1298,54 @@ export function InterviewPage() {
         return;
       }
     }
+    const controller = new AbortController();
+    researchAbortRef.current?.abort();
+    researchAbortRef.current = controller;
+    const signature = targetSignature(target);
     setBusy(setResearchingIds, interviewId, true);
+    setResearchEvents([]);
+    setResearchStartedAtMs(Date.now());
+    // A cached dossier comes back in well under a second. Holding the panel
+    // back until either a real event lands or this timer fires keeps that case
+    // from flashing a progress UI the user cannot read.
+    setResearchPanelDue(false);
+    if (researchPanelTimer.current !== null) window.clearTimeout(researchPanelTimer.current);
+    researchPanelTimer.current = window.setTimeout(() => setResearchPanelDue(true), 700);
     setError("");
     try {
-      const result = await researchInterviewCompany({
+      const result = await streamInterviewCompanyResearch({
         company: target.company,
         companyUrl: target.companyUrl,
         role: target.role,
         jobDescription: target.jobDescription,
+        signal: controller.signal,
+        onProgress: (progress) => setResearchEvents((current) => [...current, progress]),
       });
-      updateInterview(interviewId, (interview) => interview.input === target
+      // Compare only the fields research actually used. The previous object
+      // identity check threw away a finished dossier whenever any unrelated
+      // field, candidate notes included, was edited while it ran.
+      updateInterview(interviewId, (interview) => targetSignature(interview.input) === signature
         ? { ...interview, research: result, draftBrief: null }
         : interview);
     } catch (err) {
+      if (controller.signal.aborted) return;
       logError("InterviewPage: company research", err);
       setError("Aura could not complete the company research. Your inputs are still here, so you can try again.");
     } finally {
+      if (researchAbortRef.current === controller) researchAbortRef.current = null;
+      if (researchPanelTimer.current !== null) window.clearTimeout(researchPanelTimer.current);
+      researchPanelTimer.current = null;
+      setResearchPanelDue(false);
       setBusy(setResearchingIds, interviewId, false);
+      setResearchEvents([]);
     }
+  }
+
+  function cancelResearch() {
+    researchAbortRef.current?.abort();
+    researchAbortRef.current = null;
+    if (currentInterview) setBusy(setResearchingIds, currentInterview.interviewId, false);
+    setResearchEvents([]);
   }
 
   async function build() {
@@ -894,7 +1374,18 @@ export function InterviewPage() {
   async function useBrief() {
     if (!brief || !currentInterview) return;
     const interviewId = currentInterview.interviewId;
-    const reviewed = { ...brief, reviewedAtMs: Date.now() };
+    // Ride the profile along on the brief envelope. The overlay never sees the
+    // workspace record, and the Rust brief slot stores the brief as an opaque
+    // JSON value, so this is the one channel that already reaches it. Neither
+    // field is evidence and neither reaches the backend: the answer request is
+    // built by relevantInterviewBriefSlice(), which enumerates slice fields
+    // explicitly, and the slice model is extra="forbid" server side.
+    const reviewed: InterviewBrief = {
+      ...brief,
+      reviewedAtMs: Date.now(),
+      lastRoundKind: currentInterview.lastRoundKind ?? DEFAULT_ROUND_KIND,
+      plannedMinutes: currentInterview.plannedMinutes ?? DEFAULT_PLANNED_MINUTES,
+    };
     setBusy(setSavingIds, interviewId, true);
     setError("");
     try {
@@ -975,6 +1466,14 @@ export function InterviewPage() {
         />
       ) : currentInterview ? (
         <div id="interview-current-panel" className="db-interview-current-panel" role="tabpanel" aria-labelledby="interview-current-tab">
+      <InterviewSteps
+        company={input.company}
+        hasResearch={Boolean(research)}
+        hasResume={Boolean(input.resume.trim())}
+        claimCount={brief ? candidateBriefClaims(brief).length : 0}
+        hasBrief={Boolean(brief)}
+      />
+
       <section className="db-interview-builder">
         <div className="db-interview-section-head db-interview-target-head">
           <div>
@@ -990,11 +1489,33 @@ export function InterviewPage() {
           <Field label="Target role" value={input.role} onChange={(value) => updateTarget("role", value)} placeholder="Sr AI Platform Engineer" />
           <Field label="Job description" value={input.jobDescription} onChange={(value) => updateTarget("jobDescription", value)} placeholder="Paste the posting if you have it" multiline />
         </div>
-        <div className="db-interview-builder-footer">
-          <button type="button" disabled={!canResearch} onClick={() => void runResearch()}>
-            {researching ? "Researching company" : research ? "Research again" : "Research company"}
-          </button>
-        </div>
+        {researching && (researchEvents.length > 0 || researchPanelDue) ? (
+          <ResearchProgressPanel
+            company={input.company}
+            startedAtMs={researchStartedAtMs}
+            events={researchEvents}
+            onCancel={cancelResearch}
+          />
+        ) : (
+          <div className="db-interview-builder-footer">
+            <button
+              type="button"
+              disabled={!canResearch || researching}
+              onClick={() => void runResearch()}
+            >
+              {researching ? (
+                <Loader2 size={15} className="db-interview-spin" aria-hidden />
+              ) : (
+                <Search size={15} aria-hidden />
+              )}
+              {researching
+                ? "Researching company"
+                : research
+                  ? "Research again"
+                  : "Research company"}
+            </button>
+          </div>
+        )}
       </section>
 
       {research && <CompanyDossier research={research} />}
@@ -1009,7 +1530,7 @@ export function InterviewPage() {
             </div>
           </div>
 
-          <ResumeImport value={input.resume} onChange={(value) => update("resume", value)} onError={setError} />
+          <ResumeImport value={input.resume} onChange={(value) => update("resume", value)} />
 
           <details className="db-interview-optional" open>
             <summary>Candidate highlights and metrics <span>Optional</span></summary>
@@ -1029,14 +1550,38 @@ export function InterviewPage() {
           </details>
 
           <div className="db-interview-final-row">
-            <label className="db-interview-field">
+            <div className="db-interview-field db-interview-length">
               <span>Preferred answer length</span>
-              <select value={input.answerLength} onChange={(event) => update("answerLength", event.target.value as InterviewAnswerLength)}>
-                <option value="brief">Brief</option>
-                <option value="balanced">Balanced</option>
-                <option value="detailed">Detailed</option>
-              </select>
-            </label>
+              <SegmentedChoice
+                options={ANSWER_LENGTH_OPTIONS}
+                value={input.answerLength}
+                onChange={(value) => update("answerLength", value)}
+                ariaLabel="Preferred answer length"
+              />
+            </div>
+            <div className="db-interview-field db-interview-length">
+              <span>Usual round</span>
+              <SegmentedChoice
+                options={ROUND_KIND_OPTIONS}
+                value={currentInterview.lastRoundKind ?? DEFAULT_ROUND_KIND}
+                onChange={(value) => updateProfile({ lastRoundKind: value })}
+                ariaLabel="Usual round"
+              />
+            </div>
+            <div className="db-interview-field db-interview-length">
+              <span>Planned length</span>
+              <SegmentedChoice
+                options={PLANNED_MINUTES_OPTIONS.map((option) => ({
+                  ...option,
+                  value: String(option.value),
+                }))}
+                value={String(currentInterview.plannedMinutes ?? DEFAULT_PLANNED_MINUTES)}
+                onChange={(value) => updateProfile({
+                  plannedMinutes: Number(value) as typeof DEFAULT_PLANNED_MINUTES,
+                })}
+                ariaLabel="Planned length"
+              />
+            </div>
             <div className="db-interview-builder-footer">
               <button type="button" disabled={!canBuild} onClick={() => void build()}>
                 {building ? "Building brief" : brief ? "Rebuild brief" : "Build interview brief"}

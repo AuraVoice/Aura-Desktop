@@ -38,6 +38,7 @@ import {
 import { logError } from "../../lib/log";
 import { EmptyState } from "../components/EmptyState";
 import { PageError } from "../components/PageError";
+import { SiteIcon } from "../components/SiteIcon";
 import { RefreshIndicator } from "../components/RefreshIndicator";
 import { shortDateTime } from "../format";
 import { useDashboardResource } from "../useDashboardResource";
@@ -85,12 +86,9 @@ function sourceDomain(source: ResearchActivitySource): string {
 
 function SourceMark({ domain, small = false }: { domain: string; small?: boolean }) {
   const clean = domain.replace(/^www\./, "");
-  const label = clean.split(".")[0]?.slice(0, 1).toUpperCase() || "W";
-  return (
-    <span className={`db-research-source-mark${small ? " is-small" : ""}`} title={clean} aria-hidden>
-      {label}
-    </span>
-  );
+  return small
+    ? <SiteIcon host={clean} size={26} radius="7px" letters={1} />
+    : <SiteIcon host={clean} size={34} radius="9px" letters={1} />;
 }
 
 function isLegacyParked(run: ResearchRun): boolean {

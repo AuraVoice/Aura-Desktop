@@ -354,6 +354,10 @@
 
 .db-interview-builder-footer button,
 .db-interview-review-footer > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
   min-width: 150px;
   min-height: 42px;
   padding: 0 16px;
@@ -696,10 +700,21 @@
   text-transform: uppercase;
 }
 
-.db-interview-fact-meta span.is-estimated,
-.db-interview-fact-meta span.is-conflicting {
+/* Evidence strength is the whole point of the dossier, so each status reads
+   differently rather than sharing one neutral pill. */
+.db-interview-fact-meta span.is-confirmed {
+  background: color-mix(in srgb, var(--db-teal) 15%, transparent);
+  color: var(--db-teal-deep-b);
+}
+
+.db-interview-fact-meta span.is-estimated {
   background: rgba(180, 83, 9, 0.08);
   color: #934508;
+}
+
+.db-interview-fact-meta span.is-conflicting {
+  background: rgba(196, 85, 61, 0.12);
+  color: #8f3a26;
 }
 
 .db-interview-fact-meta time {
@@ -714,26 +729,6 @@
   color: var(--db-text);
   font-size: 12.5px;
   line-height: 1.45;
-}
-
-.db-interview-source-buttons button,
-.db-interview-sources button {
-  max-width: 100%;
-  overflow: hidden;
-  border: 0;
-  padding: 0;
-  background: transparent;
-  color: var(--db-text);
-  font: inherit;
-  font-size: inherit;
-  font-weight: 750;
-  text-align: left;
-  text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, var(--db-text) 35%, transparent);
-  text-underline-offset: 2px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  cursor: pointer;
 }
 
 .db-interview-predictions,
@@ -818,56 +813,68 @@
 
 .db-interview-resume {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  align-self: flex-start;
-  min-width: min(100%, 420px);
-  max-width: 100%;
-  box-sizing: border-box;
-  padding: 12px 13px;
-  border-radius: 14px;
-}
-
-.db-interview-resume input {
-  display: none;
-}
-
-.db-interview-resume > div:first-of-type {
-  display: flex;
-  flex: 1;
   flex-direction: column;
-  min-width: 0;
+  align-items: center;
+  gap: 4px;
+  align-self: center;
+  width: min(100%, 460px);
+  box-sizing: border-box;
+  padding: 22px 24px 20px;
+  border-radius: 18px;
+  text-align: center;
+}
+
+.db-interview-resume-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  margin-bottom: 6px;
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--db-teal) 16%, var(--db-surface));
+  color: var(--db-teal-deep-a);
+}
+
+.db-interview-resume.has-resume .db-interview-resume-icon {
+  background: color-mix(in srgb, var(--db-teal) 30%, var(--db-surface));
 }
 
 .db-interview-resume strong {
   color: var(--db-text);
-  font-size: 12.5px;
+  font-size: 14px;
+  font-weight: 700;
 }
 
-.db-interview-resume span {
-  margin-top: 2px;
+.db-interview-resume-sub {
+  max-width: 340px;
   color: var(--db-text-dim);
-  font-size: 10.5px;
+  font-size: 11.5px;
+  line-height: 1.5;
 }
 
-.db-interview-resume-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
-}
-
-.db-interview-resume-actions button,
-.db-interview-remove-button {
-  min-height: 34px;
+.db-interview-resume-cta {
+  min-height: 36px;
+  margin-top: 12px;
+  padding: 0 20px;
   border: 1px solid var(--db-border);
   border-radius: 999px;
-  padding: 0 11px;
-  background: color-mix(in srgb, var(--db-surface) 66%, transparent);
+  background: var(--db-surface);
   color: var(--db-text);
   font: inherit;
-  font-size: 10.5px;
+  font-size: 12px;
   font-weight: 700;
+  box-shadow: var(--db-shadow-sm);
   cursor: pointer;
+  transition: background 0.15s var(--db-ease), transform 0.12s var(--db-ease);
+}
+
+.db-interview-resume-cta:hover {
+  background: var(--db-hover);
+}
+
+.db-interview-resume-cta:active {
+  transform: scale(0.98);
 }
 
 .db-interview-optional {
@@ -902,10 +909,22 @@
 }
 
 .db-interview-final-row {
-  display: grid;
-  grid-template-columns: minmax(180px, 0.3fr) minmax(0, 1fr);
-  align-items: end;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
   gap: 18px;
+}
+
+.db-interview-final-row > .db-interview-builder-footer {
+  margin-left: auto;
+}
+
+.db-interview-length {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 7px;
 }
 
 .db-interview-review-count {
@@ -1058,10 +1077,6 @@
   .db-interview-dossier-grid {
     columns: 1;
   }
-
-  .db-interview-final-row {
-    grid-template-columns: 1fr;
-  }
 }
 
 @media (max-width: 720px) {
@@ -1113,12 +1128,6 @@
   }
 
   .db-interview-resume {
-    align-items: flex-start;
-    flex-wrap: wrap;
-    width: 100%;
-  }
-
-  .db-interview-resume-actions {
     width: 100%;
   }
 
@@ -1136,4 +1145,607 @@
   .db-interview-history-empty button {
     width: 100%;
   }
+}
+
+/* ── Step rail ─────────────────────────────────────────────────────────────
+   Runs above all three phases. Phase 1 previously had no label while phase 2
+   did, so there was nothing telling you where you were in the flow. */
+.db-interview-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  width: min(100%, 1100px);
+  margin: 0 0 4px;
+  padding: 0;
+  list-style: none;
+}
+
+.db-interview-steps li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 11px 14px;
+  border: 1px solid var(--interview-glass-border);
+  border-radius: 14px;
+  background: var(--interview-glass-soft);
+  transition: border-color 0.18s var(--db-ease), background 0.18s var(--db-ease);
+}
+
+.db-interview-step-index {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--db-text) 10%, transparent);
+  color: var(--db-text-dim);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.db-interview-step-copy {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.db-interview-step-copy strong {
+  color: var(--db-text);
+  font-size: 12.5px;
+  font-weight: 700;
+}
+
+.db-interview-step-copy small {
+  overflow: hidden;
+  color: var(--db-text-dim);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.db-interview-steps li.is-pending {
+  opacity: 0.56;
+}
+
+.db-interview-steps li.is-active {
+  border-color: color-mix(in srgb, var(--db-teal) 44%, var(--interview-glass-border));
+  background: color-mix(in srgb, var(--db-teal) 8%, var(--interview-glass-soft));
+}
+
+.db-interview-steps li.is-active .db-interview-step-index {
+  background: var(--db-teal-deep-a);
+  color: #fff;
+}
+
+.db-interview-steps li.is-done .db-interview-step-index {
+  background: color-mix(in srgb, var(--db-teal) 26%, transparent);
+  color: var(--db-teal-deep-b);
+}
+
+/* ── Live research progress ────────────────────────────────────────────────
+   Every row below is created by a server-sent event describing a search the
+   model actually ran. Only the clock advances on a timer. */
+.db-interview-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 15px 17px;
+  border: 1px solid color-mix(in srgb, var(--db-teal) 26%, var(--interview-glass-border));
+  border-radius: 16px;
+  background: color-mix(in srgb, var(--db-teal) 5%, var(--interview-glass-soft));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+.db-interview-progress-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.db-interview-progress-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--db-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.db-interview-progress-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.db-interview-progress-clock {
+  color: var(--db-text-dim);
+  font-size: 12px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.db-interview-progress-cancel {
+  min-height: 28px;
+  padding: 0 12px;
+  border: 1px solid var(--db-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--db-surface) 72%, transparent);
+  color: var(--db-text-dim);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.db-interview-progress-cancel:hover {
+  color: var(--db-text);
+  background: var(--db-surface);
+}
+
+.db-interview-spin {
+  animation: db-interview-spin 0.9s linear infinite;
+}
+
+@keyframes db-interview-spin {
+  to { transform: rotate(360deg); }
+}
+
+.db-app.db-reduce-motion .db-interview-spin {
+  animation: none;
+}
+
+.db-interview-progress-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.db-interview-progress-steps li {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 0 8px 22px;
+}
+
+/* The connector line between dots, stopping short of the last row. */
+.db-interview-progress-steps li:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  top: 17px;
+  bottom: -3px;
+  left: 5px;
+  width: 1px;
+  background: color-mix(in srgb, var(--db-text) 12%, transparent);
+}
+
+.db-interview-progress-dot {
+  position: absolute;
+  top: 10px;
+  left: 1px;
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--db-text) 16%, transparent);
+}
+
+.db-interview-progress-steps li.is-done .db-interview-progress-dot {
+  background: var(--db-teal-deep-a);
+}
+
+.db-interview-progress-steps li.is-active .db-interview-progress-dot {
+  background: var(--db-teal);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--db-teal) 18%, transparent);
+}
+
+.db-interview-progress-steps li.is-pending {
+  opacity: 0.5;
+}
+
+.db-interview-progress-text {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 7px;
+  color: var(--db-text);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.db-interview-progress-verb {
+  color: var(--db-text-dim);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.db-interview-progress-query {
+  min-width: 0;
+  color: var(--db-text);
+  font-weight: 620;
+}
+
+.db-interview-progress-query::before { content: "\201C"; }
+.db-interview-progress-query::after { content: "\201D"; }
+
+.db-interview-progress-query.is-pending {
+  color: var(--db-text-dim);
+  font-weight: 500;
+  font-style: italic;
+}
+
+.db-interview-progress-query.is-pending::before,
+.db-interview-progress-query.is-pending::after {
+  content: "";
+}
+
+.db-interview-progress-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.db-interview-progress-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--db-text-dim);
+  font-size: 12px;
+}
+
+.db-interview-progress-foot {
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--db-text) 8%, transparent);
+  color: var(--db-text-dim);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+/* ── Source chips ────────────────────────────────────────────────────────── */
+.db-interview-source-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  min-height: 26px;
+  padding: 0 9px 0 4px;
+  border: 1px solid var(--db-border);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--db-surface) 82%, transparent);
+  color: var(--db-text-dim);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 620;
+  cursor: pointer;
+  transition: border-color 0.15s var(--db-ease), color 0.15s var(--db-ease),
+    background 0.15s var(--db-ease);
+}
+
+.db-interview-source-chip:hover {
+  border-color: color-mix(in srgb, var(--db-teal) 46%, var(--db-border));
+  background: var(--db-surface);
+  color: var(--db-text);
+}
+
+.db-interview-source-host {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.db-interview-source-chip svg {
+  flex: 0 0 auto;
+  opacity: 0.55;
+}
+
+.db-interview-source-chip:hover svg {
+  opacity: 1;
+}
+
+/* ── Resume dialog ─────────────────────────────────────────────────────────
+   Glass treatment lifted from the onboarding fields so the modal reads as the
+   same surface family. */
+.db-modal-panel.db-interview-glass-panel {
+  width: min(620px, 100%);
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  border-radius: 24px;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--db-surface) 88%, transparent),
+    color-mix(in srgb, var(--db-bg) 74%, transparent)
+  );
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72), 0 24px 60px rgba(24, 29, 35, 0.22);
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+}
+
+.db-resume-dialog {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.db-resume-tabs {
+  display: inline-flex;
+  align-self: flex-start;
+  gap: 4px;
+  padding: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.42);
+}
+
+.db-resume-tabs button {
+  min-height: 30px;
+  padding: 0 14px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--db-text-dim);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.db-resume-tabs button.is-active {
+  background: var(--db-active);
+  color: #fff;
+}
+
+.db-resume-drop {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 30px 20px;
+  border: 1.5px dashed color-mix(in srgb, var(--db-text) 22%, transparent);
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.58), rgba(255, 255, 255, 0.24));
+  color: var(--db-text-dim);
+  text-align: center;
+  transition: border-color 0.15s var(--db-ease), background 0.15s var(--db-ease);
+}
+
+.db-resume-drop.is-dragging {
+  border-color: var(--db-teal);
+  background: color-mix(in srgb, var(--db-teal) 12%, rgba(255, 255, 255, 0.6));
+}
+
+.db-resume-drop.is-busy {
+  border-style: solid;
+}
+
+.db-resume-drop strong {
+  color: var(--db-text);
+  font-size: 13.5px;
+  font-weight: 700;
+}
+
+.db-resume-drop span {
+  font-size: 11px;
+}
+
+.db-resume-drop input {
+  display: none;
+}
+
+.db-resume-choose {
+  border: none;
+  padding: 0;
+  background: none;
+  color: var(--db-teal-deep-a);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.db-resume-clipboard {
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  gap: 7px;
+  min-height: 32px;
+  padding: 0 14px;
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.58), rgba(255, 255, 255, 0.24));
+  color: var(--db-text);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 650;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+  cursor: pointer;
+}
+
+.db-resume-clipboard:disabled,
+.db-resume-choose:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.db-resume-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.db-resume-editor > span {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--db-text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.db-resume-editor > span small {
+  color: var(--db-text-dim);
+  font-size: 10.5px;
+  font-weight: 500;
+}
+
+.db-resume-editor textarea {
+  min-height: 260px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.72);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.58);
+  color: var(--db-text);
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.6;
+  resize: vertical;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.72);
+}
+
+.db-resume-editor textarea:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--db-teal) 60%, transparent);
+  outline-offset: 1px;
+}
+
+.db-resume-notice {
+  margin: 0;
+  padding: 9px 12px;
+  border: 1px solid color-mix(in srgb, #c4553d 34%, transparent);
+  border-radius: 11px;
+  background: color-mix(in srgb, #c4553d 8%, transparent);
+  color: #8f3a26;
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.db-resume-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 4px;
+}
+
+.db-resume-count {
+  color: var(--db-text-dim);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.db-resume-count.is-over {
+  color: #8f3a26;
+}
+
+.db-resume-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.db-resume-remove,
+.db-resume-cancel,
+.db-resume-save {
+  min-height: 34px;
+  padding: 0 16px;
+  border-radius: 999px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.db-resume-remove,
+.db-resume-cancel {
+  border: 1px solid var(--db-border);
+  background: rgba(255, 255, 255, 0.5);
+  color: var(--db-text-dim);
+}
+
+.db-resume-remove:hover,
+.db-resume-cancel:hover {
+  color: var(--db-text);
+  background: rgba(255, 255, 255, 0.78);
+}
+
+.db-resume-save {
+  border: 1px solid color-mix(in srgb, var(--db-text) 84%, transparent);
+  background: var(--db-text);
+  color: var(--db-bg);
+  box-shadow: 0 8px 20px rgba(18, 28, 27, 0.16);
+}
+
+.db-resume-save:disabled {
+  cursor: default;
+  opacity: 0.4;
+  box-shadow: none;
+}
+
+@media (max-width: 940px) {
+  .db-interview-steps {
+    grid-template-columns: 1fr;
+  }
+
+  .db-interview-progress-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
+
+/* Dossier polish: category headers get an accent rule, fact rows get room to
+   breathe, and the unknowns block stays deliberately quiet so it reads as a
+   caveat rather than as findings. */
+.db-interview-dossier-section h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: color-mix(in srgb, var(--db-surface) 46%, transparent);
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.db-interview-dossier-section h3::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 3px;
+  height: 12px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--db-teal) 55%, transparent);
+}
+
+.db-interview-dossier-section article {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.db-interview-unknowns {
+  opacity: 0.88;
+}
+
+.db-interview-unknowns p {
+  position: relative;
+  padding-left: 14px;
+}
+
+.db-interview-unknowns p::before {
+  content: "";
+  position: absolute;
+  top: 8px;
+  left: 2px;
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--db-text) 28%, transparent);
 }

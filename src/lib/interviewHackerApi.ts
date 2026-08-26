@@ -594,6 +594,153 @@ export async function researchInterviewCompany({
   return parseCompanyResearch(await response.json());
 }
 
+/** One real hosted-search event from the backend research stream. Every field
+ * originates in a provider event, so the UI can present these as fact rather
+ * than as an estimate of what might be happening. */
+export interface CompanyResearchProgress {
+  stage: "started" | "search_started" | "search_done" | "reading" | "writing";
+  callId: string;
+  query: string;
+  urls: string[];
+}
+
+function parseResearchProgress(value: unknown): CompanyResearchProgress | null {
+  if (!value || typeof value !== "object") return null;
+  const item = value as Record<string, unknown>;
+  const stage = item.stage;
+  if (
+    stage !== "started" &&
+    stage !== "search_started" &&
+    stage !== "search_done" &&
+    stage !== "reading" &&
+    stage !== "writing"
+  ) {
+    return null;
+  }
+  return {
+    stage,
+    callId: typeof item.call_id === "string" ? item.call_id : "",
+    query: typeof item.query === "string" ? item.query : "",
+    urls: stringList(item.urls) ?? [],
+  };
+}
+
+/**
+ * Reads an SSE body frame by frame. Split out for the research stream only;
+ * streamInterviewAnswer keeps its own copy on purpose, because that path runs
+ * during a live interview and is not worth disturbing for tidiness.
+ */
+async function readEventStream(
+  body: ReadableStream<Uint8Array>,
+  onFrame: (event: string, data: string) => void,
+): Promise<void> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const flush = (chunk: string) => {
+    let event = "message";
+    const dataLines: string[] = [];
+    for (const line of chunk.split("\n")) {
+      if (line.startsWith(":")) continue;
+      if (line.startsWith("event:")) event = line.slice(6).trim();
+      else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
+    }
+    if (dataLines.length) onFrame(event, dataLines.join("\n"));
+  };
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      buffer = buffer.replace(/\r\n/g, "\n");
+      let separator = buffer.indexOf("\n\n");
+      while (separator >= 0) {
+        flush(buffer.slice(0, separator));
+        buffer = buffer.slice(separator + 2);
+        separator = buffer.indexOf("\n\n");
+      }
+      if (done) break;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  if (buffer.trim()) flush(buffer);
+}
+
+/**
+ * Streams company research, reporting the model's real searches as they happen.
+ *
+ * Falls back to the plain JSON route when the streaming endpoint is missing, so
+ * a desktop build that ships ahead of the backend deploy behaves exactly as it
+ * did before rather than failing.
+ */
+export async function streamInterviewCompanyResearch({
+  company,
+  companyUrl,
+  role,
+  jobDescription,
+  signal,
+  onProgress,
+}: {
+  company: string;
+  companyUrl: string;
+  role: string;
+  jobDescription: string;
+  signal?: AbortSignal;
+  onProgress: (progress: CompanyResearchProgress) => void;
+}): Promise<CompanyResearchResult> {
+  const body = JSON.stringify({
+    company: company.trim(),
+    company_url: companyUrl.trim() || null,
+    role: role.trim(),
+    job_description: jobDescription.trim(),
+  });
+
+  const response = await authFetch("/interview-companion/company-research/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body,
+    signal,
+  });
+
+  if (response.status === 404 || response.status === 405) {
+    return researchInterviewCompany({ company, companyUrl, role, jobDescription, signal });
+  }
+  if (!response.ok) throw new Error(`Company research failed (${response.status}).`);
+  if (!response.body) throw new Error("Company research response had no stream.");
+
+  // Held in an object so TypeScript keeps the assignment made inside the frame
+  // callback, which it would otherwise narrow away on a plain local.
+  const collected: { result: CompanyResearchResult | null } = { result: null };
+  let streamError = "";
+  await readEventStream(response.body, (event, data) => {
+    if (data === "[DONE]") return;
+    let payload: unknown;
+    try {
+      payload = JSON.parse(data);
+    } catch {
+      return;
+    }
+    if (event === "research_progress") {
+      const progress = parseResearchProgress(payload);
+      if (progress) onProgress(progress);
+      return;
+    }
+    if (event === "research_done") {
+      const wrapper = payload as { result?: unknown };
+      collected.result = parseCompanyResearch(wrapper.result);
+      return;
+    }
+    if (event === "error") {
+      const wrapper = payload as { message?: unknown };
+      streamError = typeof wrapper.message === "string" ? wrapper.message : "Company research failed.";
+    }
+  });
+
+  if (streamError) throw new Error(streamError);
+  if (!collected.result) throw new Error("Company research stream ended before a dossier arrived.");
+  return collected.result;
+}
+
 export async function buildInterviewBrief(
   sources: InterviewBriefSource[],
   answerLength: InterviewAnswerLength,

@@ -44,6 +44,7 @@ import { useDashboardNotifications } from "./useDashboardNotifications";
 import { navSections, navTitles } from "./navConfig";
 import { desktopOnboardingSeenForUidKey, overlayStorePath } from "../lib/copy";
 import { logError } from "../lib/log";
+import { pruneSiteIcons } from "../lib/siteIconCache";
 import { useGeneralSettings } from "../state/useGeneralSettings";
 import { useUpdateReady } from "../overlay/useUpdateReady";
 import { UpdateBanner } from "../UpdateBanner";
@@ -135,6 +136,10 @@ export function DashboardShell({ user, collapsed }: { user: User | null; collaps
 }
 
 function DashboardRouteListener() {
+  // Keeps the favicon cache from growing for the life of the install. Fire and
+  // forget: nothing on screen depends on it.
+  useEffect(() => pruneSiteIcons(), []);
+
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     listen<string>("dashboard-navigate", (event) => {

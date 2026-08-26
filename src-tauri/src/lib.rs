@@ -21,6 +21,7 @@ mod screenshot;
 mod screenshot_store;
 mod security;
 mod sentry_setup;
+mod site_icons;
 mod status_pill;
 mod system_control;
 mod toast;
@@ -336,6 +337,8 @@ pub fn run() {
             saved_images::cache_saved_image,
             saved_images::read_saved_image,
             saved_images::prune_saved_images,
+            site_icons::site_icon,
+            site_icons::prune_site_icons,
             meeting::start_meeting_capture,
             meeting::meeting_runtime_status,
             meeting::stop_meeting_capture,

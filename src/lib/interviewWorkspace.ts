@@ -12,6 +12,8 @@ import type {
   InterviewPreparationInput,
   InterviewStarStory,
 } from "./interviewBrief";
+import { isPlannedMinutes, isRoundKind } from "./interviewPolicy";
+import type { PlannedMinutes, RoundKind } from "./interviewPolicy";
 
 const WORKSPACE_KEY = "interview-companion:workspace:v1";
 const WORKSPACE_VERSION = 2;
@@ -24,6 +26,16 @@ export interface InterviewWorkspaceRecord {
   input: InterviewPreparationInput;
   research: CompanyResearchResult | null;
   draftBrief: InterviewBrief | null;
+  // Optional, and they must stay optional. `workspace()` below is
+  // all-or-nothing: one failed check makes loadInterviewWorkspace return null,
+  // InterviewPage builds a fresh workspace, and the next save overwrites every
+  // interview the user prepared. Requiring these, or bumping WORKSPACE_VERSION
+  // for them, would silently wipe every existing user.
+  //
+  // `lastRoundKind` is the picker's remembered default, never the authority.
+  // The round chosen at Start is what the session runs as.
+  lastRoundKind?: RoundKind;
+  plannedMinutes?: PlannedMinutes;
 }
 
 export interface InterviewWorkspace {
@@ -100,6 +112,13 @@ function companyResearch(value: unknown): value is CompanyResearchResult {
   });
 }
 
+// Absent or valid. Absent is the normal case for anything prepared before the
+// round profile shipped, and must never fail the record.
+function sessionProfile(item: Record<string, unknown>): boolean {
+  return (item.lastRoundKind === undefined || isRoundKind(item.lastRoundKind))
+    && (item.plannedMinutes === undefined || isPlannedMinutes(item.plannedMinutes));
+}
+
 function briefSource(value: unknown): value is InterviewBriefSource {
   const item = record(value);
   return Boolean(
@@ -165,6 +184,7 @@ function interviewBrief(value: unknown): value is InterviewBrief {
     || !claims(item.likelyInterviewerQuestions)
     || !["brief", "balanced", "detailed"].includes(String(item.answerLength))
     || !(item.reviewedAtMs === null || typeof item.reviewedAtMs === "number")
+    || !sessionProfile(item)
   ) return false;
   const sourceIds = new Set(item.sources.map((source) => source.sourceId));
   const allClaims = [
@@ -195,7 +215,8 @@ function interviewRecord(value: unknown): value is InterviewWorkspaceRecord {
     && Number.isFinite(item.updatedAtMs)
     && preparationInput(item.input)
     && (item.research === null || companyResearch(item.research))
-    && (item.draftBrief === null || interviewBrief(item.draftBrief)),
+    && (item.draftBrief === null || interviewBrief(item.draftBrief))
+    && sessionProfile(item),
   );
 }
 

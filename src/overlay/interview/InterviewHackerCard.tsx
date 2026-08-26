@@ -1,11 +1,53 @@
 import iconUrl from "../../assets/icons/Aura-Icon.png";
 import { GlassSurface } from "../GlassSurface";
 import { StopSquareIcon } from "../icons";
+import { PLANNED_MINUTES_OPTIONS, ROUND_KIND_OPTIONS } from "../../lib/interviewPolicy";
 import { isInterviewCaptureActive } from "./useInterviewHacker";
 import type { InterviewHackerState } from "./useInterviewHacker";
 import "./InterviewHackerCard.css";
 
 export const INTERVIEW_HACKER_SLOT_HEIGHT = 360;
+/** Taller slot while the opening pitch is expanded. See OverlayRoot's slotHeight. */
+export const INTERVIEW_HACKER_PITCH_SLOT_HEIGHT = 480;
+
+/**
+ * Segmented picker local to the overlay.
+ *
+ * Deliberately not `src/dashboard/components/SegmentedChoice`: the overlay has
+ * no other dependency on dashboard components and should not grow one for a
+ * two-row control.
+ */
+function OverlayChoice<T extends string | number>({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  options: ReadonlyArray<{ value: T; label: string }>;
+  value: T;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div className="interview-hacker-choice">
+      <span>{label}</span>
+      <div role="radiogroup" aria-label={label}>
+        {options.map((option) => (
+          <button
+            key={String(option.value)}
+            type="button"
+            role="radio"
+            aria-checked={option.value === value}
+            className={option.value === value ? "is-selected" : ""}
+            onClick={() => onChange(option.value)}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 export function InterviewHackerControlBar({
   expanded,
@@ -75,6 +117,9 @@ export function InterviewHackerCard({
             <div className="interview-hacker-title">Interview Companion</div>
             {status && <div className="interview-hacker-status">{status}</div>}
           </div>
+          {active && hacker.pacingCaption && (
+            <div className="interview-hacker-pacing" aria-live="polite">{hacker.pacingCaption}</div>
+          )}
         </div>
 
         {(hacker.phase === "preflight" || hacker.phase === "checking") && (
@@ -91,6 +136,23 @@ export function InterviewHackerCard({
               <span>Brief</span>
               <strong>{hacker.briefReady ? "Reviewed and ready" : "Not prepared"}</strong>
             </div>
+          </div>
+        )}
+
+        {hacker.phase === "preflight" && (
+          <div className="interview-hacker-round">
+            <OverlayChoice
+              label="Round"
+              options={ROUND_KIND_OPTIONS}
+              value={hacker.roundKind}
+              onChange={hacker.setRoundKind}
+            />
+            <OverlayChoice
+              label="Planned length"
+              options={PLANNED_MINUTES_OPTIONS}
+              value={hacker.plannedMinutes}
+              onChange={hacker.setPlannedMinutes}
+            />
           </div>
         )}
 
@@ -119,6 +181,38 @@ export function InterviewHackerCard({
             <summary>Error details</summary>
             <code>{hacker.errorDetail}</code>
           </details>
+        )}
+
+        {active && hacker.pitch && (
+          <div className="interview-hacker-pitch" data-expanded={hacker.pitchExpanded}>
+            <div className="interview-hacker-pitch-head">
+              <span>Your opening pitch</span>
+              <button
+                type="button"
+                onClick={hacker.togglePitch}
+                aria-expanded={hacker.pitchExpanded}
+              >
+                {hacker.pitchExpanded ? "Collapse" : "Expand"}
+              </button>
+            </div>
+            {hacker.pitchExpanded && (
+              <>
+                <ul>
+                  {hacker.pitch.lines.map((line) => (
+                    <li key={line.lineId}>
+                      <span>{line.label}</span>
+                      <p>{line.text}</p>
+                    </li>
+                  ))}
+                </ul>
+                <div className="interview-hacker-pitch-foot">
+                  {hacker.pitch.sourceIds.length === 1
+                    ? "1 confirmed source"
+                    : `${hacker.pitch.sourceIds.length} confirmed sources`}
+                </div>
+              </>
+            )}
+          </div>
         )}
 
         {active && (

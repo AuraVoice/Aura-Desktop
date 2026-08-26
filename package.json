@@ -25,6 +25,8 @@
     "firebase": "^12.15.0",
     "livekit-client": "^2.20.0",
     "lucide-react": "^1.25.0",
+    "mammoth": "^1.12.1",
+    "pdfjs-dist": "^6.2.108",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-markdown": "10.1.0",

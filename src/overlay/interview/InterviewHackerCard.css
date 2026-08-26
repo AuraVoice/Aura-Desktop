@@ -234,6 +234,121 @@
   opacity: 0.38;
 }
 
+.interview-hacker-pacing {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary, rgba(255, 255, 255, 0.86));
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.interview-hacker-round {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.interview-hacker-choice > span {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--text-muted, rgba(255, 255, 255, 0.52));
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.interview-hacker-choice > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.interview-hacker-choice button {
+  border: 1px solid var(--surface-border, rgba(255, 255, 255, 0.14));
+  border-radius: 999px;
+  padding: 5px 10px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-primary, rgba(255, 255, 255, 0.9));
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.interview-hacker-choice button.is-selected {
+  border-color: rgba(255, 255, 255, 0.4);
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.interview-hacker-pitch {
+  flex: 0 0 auto;
+  min-height: 0;
+  padding: 11px 12px;
+  border-radius: 14px;
+  background: var(--surface-sunken, rgba(0, 0, 0, 0.18));
+  color: var(--text-primary, rgba(255, 255, 255, 0.92));
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.interview-hacker-pitch[data-expanded="true"] {
+  overflow: auto;
+}
+
+.interview-hacker-pitch-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.interview-hacker-pitch-head > span {
+  color: var(--text-muted, rgba(255, 255, 255, 0.52));
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.interview-hacker-pitch-head button {
+  border: 0;
+  padding: 2px 4px;
+  background: none;
+  color: var(--text-muted, rgba(255, 255, 255, 0.62));
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.interview-hacker-pitch ul {
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.interview-hacker-pitch li > span {
+  display: block;
+  color: var(--text-muted, rgba(255, 255, 255, 0.45));
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.interview-hacker-pitch li > p {
+  margin: 2px 0 0;
+}
+
+.interview-hacker-pitch-foot {
+  margin-top: 9px;
+  color: var(--text-muted, rgba(255, 255, 255, 0.45));
+  font-size: 11.5px;
+}
+
 .interview-hacker-error-detail {
   padding: 9px 11px;
   border: 1px solid rgba(255, 163, 102, 0.24);

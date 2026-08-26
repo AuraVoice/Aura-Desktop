@@ -32,6 +32,7 @@ import {
   InterviewHackerCard,
   InterviewHackerControlBar,
   INTERVIEW_HACKER_SLOT_HEIGHT,
+  INTERVIEW_HACKER_PITCH_SLOT_HEIGHT,
 } from "./interview/InterviewHackerCard";
 import {
   InterviewPasteCard,
@@ -333,8 +334,13 @@ export function OverlayRoot() {
     && !showDraftCard
     && !showInbox
     && !showUpdateBanner;
+  // The opening pitch needs room the resting card does not have, so the slot
+  // grows while it is expanded and returns when it auto-collapses.
+  const interviewHackerHeight = interviewHacker.pitch !== null && interviewHacker.pitchExpanded
+    ? INTERVIEW_HACKER_PITCH_SLOT_HEIGHT
+    : INTERVIEW_HACKER_SLOT_HEIGHT;
   const slotHeight = showInterviewHacker
-    ? interviewHackerHidden ? 0 : INTERVIEW_HACKER_SLOT_HEIGHT
+    ? interviewHackerHidden ? 0 : interviewHackerHeight
     : showInterviewPaste
       ? interviewSlotHeight
       : showDraftCard

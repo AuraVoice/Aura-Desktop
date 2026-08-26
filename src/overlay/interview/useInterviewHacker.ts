@@ -12,6 +12,15 @@ import {
 } from "../../lib/interviewHackerApi";
 import { relevantInterviewBriefSlice, type InterviewBrief } from "../../lib/interviewBrief";
 import { listenForInterviewBrief, loadInterviewBrief } from "../../lib/interviewBriefMemory";
+import {
+  DEFAULT_PLANNED_MINUTES,
+  DEFAULT_ROUND_KIND,
+  assemblyMsFor,
+  pacingCaption,
+  type PlannedMinutes,
+  type RoundKind,
+} from "../../lib/interviewPolicy";
+import { buildSelfPitch, type SelfPitch } from "../../lib/selfPitch";
 import { toBase64 } from "../../lib/chatScreenCapture";
 import { asArrayBuffer, parseCapturedFrame } from "../../lib/screenFrame";
 import { trackEvent } from "../../lib/analytics";
@@ -65,7 +74,12 @@ function callLabel(app: string | null): string {
   }
 }
 
+// Default same-speaker merge debounce. The session's round can raise it (see
+// interviewPolicy), which costs latency on every answer, so the default stays
+// where it shipped.
 const PANEL_ASSEMBLY_MS = 150;
+const PACING_TICK_MS = 1_000;
+const PITCH_COLLAPSE_AFTER_ACCEPTED = 2;
 const ECHO_WINDOW_MS = 2_500;
 const MAX_CREDENTIAL_RETRIES = 3;
 const CALL_DETECTION_RETRY_MS = 1_500;
@@ -135,6 +149,14 @@ export interface InterviewHackerState {
   reflection: InterviewReflection | null;
   message: string | null;
   errorDetail: string | null;
+  roundKind: RoundKind;
+  plannedMinutes: PlannedMinutes;
+  setRoundKind: (value: RoundKind) => void;
+  setPlannedMinutes: (value: PlannedMinutes) => void;
+  pitch: SelfPitch | null;
+  pitchExpanded: boolean;
+  togglePitch: () => void;
+  pacingCaption: string | null;
   openPreflight: () => void;
   dismiss: () => void;
   start: () => void;
@@ -164,6 +186,11 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   const [reflection, setReflection] = useState<InterviewReflection | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [errorDetail, setErrorDetail] = useState<string | null>(null);
+  const [roundKind, setRoundKind] = useState<RoundKind>(DEFAULT_ROUND_KIND);
+  const [plannedMinutes, setPlannedMinutes] = useState<PlannedMinutes>(DEFAULT_PLANNED_MINUTES);
+  const [pitch, setPitch] = useState<SelfPitch | null>(null);
+  const [pitchExpanded, setPitchExpanded] = useState(true);
+  const [caption, setCaption] = useState<string | null>(null);
   // Mirrors of identityRef/lastRemoteTurnRef for render. The refs are written
   // outside React's cycle, so deriving the button states from them directly
   // left Suggest and Screen Sight stale whenever the write happened to land
@@ -210,6 +237,11 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   const startAttemptRef = useRef(0);
   const preflightAttemptRef = useRef(0);
   const lastStoppedEpochRef = useRef(0);
+  // Frozen at Start from the round picked in preflight. Read inside the
+  // transcript listener, which is set up once and must not close over a
+  // changing state value.
+  const assemblyMsRef = useRef(PANEL_ASSEMBLY_MS);
+  const plannedMinutesRef = useRef<PlannedMinutes>(DEFAULT_PLANNED_MINUTES);
 
   briefRef.current = brief;
   answerRef.current = answer;
@@ -255,6 +287,12 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     setCallName(null);
     setMessage(null);
     setErrorDetail(null);
+    // The pitch is memory-only and dies with the session, same lifetime as the
+    // reflection turns above.
+    setPitch(null);
+    setPitchExpanded(true);
+    setCaption(null);
+    assemblyMsRef.current = PANEL_ASSEMBLY_MS;
   }, []);
 
   const recordSessionEnd = useCallback((reason: string) => {
@@ -428,6 +466,15 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     if (phase !== "preflight") return;
     const attempt = ++startAttemptRef.current;
     acceptNativeEventsRef.current = true;
+    // The round picked here is the session's, frozen now so nothing can move it
+    // mid-interview.
+    assemblyMsRef.current = assemblyMsFor(roundKind);
+    plannedMinutesRef.current = plannedMinutes;
+    // Assembled locally from claims the user already confirmed, so it is on
+    // screen before a word is spoken and cannot invent experience. No network
+    // call, no question detection.
+    setPitch(buildSelfPitch(briefRef.current));
+    setPitchExpanded(true);
     setPhase("starting");
     setMessage(null);
     setErrorDetail(null);
@@ -476,7 +523,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
         setMessage(message);
         setErrorDetail(`Start error: ${message}`);
       });
-  }, [armCredentialRefresh, phase]);
+  }, [armCredentialRefresh, phase, plannedMinutes, roundKind]);
 
   const pause = useCallback(() => {
     invoke("pause_interview_hacker").catch((error) =>
@@ -534,6 +581,31 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       unlisten?.();
     };
   }, [signedIn]);
+
+  // Seed the preflight pickers from the brief envelope, which is the only
+  // channel that reaches the overlay: the dashboard's workspace record never
+  // does. Only while no capture is live - the round picked at Start is
+  // authoritative for that session, so a brief republished mid-interview must
+  // not silently re-point a round that is already running.
+  useEffect(() => {
+    if (isInterviewCaptureActive(phase)) return;
+    setRoundKind(brief?.lastRoundKind ?? DEFAULT_ROUND_KIND);
+    setPlannedMinutes(brief?.plannedMinutes ?? DEFAULT_PLANNED_MINUTES);
+  }, [brief, phase]);
+
+  // Pacing caption. Local clock only: no elapsed time is sent anywhere, and no
+  // interviewer speech is inspected to decide where the round is.
+  useEffect(() => {
+    if (!isInterviewCaptureActive(phase)) return;
+    const tick = () => {
+      const startedAtMs = metricsRef.current?.startedAtMs;
+      if (startedAtMs === undefined) return;
+      setCaption(pacingCaption(Date.now() - startedAtMs, plannedMinutesRef.current));
+    };
+    tick();
+    const timer = setInterval(tick, PACING_TICK_MS);
+    return () => clearInterval(timer);
+  }, [phase]);
 
   const evaluate = useCallback((
     turn: InterviewTranscriptTurn,
@@ -597,6 +669,17 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
             if (metricsRef.current) {
               if (frame.accepted) metricsRef.current.accepted += 1;
               else metricsRef.current.rejected += 1;
+              // Collapse on the SECOND accepted answer, not the first. The
+              // first accepted question is most likely "tell me about
+              // yourself", and folding the card on it hides the pitch while
+              // the candidate is mid-sentence reading it.
+              //
+              // Exactly equal, not >=, so this fires once at the transition. On
+              // >= every later answer would re-collapse a card the candidate
+              // had deliberately reopened to re-read.
+              if (metricsRef.current.accepted === PITCH_COLLAPSE_AFTER_ACCEPTED) {
+                setPitchExpanded(false);
+              }
             }
             trackEvent("interview_companion_question_decision", {
               accepted: frame.accepted,
@@ -845,7 +928,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
           const merged = mergeRemoteTurns(pending.turn, turn);
           assemblyRef.current = {
             turn: merged,
-            timer: setTimeout(flushRemoteTurn, PANEL_ASSEMBLY_MS),
+            timer: setTimeout(flushRemoteTurn, assemblyMsRef.current),
           };
           return;
         }
@@ -853,7 +936,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       }
       assemblyRef.current = {
         turn,
-        timer: setTimeout(flushRemoteTurn, PANEL_ASSEMBLY_MS),
+        timer: setTimeout(flushRemoteTurn, assemblyMsRef.current),
       };
     };
 
@@ -1024,6 +1107,14 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     reflection,
     message,
     errorDetail,
+    roundKind,
+    plannedMinutes,
+    setRoundKind,
+    setPlannedMinutes,
+    pitch,
+    pitchExpanded,
+    togglePitch: () => setPitchExpanded((current) => !current),
+    pacingCaption: caption,
     openPreflight,
     dismiss,
     start,

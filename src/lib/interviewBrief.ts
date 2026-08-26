@@ -1,3 +1,5 @@
+import type { PlannedMinutes, RoundKind } from "./interviewPolicy";
+
 export type InterviewVerificationState = "verified" | "unverified";
 
 export type InterviewAnswerLength = "brief" | "balanced" | "detailed";
@@ -107,6 +109,23 @@ export interface InterviewBrief {
   answerLength: InterviewAnswerLength;
   likelyInterviewerQuestions: InterviewBriefClaim[];
   reviewedAtMs: number | null;
+  // Session profile carried on the brief envelope, NOT evidence.
+  //
+  // The overlay never sees InterviewWorkspaceRecord, and the Rust brief slot
+  // stores the brief as an opaque serde_json::Value, so the envelope is the one
+  // channel that already reaches the overlay without new plumbing. Both are
+  // optional: a brief prepared before this shipped has neither.
+  //
+  // `lastRoundKind` is a remembered default for the preflight picker and is
+  // NEVER the authority - the round chosen at Start is. If T2 lifts a round
+  // into the slice it must read the session value, or a session running as
+  // system_design gets briefed as whatever the record last remembered, with no
+  // error and no log.
+  //
+  // Neither field may be added to InterviewBriefSlice: the backend model is
+  // extra="forbid" and an unknown key is a 422 on every turn.
+  lastRoundKind?: RoundKind;
+  plannedMinutes?: PlannedMinutes;
 }
 
 export interface InterviewBriefSlice {
@@ -231,7 +250,7 @@ function claimText(story: InterviewStarStory): string {
     .join(" ");
 }
 
-function tokens(value: string): Set<string> {
+export function tokens(value: string): Set<string> {
   return new Set(
     (value.toLocaleLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [])
       .filter((token) => token.length > 2),
@@ -247,7 +266,7 @@ function relevance(value: string, queryTokens: Set<string>): number {
   return overlap / Math.sqrt(Math.max(1, valueTokens.size));
 }
 
-function ranked<T>(items: T[], textOf: (item: T) => string, query: Set<string>, limit: number): T[] {
+export function ranked<T>(items: T[], textOf: (item: T) => string, query: Set<string>, limit: number): T[] {
   return items
     .map((item, index) => ({ item, index, score: relevance(textOf(item), query) }))
     .sort((left, right) => right.score - left.score || left.index - right.index)
@@ -255,7 +274,7 @@ function ranked<T>(items: T[], textOf: (item: T) => string, query: Set<string>, 
     .map(({ item }) => item);
 }
 
-function verified(items: InterviewBriefClaim[]): InterviewBriefClaim[] {
+export function verified(items: InterviewBriefClaim[]): InterviewBriefClaim[] {
   return items.filter((item) => item.verificationState === "verified");
 }
 

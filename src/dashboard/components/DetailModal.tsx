@@ -10,13 +10,17 @@ const EXIT_MS = 170;
  * scrollbar. The panel stops click propagation so an inside click never
  * dismisses. Restores focus to whatever was focused before it opened.
  *
- * `headerAction` renders to the left of the close button (e.g. a Copy button). */
+ * `headerAction` renders to the left of the close button (e.g. a Copy button).
+ * `panelClassName` adds to the panel's classes for callers that need a
+ * different surface treatment while keeping this component's focus, escape,
+ * click-outside, portal, and exit-animation behavior. */
 export function DetailModal({
   open,
   title,
   centerTitle = false,
   onClose,
   headerAction,
+  panelClassName = "",
   children,
 }: {
   open: boolean;
@@ -24,6 +28,7 @@ export function DetailModal({
   centerTitle?: boolean;
   onClose: () => void;
   headerAction?: ReactNode;
+  panelClassName?: string;
   children: ReactNode;
 }) {
   const panelRef = useRef<HTMLDivElement | null>(null);
@@ -73,7 +78,7 @@ export function DetailModal({
     >
       <div
         ref={panelRef}
-        className={`db-modal-panel${closing ? " db-modal-panel-out" : ""}`}
+        className={`db-modal-panel${closing ? " db-modal-panel-out" : ""}${panelClassName ? ` ${panelClassName}` : ""}`}
         role="dialog"
         aria-modal="true"
         aria-label={title}
