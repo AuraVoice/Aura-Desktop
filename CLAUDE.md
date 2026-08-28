@@ -89,7 +89,7 @@ tag vX.Y.Z pushed
 
 To ship:
 
-1. Bump the version in **all three** of `package.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`. They must be identical or the run dies on the guard (this is what killed v0.8.1).
+1. Bump the version in **all FOUR** of `package.json`, `package-lock.json` (run `npm install --package-lock-only`; it has TWO root version entries), `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, then refresh `src-tauri/Cargo.lock` via `cargo check`. All four must be identical or the run dies on the guard (this is what killed v0.8.1).
 2. Commit, then ask the user to push `main`.
 3. `git tag vX.Y.Z && git push origin vX.Y.Z`, then `gh run watch --exit-status`.
 4. On failure, `Show what the sign command actually said` dumps the real signtool error, and the tag is one line to undo: `git push --delete origin vX.Y.Z; git tag -d vX.Y.Z`.
