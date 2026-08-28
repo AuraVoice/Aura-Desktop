@@ -233,12 +233,6 @@ fn worker_loop(requests: std::sync::mpsc::Receiver<Request>, busy: Arc<AtomicBoo
         };
     let _ = automation.as_raw();
 
-    // Every watched text field lives here, on this thread, for exactly the
-    // reason the module header gives for `IUIAutomation` itself: these are COM
-    // proxies into other processes, they are not `Send`, and they belong to
-    // this apartment. Callers only ever hold opaque ids.
-    let mut anchors = AnchorStore::default();
-
     while let Ok(request) = requests.recv() {
         match request {
             Request::Capture {
@@ -268,34 +262,10 @@ fn worker_loop(requests: std::sync::mpsc::Receiver<Request>, busy: Arc<AtomicBoo
                 // moved on.
                 let _ = reply.send(context);
             }
-            Request::FocusProbe {
-                capture_anchor,
-                reply,
-            } => {
-                let probe = super::focus::probe(
-                    &automation,
-                    capture_anchor.then_some(&mut anchors),
-                );
+            Request::FocusProbe { reply } => {
+                let probe = super::focus::probe(&automation);
                 busy.store(false, Ordering::Release);
                 let _ = reply.send(probe);
-            }
-            Request::AnchorInsert {
-                trace_id,
-                inserted,
-                reply,
-            } => {
-                let outcome = anchors.confirm_insert(&automation, &trace_id, &inserted);
-                busy.store(false, Ordering::Release);
-                let _ = reply.send(outcome);
-            }
-            Request::AnchorObserve {
-                read,
-                retire,
-                reply,
-            } => {
-                let observations = anchors.observe(&read, &retire);
-                busy.store(false, Ordering::Release);
-                let _ = reply.send(observations);
             }
         }
     }

@@ -57,13 +57,7 @@ pub fn install_panic_hook() {
 /// memory. Matched by thread name because a panic hook has no other handle on
 /// where it came from.
 fn panicking_thread_handles_speech() -> bool {
-    matches!(
-        std::thread::current().name(),
-        // The trace worker holds raw transcripts, inserted text and the user's
-        // corrections in memory for as long as a field is being watched, so its
-        // panic payload is exactly as sensitive as the recognizer's own.
-        Some("aura-dictation") | Some("aura-dictation-trace")
-    )
+    matches!(std::thread::current().name(), Some("aura-dictation"))
 }
 
 /// Hard ceiling on how many lines a single read may return, regardless of

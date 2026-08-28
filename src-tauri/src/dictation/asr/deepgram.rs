@@ -58,9 +58,6 @@ const ENDPOINT: &str = "wss://api.deepgram.com/v1/listen";
 /// `language=multi` without dropping the keyterms with it.
 const MODEL: &str = "nova-3";
 const LANGUAGE: &str = "en";
-/// Stamped onto opt-in training traces so a trace can be attributed to the
-/// recognizer that produced it. Not used for anything at runtime.
-pub const RECOGNIZER_ID: &str = "deepgram-nova-3-en";
 /// A hard ceiling on biasing terms sent per utterance. Every term is a query
 /// parameter on the handshake URL, and an unbounded vocabulary would grow that
 /// URL until the request itself started failing.

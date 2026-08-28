@@ -24,7 +24,6 @@ import { useMeetings } from "./useMeetings";
 import { useMeetingArm } from "./useMeetingArm";
 import { useDictationCredential } from "./useDictationCredential";
 import { usePolishCredential } from "./usePolishCredential";
-import { useDictationUpload } from "./useDictationUpload";
 import { useMeetingCapture } from "./useMeetingCapture";
 import { useCallbackCard } from "./useCallbackCard";
 import { useDesktopNotifications } from "../state/useDesktopNotifications";
@@ -237,13 +236,8 @@ export function OverlayRoot() {
     callLive,
     autoSummon: false,
   });
-  // Drains the dictation trace sharing queue. Mounted here rather than in the
-  // dashboard because the overlay is always running and the dashboard is not;
-  // it idles on one cheap read per minute when there is nothing to send.
-  useDictationUpload(user?.uid ?? null);
-  // Keeps the dictation chord's transcription credential warm. Unrelated to
-  // the trace queue above beyond sharing a uid: this one is required for
-  // dictation to work at all, that one is an opt-in background courtesy.
+  // Keeps the dictation chord's transcription credential warm: required for
+  // dictation to work at all.
   useDictationCredential(user?.uid ?? null);
   // Keeps the AI-formatting backend credential warm for the same reason. Rust
   // no-ops with it when the polish toggle is off.
