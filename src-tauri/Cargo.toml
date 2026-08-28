@@ -108,7 +108,7 @@ aes-gcm = "0.10"
 # send no CORS header - the browser can render them in an <img> but cannot read
 # their bytes. rustls-tls keeps it off any native OpenSSL. Windows-only: the
 # cache commands no-op on other platforms.
-reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 # Dictation's cloud speech recognition (dictation/asr/deepgram.rs): one
 # WebSocket per hold to Deepgram's streaming endpoint. rustls, never native
 # OpenSSL, and deliberately the same rustls 0.23 / tokio-rustls 0.26 pair

@@ -23,6 +23,7 @@ import { useDraftCard } from "./useDraftCard";
 import { useMeetings } from "./useMeetings";
 import { useMeetingArm } from "./useMeetingArm";
 import { useDictationCredential } from "./useDictationCredential";
+import { usePolishCredential } from "./usePolishCredential";
 import { useDictationUpload } from "./useDictationUpload";
 import { useMeetingCapture } from "./useMeetingCapture";
 import { useCallbackCard } from "./useCallbackCard";
@@ -244,6 +245,9 @@ export function OverlayRoot() {
   // the trace queue above beyond sharing a uid: this one is required for
   // dictation to work at all, that one is an opt-in background courtesy.
   useDictationCredential(user?.uid ?? null);
+  // Keeps the AI-formatting backend credential warm for the same reason. Rust
+  // no-ops with it when the polish toggle is off.
+  usePolishCredential(user?.uid ?? null);
   const meetingArm = useMeetingArm(user?.uid ?? null);
   const meetingCapture = useMeetingCapture({
     uid: user?.uid ?? null,

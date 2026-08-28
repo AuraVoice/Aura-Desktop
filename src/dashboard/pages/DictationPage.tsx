@@ -23,6 +23,11 @@ import {
   loadDictationConsent,
   setDictationConsent,
 } from "../../lib/dictationConsent";
+import {
+  loadPolishSettings,
+  savePolishSettings,
+  type PolishSettings,
+} from "../../lib/dictationPolish";
 import { dictationConsent as consentCopy, dictationChord as chordCopy } from "../../lib/copy";
 import { chordLabelOf, useDictationStatus } from "../../lib/dictationStatus";
 import { SettingsPageLayout, SettingsSection } from "../components/SettingsPageLayout";
@@ -217,6 +222,79 @@ function TraceCard({
         </p>
       )}
     </article>
+  );
+}
+
+/**
+ * The AI formatting section owns its own state: it talks to a different Rust
+ * store than the trace settings above and none of its state is shared with
+ * the rest of the page.
+ */
+function PolishSection({ signedIn }: { signedIn: boolean }) {
+  const [polish, setPolish] = useState<PolishSettings | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    loadPolishSettings()
+      .then((saved) => {
+        if (active) setPolish(saved);
+      })
+      .catch((err) => {
+        logError("DictationPage: polish load", err);
+        if (active) setError("AI formatting settings could not be read.");
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  if (polish === null) {
+    return error ? <p className="db-trace-note">{error}</p> : null;
+  }
+
+  const toggle = async (enabled: boolean) => {
+    setBusy(true);
+    setError(null);
+    try {
+      setPolish(await savePolishSettings({ enabled }));
+    } catch (err) {
+      logError("DictationPage: polish toggle", err);
+      setError("The change could not be saved.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <SettingsSection
+      title="AI formatting"
+      description="Optional cleanup of each dictation before the words are typed."
+    >
+      <div className="db-panel db-settings-panel">
+        <ToggleRow
+          label="Clean up my dictation with AI"
+          description="When this is on, the finished transcript (text only, never audio) is sent to Aura's servers to fix punctuation, remove filler words, and apply spoken commands like 'new paragraph'. Off by default. If the service is slow or unreachable, the unformatted text is typed instead."
+          checked={polish.enabled}
+          disabled={busy || !signedIn}
+          onChange={(value) => void toggle(value)}
+        />
+        {!signedIn && (
+          <p className="db-trace-note">
+            Sign in to use AI formatting. The cleanup runs against your account,
+            like transcription itself.
+          </p>
+        )}
+        {error && <p className="db-trace-note">{error}</p>}
+      </div>
+
+      <p className="db-trace-privacy">
+        <ShieldCheck size={14} />
+        Only the transcript text of each dictation is sent, and nothing about it
+        is stored after the cleaned text comes back.
+      </p>
+    </SettingsSection>
   );
 }
 
@@ -549,6 +627,8 @@ export function DictationPage() {
           off deletes everything you have already shared.
         </p>
       </SettingsSection>
+
+      <PolishSection signedIn={signedIn} />
 
       {settings.enabled && (
         <SettingsSection

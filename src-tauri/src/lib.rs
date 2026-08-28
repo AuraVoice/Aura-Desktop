@@ -423,22 +423,10 @@ pub fn run() {
             interview_store::interview_session_load,
             interview_store::interview_session_delete,
             interview_store::interview_sessions_clear,
-            dictation::trace_commands::dictation_trace_settings,
-            dictation::trace_commands::dictation_set_trace_settings,
-            dictation::trace_commands::dictation_trace_summary,
-            dictation::trace_commands::dictation_trace_list,
-            dictation::trace_commands::dictation_trace_audio,
-            dictation::trace_commands::dictation_delete_trace,
-            dictation::trace_commands::dictation_delete_all_traces,
-            dictation::trace_commands::dictation_export_traces,
-            dictation::trace_commands::dictation_share_pump_state,
-            dictation::trace_commands::dictation_claim_trace_upload,
-            dictation::trace_commands::dictation_trace_upload_audio,
-            dictation::trace_commands::dictation_resolve_trace_upload,
-            dictation::trace_commands::dictation_fail_trace_upload,
-            dictation::trace_commands::dictation_claim_trace_deletion,
-            dictation::trace_commands::dictation_resolve_trace_deletion,
-            dictation::trace_commands::dictation_pause_trace_uploads,
+            dictation::polish_commands::dictation_polish_settings,
+            dictation::polish_commands::dictation_set_polish_settings,
+            dictation::polish_commands::dictation_set_polish_credential,
+            dictation::polish_commands::dictation_clear_polish_credential,
             uia::capture_structured_context,
             toast::show_actionable_toast,
             toast::take_pending_toast_activation,
@@ -472,14 +460,10 @@ pub fn run() {
             // pump.
             app.manage(dictation::start(app.handle().clone()));
 
-            // Opt-in training-trace capture. Started unconditionally because
-            // starting it is cheap - it reads one small JSON file and then
-            // parks on an empty channel - and because the settings page has to
-            // be able to switch it on without a restart. With the setting off
-            // (the default) it never reads a text field, never creates a
-            // directory, and never receives a message.
+            // Optional AI transcript cleanup. Also cheap when unused: one
+            // small JSON read and, only if a key was ever saved, one decrypt.
             #[cfg(windows)]
-            app.manage(dictation::trace::start(app.handle().clone()));
+            app.manage(dictation::polish::start(app.handle().clone()));
 
             // Owns the COM apartment for UI Automation. Started once here so
             // the first turn does not pay for CoCreateInstance, and so

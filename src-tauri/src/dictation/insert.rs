@@ -29,8 +29,8 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP,
-    KEYEVENTF_UNICODE, VIRTUAL_KEY, VK_CONTROL, VK_LMENU, VK_LWIN, VK_MENU, VK_RMENU, VK_RWIN,
-    VK_SHIFT,
+    KEYEVENTF_UNICODE, VIRTUAL_KEY, VK_CONTROL, VK_LMENU, VK_LWIN, VK_MENU, VK_RETURN, VK_RMENU,
+    VK_RWIN, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId};
 
@@ -259,6 +259,23 @@ fn send_unicode(text: &str) -> InsertOutcome {
     let mut pending_units = 0usize;
     let mut first = true;
     for character in text.chars() {
+        // A newline typed as a raw Unicode LF unit is ignored by most edit
+        // controls; a real Enter press is what they all understand. Flush
+        // whatever is pending first so ordering is preserved.
+        if character == '\n' {
+            if !chunk.is_empty() {
+                if !flush(&chunk, &mut first) {
+                    return InsertOutcome::Blocked;
+                }
+                chunk.clear();
+                pending_units = 0;
+            }
+            let tap = [key_event(VK_RETURN, false), key_event(VK_RETURN, true)];
+            if !flush(&tap, &mut first) {
+                return InsertOutcome::Blocked;
+            }
+            continue;
+        }
         let mut buffer = [0u16; 2];
         let units = character.encode_utf16(&mut buffer);
         for unit in units.iter() {
