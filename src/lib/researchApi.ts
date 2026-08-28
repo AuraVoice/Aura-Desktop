@@ -5,7 +5,7 @@
  * never enter this client; only the persisted brief and bounded citation data do.
  */
 
-import { authFetch } from "./api";
+import { authFetch, authGetJson } from "./api";
 
 export type ResearchState =
   | "planning"
@@ -195,9 +195,10 @@ export async function startResearch(text: string, signal?: AbortSignal): Promise
 }
 
 export async function listResearchRuns(signal?: AbortSignal): Promise<ResearchRun[]> {
-  const response = await authFetch("/research?limit=20", { signal });
-  if (!response.ok) throw new Error(`Research list failed (${response.status})`);
-  const body = await response.json() as { items?: RawResearchRun[] };
+  const body = await authGetJson<{ items?: RawResearchRun[] }>("/research?limit=20", {
+    signal,
+    errorPrefix: "Research list failed",
+  });
   return Array.isArray(body.items) ? body.items.map(mapRun) : [];
 }
 
@@ -206,9 +207,10 @@ export function getResearchRun(runId: string, signal?: AbortSignal): Promise<Res
 }
 
 export async function getResearchActivity(runId: string, signal?: AbortSignal): Promise<ResearchActivity> {
-  const response = await authFetch(`/research/${encodeURIComponent(runId)}/activity`, { signal });
-  if (!response.ok) throw new Error(`Research activity failed (${response.status})`);
-  const raw = await response.json() as RawResearchActivity;
+  const raw = await authGetJson<RawResearchActivity>(
+    `/research/${encodeURIComponent(runId)}/activity`,
+    { signal, errorPrefix: "Research activity failed" },
+  );
   return {
     runId: String(raw.run_id ?? ""),
     state: String(raw.state ?? "failed") as ResearchState,

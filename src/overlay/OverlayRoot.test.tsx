@@ -118,6 +118,7 @@ describe("OverlayRoot meeting background services", () => {
     expect(mocks.useMeetings).toHaveBeenCalledWith({
       presentation: "hidden",
       signedIn: true,
+      uid: "user-1",
       callLive: false,
       autoSummon: false,
     });

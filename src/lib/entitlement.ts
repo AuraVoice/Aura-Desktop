@@ -1,4 +1,4 @@
-import { authFetch } from "./api";
+import { authFetchWithTimeout } from "./api";
 
 /**
  * GET /entitlement + POST /billing/checkout wrappers, mirroring the thin
@@ -67,67 +67,52 @@ export function parseEntitlement(json: unknown): Entitlement | null {
  * failure, a non-2xx, or a malformed body (AuthRequiredError on 401/403, from
  * authFetch). */
 export async function fetchEntitlement(): Promise<Entitlement> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  try {
-    const response = await authFetch("/entitlement", { signal: controller.signal });
-    if (!response.ok) {
-      throw new Error(`fetchEntitlement failed: ${response.status}`);
-    }
-    const parsed = parseEntitlement(await response.json());
-    if (!parsed) {
-      throw new Error("fetchEntitlement: malformed response");
-    }
-    return parsed;
-  } finally {
-    clearTimeout(timeoutId);
+  const response = await authFetchWithTimeout("/entitlement", undefined, FETCH_TIMEOUT_MS);
+  if (!response.ok) {
+    throw new Error(`fetchEntitlement failed: ${response.status}`);
   }
+  const parsed = parseEntitlement(await response.json());
+  if (!parsed) {
+    throw new Error("fetchEntitlement: malformed response");
+  }
+  return parsed;
 }
 
 /** POST /billing/checkout: returns the Dodo hosted-checkout URL to open in the
  * system browser. The backend binds the caller's uid into the session metadata,
  * so paying on the web unlocks this desktop (and the phone) together. */
 export async function postCheckout(tier: CheckoutTier, period: CheckoutPeriod): Promise<string> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), CHECKOUT_TIMEOUT_MS);
-  try {
-    const response = await authFetch("/billing/checkout", {
+  const response = await authFetchWithTimeout(
+    "/billing/checkout",
+    {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ tier, period }),
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      throw new Error(`postCheckout failed: ${response.status}`);
-    }
-    const data = (await response.json()) as { checkout_url?: string };
-    if (!data.checkout_url) {
-      throw new Error("postCheckout: response missing checkout_url");
-    }
-    return data.checkout_url;
-  } finally {
-    clearTimeout(timeoutId);
+    },
+    CHECKOUT_TIMEOUT_MS,
+  );
+  if (!response.ok) {
+    throw new Error(`postCheckout failed: ${response.status}`);
   }
+  const data = (await response.json()) as { checkout_url?: string };
+  if (!data.checkout_url) {
+    throw new Error("postCheckout: response missing checkout_url");
+  }
+  return data.checkout_url;
 }
 
 export async function fetchBillingPortal(): Promise<string> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), CHECKOUT_TIMEOUT_MS);
-  try {
-    const response = await authFetch("/billing/portal", { signal: controller.signal });
-    if (!response.ok) {
-      throw new Error(`fetchBillingPortal failed: ${response.status}`);
-    }
-    const data = (await response.json()) as { portal_url?: unknown };
-    if (typeof data.portal_url !== "string" || !data.portal_url) {
-      throw new Error("fetchBillingPortal: response missing portal_url");
-    }
-    const url = new URL(data.portal_url);
-    if (url.protocol !== "https:") {
-      throw new Error("fetchBillingPortal: portal URL is not HTTPS");
-    }
-    return data.portal_url;
-  } finally {
-    clearTimeout(timeoutId);
+  const response = await authFetchWithTimeout("/billing/portal", undefined, CHECKOUT_TIMEOUT_MS);
+  if (!response.ok) {
+    throw new Error(`fetchBillingPortal failed: ${response.status}`);
   }
+  const data = (await response.json()) as { portal_url?: unknown };
+  if (typeof data.portal_url !== "string" || !data.portal_url) {
+    throw new Error("fetchBillingPortal: response missing portal_url");
+  }
+  const url = new URL(data.portal_url);
+  if (url.protocol !== "https:") {
+    throw new Error("fetchBillingPortal: portal URL is not HTTPS");
+  }
+  return data.portal_url;
 }

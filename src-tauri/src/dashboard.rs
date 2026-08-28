@@ -89,7 +89,7 @@ pub fn open_dashboard_route(
         window.show().map_err(|e| e.to_string())?;
         window.set_focus().map_err(|e| e.to_string())?;
         window
-            .emit("dashboard-navigate", &destination)
+            .emit(crate::events::DASHBOARD_NAVIGATE, &destination)
             .map_err(|e| e.to_string())?;
         return Ok(());
     }

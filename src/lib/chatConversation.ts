@@ -1,4 +1,4 @@
-import { authFetch } from "./api";
+import { authFetchWithTimeout } from "./api";
 import { logError } from "./log";
 import type { ChatHistoryEntry } from "./chatStream";
 
@@ -72,21 +72,20 @@ export async function postTextHandoff(): Promise<void> {
   if (!id || !digestProvider) return;
   const turns = boundHandoffTurns(digestProvider());
   if (turns.length === 0) return;
-  const controller = new AbortController();
-  const deadline = setTimeout(() => controller.abort(), HANDOFF_TIMEOUT_MS);
   try {
-    const response = await authFetch("/chat/handoff", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ conversation_id: id, turns }),
-      signal: controller.signal,
-    });
+    const response = await authFetchWithTimeout(
+      "/chat/handoff",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ conversation_id: id, turns }),
+      },
+      HANDOFF_TIMEOUT_MS,
+    );
     if (!response.ok) {
       logError("chatConversation: handoff rejected", new Error(`HTTP ${response.status}`));
     }
   } catch (err) {
     logError("chatConversation: handoff failed", err);
-  } finally {
-    clearTimeout(deadline);
   }
 }

@@ -1,4 +1,5 @@
 import { authFetch } from "./api";
+import { readSseFrames } from "./sseStream";
 import type { ChatAttachment } from "./chatScreenCapture";
 
 export interface ChatHistoryEntry {
@@ -208,39 +209,13 @@ export async function streamChat({
   }
   onOpen?.();
 
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
   let sawTerminator = false;
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      buffer += decoder.decode(value, { stream: !done });
-      buffer = buffer.replace(/\r\n/g, "\n");
-
-      let separator = buffer.indexOf("\n\n");
-      while (separator >= 0) {
-        const rawFrame = buffer.slice(0, separator);
-        buffer = buffer.slice(separator + 2);
-        if (rawFrame.trim()) {
-          const frame = parseFrame(rawFrame);
-          onFrame(frame);
-          if (frame.type === "terminator") sawTerminator = true;
-        }
-        separator = buffer.indexOf("\n\n");
-      }
-      if (done) break;
-    }
-  } finally {
-    reader.releaseLock();
-  }
-
-  if (buffer.trim()) {
-    const frame = parseFrame(buffer);
+  await readSseFrames(response.body, (rawFrame) => {
+    if (!rawFrame.trim()) return;
+    const frame = parseFrame(rawFrame);
     onFrame(frame);
     if (frame.type === "terminator") sawTerminator = true;
-  }
+  });
   if (!sawTerminator) {
     throw new Error(`Chat stream ended before [DONE] (HTTP ${response.status})`);
   }

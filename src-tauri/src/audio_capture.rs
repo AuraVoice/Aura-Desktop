@@ -12,7 +12,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use log::{error, info, warn};
 use wasapi::{DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat};
@@ -485,10 +485,7 @@ fn capture_thread(
                     CaptureEvent::Frame(PcmFrame {
                         source,
                         captured_at_ms: origin.elapsed().as_millis() as u64,
-                        captured_at_unix_ms: SystemTime::now()
-                            .duration_since(UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis() as u64,
+                        captured_at_unix_ms: crate::util::now_ms_u64(),
                         samples: Arc::from(samples),
                     }),
                 );

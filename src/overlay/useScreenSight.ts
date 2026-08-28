@@ -7,7 +7,11 @@ import {
   type TranscriptionSegment,
 } from "livekit-client";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { useTauriEvent } from "../lib/useTauriEvent";
+import {
+  SCREEN_SIGHT_ARMED,
+  type ScreenSightArmedPayload,
+} from "../lib/ipcEvents";
 import { validateAgentDataMessage } from "../lib/agentData";
 import { logError } from "../lib/log";
 import {
@@ -119,10 +123,10 @@ export function useScreenSight(room: Room | null, status: VoiceSessionStatus) {
 
   // The single armed-state funnel for every trigger (hotkey, native command,
   // voice end, sign-out): mirror Rust's bit and fire the on-arm capture.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    listen<{ armed: boolean }>("screen-sight-armed", (event) => {
-      const next = event.payload.armed;
+  useTauriEvent<ScreenSightArmedPayload>(
+    SCREEN_SIGHT_ARMED,
+    (payload) => {
+      const next = payload.armed;
       const wasArmed = armedRef.current;
       armedRef.current = next;
       setArmed(next);
@@ -130,13 +134,9 @@ export function useScreenSight(room: Room | null, status: VoiceSessionStatus) {
       if (next && !wasArmed && isSessionLive(statusRef.current)) {
         void captureAndSend("armed");
       }
-    })
-      .then((fn) => {
-        unlisten = fn;
-      })
-      .catch((err) => logError("useScreenSight: listen screen-sight-armed", err));
-    return () => unlisten?.();
-  }, [captureAndSend]);
+    },
+    "useScreenSight: listen screen-sight-armed",
+  );
 
   // Seed the mirror once on mount - covers a webview reload while Rust's
   // armed bit is still set (same race current_overlay_state covers).

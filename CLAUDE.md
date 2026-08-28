@@ -23,7 +23,7 @@ The runtime has three Tauri webview windows:
 
 ## Optimistic "applied" caches
 
-A cache that represents "this side effect already happened" (`OverlayState.applied_presentation`/`applied_variant` in `overlay.rs`) must be written **after** the side effect succeeds, never before. Writing it optimistically means one failed resize/show call permanently desyncs the cache from reality, and every later trigger (hotkey, tray click, second-instance launch) trusts the stale cache and silently no-ops instead of retrying. This exact bug froze the Flutter sibling's desktop overlay from ever showing a window after a first-boot failure - don't reintroduce it here.
+A cache that represents "this side effect already happened" (`OverlayState.applied`, the single `AppliedBounds` snapshot in `overlay.rs`) must be written **after** the side effect succeeds, never before. Writing it optimistically means one failed resize/show call permanently desyncs the cache from reality, and every later trigger (hotkey, tray click, second-instance launch) trusts the stale cache and silently no-ops instead of retrying. This exact bug froze the Flutter sibling's desktop overlay from ever showing a window after a first-boot failure - don't reintroduce it here.
 
 ## Main-thread blocking (Tauri commands)
 
@@ -119,7 +119,7 @@ Signing config lives in the Entra app registration (federated credential subject
 ### Touching the overlay state machine
 
 Changes to `OverlayPresentation`/`PanelVariant` or their transitions live in `overlay.rs` (`set_presentation`, `size_for`, `position_for`) with a matching render branch in `OverlayRoot.tsx`. Respect the optimistic-cache rule above. The current presentations are `Hidden`, `Panel`, `Bar`, `Companion`, `Pointing`, and `MovingNotch`; the old `Pill`/`minimize_to_pill` command path is gone.
-The Bar and Companion presentations can grow a single notch slot: `OverlayRoot` resolves which surface wins it (currently chat > draft > inbox > daily catch-up) and drives the single `set_slot_height` command; `overlay.rs` tracks it as `slot_height` (with its `applied_slot_height` cache, same after-success rule). On top/bottom edges the bar grows inward from the edge; on left/right edges the card grows beside the vertical notch.
+The Bar and Companion presentations can grow a single notch slot: `OverlayRoot` resolves which surface wins it (currently chat > draft > inbox > daily catch-up) and drives the single `set_slot_height` command; `overlay.rs` tracks it as `slot_height` (inside the single `applied: Option<AppliedBounds>` cache, same after-success rule). On top/bottom edges the bar grows inward from the edge; on left/right edges the card grows beside the vertical notch.
 The per-card open commands this replaced (`set_draft_card_open`, `set_callback_card_open`) no longer exist; each surface's height constant or measured height lives in OverlayRoot and must agree with its CSS.
 Meeting Notes (MEETING_NOTES_PLAN.md) adds `src-tauri/src/meeting/` (WASAPI capture, join detection, encrypted segment queue) plus `useMeetingArm`/`useMeetingCapture`/`useMeetingNotes` on the React side; capture is user-armed only, shows a persistent recording indicator, and gates the updater like `voice_active` does.
 

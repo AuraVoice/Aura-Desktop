@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { CAPTURE_STAGES } from "../lib/ipcEvents";
 import {
   Room,
   RoomEvent,
@@ -80,7 +81,7 @@ export function useTurnScreenCapture(room: Room | null, guideArmed = false) {
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | null = null;
-    void listen<CaptureStages>("capture-stages", (event) => {
+    void listen<CaptureStages>(CAPTURE_STAGES, (event) => {
       captureStagesRef.current = event.payload;
     })
       .then((stop) => {

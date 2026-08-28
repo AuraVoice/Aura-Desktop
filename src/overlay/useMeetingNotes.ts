@@ -10,6 +10,10 @@ import type { MeetingActivity } from "../lib/meetingActivity";
 import { localDateString } from "../lib/memory";
 import { trackEvent } from "../lib/analytics";
 import { logError } from "../lib/log";
+import {
+  presentationTreatingMoveAsBar,
+  type OverlayPresentation,
+} from "./overlayPresentation";
 
 const FETCH_BUDGET_MS = 4000;
 /** After a capture completes, poll its status this often, this long. Synthesis
@@ -51,7 +55,7 @@ export interface MeetingNotesState {
 }
 
 interface MeetingNotesInputs {
-  presentation: "hidden" | "panel" | "companion" | "pointing";
+  presentation: OverlayPresentation;
   signedIn: boolean;
   callLive: boolean;
   draftActive: boolean;
@@ -71,8 +75,8 @@ interface MeetingNotesInputs {
  * catch-up card's consumed-day rule.
  */
 export function useMeetingNotes(inputs: MeetingNotesInputs): MeetingNotesState {
+  const presentation = presentationTreatingMoveAsBar(inputs.presentation);
   const {
-    presentation,
     signedIn,
     callLive,
     draftActive,

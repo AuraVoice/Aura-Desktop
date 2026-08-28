@@ -75,6 +75,8 @@
    free-form screen position while this combined surface expands or collapses. */
 .notch-column-with-draft.notch-column-interview {
   grid-template-columns: 1fr;
+  /* 52px rows + 8px gap must agree with INTERVIEW_CONTROL_HEIGHT and
+     INTERVIEW_CONTROL_GAP in overlay.rs. */
   grid-template-rows: 52px minmax(0, 1fr);
   row-gap: 8px;
 }

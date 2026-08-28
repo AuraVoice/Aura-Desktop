@@ -31,7 +31,7 @@ pub fn ingest_urls(app: &AppHandle, urls: &[Url]) {
         if let Err(error) = dashboard::open_dashboard_route(app, Some("/connectors"), None) {
             log::error!("connector oauth: failed to open connectors page: {error}");
         }
-        if let Err(error) = app.emit("connector-oauth-complete", raw) {
+        if let Err(error) = app.emit(crate::events::CONNECTOR_OAUTH_COMPLETE, raw) {
             log::error!("connector oauth: failed to emit completion: {error}");
         }
     }

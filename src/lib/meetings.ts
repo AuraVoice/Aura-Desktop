@@ -1,4 +1,4 @@
-import { authFetch, AuthRequiredError } from "./api";
+import { authFetch, authFetchWithTimeout, AuthRequiredError, TimeoutError } from "./api";
 import { logError } from "./log";
 
 /** Machine code the backend returns on a 402 claim denial - the exact
@@ -244,38 +244,32 @@ export async function uploadSegment(args: {
   channelCount: number;
   sampleRateHz: number;
 }): Promise<UploadReceipt> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 60_000);
-  try {
-    const body = new Uint8Array(args.bytes).buffer as ArrayBuffer;
-    const response = await authFetch(
-      `/meetings/${args.meetingId}/capture-runs/${args.captureRunId}/segments/${args.seq}`,
-      {
-        method: "PUT",
-        headers: {
-          "Content-Type": "audio/flac",
-          "Idempotency-Key": args.jobId,
-          "X-Capture-Fence": String(args.captureFence),
-          "X-Content-SHA256": args.contentSha256,
-          "X-Byte-Length": String(args.byteLength),
-          "X-Start-Ms": String(args.startMs),
-          "X-Duration-Ms": String(args.durationMs),
-          "X-Channel-Count": String(args.channelCount),
-          "X-Sample-Rate-Hz": String(args.sampleRateHz),
-          "X-Incomplete": args.incomplete ? "true" : "false",
-        },
-        body,
-        signal: controller.signal,
+  const body = new Uint8Array(args.bytes).buffer as ArrayBuffer;
+  const response = await authFetchWithTimeout(
+    `/meetings/${args.meetingId}/capture-runs/${args.captureRunId}/segments/${args.seq}`,
+    {
+      method: "PUT",
+      headers: {
+        "Content-Type": "audio/flac",
+        "Idempotency-Key": args.jobId,
+        "X-Capture-Fence": String(args.captureFence),
+        "X-Content-SHA256": args.contentSha256,
+        "X-Byte-Length": String(args.byteLength),
+        "X-Start-Ms": String(args.startMs),
+        "X-Duration-Ms": String(args.durationMs),
+        "X-Channel-Count": String(args.channelCount),
+        "X-Sample-Rate-Hz": String(args.sampleRateHz),
+        "X-Incomplete": args.incomplete ? "true" : "false",
       },
-    );
-    const payload = await readJsonObject(response);
-    if (!response.ok && !(response.status === 409 && isSameIdentity(payload))) {
-      throw transportError("Segment upload", response.status, payload);
-    }
-    return parseUploadReceipt(payload, args.contentSha256, args.byteLength);
-  } finally {
-    clearTimeout(timeoutId);
+      body,
+    },
+    60_000,
+  );
+  const payload = await readJsonObject(response);
+  if (!response.ok && !(response.status === 409 && isSameIdentity(payload))) {
+    throw transportError("Segment upload", response.status, payload);
   }
+  return parseUploadReceipt(payload, args.contentSha256, args.byteLength);
 }
 
 export interface CompletionReceipt {
@@ -614,21 +608,15 @@ export async function fetchMeeting(
   meetingId: string,
   timeoutMs: number,
 ): Promise<MeetingDoc | null> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await authFetch(`/meetings/${meetingId}`, {
-      signal: controller.signal,
-    });
+    const response = await authFetchWithTimeout(`/meetings/${meetingId}`, undefined, timeoutMs);
     if (!response.ok) return null;
     return parseMeetingDoc(await response.json());
   } catch (err) {
-    if (!(err instanceof AuthRequiredError) && !(err instanceof DOMException && err.name === "AbortError")) {
+    if (!(err instanceof AuthRequiredError) && !(err instanceof TimeoutError)) {
       logError("fetchMeeting", err);
     }
     return null;
-  } finally {
-    clearTimeout(timeoutId);
   }
 }
 
@@ -636,23 +624,21 @@ export async function fetchRecentMeetings(
   limit: number,
   timeoutMs: number,
 ): Promise<MeetingDoc[] | null> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await authFetch(`/meetings/recent?limit=${limit}`, {
-      signal: controller.signal,
-    });
+    const response = await authFetchWithTimeout(
+      `/meetings/recent?limit=${limit}`,
+      undefined,
+      timeoutMs,
+    );
     if (!response.ok) return null;
     const data = (await response.json()) as { items?: unknown };
     return Array.isArray(data.items)
       ? data.items.map(parseMeetingDoc).filter((m): m is MeetingDoc => m !== null)
       : [];
   } catch (err) {
-    if (!(err instanceof AuthRequiredError) && !(err instanceof DOMException && err.name === "AbortError")) {
+    if (!(err instanceof AuthRequiredError) && !(err instanceof TimeoutError)) {
       logError("fetchRecentMeetings", err);
     }
     return null;
-  } finally {
-    clearTimeout(timeoutId);
   }
 }

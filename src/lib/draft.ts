@@ -1,4 +1,4 @@
-import { authFetch } from "./api";
+import { authFetchWithTimeout } from "./api";
 
 /** Buddy Drafts client contract, mirroring the worker's data-channel payloads
  * and POST /desktop/draft-outbound/refine. The card refines over REST on every
@@ -77,12 +77,9 @@ export interface RefineDraftResult {
  * {text: "", reason: "timeout" | "model_error"} on a 200, matching the
  * backend's never-raise contract; only transport/auth problems throw. */
 export async function refineDraft(params: RefineDraftParams): Promise<RefineDraftResult> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), REFINE_TIMEOUT_MS);
-
-  let response: Response;
-  try {
-    response = await authFetch("/desktop/draft-outbound/refine", {
+  const response = await authFetchWithTimeout(
+    "/desktop/draft-outbound/refine",
+    {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -95,11 +92,9 @@ export async function refineDraft(params: RefineDraftParams): Promise<RefineDraf
         instruction_kind: params.chip,
         draft_id: params.draftId,
       }),
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timeoutId);
-  }
+    },
+    REFINE_TIMEOUT_MS,
+  );
 
   if (!response.ok) {
     throw new Error(`refine failed with HTTP ${response.status}`);

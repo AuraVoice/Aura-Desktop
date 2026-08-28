@@ -1,4 +1,9 @@
-export type DraftPresentation = "hidden" | "panel" | "bar" | "companion" | "pointing";
+import type { OverlayPresentation } from "./overlayPresentation";
+
+// The draft surface's view of the overlay: the canonical union minus the
+// move-mode takeover, which useDraftCard normalizes to "bar" before this
+// module ever sees it.
+export type DraftPresentation = Exclude<OverlayPresentation, "movingnotch">;
 export type DraftVisibilityPhase = "idle" | "generating" | "shown" | "refining" | "error";
 export type PendingDraftRestoreAction = "none" | "wait" | "clear" | "restore";
 

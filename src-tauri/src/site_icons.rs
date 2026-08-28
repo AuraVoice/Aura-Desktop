@@ -125,13 +125,7 @@ pub async fn site_icon(app: AppHandle, host: String) -> Result<tauri::ipc::Respo
             Some(bytes) => (icon_path, bytes.as_slice()),
             None => (miss_path, [].as_slice()),
         };
-        let temp_path = path.with_extension("tmp");
-        if std::fs::write(&temp_path, contents).is_err() {
-            return;
-        }
-        if std::fs::rename(&temp_path, &path).is_err() {
-            let _ = std::fs::remove_file(&temp_path);
-        }
+        let _ = crate::fsx::write_atomic(&path, contents, crate::fsx::Durability::BestEffort);
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -169,7 +163,7 @@ pub async fn prune_site_icons(app: AppHandle) -> Result<usize, String> {
         if entries.len() <= KEEP_ICONS {
             return Ok(0);
         }
-        entries.sort_by(|a, b| a.0.cmp(&b.0));
+        entries.sort_by_key(|entry| entry.0);
         let mut removed = 0;
         for (_, path) in entries.iter().take(PRUNE_BATCH) {
             if std::fs::remove_file(path).is_ok() {

@@ -1,4 +1,5 @@
 import { authFetch } from "./api";
+import { readSseFrames } from "./sseStream";
 import type { AnswerShape } from "./interviewPolicy";
 import { RESUME_MAX_CHARS } from "./resumeText";
 import type {
@@ -72,8 +73,21 @@ export interface InterviewCredential {
   expiresInSeconds: number;
 }
 
+/** Thrown when the backend has interview transcription switched off, or is
+ * not configured for it. Distinct from an auth failure: retrying will not
+ * help and the user is not signed out. Mirrors DictationUnavailableError. */
+export class InterviewUnavailableError extends Error {}
+
+/** Below this, a token is not worth using: it would expire before or during
+ * the first handshake it was minted for, surfacing as a confusing auth
+ * failure mid-connect. Same guard as dictationCredential.ts. */
+const MIN_USEFUL_TTL_SECONDS = 15;
+
 export async function mintInterviewCredential(): Promise<InterviewCredential> {
   const response = await authFetch("/interview-companion/stt-token", { method: "POST" });
+  if (response.status === 503) {
+    throw new InterviewUnavailableError("Interview transcription is unavailable");
+  }
   if (!response.ok) {
     throw new Error(`Interview transcription is unavailable (${response.status}).`);
   }
@@ -94,6 +108,9 @@ export async function mintInterviewCredential(): Promise<InterviewCredential> {
     || expiresInSeconds <= 0
   ) {
     throw new Error("Interview transcription returned an invalid credential.");
+  }
+  if (expiresInSeconds < MIN_USEFUL_TTL_SECONDS) {
+    throw new Error("Interview transcription credential expires too soon to be usable.");
   }
   return { accessToken, openaiAccessToken, expiresInSeconds };
 }
@@ -632,10 +649,7 @@ async function readEventStream(
   body: ReadableStream<Uint8Array>,
   onFrame: (event: string, data: string) => void,
 ): Promise<void> {
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  const flush = (chunk: string) => {
+  await readSseFrames(body, (chunk) => {
     let event = "message";
     const dataLines: string[] = [];
     for (const line of chunk.split("\n")) {
@@ -644,24 +658,7 @@ async function readEventStream(
       else if (line.startsWith("data:")) dataLines.push(line.slice(5).trim());
     }
     if (dataLines.length) onFrame(event, dataLines.join("\n"));
-  };
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      buffer += decoder.decode(value, { stream: !done });
-      buffer = buffer.replace(/\r\n/g, "\n");
-      let separator = buffer.indexOf("\n\n");
-      while (separator >= 0) {
-        flush(buffer.slice(0, separator));
-        buffer = buffer.slice(separator + 2);
-        separator = buffer.indexOf("\n\n");
-      }
-      if (done) break;
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  if (buffer.trim()) flush(buffer);
+  });
 }
 
 /**

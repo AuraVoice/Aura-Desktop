@@ -24,9 +24,7 @@ use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::Mutex;
 
 use serde::Serialize;
-use tauri::{
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder,
-};
+use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager};
 
 use crate::overlay::{self, NotchEdge, OverlayPresentation};
 
@@ -38,6 +36,9 @@ const RESTING_WIDTH: f64 = 8.0;
 const RESTING_HEIGHT: f64 = 40.0;
 const ACTIVE_WIDTH: f64 = 24.0;
 const ACTIVE_HEIGHT: f64 = 65.0;
+// Hover hint sizes must agree with DictationHud.css: the 164px hint pill
+// (.dictation-launcher__hint) and 46px mic column (.dictation-launcher__mic)
+// render edge-to-edge inside these windows.
 const HOVER_SIDE_WIDTH: f64 = 196.0;
 const HOVER_SIDE_HEIGHT: f64 = 46.0;
 const HOVER_TOP_WIDTH: f64 = 164.0;
@@ -166,62 +167,19 @@ impl HudUpdate {
 /// because that is where Tauri builds windows on Windows; callers on the
 /// dictation worker thread go through `AppHandle::run_on_main_thread`.
 fn build_window(app: &AppHandle) -> Result<(), String> {
-    if app.get_webview_window(DICTATION_WINDOW).is_some() {
-        return Ok(());
-    }
-    let window = WebviewWindowBuilder::new(
+    // The resting surface receives hover (ignore_cursor_events false) so
+    // Windows can show its native hint. WS_EX_NOACTIVATE, applied inside the
+    // shared builder, keeps it from taking focus, and the surface has no
+    // click action. Active dictation switches back to click-through.
+    crate::window_util::build_accessory_window(
         app,
         DICTATION_WINDOW,
-        WebviewUrl::App("index.html".into()),
+        "Aura Dictation",
+        LogicalSize::new(RESTING_WIDTH, RESTING_HEIGHT),
+        false,
     )
-    .title("Aura Dictation")
-    .inner_size(RESTING_WIDTH, RESTING_HEIGHT)
-    .decorations(false)
-    .transparent(true)
-    .shadow(false)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .resizable(false)
-    .focused(false)
-    .visible(false)
-    .build()
-    .map_err(|e| e.to_string())?;
-
-    // The resting surface receives hover so Windows can show its native hint.
-    // WS_EX_NOACTIVATE below keeps it from taking focus, and the surface has no
-    // click action. Active dictation switches back to click-through.
-    let _ = window.set_ignore_cursor_events(false);
-    // Same display-affinity treatment the overlay gets.
-    let _ = crate::overlay::exclude_main_window_from_capture(&window);
-    apply_no_activate(&window);
-    Ok(())
+    .map(|_| ())
 }
-
-/// WS_EX_NOACTIVATE on top of Tauri's `focused(false)`: the builder flag only
-/// covers the first show, the style covers every later one. Without it the HUD
-/// would steal focus from the target window and insertion would abort on its
-/// own focus check.
-#[cfg(windows)]
-fn apply_no_activate(window: &tauri::WebviewWindow) {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE,
-    };
-
-    let Ok(hwnd) = window.hwnd() else {
-        return;
-    };
-    unsafe {
-        let current = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        SetWindowLongPtrW(
-            hwnd,
-            GWL_EXSTYLE,
-            current | WS_EX_NOACTIVATE.0 as isize,
-        );
-    }
-}
-
-#[cfg(not(windows))]
-fn apply_no_activate(_window: &tauri::WebviewWindow) {}
 
 /// Whether this phase needs the window to be activatable.
 ///
@@ -464,7 +422,7 @@ pub fn show_idle(app: &AppHandle) {
                 let _ = window.show();
             }
             sync_activation(&window, HudPhase::Idle);
-            let _ = window.emit("dictation-update", update);
+            let _ = window.emit(crate::events::DICTATION_UPDATE, update);
         }
     });
 }
@@ -500,7 +458,7 @@ pub fn refresh_placement(app: &AppHandle) {
         if let Some(window) = handle.get_webview_window(DICTATION_WINDOW) {
             place_window(&handle, &window, target, phase, has_caption);
             let _ = window.set_ignore_cursor_events(!accepts_clicks(phase));
-            let _ = window.emit("dictation-update", update);
+            let _ = window.emit(crate::events::DICTATION_UPDATE, update);
         }
     });
 }
@@ -524,7 +482,7 @@ pub fn publish(app: &AppHandle, mut update: HudUpdate) {
     let has_caption = !update.text.is_empty();
     *LAST_UPDATE.lock().unwrap_or_else(|e| e.into_inner()) = Some(update.clone());
     if let Some(window) = app.get_webview_window(DICTATION_WINDOW) {
-        let _ = window.emit("dictation-update", update);
+        let _ = window.emit(crate::events::DICTATION_UPDATE, update);
     }
     let handle = app.clone();
     let target = LAST_TARGET.load(Ordering::Relaxed);
@@ -579,6 +537,6 @@ pub fn set_overlay_suppressed(app: &AppHandle, suppressed: bool) {
 /// everything else here: never logged, at any level.
 pub fn publish_level(app: &AppHandle, level: f32) {
     if let Some(window) = app.get_webview_window(DICTATION_WINDOW) {
-        let _ = window.emit("dictation-level", level);
+        let _ = window.emit(crate::events::DICTATION_LEVEL, level);
     }
 }

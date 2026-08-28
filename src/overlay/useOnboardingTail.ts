@@ -12,10 +12,9 @@ import {
 } from "../lib/acquisitionAnalytics";
 import { logError } from "../lib/log";
 import { syncProfileOnSignIn } from "../lib/profile";
+import { DESKTOP_ONBOARDING_COMPLETED as ONBOARDING_COMPLETED_EVENT } from "../lib/ipcEvents";
 
 export type OnboardingTailStatus = "unknown" | "active" | "done";
-
-const ONBOARDING_COMPLETED_EVENT = "desktop-onboarding-completed";
 
 /** Decides whether the post-sign-in onboarding tail (hotkey tour + live demo)
  * should run. It's active only for desktop first-run: signed in and this UID

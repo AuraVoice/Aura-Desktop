@@ -5,9 +5,13 @@ mod auth_cache;
 mod autostart;
 mod chat_cache;
 mod connector_oauth;
+#[cfg(windows)]
+mod crypto;
 mod dashboard;
 mod dictation;
 mod entitlement;
+mod events;
+mod fsx;
 mod guide;
 mod hotkeys;
 mod interview;
@@ -20,6 +24,7 @@ mod saved_images;
 mod screenshot;
 #[cfg(windows)]
 mod screenshot_store;
+mod sealed_store;
 mod security;
 mod sentry_setup;
 mod site_icons;
@@ -29,8 +34,10 @@ mod toast;
 mod tray;
 mod uia;
 mod updater;
+mod util;
 mod voice_toggle_key;
 mod win_focus;
+mod window_util;
 
 use log::{error, info};
 use tauri::{AppHandle, Manager, WindowEvent};
@@ -301,6 +308,8 @@ pub fn run() {
             dismiss_idle_bar,
             point_at,
             cancel_pointing,
+            // registered ahead of UI: docking flows natively through
+            // begin/commit_notch_move; no frontend invoke yet
             set_notch_edge,
             begin_notch_move,
             commit_notch_move,
@@ -375,6 +384,8 @@ pub fn run() {
             dictation::dictation_clear_credential,
             dictation::dictation_hud_state,
             dictation::dictation_set_hud_hovered,
+            // registered ahead of UI: dictation vocabulary management has no
+            // frontend invoke yet
             dictation::dictation_vocabulary,
             dictation::dictation_add_vocabulary,
             dictation::dictation_record_correction,
@@ -382,6 +393,8 @@ pub fn run() {
             interview::start_interview_hacker,
             interview::pause_interview_hacker,
             interview::resume_interview_hacker,
+            // registered ahead of UI: pull-style status snapshot; the frontend
+            // listens to the interview-hacker-status event instead
             interview::interview_hacker_status,
             interview::update_interview_hacker_credential,
             interview::set_interview_hacker_brief,

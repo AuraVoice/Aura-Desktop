@@ -1,8 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type { InterviewBrief } from "./interviewBrief";
-
-const BRIEF_EVENT = "interview-brief-updated";
+import { INTERVIEW_BRIEF_UPDATED as BRIEF_EVENT } from "./ipcEvents";
 
 export async function loadInterviewBrief(): Promise<InterviewBrief | null> {
   const brief = await invoke<InterviewBrief | null>("interview_hacker_brief");

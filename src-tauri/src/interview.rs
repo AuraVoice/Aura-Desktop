@@ -20,10 +20,10 @@ use crate::dictation::asr::{
     self, AsrError, ContinuousAsrEvent, ContinuousAsrSession, ContinuousSessionConfig,
 };
 
-const STATUS_EVENT: &str = "interview-hacker-status";
-const TRANSCRIPT_EVENT: &str = "interview-hacker-transcript";
-const BRIEF_EVENT: &str = "interview-brief-updated";
-const RESUME_EVENT: &str = "interview-resume-updated";
+use crate::events::{
+    INTERVIEW_BRIEF_UPDATED as BRIEF_EVENT, INTERVIEW_HACKER_STATUS as STATUS_EVENT,
+    INTERVIEW_HACKER_TRANSCRIPT as TRANSCRIPT_EVENT, INTERVIEW_RESUME_UPDATED as RESUME_EVENT,
+};
 const MAX_BRIEF_BYTES: usize = 128_000;
 // Generous next to the 12,000 characters the backend accepts, so a resume is
 // rejected by the extractor's own limit rather than truncated silently here.
@@ -60,7 +60,7 @@ enum TranscriptionProvider {
 
 #[cfg(windows)]
 impl TranscriptionProvider {
-    fn credential<'a>(self, credentials: &'a TranscriptionCredentials) -> &'a str {
+    fn credential(self, credentials: &TranscriptionCredentials) -> &str {
         match self {
             Self::Deepgram => &credentials.deepgram,
             Self::OpenAi => &credentials.openai,

@@ -1,33 +1,30 @@
-import { useEffect, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
+import {
+  HOTKEY_BINDINGS_CHANGED,
+  VOICE_TOGGLE_KEY_CHANGED,
+} from "../lib/ipcEvents";
 import {
   loadHotkeyBindings,
   loadVoiceToggleKey,
   type HotkeyBinding,
   type VoiceToggleKeyStatus,
 } from "../lib/hotkeys";
-import { logError } from "../lib/log";
+import { useTauriMirroredState } from "../lib/useTauriEvent";
+
+// Stable identity for the pre-load render, so consumers' dep arrays do not
+// churn while the first load is in flight.
+const NO_BINDINGS: HotkeyBinding[] = [];
 
 export function useHotkeyBindings() {
-  const [bindings, setBindings] = useState<HotkeyBinding[]>([]);
-  const [voice, setVoice] = useState<VoiceToggleKeyStatus | null>(null);
+  const bindings = useTauriMirroredState<HotkeyBinding[]>(
+    HOTKEY_BINDINGS_CHANGED,
+    loadHotkeyBindings,
+    "useHotkeyBindings: bindings",
+  );
+  const voice = useTauriMirroredState<VoiceToggleKeyStatus>(
+    VOICE_TOGGLE_KEY_CHANGED,
+    loadVoiceToggleKey,
+    "useHotkeyBindings: voice",
+  );
 
-  useEffect(() => {
-    loadHotkeyBindings().then(setBindings).catch((err) => logError("useHotkeyBindings: load", err));
-    loadVoiceToggleKey().then(setVoice).catch((err) => logError("useHotkeyBindings: voice", err));
-    let unlistenBindings: (() => void) | undefined;
-    let unlistenVoice: (() => void) | undefined;
-    listen<HotkeyBinding[]>("hotkey-bindings-changed", (event) => setBindings(event.payload))
-      .then((fn) => { unlistenBindings = fn; })
-      .catch((err) => logError("useHotkeyBindings: listen bindings", err));
-    listen<VoiceToggleKeyStatus>("voice-toggle-key-changed", (event) => setVoice(event.payload))
-      .then((fn) => { unlistenVoice = fn; })
-      .catch((err) => logError("useHotkeyBindings: listen voice", err));
-    return () => {
-      unlistenBindings?.();
-      unlistenVoice?.();
-    };
-  }, []);
-
-  return { bindings, voice };
+  return { bindings: bindings ?? NO_BINDINGS, voice };
 }

@@ -65,6 +65,8 @@ body,
 }
 
 .dictation-launcher__hint {
+  /* 164px must agree with HOVER_TOP_WIDTH in hud.rs (the native window is
+     sized to exactly this pill). */
   flex: 0 0 164px;
   display: flex;
   align-items: center;
@@ -95,6 +97,7 @@ body,
   display: grid;
   place-items: center;
   width: 28px;
+  /* 46px must agree with HOVER_SIDE_HEIGHT in hud.rs. */
   height: 46px;
   border-radius: 999px;
   background: rgba(49, 49, 49, 0.98);

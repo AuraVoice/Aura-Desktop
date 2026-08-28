@@ -2,16 +2,9 @@ import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { logError } from "../lib/log";
 import { useHotkeyBindings } from "../state/useHotkeyBindings";
+import type { VoiceToggleKeyStatus } from "../lib/hotkeys";
 
 const ROTATE_MS = 4200;
-
-interface VoiceToggleKeyStatus {
-  available: boolean;
-  keyLabel: string;
-  keys: string[];
-  gesture: "doubleTap" | "press";
-  reason?: string;
-}
 
 interface GuideItem {
   keys: string[];

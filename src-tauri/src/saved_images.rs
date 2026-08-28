@@ -77,12 +77,7 @@ pub async fn cache_saved_image(app: AppHandle, item_id: String, url: String) -> 
             let key = crypto::load_or_create_key(&blocking_app)?;
             let encrypted = crypto::encrypt(&key, &bytes)?;
             std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-            let temp_path = path.with_extension("enc.tmp");
-            std::fs::write(&temp_path, encrypted).map_err(|e| e.to_string())?;
-            if let Err(e) = std::fs::rename(&temp_path, &path) {
-                let _ = std::fs::remove_file(&temp_path);
-                return Err(e.to_string());
-            }
+            crate::fsx::write_atomic(&path, &encrypted, crate::fsx::Durability::BestEffort)?;
             Ok::<bool, String>(true)
         })
         .await

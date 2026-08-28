@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
 import { Download, Mic, Pause, Play, ShieldCheck, Trash2 } from "lucide-react";
 import { logError } from "../../lib/log";
 import {
@@ -25,11 +24,7 @@ import {
   setDictationConsent,
 } from "../../lib/dictationConsent";
 import { dictationConsent as consentCopy, dictationChord as chordCopy } from "../../lib/copy";
-import {
-  chordLabelOf,
-  loadDictationStatus,
-  type DictationStatus,
-} from "../../lib/dictationStatus";
+import { chordLabelOf, useDictationStatus } from "../../lib/dictationStatus";
 import { SettingsPageLayout, SettingsSection } from "../components/SettingsPageLayout";
 import { useDashboardUser } from "../useDashboardUser";
 
@@ -230,7 +225,7 @@ export function DictationPage() {
   // against a service, and the credential for it is minted per session.
   const signedIn = useDashboardUser() !== null;
   const [onlineAccepted, setOnlineAccepted] = useState<boolean | null>(null);
-  const [dictationStatus, setDictationStatus] = useState<DictationStatus | null>(null);
+  const dictationStatus = useDictationStatus();
   const [settings, setSettings] = useState<TraceSettings | null>(null);
   const [summary, setSummary] = useState<TraceSummary | null>(null);
   const [traces, setTraces] = useState<TraceRecord[]>([]);
@@ -286,21 +281,6 @@ export function DictationPage() {
     };
   }, []);
 
-  useEffect(() => {
-    let active = true;
-    void loadDictationStatus()
-      .then((status) => {
-        if (active) setDictationStatus(status);
-      })
-      .catch((err) => logError("DictationPage: load status", err));
-    const pending = listen<DictationStatus>("dictation-status-changed", (event) => {
-      if (active) setDictationStatus(event.payload);
-    });
-    return () => {
-      active = false;
-      void pending.then((unlisten) => unlisten());
-    };
-  }, []);
 
   async function updateOnlineConsent(accepted: boolean) {
     setBusy("consent");

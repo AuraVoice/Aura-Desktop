@@ -2,6 +2,8 @@
 // anywhere (house rule, mirrors meetingCopy.ts). A separate feature file for
 // now; fold into copy.ts later if it stays small.
 
+import { relativeTime } from "../dashboard/format";
+
 export const notifications = {
   // Kebab menu row + inbox.
   menuRow: "Notifications",
@@ -53,14 +55,7 @@ export const notifications = {
     return `${date} at ${time}`;
   },
 
-  // Relative-time helper for a row timestamp.
-  relativeTime: (ms: number): string => {
-    const seconds = Math.max(0, Math.floor((Date.now() - ms) / 1000));
-    if (seconds < 60) return "just now";
-    const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return `${minutes}m ago`;
-    const hours = Math.floor(minutes / 60);
-    if (hours < 24) return `${hours}h ago`;
-    return `${Math.floor(hours / 24)}d ago`;
-  },
+  // Relative-time helper for a row timestamp; the one shared formatter so an
+  // inbox row and a dashboard card never disagree about the same instant.
+  relativeTime: (ms: number): string => relativeTime(ms, true),
 } as const;

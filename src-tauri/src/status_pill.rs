@@ -2,9 +2,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use tauri::{
-    AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder,
-};
+use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager};
 
 const STATUS_PILL_WINDOW: &str = "status-pill";
 const STATUS_PILL_WIDTH: f64 = 220.0;
@@ -41,42 +39,17 @@ struct StatusPillRuntime {
 pub struct StatusPillHandle(Mutex<StatusPillRuntime>);
 
 fn build_window(app: &AppHandle) -> Result<tauri::WebviewWindow, String> {
-    if let Some(window) = app.get_webview_window(STATUS_PILL_WINDOW) {
-        log::info!("status_pill: reusing window");
-        return Ok(window);
-    }
-    let window = WebviewWindowBuilder::new(
+    crate::window_util::build_accessory_window(
         app,
         STATUS_PILL_WINDOW,
-        WebviewUrl::App("index.html".into()),
+        "Aura Status",
+        LogicalSize::new(STATUS_PILL_WIDTH, STATUS_PILL_HEIGHT),
+        true,
     )
-    .title("Aura Status")
-    .inner_size(STATUS_PILL_WIDTH, STATUS_PILL_HEIGHT)
-    .decorations(false)
-    .transparent(true)
-    .shadow(false)
-    .always_on_top(true)
-    .skip_taskbar(true)
-    .resizable(false)
-    .focused(false)
-    .visible(false)
-    .build()
-    .map_err(|error| error.to_string())?;
-
-    let _ = window.set_ignore_cursor_events(true);
-    let _ = crate::overlay::exclude_main_window_from_capture(&window);
-    apply_no_activate(&window);
-    log::info!("status_pill: window created");
-    Ok(window)
 }
 
 fn place_window(window: &tauri::WebviewWindow) {
-    let monitor = window
-        .cursor_position()
-        .ok()
-        .and_then(|cursor| window.monitor_from_point(cursor.x, cursor.y).ok().flatten())
-        .or_else(|| window.primary_monitor().ok().flatten());
-    let Some(monitor) = monitor else {
+    let Some(monitor) = crate::overlay::monitor_under_cursor(window) else {
         return;
     };
     let scale = monitor.scale_factor();
@@ -98,28 +71,6 @@ fn place_window(window: &tauri::WebviewWindow) {
         work_size.height
     );
 }
-
-#[cfg(windows)]
-fn apply_no_activate(window: &tauri::WebviewWindow) {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        GetWindowLongPtrW, SetWindowLongPtrW, GWL_EXSTYLE, WS_EX_NOACTIVATE,
-    };
-
-    let Ok(hwnd) = window.hwnd() else {
-        return;
-    };
-    unsafe {
-        let current = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
-        SetWindowLongPtrW(
-            hwnd,
-            GWL_EXSTYLE,
-            current | WS_EX_NOACTIVATE.0 as isize,
-        );
-    }
-}
-
-#[cfg(not(windows))]
-fn apply_no_activate(_window: &tauri::WebviewWindow) {}
 
 #[tauri::command]
 pub async fn show_status_pill(app: AppHandle, kind: StatusPillKind) {
@@ -146,7 +97,7 @@ pub async fn show_status_pill(app: AppHandle, kind: StatusPillKind) {
         };
         place_window(&window);
         if let Some(payload) = status_pill_state(handle.state::<StatusPillHandle>()) {
-            let _ = window.emit("status-pill-update", payload);
+            let _ = window.emit(crate::events::STATUS_PILL_UPDATE, payload);
         }
         if let Err(error) = window.show() {
             log::error!("status_pill: failed to show window: {error}");

@@ -1,5 +1,6 @@
 import { useEffect, type RefObject } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { DICTATION_LEVEL } from "../lib/ipcEvents";
 import {
   clamp,
   easeHeights,
@@ -116,7 +117,7 @@ export function useDictationLevels(
     let animationFrame = 0;
     let disposed = false;
 
-    const pending = listen<number>("dictation-level", (event) => {
+    const pending = listen<number>(DICTATION_LEVEL, (event) => {
       level = clamp(event.payload, 0, 1);
       levelAt = performance.now();
     });

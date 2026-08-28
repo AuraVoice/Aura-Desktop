@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { INTERVIEW_RESUME_UPDATED as RESUME_EVENT } from "./ipcEvents";
 
 /**
  * The resume the overlay's preflight can attach when no reviewed brief exists.
@@ -9,8 +10,6 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
  * see one answer, and sign-out clears it with the brief (clear_preparation).
  * In memory only - a resume is not written to disk by this path.
  */
-
-const RESUME_EVENT = "interview-resume-updated";
 
 export async function loadInterviewResume(): Promise<string | null> {
   const resume = await invoke<string | null>("interview_resume");

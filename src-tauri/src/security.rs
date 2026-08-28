@@ -422,7 +422,7 @@ struct ArmedPayload {
 /// regardless of trigger (hotkey, native command, voice end, sign-out). JS
 /// mirrors this instead of owning a competing boolean.
 pub(crate) fn emit_screen_sight_armed(app: &AppHandle, armed: bool) {
-    if let Err(e) = app.emit("screen-sight-armed", ArmedPayload { armed }) {
+    if let Err(e) = app.emit(crate::events::SCREEN_SIGHT_ARMED, ArmedPayload { armed }) {
         log::error!("security: failed to emit screen-sight-armed: {e}");
     }
 }

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { RoomEvent, type Room, type RemoteParticipant } from "livekit-client";
+import { type Room } from "livekit-client";
 import { invoke } from "@tauri-apps/api/core";
-import { validateAgentDataMessage } from "../../lib/agentData";
+import { useAgentDataMessage } from "../../lib/useAgentDataMessage";
 import { logError, logInfo } from "../../lib/log";
 import {
   MATERIAL_REQUEST_TYPE,
@@ -168,39 +168,21 @@ export function useInterviewMaterial(room: Room | null): InterviewMaterialState 
     setData({ phase: "idle", request: null, errorReason: null });
   }, []);
 
-  useEffect(() => {
-    if (!room) return;
-    let disposed = false;
-
-    function onDataReceived(
-      payload: Uint8Array,
-      participant?: RemoteParticipant,
-      _kind?: unknown,
-      topic?: string,
-    ) {
-      try {
-        const verdict = validateAgentDataMessage(payload, participant, topic);
-        if (verdict.kind !== "valid" || verdict.type !== MATERIAL_REQUEST_TYPE) return;
-        const request = parseMaterialRequest(verdict.payload);
-        if (!request) {
-          // Never open a box we cannot correlate: the paste would be rejected on
-          // arrival with nothing on screen explaining why.
-          logInfo("useInterviewMaterial: request rejected", "unparseable");
-          return;
-        }
-        if (disposed) return;
-        handleRequest(request);
-      } catch (err) {
-        logError("useInterviewMaterial: onDataReceived", err);
+  useAgentDataMessage(
+    room,
+    MATERIAL_REQUEST_TYPE,
+    (event) => {
+      const request = parseMaterialRequest(event.payload);
+      if (!request) {
+        // Never open a box we cannot correlate: the paste would be rejected on
+        // arrival with nothing on screen explaining why.
+        logInfo("useInterviewMaterial: request rejected", "unparseable");
+        return;
       }
-    }
-
-    room.on(RoomEvent.DataReceived, onDataReceived);
-    return () => {
-      disposed = true;
-      room.off(RoomEvent.DataReceived, onDataReceived);
-    };
-  }, [room, handleRequest]);
+      handleRequest(request);
+    },
+    "useInterviewMaterial: onDataReceived",
+  );
 
   // A box outlives its usefulness the moment the call it belongs to ends: the
   // worker that armed it is gone, so a paste would land nowhere.

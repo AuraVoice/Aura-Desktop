@@ -1,10 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { load, type Store } from "@tauri-apps/plugin-store";
 import { fetchUpcomingMeetings, type UpcomingMeeting } from "../lib/calendar";
+import {
+  CALENDAR_STORE,
+  lazyStore,
+  prunedToToday,
+  scopedKey,
+  type IdDateMap,
+} from "./meetingStore";
 import { localDateString } from "../lib/memory";
 import { trackEvent } from "../lib/analytics";
 import { logError } from "../lib/log";
+import {
+  presentationTreatingMoveAsBar,
+  type OverlayPresentation,
+} from "./overlayPresentation";
 
 /** Generous budget: unlike the catch-up card this poll runs in the background,
  * not on the critical summon path, so it can wait a little longer for a result. */
@@ -21,16 +31,21 @@ const AUTOSUMMON_LEAD_MIN = 10;
  * network can never leave a wrong "in 25 min" frozen on screen. */
 const STALE_MAX_MS = 15 * 60_000;
 
-const CALENDAR_STORE = "calendar.json";
 // Both maps are eventId -> local date string; pruned to today on load so they
-// stay bounded (an entry is only meaningful for the day it was written).
+// stay bounded. Scoped per uid like useMeetingArm's keys: a snooze belongs to
+// the person who snoozed, not the Windows install. The legacy unscoped keys
+// are read once as a seed and no longer written.
 const DISMISSED_KEY = "dismissed_events";
 const SUMMONED_KEY = "auto_summoned_events";
+// Deliberately NOT uid-scoped: the kill switch is documented as per-device.
 const ALERTS_DISABLED_KEY = "alerts_disabled";
 
+const getCalendarStore = lazyStore(CALENDAR_STORE);
+
 interface MeetingsInputs {
-  presentation: "hidden" | "panel" | "bar" | "companion" | "pointing";
+  presentation: OverlayPresentation;
   signedIn: boolean;
+  uid: string | null;
   callLive: boolean;
   /** Whether an imminent event may reveal the signed-in surface. The notch UI
    * keeps this false while still using the calendar events for background
@@ -67,17 +82,6 @@ export interface MeetingsState {
   refresh: () => void;
 }
 
-type IdDateMap = Record<string, string>;
-
-function prunedToToday(map: IdDateMap | undefined, today: string): IdDateMap {
-  if (!map) return {};
-  const next: IdDateMap = {};
-  for (const [id, date] of Object.entries(map)) {
-    if (date === today) next[id] = date;
-  }
-  return next;
-}
-
 /**
  * The calendar meeting state machine. Mounted once in OverlayRoot and polls
  * regardless of presentation (the webview process stays alive while the window
@@ -86,7 +90,8 @@ function prunedToToday(map: IdDateMap | undefined, today: string): IdDateMap {
  * ambient surface that must never surface an error.
  */
 export function useMeetings(inputs: MeetingsInputs): MeetingsState {
-  const { presentation, signedIn, callLive, autoSummon = true } = inputs;
+  const { signedIn, uid, callLive, autoSummon = true } = inputs;
+  const presentation = presentationTreatingMoveAsBar(inputs.presentation);
 
   const [connected, setConnected] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -95,7 +100,6 @@ export function useMeetings(inputs: MeetingsInputs): MeetingsState {
   const [soonest, setSoonest] = useState<SoonestMeeting | null>(null);
   const [alertsDisabled, setAlertsDisabled] = useState(false);
 
-  const storeRef = useRef<Store | null>(null);
   const eventsRef = useRef<UpcomingMeeting[]>(events);
   eventsRef.current = events;
   // Mirror so poll()'s stable closure can tell "never loaded yet" (terminal
@@ -119,34 +123,50 @@ export function useMeetings(inputs: MeetingsInputs): MeetingsState {
   signedInRef.current = signedIn;
   const alertsDisabledRef = useRef(alertsDisabled);
   alertsDisabledRef.current = alertsDisabled;
+  const uidRef = useRef(uid);
+  uidRef.current = uid;
 
-  const getStore = useCallback(async () => {
-    return storeRef.current ?? (storeRef.current = await load(CALENDAR_STORE));
+  const persistMap = useCallback(async (baseKey: string, map: IdDateMap) => {
+    // Signed out there is no one to attribute the snooze to; it stays
+    // in-memory for the session, matching useMeetingArm's posture.
+    const currentUid = uidRef.current;
+    if (!currentUid) return;
+    try {
+      const store = await getCalendarStore();
+      await store.set(scopedKey(baseKey, currentUid), map);
+      await store.save();
+    } catch (err) {
+      logError("useMeetings: persistMap", err);
+    }
   }, []);
 
-  const persistMap = useCallback(
-    async (key: string, map: IdDateMap) => {
-      try {
-        const store = await getStore();
-        await store.set(key, map);
-        await store.save();
-      } catch (err) {
-        logError("useMeetings: persistMap", err);
-      }
-    },
-    [getStore],
-  );
-
-  // Load persisted state once, pruning both id maps to today.
+  // Load persisted state per account, pruning both id maps to today. The
+  // legacy unscoped keys seed a uid that has no scoped state yet, so snoozes
+  // from before uid-scoping survive for the install's owner (the legacy keys
+  // are never written again).
   useEffect(() => {
+    dismissedRef.current = {};
+    summonedRef.current = {};
     let cancelled = false;
     (async () => {
       try {
-        const store = await getStore();
+        const store = await getCalendarStore();
         const today = localDateString();
-        const dismissed = prunedToToday(await store.get<IdDateMap>(DISMISSED_KEY), today);
-        const summoned = prunedToToday(await store.get<IdDateMap>(SUMMONED_KEY), today);
         const disabled = (await store.get<boolean>(ALERTS_DISABLED_KEY)) === true;
+        let dismissed: IdDateMap = {};
+        let summoned: IdDateMap = {};
+        if (uid) {
+          dismissed = prunedToToday(
+            (await store.get<IdDateMap>(scopedKey(DISMISSED_KEY, uid)))
+              ?? (await store.get<IdDateMap>(DISMISSED_KEY)),
+            today,
+          );
+          summoned = prunedToToday(
+            (await store.get<IdDateMap>(scopedKey(SUMMONED_KEY, uid)))
+              ?? (await store.get<IdDateMap>(SUMMONED_KEY)),
+            today,
+          );
+        }
         if (cancelled) return;
         dismissedRef.current = dismissed;
         summonedRef.current = summoned;
@@ -158,7 +178,7 @@ export function useMeetings(inputs: MeetingsInputs): MeetingsState {
     return () => {
       cancelled = true;
     };
-  }, [getStore]);
+  }, [uid]);
 
   // Recompute the soonest eligible meeting from the cached list, and fire the
   // one-shot auto-summon when a meeting crosses the lead threshold.
@@ -276,7 +296,7 @@ export function useMeetings(inputs: MeetingsInputs): MeetingsState {
     setSoonest(null);
     (async () => {
       try {
-        const store = await getStore();
+        const store = await getCalendarStore();
         await store.set(ALERTS_DISABLED_KEY, true);
         await store.save();
       } catch (err) {
@@ -284,7 +304,7 @@ export function useMeetings(inputs: MeetingsInputs): MeetingsState {
       }
     })();
     trackEvent("meeting_alerts_toggle_off", {});
-  }, [getStore]);
+  }, []);
 
   return { connected, loaded, loadFailed, events, soonest, alertsDisabled, dismiss, turnOffAlerts, refresh };
 }

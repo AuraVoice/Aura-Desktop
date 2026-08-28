@@ -152,7 +152,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             // mirroring how OPEN_DASHBOARD hands off to the frontend.
             OPEN_NOTIFICATIONS => {
                 overlay::summon(app);
-                if let Err(e) = app.emit("open-notifications-requested", ()) {
+                if let Err(e) = app.emit(crate::events::OPEN_NOTIFICATIONS_REQUESTED, ()) {
                     error!("tray: failed to emit open-notifications-requested: {e}");
                 }
             }
@@ -163,13 +163,13 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             // break the "capture is always visible" commitment.
             CAPTURE_NOW => {
                 overlay::summon(app);
-                if let Err(e) = app.emit("capture-now-requested", ()) {
+                if let Err(e) = app.emit(crate::events::CAPTURE_NOW_REQUESTED, ()) {
                     error!("tray: failed to emit capture-now-requested: {e}");
                 }
             }
             INTERVIEW_HACKER => {
                 overlay::summon(app);
-                if let Err(e) = app.emit("open-interview-hacker-requested", ()) {
+                if let Err(e) = app.emit(crate::events::OPEN_INTERVIEW_HACKER_REQUESTED, ()) {
                     error!("tray: failed to emit open-interview-hacker-requested: {e}");
                 }
             }

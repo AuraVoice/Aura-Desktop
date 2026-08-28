@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { load, type Store } from "@tauri-apps/plugin-store";
 import type { UpcomingMeeting } from "../lib/calendar";
+import {
+  CALENDAR_STORE,
+  lazyStore,
+  prunedToToday,
+  scopedKey,
+  type IdDateMap,
+} from "./meetingStore";
 import { localDateString } from "../lib/memory";
 import { trackEvent } from "../lib/analytics";
 import { logError } from "../lib/log";
@@ -26,30 +32,16 @@ export function isEligibleForNotes(event: UpcomingMeeting): boolean {
   return durationMs > 0 && durationMs <= MAX_NOTES_MEETING_MINUTES * 60_000;
 }
 
-// Shares useMeetings' calendar.json store (plugin-store dedups the handle),
-// same pruned id -> local-date map idiom as dismissed/summoned events.
-// Every key is namespaced by Firebase uid: recording consent belongs to the
-// PERSON who granted it, not the Windows install - user B signing into the
-// same profile must never inherit user A's opt-in.
-const CALENDAR_STORE = "calendar.json";
+// Shares useMeetings' calendar.json store (meetingStore.ts owns the file
+// name and the pruned id -> local-date map idiom). Every key is namespaced
+// by Firebase uid: recording consent belongs to the PERSON who granted it,
+// not the Windows install - user B signing into the same profile must never
+// inherit user A's opt-in.
 const AUTO_NOTES_KEY = "auto_meeting_notes";
 const ARMED_KEY = "armed_events";
 const DISARMED_KEY = "disarmed_events";
 
-function scopedKey(base: string, uid: string): string {
-  return `${base}:${uid}`;
-}
-
-type IdDateMap = Record<string, string>;
-
-function prunedToToday(map: IdDateMap | undefined, today: string): IdDateMap {
-  if (!map) return {};
-  const next: IdDateMap = {};
-  for (const [id, date] of Object.entries(map)) {
-    if (date === today) next[id] = date;
-  }
-  return next;
-}
+const getCalendarStore = lazyStore(CALENDAR_STORE);
 
 export interface MeetingArmState {
   /** The global default (persisted, OFF until the user flips it - the
@@ -76,17 +68,12 @@ export function useMeetingArm(uid: string | null): MeetingArmState {
   const [autoNotes, setAutoNotes] = useState(false);
   const [revision, setRevision] = useState(0);
 
-  const storeRef = useRef<Store | null>(null);
   const armedRef = useRef<IdDateMap>({});
   const disarmedRef = useRef<IdDateMap>({});
   const autoNotesRef = useRef(autoNotes);
   autoNotesRef.current = autoNotes;
   const uidRef = useRef(uid);
   uidRef.current = uid;
-
-  const getStore = useCallback(async () => {
-    return storeRef.current ?? (storeRef.current = await load(CALENDAR_STORE));
-  }, []);
 
   useEffect(() => {
     // Account switch: drop the previous user's arm state immediately, then
@@ -99,7 +86,7 @@ export function useMeetingArm(uid: string | null): MeetingArmState {
     let cancelled = false;
     (async () => {
       try {
-        const store = await getStore();
+        const store = await getCalendarStore();
         const today = localDateString();
         const armed = prunedToToday(
           await store.get<IdDateMap>(scopedKey(ARMED_KEY, uid)),
@@ -122,21 +109,21 @@ export function useMeetingArm(uid: string | null): MeetingArmState {
     return () => {
       cancelled = true;
     };
-  }, [uid, getStore]);
+  }, [uid]);
 
   const persist = useCallback(
     async (baseKey: string, value: IdDateMap | boolean) => {
       const currentUid = uidRef.current;
       if (!currentUid) return;
       try {
-        const store = await getStore();
+        const store = await getCalendarStore();
         await store.set(scopedKey(baseKey, currentUid), value);
         await store.save();
       } catch (err) {
         logError("useMeetingArm: persist", err);
       }
     },
-    [getStore],
+    [],
   );
 
   const isArmed = useCallback((eventId: string): boolean => {

@@ -41,6 +41,8 @@ pub(crate) const NOTCH_CROSS: f64 = 29.0;
 // Left/Right it sits beside the notch and grows the window along its width.
 const CARD_CROSS: f64 = 380.0;
 const INTERVIEW_HACKER_WIDTH: f64 = 720.0;
+// Must agree with InterviewHackerCard.css (.interview-hacker-control-bar
+// width/height) and NotchBar.css's 52px interview grid rows + 8px row-gap.
 const INTERVIEW_CONTROL_WIDTH: f64 = 228.0;
 const INTERVIEW_CONTROL_HEIGHT: f64 = 52.0;
 const INTERVIEW_CONTROL_GAP: f64 = 8.0;
@@ -169,13 +171,10 @@ pub struct OverlayState {
     centered_slot_anchor: Option<(f64, f64)>,
     user_center: Option<(f64, f64)>,
     notch_edge: NotchEdge,
-    applied_presentation: Option<OverlayPresentation>,
-    applied_variant: Option<PanelVariant>,
-    applied_slot_height: Option<Option<f64>>,
-    applied_centered_slot: Option<bool>,
-    // The edge that was last applied to the window, so an edge change forces a
-    // reposition even when presentation/variant/slot are unchanged.
-    applied_notch_edge: Option<NotchEdge>,
+    // What was last successfully applied to the real window. Written only
+    // AFTER the corresponding window operations succeed (the rule the module
+    // header explains); None forces the next apply() to run unconditionally.
+    applied: Option<AppliedBounds>,
     applying_bounds: bool,
     pre_pointing: Option<(OverlayPresentation, PanelVariant)>,
     pointing_generation: u64,
@@ -199,15 +198,37 @@ impl Default for OverlayState {
             centered_slot_anchor: None,
             user_center: None,
             notch_edge: NotchEdge::default(),
-            applied_presentation: None,
-            applied_variant: None,
-            applied_slot_height: None,
-            applied_centered_slot: None,
-            applied_notch_edge: None,
+            applied: None,
             applying_bounds: false,
             pre_pointing: None,
             pointing_generation: 0,
             always_show_bar: false,
+        }
+    }
+}
+
+/// One successfully-applied window configuration, compared and written
+/// wholesale so no field can be forgotten when a new dimension is added. The
+/// edge lives in the snapshot so an edge change forces a reposition even when
+/// presentation/variant/slot are unchanged.
+#[derive(Clone, Copy, PartialEq)]
+struct AppliedBounds {
+    presentation: OverlayPresentation,
+    variant: PanelVariant,
+    slot_height: Option<f64>,
+    centered_slot: bool,
+    notch_edge: NotchEdge,
+}
+
+impl OverlayState {
+    /// The bounds the current fields ask for, compared against `applied`.
+    fn current_bounds(&self) -> AppliedBounds {
+        AppliedBounds {
+            presentation: self.presentation,
+            variant: self.panel_variant,
+            slot_height: self.slot_height,
+            centered_slot: self.centered_slot,
+            notch_edge: self.notch_edge,
         }
     }
 }
@@ -336,17 +357,23 @@ fn persist_edge(app: &AppHandle, edge: NotchEdge) {
     }
 }
 
+/// The monitor the cursor currently sits on, falling back to the primary
+/// monitor. Shared by every surface that places itself relative to the
+/// cursor's display (overlay, status pill); dictation/hud.rs deliberately
+/// resolves from the target window's center instead.
+pub(crate) fn monitor_under_cursor(window: &WebviewWindow) -> Option<tauri::Monitor> {
+    window
+        .cursor_position()
+        .ok()
+        .and_then(|cursor| window.monitor_from_point(cursor.x, cursor.y).ok().flatten())
+        .or_else(|| window.primary_monitor().ok().flatten())
+}
+
 /// The display the cursor currently sits on (logical position + size),
 /// falling back to the primary monitor, then to a hardcoded 1920x1080 rect if
 /// neither can be read.
 fn active_display_bounds(window: &WebviewWindow) -> (LogicalPosition<f64>, LogicalSize<f64>) {
-    let monitor = window
-        .cursor_position()
-        .ok()
-        .and_then(|cursor| window.monitor_from_point(cursor.x, cursor.y).ok().flatten())
-        .or_else(|| window.primary_monitor().ok().flatten());
-
-    match monitor {
+    match monitor_under_cursor(window) {
         Some(m) => {
             let scale = m.scale_factor();
             (
@@ -369,14 +396,24 @@ fn active_display_bounds(window: &WebviewWindow) -> (LogicalPosition<f64>, Logic
 fn active_display_work_area(
     window: &WebviewWindow,
 ) -> (LogicalPosition<f64>, LogicalSize<f64>) {
-    let (full_pos, full_size) = active_display_bounds(window);
-    let scale = window
-        .cursor_position()
-        .ok()
-        .and_then(|cursor| window.monitor_from_point(cursor.x, cursor.y).ok().flatten())
-        .or_else(|| window.primary_monitor().ok().flatten())
-        .map(|m| m.scale_factor())
-        .unwrap_or(1.0);
+    // Resolve the monitor ONCE: bounds and scale must come from the same
+    // display, or a cursor crossing displays between two lookups would apply
+    // one monitor's scale to another's bounds.
+    let (full_pos, full_size, scale) = match monitor_under_cursor(window) {
+        Some(m) => {
+            let scale = m.scale_factor();
+            (
+                m.position().to_logical::<f64>(scale),
+                m.size().to_logical::<f64>(scale),
+                scale,
+            )
+        }
+        None => (
+            LogicalPosition::new(0.0, 0.0),
+            LogicalSize::new(1920.0, 1080.0),
+            1.0,
+        ),
+    };
     work_area_within(full_pos, full_size, scale)
 }
 
@@ -623,7 +660,7 @@ pub fn snapshot(app: &AppHandle) -> OverlaySnapshot {
 
 fn emit_overlay_changed(app: &AppHandle) {
     if let Some(window) = main_window(app) {
-        if let Err(e) = window.emit("overlay-changed", snapshot(app)) {
+        if let Err(e) = window.emit(crate::events::OVERLAY_CHANGED, snapshot(app)) {
             error!("overlay: failed to emit overlay-changed: {e}");
         }
     }
@@ -647,11 +684,7 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
 
     let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
 
-    let unchanged = state.applied_presentation == Some(state.presentation)
-        && state.applied_variant == Some(state.panel_variant)
-        && state.applied_slot_height == Some(state.slot_height)
-        && state.applied_centered_slot == Some(state.centered_slot)
-        && state.applied_notch_edge == Some(state.notch_edge);
+    let unchanged = state.applied == Some(state.current_bounds());
     if unchanged {
         return Ok(());
     }
@@ -659,7 +692,10 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
     let started_at = Instant::now();
 
     if state.presentation == OverlayPresentation::Hidden {
-        let from = (state.applied_presentation, state.applied_variant);
+        let from = (
+            state.applied.map(|a| a.presentation),
+            state.applied.map(|a| a.variant),
+        );
         let presentation = state.presentation;
         let panel_variant = state.panel_variant;
         let slot_height = state.slot_height;
@@ -672,11 +708,13 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
             .map_err(|e| format!("failed to hide window: {e}"))?;
         {
             let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
-            state.applied_presentation = Some(presentation);
-            state.applied_variant = Some(panel_variant);
-            state.applied_slot_height = Some(slot_height);
-            state.applied_centered_slot = Some(centered_slot);
-            state.applied_notch_edge = Some(notch_edge);
+            state.applied = Some(AppliedBounds {
+                presentation,
+                variant: panel_variant,
+                slot_height,
+                centered_slot,
+                notch_edge,
+            });
         }
         crate::dictation::set_overlay_visible(app, false);
         emit_overlay_changed(app);
@@ -701,8 +739,9 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
     // menu or a card) or an edge re-dock is NOT one - it must not re-steal OS
     // foreground, which flickers focus and costs ~100ms per click on every
     // dropdown toggle.
-    let is_fresh_show = state.applied_presentation != Some(presentation)
-        || state.applied_variant != Some(panel_variant);
+    let is_fresh_show = state
+        .applied
+        .map_or(true, |a| a.presentation != presentation || a.variant != panel_variant);
     let size = size_for(&state);
     let position = position_for(&state, &window, size);
     state.applying_bounds = true;
@@ -739,11 +778,13 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
 
     {
         let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
-        state.applied_presentation = Some(presentation);
-        state.applied_variant = Some(panel_variant);
-        state.applied_slot_height = Some(slot_height);
-        state.applied_centered_slot = Some(centered_slot);
-        state.applied_notch_edge = Some(notch_edge);
+        state.applied = Some(AppliedBounds {
+            presentation,
+            variant: panel_variant,
+            slot_height,
+            centered_slot,
+            notch_edge,
+        });
     }
     emit_overlay_changed(app);
     crate::dictation::set_overlay_visible(app, suppresses_hud);
@@ -830,17 +871,23 @@ pub fn begin_notch_move(app: &AppHandle) -> Result<(), String> {
         {
             let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
             state.presentation = OverlayPresentation::Bar;
-            state.applied_presentation = None;
+            state.applied = None;
         }
         apply(app);
         return Err(format!("failed to take over display for notch move: {e}"));
     }
 
-    handle
-        .0
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .applied_presentation = Some(OverlayPresentation::MovingNotch);
+    {
+        // Record the takeover in the applied snapshot (the other fields are
+        // whatever the last apply left, so only the presentation reads as
+        // changed). A full None here would let an interleaved apply() shrink
+        // the takeover back to bar geometry.
+        let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        state.applied = Some(AppliedBounds {
+            presentation: OverlayPresentation::MovingNotch,
+            ..state.current_bounds()
+        });
+    }
     emit_overlay_changed(app);
     Ok(())
 }
@@ -856,7 +903,7 @@ pub fn commit_notch_move(app: &AppHandle, edge: NotchEdge) {
         state.notch_edge = edge;
     }
     persist_edge(app, edge);
-    // applied_presentation is still MovingNotch here, so apply() repositions.
+    // applied still records MovingNotch here, so apply() repositions.
     apply(app);
 }
 
@@ -962,7 +1009,7 @@ pub fn summon_chat(app: &AppHandle) -> Result<(), String> {
     }
     win_focus::raise_for_hotkey(app, &window);
     window
-        .emit("chat-requested", ())
+        .emit(crate::events::CHAT_REQUESTED, ())
         .map_err(|e| format!("failed to emit chat event: {e}"))?;
     Ok(())
 }
@@ -972,7 +1019,7 @@ pub fn summon_chat(app: &AppHandle) -> Result<(), String> {
 /// toggle from briefly showing or focusing a window that is about to disappear.
 pub fn request_chat_toggle(app: &AppHandle) {
     if let Some(window) = main_window(app) {
-        if let Err(e) = window.emit("chat-toggle-requested", ()) {
+        if let Err(e) = window.emit(crate::events::CHAT_TOGGLE_REQUESTED, ()) {
             error!("overlay::request_chat_toggle: failed to emit: {e}");
         }
     }
@@ -985,7 +1032,7 @@ pub fn request_chat_toggle(app: &AppHandle) {
 /// the existing summon_bar/dismiss_bar commands.
 pub fn request_output_mute_toggle(app: &AppHandle) {
     if let Some(window) = main_window(app) {
-        if let Err(e) = window.emit("output-mute-toggle-requested", ()) {
+        if let Err(e) = window.emit(crate::events::OUTPUT_MUTE_TOGGLE_REQUESTED, ()) {
             error!("overlay::request_output_mute_toggle: failed to emit: {e}");
         }
     }
@@ -1028,7 +1075,7 @@ fn resting_presentation(state: &OverlayState) -> OverlayPresentation {
 
 pub fn dismiss_bar(app: &AppHandle) {
     if let Some(window) = main_window(app) {
-        if let Err(e) = window.emit("end-voice-session", ()) {
+        if let Err(e) = window.emit(crate::events::END_VOICE_SESSION, ()) {
             error!("overlay::dismiss_bar: failed to emit end-voice-session: {e}");
         }
     }
@@ -1101,7 +1148,7 @@ pub fn sign_out_requested(app: &AppHandle) {
     // the sensitive command surface is already locked.
     crate::security::clear_for_sign_out(app);
     if let Some(window) = main_window(app) {
-        if let Err(e) = window.emit("sign-out-requested", ()) {
+        if let Err(e) = window.emit(crate::events::SIGN_OUT_REQUESTED, ()) {
             error!("overlay::sign_out_requested: failed to emit: {e}");
         }
     }
@@ -1280,17 +1327,21 @@ pub fn point_at(
                 .unwrap_or((OverlayPresentation::Bar, PanelVariant::Companion));
             state.presentation = presentation;
             state.panel_variant = variant;
-            state.applied_presentation = None;
+            state.applied = None;
         }
         apply(app);
         return;
     }
 
-    handle
-        .0
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .applied_presentation = Some(OverlayPresentation::Pointing);
+    {
+        // Same shape as the MovingNotch takeover marker above: record the
+        // takeover, keep the rest of the snapshot as applied.
+        let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        state.applied = Some(AppliedBounds {
+            presentation: OverlayPresentation::Pointing,
+            ..state.current_bounds()
+        });
+    }
 
     // Without this, the frontend's own `presentation` state (only ever
     // updated by this event) never becomes "pointing", so OverlayRoot never
@@ -1306,7 +1357,7 @@ pub fn point_at(
     // Window-relative: the window now exactly covers the target monitor, so
     // the frontend just needs where within its own bounds to fly to.
     if let Err(e) = window.emit(
-        "pointing-target",
+        crate::events::POINTING_TARGET,
         serde_json::json!({
             "x": target_x - monitor_x,
             "y": target_y - monitor_y,

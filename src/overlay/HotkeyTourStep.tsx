@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { HOTKEY_TEST_PRESSED } from "../lib/ipcEvents";
 import {
   loadHotkeyBindings,
   loadVoiceToggleKey,
@@ -88,7 +89,7 @@ export function HotkeyTourStep({ keyLabel, onContinue }: HotkeyTourStepProps) {
     let unlisten: (() => void) | undefined;
     void (async () => {
       try {
-        const stopListening = await listen<string>("hotkey-test-pressed", (event) => {
+        const stopListening = await listen<string>(HOTKEY_TEST_PRESSED, (event) => {
           if (event.payload !== currentTestId) return;
           trackEvent("desktop_hotkey_test_passed", {
             hotkey_id: currentTestId,

@@ -1,4 +1,4 @@
-import { authFetch } from "./api";
+import { authFetchWithTimeout } from "./api";
 
 export interface VoicePreference {
   voiceId: string;
@@ -26,17 +26,11 @@ function parseVoicePreference(json: unknown): VoicePreference {
 }
 
 async function requestVoicePreference(init?: RequestInit): Promise<VoicePreference> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  try {
-    const response = await authFetch("/voice/preferences", { ...init, signal: controller.signal });
-    if (!response.ok) {
-      throw new Error(`Voice preference request failed (${response.status})`);
-    }
-    return parseVoicePreference(await response.json());
-  } finally {
-    clearTimeout(timeoutId);
+  const response = await authFetchWithTimeout("/voice/preferences", init, REQUEST_TIMEOUT_MS);
+  if (!response.ok) {
+    throw new Error(`Voice preference request failed (${response.status})`);
   }
+  return parseVoicePreference(await response.json());
 }
 
 export function fetchVoicePreference(): Promise<VoicePreference> {

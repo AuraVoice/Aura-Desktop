@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import {
   DEFAULT_GENERAL_SETTINGS,
   IMPROVEMENT_CONSENT_VERSION,
@@ -9,11 +8,7 @@ import {
   type GeneralSettings,
 } from "../../lib/generalSettings";
 import { logError } from "../../lib/log";
-import {
-  chordKeysOf,
-  loadDictationStatus,
-  type DictationStatus,
-} from "../../lib/dictationStatus";
+import { chordKeysOf, useDictationStatus } from "../../lib/dictationStatus";
 import { dictationChord as chordCopy } from "../../lib/copy";
 import { resetHotkeyBindings } from "../../lib/hotkeys";
 import { useHotkeyBindings } from "../../state/useHotkeyBindings";
@@ -80,7 +75,7 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
   // failed write shows as off instead of lying. Same source of truth as the
   // tray's "Start with Windows" item, which stays in sync automatically.
   const [launchAtStartup, setLaunchAtStartup] = useState(false);
-  const [dictationStatus, setDictationStatus] = useState<DictationStatus | null>(null);
+  const dictationStatus = useDictationStatus();
   const pageCopy = PAGE_COPY[section];
 
   useEffect(() => {
@@ -88,23 +83,6 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
     invoke<boolean>("autostart_enabled")
       .then(setLaunchAtStartup)
       .catch((err) => logError("GeneralPage: read autostart", err));
-  }, [section]);
-
-  useEffect(() => {
-    if (section !== "system") return;
-    let active = true;
-    void loadDictationStatus()
-      .then((status) => {
-        if (active) setDictationStatus(status);
-      })
-      .catch((err) => logError("GeneralPage: load dictation status", err));
-    const pending = listen<DictationStatus>("dictation-status-changed", (event) => {
-      if (active) setDictationStatus(event.payload);
-    });
-    return () => {
-      active = false;
-      void pending.then((unlisten) => unlisten());
-    };
   }, [section]);
 
   useEffect(() => {

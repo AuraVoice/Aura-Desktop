@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import {
+  MEETING_CAPTURE_STATE,
+  MEETING_JOIN_DETECTED,
+  MEETING_LEFT,
+  MEETING_SEGMENT_READY,
+} from "../lib/ipcEvents";
 import type { UpcomingMeeting } from "../lib/calendar";
 import { isEligibleForNotes } from "./useMeetingArm";
 import {
@@ -775,13 +781,13 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
     };
 
     add(
-      listen<{ eventId: string }>("meeting-join-detected", (event) => {
+      listen<{ eventId: string }>(MEETING_JOIN_DETECTED, (event) => {
         handleJoinDetected(event.payload.eventId);
       }),
       "join-detected",
     );
     add(
-      listen<{ eventId: string }>("meeting-left", (event) => {
+      listen<{ eventId: string }>(MEETING_LEFT, (event) => {
         if (activeEventRef.current === event.payload.eventId) {
           void invoke("stop_meeting_capture", { reason: "meeting_left" }).catch((err) =>
             logError("useMeetingCapture: stop on meeting-left", err),
@@ -791,7 +797,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
       "meeting-left",
     );
     add(
-      listen<CaptureStatePayload>("meeting-capture-state", (event) => {
+      listen<CaptureStatePayload>(MEETING_CAPTURE_STATE, (event) => {
         const payload = event.payload;
         if (payload.ownerUid !== uidRef.current) return;
         if (payload.active && payload.meetingId) {
@@ -831,7 +837,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
       "capture-state",
     );
     add(
-      listen<{ ownerUid: string }>("meeting-segment-ready", (event) => {
+      listen<{ ownerUid: string }>(MEETING_SEGMENT_READY, (event) => {
         if (event.payload.ownerUid === uidRef.current) void pump();
       }),
       "segment-ready",

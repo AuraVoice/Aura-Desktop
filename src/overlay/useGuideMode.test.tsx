@@ -218,7 +218,7 @@ beforeEach(() => {
   mocks.guideListener = null;
   mocks.invoke.mockImplementation((command: string) => {
     if (command === "guide_armed_state") {
-      return Promise.resolve({ armed: true, epoch: 7, session_id: SESSION_ID });
+      return Promise.resolve({ armed: true, epoch: 7, sessionId: SESSION_ID });
     }
     if (command === "capture_guide_frame") return Promise.resolve(captureResult);
     if (command === "ack_guide_response") return Promise.resolve(ackDirty);
@@ -248,7 +248,7 @@ describe("useGuideMode", () => {
     const initialState = deferred<{
       armed: boolean;
       epoch: number;
-      session_id: string | null;
+      sessionId: string | null;
     }>();
     mocks.invoke.mockImplementation((command: string) => {
       if (command === "guide_armed_state") return initialState.promise;
@@ -258,14 +258,14 @@ describe("useGuideMode", () => {
     await mountHook();
     await act(async () => {
       mocks.guideListener?.({
-        payload: { armed: true, epoch: 8, session_id: SESSION_ID },
+        payload: { armed: true, epoch: 8, sessionId: SESSION_ID },
       });
       await Promise.resolve();
     });
     expect(hookArmed).toBe(true);
 
     await act(async () => {
-      initialState.resolve({ armed: false, epoch: 7, session_id: null });
+      initialState.resolve({ armed: false, epoch: 7, sessionId: null });
       await Promise.resolve();
     });
     expect(hookArmed).toBe(true);
@@ -286,7 +286,7 @@ describe("useGuideMode", () => {
     // Mount disarmed so an enable request is not a no-op.
     mocks.invoke.mockImplementation((command: string) => {
       if (command === "guide_armed_state") {
-        return Promise.resolve({ armed: false, epoch: 7, session_id: null });
+        return Promise.resolve({ armed: false, epoch: 7, sessionId: null });
       }
       return Promise.resolve();
     });

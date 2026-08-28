@@ -1327,7 +1327,7 @@ pub fn emit_status_changed(app: &tauri::AppHandle) {
         return;
     }
     *previous = Some(next.clone());
-    let _ = app.emit("dictation-status-changed", next);
+    let _ = app.emit(crate::events::DICTATION_STATUS_CHANGED, next);
 }
 
 #[derive(Clone, Deserialize, Serialize)]

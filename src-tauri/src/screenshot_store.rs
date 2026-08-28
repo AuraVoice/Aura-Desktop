@@ -27,10 +27,12 @@ use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use log::{info, warn};
 use tauri::{AppHandle, Manager};
+
+use crate::util::{lock, now_ms_u64};
 
 const CAPTURES_DIR: &str = "screen-captures";
 const RETENTION_DAYS: u64 = 180;
@@ -58,7 +60,7 @@ pub fn save_capture(app: &AppHandle, kind: &str, jpeg: &[u8]) -> Result<PathBuf,
         .map_err(|e| e.to_string())?
         .join(CAPTURES_DIR);
     let key = crate::meeting::crypto::load_or_create_key(app)?;
-    save_capture_in(&base_dir, &key, kind, jpeg, now_ms())
+    save_capture_in(&base_dir, &key, kind, jpeg, now_ms_u64())
 }
 
 struct PersistJob {
@@ -126,7 +128,7 @@ impl PersistenceQueue {
         state.jobs.push_back(PersistJob {
             kind,
             jpeg,
-            captured_at_ms: now_ms(),
+            captured_at_ms: now_ms_u64(),
         });
         drop(state);
         self.inner.signal.notify_one();
@@ -156,12 +158,6 @@ impl PersistenceQueue {
             std::thread::sleep(Duration::from_millis(10));
         }
     }
-}
-
-/// A poisoned persistence mutex must not take the app down; the worker holds
-/// no invariant worth panicking over.
-fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 fn worker_loop(app: AppHandle, inner: Arc<QueueInner>) {
@@ -244,7 +240,7 @@ pub fn startup_maintenance(app: &AppHandle) {
                     .app_local_data_dir()
                     .map_err(|e| e.to_string())?
                     .join(CAPTURES_DIR);
-                prune_expired_in(&base_dir, now_ms())
+                prune_expired_in(&base_dir, now_ms_u64())
             })
             .await;
             match result {
@@ -290,12 +286,7 @@ fn write_capture_in(
         std::process::id()
     );
     let final_path = base_dir.join(filename);
-    let temp_path = final_path.with_extension("enc.tmp");
-    std::fs::write(&temp_path, encrypted).map_err(|e| e.to_string())?;
-    if let Err(e) = std::fs::rename(&temp_path, &final_path) {
-        let _ = std::fs::remove_file(&temp_path);
-        return Err(e.to_string());
-    }
+    crate::fsx::write_atomic(&final_path, &encrypted, crate::fsx::Durability::BestEffort)?;
     Ok(final_path)
 }
 
@@ -328,13 +319,6 @@ fn prune_expired_in(base_dir: &Path, now_ms: u64) -> Result<usize, String> {
     Ok(removed)
 }
 
-fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as u64)
-        .unwrap_or(0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,7 +327,7 @@ mod tests {
         std::env::temp_dir().join(format!(
             "aura-screen-store-{}-{}-{name}",
             std::process::id(),
-            now_ms()
+            now_ms_u64()
         ))
     }
 

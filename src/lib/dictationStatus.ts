@@ -1,4 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
+import { DICTATION_STATUS_CHANGED } from "./ipcEvents";
+import { useTauriMirroredState } from "./useTauriEvent";
 
 export interface DictationStatus {
   available: boolean;
@@ -8,6 +10,16 @@ export interface DictationStatus {
 
 export function loadDictationStatus(): Promise<DictationStatus> {
   return invoke<DictationStatus>("dictation_status");
+}
+
+/** Live mirror of Rust's dictation status (initial load + change events);
+ * null until the first value lands. */
+export function useDictationStatus(): DictationStatus | null {
+  return useTauriMirroredState<DictationStatus>(
+    DICTATION_STATUS_CHANGED,
+    loadDictationStatus,
+    "dictationStatus: mirror",
+  );
 }
 
 /** Shown only in the instant between mount and the first `dictation_status`

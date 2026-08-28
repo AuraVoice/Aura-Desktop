@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { logError } from "../lib/log";
+import { useTauriEvent } from "../lib/useTauriEvent";
+import { OVERLAY_CHANGED } from "../lib/ipcEvents";
+import type { VoiceToggleKeyStatus } from "../lib/hotkeys";
 import { HotkeyTourStep } from "./HotkeyTourStep";
 import { AgentDemoStep } from "./AgentDemoStep";
 import { ProfileSetupStep } from "./ProfileSetupStep";
@@ -11,12 +13,6 @@ import type { VoiceBarState } from "./useVoiceBar";
 import "./OnboardingFlow.css";
 
 type TailStep = "profile" | "hotkeyTour" | "privacy" | "voice" | "agentDemo";
-
-interface VoiceToggleKeyStatus {
-  available: boolean;
-  keyLabel: string;
-  reason?: string;
-}
 
 interface OverlaySnapshot {
   presentation: string;
@@ -54,20 +50,18 @@ export function OnboardingTail({
     invoke("summon_onboarding_panel").catch((err) =>
       logError("OnboardingTail: summon_onboarding_panel", err),
     );
-    let unlisten: (() => void) | undefined;
-    listen<OverlaySnapshot>("overlay-changed", (event) => {
-      if (!completedRef.current && event.payload.presentation === "hidden") {
+  }, []);
+  useTauriEvent<OverlaySnapshot>(
+    OVERLAY_CHANGED,
+    (payload) => {
+      if (!completedRef.current && payload.presentation === "hidden") {
         invoke("summon_onboarding_panel").catch((err) =>
           logError("OnboardingTail: re-show panel", err),
         );
       }
-    })
-      .then((fn) => {
-        unlisten = fn;
-      })
-      .catch((err) => logError("OnboardingTail: listen overlay-changed", err));
-    return () => unlisten?.();
-  }, []);
+    },
+    "OnboardingTail: listen overlay-changed",
+  );
 
   // Mirror the step to Rust for parity, same as OnboardingFlow.
   useEffect(() => {

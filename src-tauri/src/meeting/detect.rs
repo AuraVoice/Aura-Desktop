@@ -44,13 +44,7 @@ const POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// capture.
 const LEFT_AFTER_MISSES: u32 = 2;
 
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct JoinPayload {
-    event_id: String,
-    app: String,
-    window_title: String,
-}
+use super::JoinDetectedPayload;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -121,7 +115,7 @@ fn watch_thread(
         if now >= window_end_ms && joined_in_browser {
             info!("meeting.detect: browser meeting ended for {event_id}");
             if let Err(e) = app.emit(
-                "meeting-left",
+                crate::events::MEETING_LEFT,
                 LeftPayload {
                     event_id: event_id.clone(),
                 },
@@ -138,7 +132,7 @@ fn watch_thread(
                         joined = true;
                         joined_in_browser = app_name.ends_with("web") || app_name == "google-meet";
                         info!("meeting.detect: join detected for {event_id} ({app_name})");
-                        if let Err(e) = app.emit("meeting-join-detected", JoinPayload {
+                        if let Err(e) = app.emit(crate::events::MEETING_JOIN_DETECTED, JoinDetectedPayload {
                             event_id: event_id.clone(),
                             app: app_name,
                             window_title: title,
@@ -162,7 +156,7 @@ fn watch_thread(
                             joined = false;
                             misses = 0;
                             info!("meeting.detect: meeting left for {event_id}");
-                            if let Err(e) = app.emit("meeting-left", LeftPayload {
+                            if let Err(e) = app.emit(crate::events::MEETING_LEFT, LeftPayload {
                                 event_id: event_id.clone(),
                             }) {
                                 error!("meeting.detect: emit left failed: {e}");

@@ -22,6 +22,10 @@ import {
   pendingDraftRestoreAction,
   type DraftPresentation,
 } from "./draftVisibility";
+import {
+  presentationTreatingMoveAsBar,
+  type OverlayPresentation,
+} from "./overlayPresentation";
 
 const COPIED_FLASH_MS = 2500;
 const REFINE_FAILED_FLASH_MS = 3000;
@@ -255,8 +259,9 @@ async function structuredArtifactIntegrityValid(payload: Record<string, unknown>
  */
 export function useDraftCard(
   room: Room | null,
-  presentation: DraftPresentation,
+  rawPresentation: OverlayPresentation,
 ): DraftCardState {
+  const presentation: DraftPresentation = presentationTreatingMoveAsBar(rawPresentation);
   const [data, setData] = useState<DraftCardData>(INITIAL);
 
   // Mirrors for imperative reads inside stable callbacks. presentation decides

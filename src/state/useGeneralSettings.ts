@@ -21,7 +21,9 @@ export function useGeneralSettings(): GeneralSettings {
       if (active) setSettings(value);
     })
       .then((fn) => {
-        unlisten = fn;
+        // If unmount won the race, run the resolved unlisten now or it leaks.
+        if (active) unlisten = fn;
+        else fn();
       })
       .catch((err) => logError("useGeneralSettings: subscribe", err));
 

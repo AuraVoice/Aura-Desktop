@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { RoomEvent, type RemoteParticipant, type Room } from "livekit-client";
-import { validateAgentDataMessage } from "../lib/agentData";
+import { OUTPUT_MUTE_TOGGLE_REQUESTED } from "../lib/ipcEvents";
+import { type Room } from "livekit-client";
+import { useAgentDataMessage } from "../lib/useAgentDataMessage";
 import { publishOutputMode } from "../lib/clientControl";
 import { logError, logInfo } from "../lib/log";
 import { showStatusPill } from "../lib/statusPill";
@@ -97,41 +98,28 @@ export function useOutputMode({
     }
   }, [room, clearAckTimer]);
 
-  useEffect(() => {
-    if (!room) return;
-    const handler = (
-      payload: Uint8Array,
-      participant?: RemoteParticipant,
-      _kind?: unknown,
-      topic?: string,
-    ) => {
-      try {
-        const verdict = validateAgentDataMessage(payload, participant, topic);
-        if (verdict.kind !== "valid" || verdict.type !== "output.mode_ack") return;
-        const generation = verdict.payload.generation as number;
-        const applied = verdict.payload.applied === true;
-        const mode = verdict.payload.mode as string;
-        // Generation 0 is the token-stamped mode the worker resolved on its own;
-        // anything else must match the toggle still waiting for an answer, so a
-        // late ack for a superseded toggle cannot repaint the indicator.
-        const pending = pendingGenerationRef.current;
-        if (generation !== 0 && generation !== pending) return;
-        if (generation !== 0) pendingGenerationRef.current = null;
-        clearAckTimer();
-        setAckState(applied ? "applied" : "unconfirmed");
-        logInfo(
-          "useOutputMode: acknowledged",
-          `generation=${generation} mode=${mode} applied=${applied}`,
-        );
-      } catch (err) {
-        logError("useOutputMode: DataReceived handler", err);
-      }
-    };
-    room.on(RoomEvent.DataReceived, handler);
-    return () => {
-      room.off(RoomEvent.DataReceived, handler);
-    };
-  }, [room, clearAckTimer]);
+  useAgentDataMessage(
+    room,
+    "output.mode_ack",
+    (event) => {
+      const generation = event.payload.generation as number;
+      const applied = event.payload.applied === true;
+      const mode = event.payload.mode as string;
+      // Generation 0 is the token-stamped mode the worker resolved on its own;
+      // anything else must match the toggle still waiting for an answer, so a
+      // late ack for a superseded toggle cannot repaint the indicator.
+      const pending = pendingGenerationRef.current;
+      if (generation !== 0 && generation !== pending) return;
+      if (generation !== 0) pendingGenerationRef.current = null;
+      clearAckTimer();
+      setAckState(applied ? "applied" : "unconfirmed");
+      logInfo(
+        "useOutputMode: acknowledged",
+        `generation=${generation} mode=${mode} applied=${applied}`,
+      );
+    },
+    "useOutputMode: DataReceived handler",
+  );
 
   const toggle = useCallback(() => {
     const next = !outputMuted();
@@ -152,7 +140,7 @@ export function useOutputMode({
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let disposed = false;
-    listen("output-mute-toggle-requested", () => {
+    listen(OUTPUT_MUTE_TOGGLE_REQUESTED, () => {
       toggle();
     })
       .then((fn) => {

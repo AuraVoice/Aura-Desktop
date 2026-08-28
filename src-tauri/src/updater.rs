@@ -148,9 +148,9 @@ fn announce_update_ready(app: &AppHandle, version: &str) {
     if let Some(handle) = app.try_state::<DismissedUpdate>() {
         *handle.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
-    tray::mark_update_ready(app, &version);
+    tray::mark_update_ready(app, version);
     info!("update check: v{version} downloaded, ready once accepted");
-    if let Err(e) = app.emit("update-ready", UpdateReadyPayload { version: version.to_string() }) {
+    if let Err(e) = app.emit(crate::events::UPDATE_READY, UpdateReadyPayload { version: version.to_string() }) {
         error!("update check: failed to emit update-ready: {e}");
     }
 }
@@ -277,7 +277,7 @@ pub fn dismiss_update_banner(app: AppHandle, version: String) -> bool {
         return false;
     };
     *handle.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(version.clone());
-    if let Err(e) = app.emit("update-dismissed", UpdateReadyPayload { version }) {
+    if let Err(e) = app.emit(crate::events::UPDATE_DISMISSED, UpdateReadyPayload { version }) {
         error!("updater: failed to emit update-dismissed: {e}");
     }
     true

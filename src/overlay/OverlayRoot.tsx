@@ -1,8 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { useAuth } from "../state/AuthProvider";
 import { logError } from "../lib/log";
+import { useTauriEvent } from "../lib/useTauriEvent";
+import {
+  CAPTURE_NOW_REQUESTED,
+  CHAT_REQUESTED,
+  CHAT_TOGGLE_REQUESTED,
+  END_VOICE_SESSION,
+  OPEN_INTERVIEW_HACKER_REQUESTED,
+  OPEN_NOTIFICATIONS_REQUESTED,
+  OVERLAY_CHANGED,
+  START_VOICE_REQUESTED,
+} from "../lib/ipcEvents";
 import { useVoiceBar } from "./useVoiceBar";
 import { useNotchGesture } from "./useNotchGesture";
 import { useOnboardingTail } from "./useOnboardingTail";
@@ -45,6 +55,7 @@ import { NotchBar } from "./NotchBar";
 import { NotchMoveOverlay } from "./NotchMoveOverlay";
 import { useNotchMove } from "./useNotchMove";
 import type { NotchEdge } from "./notchEdge";
+import type { OverlayPresentation } from "./overlayPresentation";
 import { screenPointFor, type ScreenFrameGeometry } from "../lib/screenFrame";
 import { useGuideMode, type GuidePoint } from "./useGuideMode";
 import { useGeneralSettings } from "../state/useGeneralSettings";
@@ -59,18 +70,13 @@ import { UpdateBanner } from "../UpdateBanner";
 
 // Fixed heights remain for fixed-content surfaces. DraftCard reports its own
 // measured content height so a short reply stays compact and a long one grows.
+// Each value must fit the surface's rendered CSS (Rust grows the window by
+// exactly this many logical px via set_slot_height, and .glass-surface clips
+// overflow): NotificationInboxCard.css, CallbackCard.css, UpdateBanner.css.
 const NOTIFICATION_INBOX_CARD_HEIGHT = 300;
 const CALLBACK_CARD_HEIGHT = 180;
 const UPDATE_BANNER_HEIGHT = 112;
 const UPDATED_NOTICE_HEIGHT = 72;
-
-type OverlayPresentation =
-  | "hidden"
-  | "panel"
-  | "bar"
-  | "companion"
-  | "pointing"
-  | "movingnotch";
 
 interface OverlaySnapshot {
   presentation: OverlayPresentation;
@@ -216,11 +222,7 @@ export function OverlayRoot() {
   // Desktop control: dispatches the agent's `desktop.run` messages to native
   // commands. Native side gates on a live voice session, so no extra guard here.
   useSystemControl(voice.room);
-  // The draft/meeting/callback hooks predate movingnotch and type their
-  // presentation param without it. Move-mode is a transient fullscreen takeover
-  // that starts and ends on the bar, so present it to them as "bar".
-  const hookPresentation = presentation === "movingnotch" ? "bar" : presentation;
-  const draftCard = useDraftCard(voice.room, hookPresentation);
+  const draftCard = useDraftCard(voice.room, presentation);
   const callLive =
     voice.status !== "disconnected" && voice.status !== "ended" && voice.status !== "error";
   // Meeting capture is a background service, not part of the notch UI. Keep
@@ -228,8 +230,9 @@ export function OverlayRoot() {
   // while the native window is hidden. The removed meeting controls/cards stay
   // intentionally absent from this visual root.
   const meetings = useMeetings({
-    presentation: hookPresentation,
+    presentation,
     signedIn: user !== null,
+    uid: user?.uid ?? null,
     callLive,
     autoSummon: false,
   });
@@ -293,11 +296,8 @@ export function OverlayRoot() {
     appHidden: presentation !== "bar",
   });
   const [inboxOpen, setInboxOpen] = useState(false);
-  // useCallbackCard predates the companion->notch rename and still keys its
-  // trigger off the old "companion" presentation; map today's "bar" onto it
-  // rather than rewriting the (tested) hook.
   const callbackCard = useCallbackCard({
-    presentation: hookPresentation === "bar" ? "companion" : hookPresentation,
+    presentation,
     signedIn: user !== null,
     callLive,
     draftActive: showDraftCard,
@@ -419,37 +419,25 @@ export function OverlayRoot() {
 
   // Tray "Notifications" item: Rust summons the bar, then hands off here to
   // fill the below-bar slot with the inbox.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    listen("open-notifications-requested", () => setInboxOpen(true))
-      .then((fn) => {
-        unlisten = fn;
-      })
-      .catch((err) =>
-        logError("OverlayRoot: listen open-notifications-requested", err),
-      );
-    return () => unlisten?.();
-  }, []);
+  useTauriEvent(
+    OPEN_NOTIFICATIONS_REQUESTED,
+    () => setInboxOpen(true),
+    "OverlayRoot: listen open-notifications-requested",
+  );
 
   // Tray entry point for the explicit preflight. It closes chat so the
   // microphone/call source labels cannot be hidden beneath the higher-priority
   // composer while the user is deciding whether to start capture.
   const openInterviewPreflight = interviewHacker.openPreflight;
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    listen("open-interview-hacker-requested", () => {
+  useTauriEvent(
+    OPEN_INTERVIEW_HACKER_REQUESTED,
+    () => {
       setChatOpen(false);
       setInboxOpen(false);
       openInterviewPreflight();
-    })
-      .then((fn) => {
-        unlisten = fn;
-      })
-      .catch((err) =>
-        logError("OverlayRoot: listen open-interview-hacker-requested", err),
-      );
-    return () => unlisten?.();
-  }, [openInterviewPreflight]);
+    },
+    "OverlayRoot: listen open-interview-hacker-requested",
+  );
 
   // Tray "Capture now" item. Same hand-off shape as the notifications item
   // above: the capture itself is a JS concern (useMeetingCapture owns the arm
@@ -469,15 +457,11 @@ export function OverlayRoot() {
     captureNow();
   }, [captureNow, isMeetingRecording, stopMeetingCapture]);
 
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    listen("capture-now-requested", () => handleCaptureAction())
-      .then((fn) => {
-        unlisten = fn;
-      })
-      .catch((err) => logError("OverlayRoot: listen capture-now-requested", err));
-    return () => unlisten?.();
-  }, [handleCaptureAction]);
+  useTauriEvent(
+    CAPTURE_NOW_REQUESTED,
+    () => handleCaptureAction(),
+    "OverlayRoot: listen capture-now-requested",
+  );
 
   const dismissChatOverlay = useCallback(() => {
     chatOpenRef.current = false;
@@ -490,10 +474,10 @@ export function OverlayRoot() {
 
   // The global shortcut is a true toggle. Native emits this without summoning
   // first, so closing never flashes the window or steals foreground focus.
-  useEffect(() => {
-    if (!chatEnabled) return;
-    let unlisten: (() => void) | undefined;
-    listen("chat-toggle-requested", () => {
+  useTauriEvent(
+    CHAT_TOGGLE_REQUESTED,
+    () => {
+      if (!chatEnabled) return;
       if (chatOpenRef.current) {
         dismissChatOverlay();
         return;
@@ -503,20 +487,16 @@ export function OverlayRoot() {
         chatOpenRef.current = false;
         logError("OverlayRoot: summon chat from hotkey", err);
       });
-    })
-      .then((fn) => {
-        unlisten = fn;
-      })
-      .catch((err) => logError("OverlayRoot: listen chat-toggle-requested", err));
-    return () => unlisten?.();
-  }, [chatEnabled, dismissChatOverlay]);
+    },
+    "OverlayRoot: listen chat-toggle-requested",
+  );
 
   // summon_chat shows the Bar first, then this event opens the chat slot below
   // it; ChatSlot focuses its own composer on mount.
-  useEffect(() => {
-    if (!chatEnabled) return;
-    let unlisten: (() => void) | undefined;
-    listen("chat-requested", () => {
+  useTauriEvent(
+    CHAT_REQUESTED,
+    () => {
+      if (!chatEnabled) return;
       chatOpenRef.current = true;
       setChatOpen(true);
       setChatHistoryOpen(false);
@@ -524,13 +504,9 @@ export function OverlayRoot() {
       // setChatOpen, so the nonce is what tells ChatSlot to take the caret back
       // after the user clicked into another app.
       setChatFocusNonce((current) => current + 1);
-    })
-      .then((fn) => {
-        unlisten = fn;
-      })
-      .catch((err) => logError("OverlayRoot: listen chat-requested", err));
-    return () => unlisten?.();
-  }, [chatEnabled]);
+    },
+    "OverlayRoot: listen chat-requested",
+  );
 
   const resetCallbackCard = callbackCard.reset;
   useEffect(() => {
@@ -573,40 +549,33 @@ export function OverlayRoot() {
     }
   }
 
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    listen<OverlaySnapshot>("overlay-changed", (event) => {
-      setPresentation(event.payload.presentation);
-      setNotchEdge(event.payload.notchEdge);
-      if (event.payload.presentation === "hidden") setChatOpen(false);
-    })
-      .then((fn) => {
-        unlisten = fn;
-      })
-      .catch((err) => logError("OverlayRoot: listen overlay-changed", err));
+  useTauriEvent<OverlaySnapshot>(
+    OVERLAY_CHANGED,
+    (payload) => {
+      setPresentation(payload.presentation);
+      setNotchEdge(payload.notchEdge);
+      if (payload.presentation === "hidden") setChatOpen(false);
+    },
+    "OverlayRoot: listen overlay-changed",
+  );
 
+  useEffect(() => {
     invoke<OverlaySnapshot>("current_overlay_state")
       .then((snapshot) => {
         setPresentation(snapshot.presentation);
         setNotchEdge(snapshot.notchEdge);
       })
       .catch((err) => logError("OverlayRoot: current_overlay_state", err));
-
-    return () => unlisten?.();
   }, []);
 
   const endSession = voice.endSession;
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    listen("end-voice-session", () => {
+  useTauriEvent(
+    END_VOICE_SESSION,
+    () => {
       void endSession();
-    })
-      .then((fn) => {
-        unlisten = fn;
-      })
-      .catch((err) => logError("OverlayRoot: listen end-voice-session", err));
-    return () => unlisten?.();
-  }, [endSession]);
+    },
+    "OverlayRoot: listen end-voice-session",
+  );
 
   const startSession = voice.startSession;
   useEffect(() => {
@@ -617,9 +586,9 @@ export function OverlayRoot() {
     }
   }, [chat.messages.length, chat.noteVoiceSessionStarted, visibleChatOpen, voice.desiredActive]);
 
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    listen("start-voice-requested", async () => {
+  useTauriEvent(
+    START_VOICE_REQUESTED,
+    async () => {
       if (!user || voice.desiredActive) return;
       try {
         await invoke("summon_bar");
@@ -627,13 +596,9 @@ export function OverlayRoot() {
       } catch (err) {
         logError("OverlayRoot: start voice requested", err);
       }
-    })
-      .then((fn) => {
-        unlisten = fn;
-      })
-      .catch((err) => logError("OverlayRoot: listen start-voice-requested", err));
-    return () => unlisten?.();
-  }, [user, voice.desiredActive, startSession]);
+    },
+    "OverlayRoot: listen start-voice-requested",
+  );
 
   useEffect(() => {
     if (!user) return;

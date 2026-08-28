@@ -14,10 +14,11 @@ use xcap::Monitor;
 
 use fingerprint::{Classification, Detector, Fingerprint, Verdict as FingerprintVerdict};
 
+use crate::screenshot::{ScreenFrameGeometry, GEOMETRY_HEADER_LEN};
+
 const GUIDE_MAGIC: u32 = 0x4449_5547;
 const GUIDE_PROTOCOL_VERSION: u16 = 1;
 const GUIDE_FIXED_HEADER_LEN: u32 = 43;
-const GEOMETRY_HEADER_LEN: usize = 28;
 const FORCE_COOLDOWN: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Debug, PartialEq)]
@@ -26,38 +27,25 @@ struct PinnedMonitor {
     name: String,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+/// Guide's per-frame geometry: the shared wire header plus fields the
+/// envelope does NOT serialize (`monitor_id` and `rotation` feed only
+/// `identity_eq`, so a monitor swap or rotation forces a fresh frame).
+#[derive(Clone, Debug)]
 struct Geometry {
     monitor_id: u32,
-    monitor_left_px: i32,
-    monitor_top_px: i32,
-    monitor_width_px: u32,
-    monitor_height_px: u32,
-    scale_factor: f32,
     rotation: f32,
-    jpeg_width_px: u32,
-    jpeg_height_px: u32,
+    wire: ScreenFrameGeometry,
 }
 
 impl Geometry {
     fn identity_eq(&self, other: &Self) -> bool {
         self.monitor_id == other.monitor_id
-            && self.monitor_width_px == other.monitor_width_px
-            && self.monitor_height_px == other.monitor_height_px
-            && self.jpeg_width_px == other.jpeg_width_px
-            && self.jpeg_height_px == other.jpeg_height_px
-            && self.scale_factor.to_bits() == other.scale_factor.to_bits()
+            && self.wire.monitor_width_px == other.wire.monitor_width_px
+            && self.wire.monitor_height_px == other.wire.monitor_height_px
+            && self.wire.jpeg_width_px == other.wire.jpeg_width_px
+            && self.wire.jpeg_height_px == other.wire.jpeg_height_px
+            && self.wire.scale_factor.to_bits() == other.wire.scale_factor.to_bits()
             && self.rotation.to_bits() == other.rotation.to_bits()
-    }
-
-    fn write_le(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(&self.monitor_left_px.to_le_bytes());
-        out.extend_from_slice(&self.monitor_top_px.to_le_bytes());
-        out.extend_from_slice(&self.monitor_width_px.to_le_bytes());
-        out.extend_from_slice(&self.monitor_height_px.to_le_bytes());
-        out.extend_from_slice(&self.scale_factor.to_le_bytes());
-        out.extend_from_slice(&self.jpeg_width_px.to_le_bytes());
-        out.extend_from_slice(&self.jpeg_height_px.to_le_bytes());
     }
 }
 
@@ -281,14 +269,6 @@ fn runtime_handle(app: &AppHandle) -> Option<tauri::State<'_, GuideRuntimeHandle
     app.try_state::<GuideRuntimeHandle>()
 }
 
-fn resolve_cursor_monitor(app: &AppHandle) -> Result<(i32, i32), String> {
-    let window = app
-        .get_webview_window("main")
-        .ok_or_else(|| "main window not found".to_string())?;
-    let cursor = window.cursor_position().map_err(|e| e.to_string())?;
-    Ok((cursor.x as i32, cursor.y as i32))
-}
-
 fn resolve_monitor(cursor_x: i32, cursor_y: i32) -> Result<PinnedMonitor, String> {
     let monitor = Monitor::from_point(cursor_x, cursor_y).map_err(|e| e.to_string())?;
     Ok(PinnedMonitor {
@@ -358,14 +338,16 @@ fn assemble_monitor(monitor: &Monitor, image: RgbaImage) -> Result<CapturedMonit
     let fingerprint = Fingerprint::from_rgba(&image);
     let geometry = Geometry {
         monitor_id: monitor.id().map_err(|e| e.to_string())?,
-        monitor_left_px: monitor.x().map_err(|e| e.to_string())?,
-        monitor_top_px: monitor.y().map_err(|e| e.to_string())?,
-        monitor_width_px: monitor.width().map_err(|e| e.to_string())?,
-        monitor_height_px: monitor.height().map_err(|e| e.to_string())?,
-        scale_factor: monitor.scale_factor().map_err(|e| e.to_string())?,
         rotation: monitor.rotation().map_err(|e| e.to_string())?,
-        jpeg_width_px: image.width(),
-        jpeg_height_px: image.height(),
+        wire: ScreenFrameGeometry {
+            monitor_left_px: monitor.x().map_err(|e| e.to_string())?,
+            monitor_top_px: monitor.y().map_err(|e| e.to_string())?,
+            monitor_width_px: monitor.width().map_err(|e| e.to_string())?,
+            monitor_height_px: monitor.height().map_err(|e| e.to_string())?,
+            scale_factor: monitor.scale_factor().map_err(|e| e.to_string())?,
+            jpeg_width_px: image.width(),
+            jpeg_height_px: image.height(),
+        },
     };
     Ok(CapturedMonitor {
         image,
@@ -417,7 +399,7 @@ fn response(
     out.extend_from_slice(&GUIDE_FIXED_HEADER_LEN.to_le_bytes());
     out.extend_from_slice(&(payload_len as u32).to_le_bytes());
     if let Some((geometry, bytes)) = frame {
-        geometry.write_le(&mut out);
+        geometry.wire.write_le(&mut out);
         out.extend_from_slice(bytes);
     }
     Response::new(out)
@@ -477,7 +459,7 @@ fn emit_armed(app: &AppHandle, payload: GuideArmedPayload) {
         "guide: armed state changed - armed={} epoch={}",
         payload.armed, payload.epoch
     );
-    if let Err(error) = app.emit("guide-armed", payload) {
+    if let Err(error) = app.emit(crate::events::GUIDE_ARMED, payload) {
         log::error!("guide: failed to emit guide-armed: {error}");
     }
 }
@@ -496,7 +478,7 @@ fn complete_arm_transaction(
 
 #[tauri::command]
 pub async fn arm_guide(app: AppHandle) -> Result<GuideArmedPayload, String> {
-    let (cursor_x, cursor_y) = resolve_cursor_monitor(&app)?;
+    let (cursor_x, cursor_y) = crate::screenshot::cursor_point(&app)?;
     let monitor = tauri::async_runtime::spawn_blocking(move || resolve_monitor(cursor_x, cursor_y))
         .await
         .map_err(|e| e.to_string())??;
@@ -635,11 +617,10 @@ pub fn toggle(app: &AppHandle) {
                 }
                 let should_remain_armed = app
                     .try_state::<GuideToggleHandle>()
-                    .map(|toggle| {
+                    .and_then(|toggle| {
                         let mut state = toggle.0.lock().unwrap_or_else(|e| e.into_inner());
                         finish_toggle(&mut state, generation)
                     })
-                    .flatten()
                     .unwrap_or(false);
                 if !should_remain_armed {
                     clear(&app, true);
@@ -913,8 +894,8 @@ pub async fn capture_guide_frame(
     // `ScreenFrame._scaled` (backend) map a model coordinate back to the screen
     // by the jpeg/monitor ratio. Leaving the pre-resize values would put every
     // Guide highlight at a fraction of its correct position, silently.
-    geometry.jpeg_width_px = jpeg_width_px;
-    geometry.jpeg_height_px = jpeg_height_px;
+    geometry.wire.jpeg_width_px = jpeg_width_px;
+    geometry.wire.jpeg_height_px = jpeg_height_px;
     crate::security::recheck(&app, crate::security::Operation::CaptureGuide, &ticket)?;
 
     // A real (tile-classified) change sends Send and drives a proactive nudge; a
@@ -1077,14 +1058,16 @@ mod tests {
     fn geometry() -> Geometry {
         Geometry {
             monitor_id: 1,
-            monitor_left_px: 0,
-            monitor_top_px: 0,
-            monitor_width_px: 1920,
-            monitor_height_px: 1080,
-            scale_factor: 1.0,
             rotation: 0.0,
-            jpeg_width_px: 1920,
-            jpeg_height_px: 1080,
+            wire: ScreenFrameGeometry {
+                monitor_left_px: 0,
+                monitor_top_px: 0,
+                monitor_width_px: 1920,
+                monitor_height_px: 1080,
+                scale_factor: 1.0,
+                jpeg_width_px: 1920,
+                jpeg_height_px: 1080,
+            },
         }
     }
 
@@ -1167,10 +1150,10 @@ mod tests {
     fn geometry_identity_includes_monitor_dimensions_scale_rotation_and_jpeg() {
         let original = geometry();
         let mut changed = original.clone();
-        changed.scale_factor = 1.25;
+        changed.wire.scale_factor = 1.25;
         assert!(!original.identity_eq(&changed));
         changed = original.clone();
-        changed.jpeg_width_px = 1280;
+        changed.wire.jpeg_width_px = 1280;
         assert!(!original.identity_eq(&changed));
     }
 

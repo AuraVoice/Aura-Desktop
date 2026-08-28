@@ -4,8 +4,6 @@
 //! retention, and the local audit trail. Encrypted audio remains in separate
 //! digest-addressed files under `meeting-captures/`.
 
-#[cfg(not(windows))]
-use std::fs::File;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -526,12 +524,7 @@ fn db_error(error: rusqlite::Error) -> String {
     format!("meeting evidence database error: {error}")
 }
 
-pub fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis() as i64)
-        .unwrap_or(0)
-}
+pub use crate::util::now_ms;
 
 pub fn random_hex(bytes: usize) -> Result<String, String> {
     let mut value = vec![0u8; bytes];
@@ -638,58 +631,7 @@ fn metadata_relative_path(metadata: &SegmentRecoveryMetadata) -> PathBuf {
         ))
 }
 
-fn sync_directory(path: &Path) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        // Windows does not provide POSIX directory fsync semantics through
-        // std::fs. Every publication rename uses MOVEFILE_WRITE_THROUGH in
-        // durable_rename, which flushes the rename before returning.
-        let _ = path;
-        Ok(())
-    }
-    #[cfg(not(windows))]
-    {
-        File::open(path)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|e| e.to_string())
-    }
-}
-
-pub(super) fn durable_rename(from: &Path, to: &Path) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt;
-        use windows::core::PCWSTR;
-        use windows::Win32::Storage::FileSystem::{MoveFileExW, MOVEFILE_WRITE_THROUGH};
-
-        let from_wide = from
-            .as_os_str()
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect::<Vec<_>>();
-        let to_wide = to
-            .as_os_str()
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect::<Vec<_>>();
-        unsafe {
-            MoveFileExW(
-                PCWSTR(from_wide.as_ptr()),
-                PCWSTR(to_wide.as_ptr()),
-                MOVEFILE_WRITE_THROUGH,
-            )
-        }
-        .map_err(|error| error.to_string())
-    }
-    #[cfg(not(windows))]
-    {
-        std::fs::rename(from, to).map_err(|error| error.to_string())?;
-        let parent = to
-            .parent()
-            .ok_or_else(|| "rename target has no parent".to_string())?;
-        sync_directory(parent)
-    }
-}
+pub(super) use crate::fsx::{durable_rename, sync_directory};
 
 fn write_new_synced(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let mut file = OpenOptions::new()
@@ -806,8 +748,7 @@ fn full_jitter_delay(attempt_count: u32) -> Result<i64, String> {
     let exponent = attempt_count.saturating_sub(1).min(20);
     let ceiling = RETRY_BASE_MS
         .saturating_mul(1i64 << exponent)
-        .min(RETRY_MAX_MS)
-        .max(1);
+        .clamp(1, RETRY_MAX_MS);
     let mut bytes = [0u8; 8];
     getrandom::fill(&mut bytes).map_err(|e| e.to_string())?;
     Ok((u64::from_le_bytes(bytes) % ceiling as u64) as i64)

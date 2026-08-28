@@ -11,6 +11,7 @@ use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
 use super::DictationUsageEntry;
+use crate::util::now_ms;
 
 const USAGE_STORE: &str = "dictation-usage.json";
 const HOUR_MS: i64 = 60 * 60 * 1_000;
@@ -19,13 +20,6 @@ const RETENTION_MS: i64 = 120 * 24 * HOUR_MS;
 fn usage_lock() -> &'static Mutex<()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
-}
-
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|since| since.as_millis() as i64)
-        .unwrap_or(0)
 }
 
 fn store_key(uid: &str) -> String {

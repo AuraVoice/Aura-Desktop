@@ -110,6 +110,9 @@ fn open(app: &AppHandle) -> Result<Connection, String> {
 }
 
 /// Binds a row's ciphertext to exactly one account, conversation and message.
+/// FROZEN grammar (unversioned, colon-joined): existing sealed rows decrypt
+/// only under exactly this string, so it cannot change. New stores use
+/// sealed_store::aad instead.
 fn row_aad(uid: &str, conversation_id: &str, message_id: &str) -> String {
     format!("{uid}:{conversation_id}:{message_id}")
 }
@@ -125,19 +128,11 @@ fn cache_key(_app: &AppHandle) -> Result<[u8; 32], String> {
 }
 
 #[cfg(windows)]
-fn seal(key: &[u8; 32], plaintext: &str, aad: &str) -> Result<Vec<u8>, String> {
-    crypto::encrypt_with_aad(key, plaintext.as_bytes(), aad.as_bytes())
-}
+use crate::sealed_store::{seal, unseal};
 
 #[cfg(not(windows))]
 fn seal(_key: &[u8; 32], _plaintext: &str, _aad: &str) -> Result<Vec<u8>, String> {
     Err("chat cache encryption is unavailable on this platform".to_string())
-}
-
-#[cfg(windows)]
-fn unseal(key: &[u8; 32], sealed: &[u8], aad: &str) -> Result<String, String> {
-    let plain = crypto::decrypt_with_aad(key, sealed, aad.as_bytes())?;
-    String::from_utf8(plain).map_err(|e| e.to_string())
 }
 
 #[cfg(not(windows))]

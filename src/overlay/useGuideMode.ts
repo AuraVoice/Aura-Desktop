@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { GUIDE_ARMED, type GuideArmedPayload } from "../lib/ipcEvents";
 import {
   RoomEvent,
   type Participant,
@@ -60,17 +61,13 @@ export interface GuideStep {
   point: GuidePoint | null;
 }
 
-interface GuideArmedPayload {
-  armed: boolean;
-  epoch: number;
-  sessionId: string | null;
-}
-
+// Defensive view of the wire shape; the canonical mirror of Rust's
+// GuideArmedPayload lives in lib/ipcEvents.ts. Rust serializes with
+// rename_all = "camelCase", so snake_case field names never reach the wire.
 interface GuideArmedWirePayload {
   armed?: unknown;
   epoch?: unknown;
   sessionId?: unknown;
-  session_id?: unknown;
 }
 
 interface AwaitingFrame {
@@ -211,12 +208,7 @@ async function sha256(bytes: Uint8Array): Promise<string> {
 }
 
 function normalizeGuideArmedPayload(payload: GuideArmedWirePayload): GuideArmedPayload {
-  const sessionId =
-    typeof payload.sessionId === "string"
-      ? payload.sessionId
-      : typeof payload.session_id === "string"
-        ? payload.session_id
-        : null;
+  const sessionId = typeof payload.sessionId === "string" ? payload.sessionId : null;
   const epoch = typeof payload.epoch === "number" ? payload.epoch : Number(payload.epoch ?? 0);
   return {
     armed: payload.armed === true,
@@ -863,7 +855,7 @@ export function useGuideMode({ room, status, signedIn, onPoint }: UseGuideModeOp
     let cancelled = false;
     let unlisten: (() => void) | undefined;
     void (async () => {
-      const stopListening = await listen<GuideArmedWirePayload>("guide-armed", (event) =>
+      const stopListening = await listen<GuideArmedWirePayload>(GUIDE_ARMED, (event) =>
         applyArmed(normalizeGuideArmedPayload(event.payload)),
       );
       if (cancelled) {

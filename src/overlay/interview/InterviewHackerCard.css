@@ -1,4 +1,6 @@
 .glass-surface.interview-hacker-control-bar {
+  /* Must agree with INTERVIEW_CONTROL_WIDTH/HEIGHT in overlay.rs: Rust sizes
+     the native window to exactly this footprint. */
   width: 228px;
   height: 52px;
   justify-self: center;

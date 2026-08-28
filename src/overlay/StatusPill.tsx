@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { STATUS_PILL_UPDATE } from "../lib/ipcEvents";
 import { GlassSurface } from "./GlassSurface";
 import type { StatusPillKind } from "../lib/statusPill";
 import { logError, logInfo } from "../lib/log";
@@ -29,7 +30,7 @@ export function StatusPill() {
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let disposed = false;
-    listen<StatusPillPayload>("status-pill-update", (event) => {
+    listen<StatusPillPayload>(STATUS_PILL_UPDATE, (event) => {
       if (!disposed) {
         logInfo("StatusPill: update", `kind=${event.payload.kind} sequence=${event.payload.sequence}`);
         setStatus(event.payload);

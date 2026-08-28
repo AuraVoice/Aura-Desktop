@@ -35,6 +35,7 @@ import {
   type RawScreenSave,
 } from "../../lib/dashboardApi";
 import type { MeetingDoc } from "../../lib/meetings";
+import { durationCoarse as formatDuration } from "../format";
 import { PageError } from "../components/PageError";
 import { RefreshIndicator } from "../components/RefreshIndicator";
 import { useDashboardResource } from "../useDashboardResource";
@@ -144,12 +145,6 @@ function durationSeconds(value: string): number {
     Number(human[2] ?? 0) * 60 +
     Number(human[3] ?? 0)
   );
-}
-
-function formatDuration(seconds: number): string {
-  if (seconds < 60) return seconds > 0 ? "<1 min" : "0 min";
-  if (seconds >= 3600) return `${(seconds / 3600).toFixed(1)} hr`;
-  return `${Math.round(seconds / 60)} min`;
 }
 
 function comparisonLabel(current: number, previous: number): string {

@@ -4,7 +4,6 @@
 // permission live in the broker (src/lib/desktopNotifications.ts); this hook is
 // the thin React surface over it.
 
-import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
@@ -23,6 +22,8 @@ import {
   unreadCount as countUnread,
 } from "../lib/desktopNotifications";
 import { logError } from "../lib/log";
+import { useTauriEvent } from "../lib/useTauriEvent";
+import { DESKTOP_NOTIFICATION_LOCAL } from "../lib/ipcEvents";
 import { trackEvent } from "../lib/analytics";
 import {
   acknowledgeDesktopNotification,
@@ -129,26 +130,24 @@ export function useDesktopNotifications({
     };
   }, [signedIn, uid]);
 
-  // Native local-event ingestion: a Rust producer (e.g. update ready) can push
-  // a raw contract event over "desktop-notification-local"; the broker validates
-  // it, so an unexpected payload cannot reach the UI unchecked.
-  useEffect(() => {
-    if (!signedIn || !uid || !ownerReady) return;
-    let unlisten: (() => void) | undefined;
-    listen<unknown>("desktop-notification-local", (event) => {
+  // Native local-event ingestion lane. NO Rust producer currently emits
+  // desktop-notification-local (verified 2026-08-27; the updater uses its own
+  // update-ready event). The lane is kept for future native producers; the
+  // broker validates every payload, so an unexpected shape cannot reach the
+  // UI unchecked.
+  useTauriEvent<unknown>(
+    DESKTOP_NOTIFICATION_LOCAL,
+    (payload) => {
+      if (!signedIn || !uid || !ownerReady) return;
       if (boundUidRef.current !== uid) return;
-      ingest(event.payload, { appHidden: appHiddenRef.current, ownerUid: uid })
+      ingest(payload, { appHidden: appHiddenRef.current, ownerUid: uid })
         .then((result) => {
           if (result.isNew) refresh();
         })
         .catch((err) => logError("useDesktopNotifications: ingest local", err));
-    })
-      .then((fn) => {
-        unlisten = fn;
-      })
-      .catch((err) => logError("useDesktopNotifications: listen local", err));
-    return () => unlisten?.();
-  }, [signedIn, uid, ownerReady, refresh]);
+    },
+    "useDesktopNotifications: listen local",
+  );
 
   // Register capability independently from hydration. A transient API failure
   // must not prevent local inbox ownership or future polling, and is retried

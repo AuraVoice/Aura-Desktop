@@ -26,7 +26,6 @@
 
 #![cfg(windows)]
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 
@@ -110,21 +109,12 @@ fn audio_path(app: &AppHandle, trace_id: &str) -> Result<PathBuf, String> {
 }
 
 /// Write-to-temp-then-rename, so a crash mid-write can never leave a truncated
-/// index behind. Same shape as `vocab::write_store`.
+/// index behind.
 pub fn write_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let temporary = path.with_extension(format!("tmp{}", std::process::id()));
-    let mut handle = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .open(&temporary)
-        .map_err(|e| e.to_string())?;
-    handle.write_all(bytes).map_err(|e| e.to_string())?;
-    handle.sync_all().map_err(|e| e.to_string())?;
-    std::fs::rename(&temporary, path).map_err(|e| e.to_string())
+    crate::fsx::write_atomic(path, bytes, crate::fsx::Durability::Fsync)
 }
 
 fn read_index(app: &AppHandle) -> Result<TraceIndex, String> {
@@ -668,9 +658,4 @@ pub fn settle_orphans(app: &AppHandle) -> Result<usize, String> {
     })
 }
 
-pub fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_millis() as i64)
-        .unwrap_or(0)
-}
+pub use crate::util::now_ms;

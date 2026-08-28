@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { CONNECTOR_OAUTH_COMPLETE } from "../lib/ipcEvents";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -387,7 +388,7 @@ export function useConnectors(): ConnectorsState {
     mountedRef.current = true;
     void reload();
     let unlisten: (() => void) | undefined;
-    void listen<string>("connector-oauth-complete", (event) => {
+    void listen<string>(CONNECTOR_OAUTH_COMPLETE, (event) => {
       void handleOAuthCompletion(event.payload);
     }).then(async (stopListening) => {
       unlisten = stopListening;

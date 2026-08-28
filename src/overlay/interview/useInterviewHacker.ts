@@ -2,6 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
+  INTERVIEW_HACKER_STATUS,
+  INTERVIEW_HACKER_TRANSCRIPT,
+} from "../../lib/ipcEvents";
+import {
   mintInterviewCredential,
   createInterviewReflection,
   streamInterviewAnswer,
@@ -1113,6 +1117,9 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   }, []);
 
   useEffect(() => {
+    // If unmount wins the race against listen() resolving, the resolved
+    // unlisten must still run or the native listener leaks.
+    let disposed = false;
     let unlistenStatus: (() => void) | undefined;
     let unlistenTranscript: (() => void) | undefined;
 
@@ -1165,7 +1172,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       return duplicate;
     };
 
-    listen<StatusPayload>("interview-hacker-status", (event) => {
+    listen<StatusPayload>(INTERVIEW_HACKER_STATUS, (event) => {
       const status = event.payload;
       if (status.phase === "stopped") {
         if (status.epoch !== null && status.epoch <= lastStoppedEpochRef.current) return;
@@ -1249,10 +1256,13 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
         );
       }
     })
-      .then((unlisten) => { unlistenStatus = unlisten; })
+      .then((unlisten) => {
+        if (disposed) unlisten();
+        else unlistenStatus = unlisten;
+      })
       .catch((error) => logError("Interview Companion: status listener", error));
 
-    listen<InterviewTranscriptTurn>("interview-hacker-transcript", (event) => {
+    listen<InterviewTranscriptTurn>(INTERVIEW_HACKER_TRANSCRIPT, (event) => {
       const turn = event.payload;
       const identity = identityRef.current;
       if (
@@ -1294,10 +1304,14 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       setInterimQuestion(turn.text);
       queueRemoteTurn(turn);
     })
-      .then((unlisten) => { unlistenTranscript = unlisten; })
+      .then((unlisten) => {
+        if (disposed) unlisten();
+        else unlistenTranscript = unlisten;
+      })
       .catch((error) => logError("Interview Companion: transcript listener", error));
 
     return () => {
+      disposed = true;
       if (assemblyRef.current) clearTimeout(assemblyRef.current.timer);
       assemblyRef.current = null;
       unlistenStatus?.();

@@ -1,4 +1,4 @@
-import { authFetch, AuthRequiredError } from "./api";
+import { authFetchWithTimeout, AuthRequiredError, TimeoutError } from "./api";
 import { logError } from "./log";
 
 /** One upcoming calendar event, mirroring the backend's query_events() shape
@@ -60,12 +60,11 @@ function parseMeeting(raw: unknown): UpcomingMeeting | null {
  * raise an error to the user, and never routes to sign-in on auth failure.
  */
 export async function fetchUpcomingMeetings(timeoutMs: number): Promise<UpcomingMeetings | null> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await authFetch(
+    const response = await authFetchWithTimeout(
       `/calendar/upcoming?limit=${UPCOMING_LIMIT}`,
-      { signal: controller.signal },
+      undefined,
+      timeoutMs,
     );
     if (!response.ok) return null;
     const data = (await response.json()) as { connected?: unknown; events?: unknown };
@@ -75,11 +74,9 @@ export async function fetchUpcomingMeetings(timeoutMs: number): Promise<Upcoming
       : [];
     return { connected, events };
   } catch (err) {
-    if (!(err instanceof AuthRequiredError) && !(err instanceof DOMException && err.name === "AbortError")) {
+    if (!(err instanceof AuthRequiredError) && !(err instanceof TimeoutError)) {
       logError("fetchUpcomingMeetings", err);
     }
     return null;
-  } finally {
-    clearTimeout(timeoutId);
   }
 }

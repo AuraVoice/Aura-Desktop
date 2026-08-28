@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { UPDATE_DISMISSED, UPDATE_READY } from "../lib/ipcEvents";
 import { logError } from "../lib/log";
 
 interface UpdateReadyPayload {
@@ -26,14 +27,14 @@ export function useUpdateReady(): UpdateReadyState {
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     let unlistenDismissed: (() => void) | undefined;
-    listen<UpdateReadyPayload>("update-ready", (event) => {
+    listen<UpdateReadyPayload>(UPDATE_READY, (event) => {
       setVersion(event.payload.version);
     })
       .then((fn) => {
         unlisten = fn;
       })
       .catch((err) => logError("useUpdateReady: listen update-ready", err));
-    listen<UpdateReadyPayload>("update-dismissed", (event) => {
+    listen<UpdateReadyPayload>(UPDATE_DISMISSED, (event) => {
       setVersion((current) => current === event.payload.version ? null : current);
     })
       .then((fn) => {

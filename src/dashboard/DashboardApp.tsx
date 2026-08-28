@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactElement } from "react";
-import { listen } from "@tauri-apps/api/event";
+import { useTauriEvent } from "../lib/useTauriEvent";
+import { DASHBOARD_NAVIGATE } from "../lib/ipcEvents";
 import {
   HashRouter,
   Navigate,
@@ -140,17 +141,13 @@ function DashboardRouteListener() {
   // forget: nothing on screen depends on it.
   useEffect(() => pruneSiteIcons(), []);
 
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    listen<string>("dashboard-navigate", (event) => {
-      window.location.hash = event.payload;
-    })
-      .then((fn) => {
-        unlisten = fn;
-      })
-      .catch((err) => logError("DashboardApp: dashboard-navigate", err));
-    return () => unlisten?.();
-  }, []);
+  useTauriEvent<string>(
+    DASHBOARD_NAVIGATE,
+    (destination) => {
+      window.location.hash = destination;
+    },
+    "DashboardApp: dashboard-navigate",
+  );
 
   return null;
 }

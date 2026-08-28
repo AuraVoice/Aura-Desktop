@@ -255,12 +255,7 @@ impl StructuredContext {
     }
 }
 
-pub fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|elapsed| elapsed.as_millis() as u64)
-        .unwrap_or(0)
-}
+pub use crate::util::now_ms_u64 as now_ms;
 
 /// Flattens and hard-caps one piece of UI text. Applied to every name and
 /// value the moment it leaves COM, so no unbounded string ever reaches the

@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { emitTo } from "@tauri-apps/api/event";
+import { START_VOICE_REQUESTED } from "../../lib/ipcEvents";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useNavigate } from "react-router-dom";
 import {
@@ -164,11 +165,12 @@ function UpNext({
               (new Date(slide.event.startTime).getTime() - Date.now()) / 60_000,
             );
             const canJoin = minutesUntil >= 0 && minutesUntil <= 60;
-            return canJoin && (slide.event.meetingLink || slide.event.htmlLink) ? (
+            const eventUrl = slide.event.meetingLink || slide.event.htmlLink;
+            return canJoin && eventUrl ? (
               <button
                 type="button"
                 onClick={() =>
-                  void openUrl(slide.event.meetingLink || slide.event.htmlLink!).catch((err) =>
+                  void openUrl(eventUrl).catch((err) =>
                     logError("HomePage: open upcoming event", err),
                   )
                 }
@@ -350,7 +352,7 @@ export function HomePage() {
   const streak = activeStreak(history.data?.sessions.map((session) => session.started_at) ?? []);
 
   function startConversation() {
-    emitTo("main", "start-voice-requested").catch((err) =>
+    emitTo("main", START_VOICE_REQUESTED).catch((err) =>
       logError("HomePage: start voice", err),
     );
   }

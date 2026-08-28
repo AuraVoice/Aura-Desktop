@@ -47,11 +47,7 @@ pub fn set_accepted(app: &AppHandle, accepted: bool) -> Result<bool, String> {
         .store(CONSENT_STORE)
         .map_err(|e| format!("could not open the dictation consent store: {e}"))?;
     if accepted {
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|since| since.as_millis() as i64)
-            .unwrap_or(0);
-        store.set(ACCEPTED_AT_KEY, serde_json::json!(now_ms));
+        store.set(ACCEPTED_AT_KEY, serde_json::json!(crate::util::now_ms()));
     } else {
         store.delete(ACCEPTED_AT_KEY);
     }

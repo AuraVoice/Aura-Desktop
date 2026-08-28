@@ -1,4 +1,4 @@
-import { authFetch } from "./api";
+import { authGetJson as authGetJsonBase } from "./api";
 import type { DraftChannel, DraftLength } from "./draft";
 import { parseMeetingDoc, type MeetingDoc } from "./meetings";
 
@@ -35,12 +35,9 @@ import { parseMeetingDoc, type MeetingDoc } from "./meetings";
  * cancel or time out without changing authFetch's signature.
  */
 
-async function authGetJson<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const response = await authFetch(path, signal ? { signal } : undefined);
-  if (!response.ok) {
-    throw new Error(`GET ${path} -> HTTP ${response.status}`);
-  }
-  return (await response.json()) as T;
+// Positional adapter over the shared helper (api.ts): every non-2xx throws.
+function authGetJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+  return authGetJsonBase<T>(path, signal ? { signal } : undefined);
 }
 
 // ── Home stats ───────────────────────────────────────────────────────────

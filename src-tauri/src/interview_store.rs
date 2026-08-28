@@ -31,7 +31,6 @@
 //! quiet no-ops that never fall back to writing readable text.
 
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
@@ -39,6 +38,7 @@ use tauri::{AppHandle, Manager};
 
 #[cfg(windows)]
 use crate::meeting::crypto;
+use crate::util::now_ms;
 
 const DATABASE_FILE: &str = "interview-sessions.sqlite3";
 
@@ -110,13 +110,6 @@ pub struct InterviewSessionDetail {
     pub exchanges: Vec<StoredExchange>,
 }
 
-fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as i64
-}
-
 fn db_path(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = app.path().app_local_data_dir().map_err(|e| e.to_string())?;
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
@@ -167,9 +160,13 @@ fn open(app: &AppHandle) -> Result<Connection, String> {
     Ok(conn)
 }
 
+/// FROZEN namespace: existing sealed rows decrypt only under exactly this
+/// grammar (this version string, NUL-separated parts).
+const AAD_NAMESPACE: &str = "aura-interview-v1";
+
 /// Binds a sealed value to exactly one account, session, and slot.
 fn row_aad(uid: &str, session_id: &str, slot: &str) -> String {
-    format!("aura-interview-v1\0{uid}\0{session_id}\0{slot}")
+    crate::sealed_store::aad(AAD_NAMESPACE, &[uid, session_id, slot])
 }
 
 #[cfg(windows)]
@@ -183,19 +180,11 @@ fn cache_key(_app: &AppHandle) -> Result<[u8; 32], String> {
 }
 
 #[cfg(windows)]
-fn seal(key: &[u8; 32], plaintext: &str, aad: &str) -> Result<Vec<u8>, String> {
-    crypto::encrypt_with_aad(key, plaintext.as_bytes(), aad.as_bytes())
-}
+use crate::sealed_store::{seal, unseal};
 
 #[cfg(not(windows))]
 fn seal(_key: &[u8; 32], _plaintext: &str, _aad: &str) -> Result<Vec<u8>, String> {
     Err("interview store encryption is unavailable on this platform".to_string())
-}
-
-#[cfg(windows)]
-fn unseal(key: &[u8; 32], sealed: &[u8], aad: &str) -> Result<String, String> {
-    let plain = crypto::decrypt_with_aad(key, sealed, aad.as_bytes())?;
-    String::from_utf8(plain).map_err(|e| e.to_string())
 }
 
 #[cfg(not(windows))]

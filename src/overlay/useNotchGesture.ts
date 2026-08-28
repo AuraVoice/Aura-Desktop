@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { AURA_TOGGLE, VOICE_TOGGLE_KEY_CHANGED } from "../lib/ipcEvents";
 import { logError, logInfo } from "../lib/log";
 import { outputMuted } from "../lib/outputMode";
+import type { VoiceToggleKeyStatus } from "../lib/hotkeys";
 import type { VoiceBarState } from "./useVoiceBar";
 
 interface AuraTogglePayload {
@@ -10,13 +12,15 @@ interface AuraTogglePayload {
   emittedAtMs?: number;
 }
 
-interface VoiceToggleKeyStatus {
-  available: boolean;
-  keyLabel: string;
-  reason?: string;
-}
+// The gesture surface needs only this slice of the canonical status; deriving
+// it keeps the shape compiler-checked against lib/hotkeys.ts instead of
+// drifting as a private re-declaration.
+type VoiceToggleKeySlice = Pick<
+  VoiceToggleKeyStatus,
+  "available" | "keyLabel" | "reason"
+>;
 
-export interface NotchGestureState extends VoiceToggleKeyStatus {
+export interface NotchGestureState extends VoiceToggleKeySlice {
   checking: boolean;
 }
 
@@ -64,7 +68,7 @@ export function useNotchGesture(
     let unlistenKeyChange: (() => void) | undefined;
     let disposed = false;
 
-    listen<AuraTogglePayload>("aura-toggle", (event) => {
+    listen<AuraTogglePayload>(AURA_TOGGLE, (event) => {
       const sequence = event.payload?.sequence;
       if (!Number.isSafeInteger(sequence) || sequence <= lastSequenceRef.current) {
         return;
@@ -188,7 +192,7 @@ export function useNotchGesture(
       })
       .catch((err) => logError("useNotchGesture: listen", err));
 
-    listen<VoiceToggleKeyStatus>("voice-toggle-key-changed", (event) => {
+    listen<VoiceToggleKeyStatus>(VOICE_TOGGLE_KEY_CHANGED, (event) => {
       if (!disposed) setState({ ...event.payload, checking: false });
     })
       .then((fn) => {

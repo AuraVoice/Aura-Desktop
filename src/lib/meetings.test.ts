@@ -1,9 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("./api", () => ({
-  authFetch: vi.fn(),
-  AuthRequiredError: class AuthRequiredError extends Error {},
-}));
+vi.mock("./api", () => {
+  const authFetch = vi.fn();
+  return {
+    authFetch,
+    // The real helper wraps authFetch with a deadline; the fake forwards to
+    // the same mock so existing mockResolvedValue setups drive both paths.
+    authFetchWithTimeout: (path: string, init: RequestInit | undefined, _timeoutMs: number) =>
+      authFetch(path, init),
+    AuthRequiredError: class AuthRequiredError extends Error {},
+    TimeoutError: class TimeoutError extends Error {},
+  };
+});
 vi.mock("./log", () => ({ logError: vi.fn() }));
 
 import { authFetch } from "./api";

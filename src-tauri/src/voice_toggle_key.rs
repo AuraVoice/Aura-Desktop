@@ -156,13 +156,13 @@ pub fn set_voice_toggle_key(
     if let Err(err) = crate::hotkeys::set_voice_binding(&app, &hotkeys, &key_code) {
         let mut status = state.status();
         apply_current_binding(&mut status, &hotkeys);
-        let _ = app.emit("voice-toggle-key-changed", &status);
+        let _ = app.emit(crate::events::VOICE_TOGGLE_KEY_CHANGED, &status);
         return Err(err);
     }
     VOICE_TOGGLE_VK.store(vk, Ordering::Relaxed);
     let mut status = state.status();
     apply_current_binding(&mut status, &hotkeys);
-    let _ = app.emit("voice-toggle-key-changed", &status);
+    let _ = app.emit(crate::events::VOICE_TOGGLE_KEY_CHANGED, &status);
     Ok(status)
 }
 
@@ -193,18 +193,15 @@ pub fn emit_status_changed(app: &AppHandle) {
     let hotkeys = app.state::<crate::hotkeys::HotkeyState>();
     let mut status = handle.status();
     apply_current_binding(&mut status, &hotkeys);
-    let _ = app.emit("voice-toggle-key-changed", &status);
+    let _ = app.emit(crate::events::VOICE_TOGGLE_KEY_CHANGED, &status);
 }
 
 pub fn emit_toggle(app: &AppHandle) {
     let sequence = TOGGLE_SEQUENCE.fetch_add(1, Ordering::Relaxed).saturating_add(1);
-    let emitted_at_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64;
+    let emitted_at_ms = crate::util::now_ms_u64();
     if let Some(window) = app.get_webview_window("main") {
         if let Err(err) = window.emit(
-            "aura-toggle",
+            crate::events::AURA_TOGGLE,
             serde_json::json!({
                 "sequence": sequence,
                 "emittedAtMs": emitted_at_ms,
@@ -367,12 +364,14 @@ mod platform {
             // Escape is the escape hatch for held dictation text. Gated on the
             // flag so an ordinary Escape (every dialog, every editor, all day)
             // is one relaxed atomic load in this hook and nothing else.
-            if is_down && !is_injected && event.vkCode == VK_ESCAPE.0 as u32 {
-                if crate::dictation::is_holding_text() {
-                    crate::dictation::signal(
-                        crate::dictation::chord::ChordSignal::CancelPending,
-                    );
-                }
+            if is_down
+                && !is_injected
+                && event.vkCode == VK_ESCAPE.0 as u32
+                && crate::dictation::is_holding_text()
+            {
+                crate::dictation::signal(
+                    crate::dictation::chord::ChordSignal::CancelPending,
+                );
             }
             // Only a chord that actually contains the voice toggle key needs
             // the classifier suppressed; DICTATION_CHORD::RightCtrlOnly (with

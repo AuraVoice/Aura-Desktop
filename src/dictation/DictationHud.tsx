@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { useTauriEvent } from "../lib/useTauriEvent";
+import { DICTATION_UPDATE } from "../lib/ipcEvents";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { GlassSurface } from "../overlay/GlassSurface";
 import { dictationConsent } from "../lib/copy";
@@ -188,11 +189,10 @@ export function DictationHud() {
   );
   useDictationSounds(update.phase);
 
+  useTauriEvent<DictationUpdate>(DICTATION_UPDATE, setUpdate);
+
   useEffect(() => {
     let live = true;
-    const pending = listen<DictationUpdate>("dictation-update", (event) => {
-      setUpdate(event.payload);
-    });
     // Pull the current state once so startup does not depend on winning a race
     // with the first event. A later event always wins: the listener overwrites
     // whatever this resolves to.
@@ -209,7 +209,6 @@ export function DictationHud() {
       });
     return () => {
       live = false;
-      void pending.then((unlisten) => unlisten());
     };
   }, []);
 

@@ -434,7 +434,7 @@ pub fn set_hotkey_binding(
     }
     let result = views(&runtime);
     drop(runtime);
-    let _ = app.emit("hotkey-bindings-changed", &result);
+    let _ = app.emit(crate::events::HOTKEY_BINDINGS_CHANGED, &result);
     Ok(result)
 }
 
@@ -478,7 +478,7 @@ pub fn reset_hotkey_bindings(
     persist(&app, &runtime)?;
     let result = views(&runtime);
     drop(runtime);
-    let _ = app.emit("hotkey-bindings-changed", &result);
+    let _ = app.emit(crate::events::HOTKEY_BINDINGS_CHANGED, &result);
     crate::voice_toggle_key::emit_status_changed(&app);
     Ok(result)
 }
@@ -548,7 +548,7 @@ pub fn set_chat_enabled(app: &AppHandle, enabled: bool) -> Result<(), String> {
     }
     let result = views(&runtime);
     drop(runtime);
-    let _ = app.emit("hotkey-bindings-changed", &result);
+    let _ = app.emit(crate::events::HOTKEY_BINDINGS_CHANGED, &result);
     Ok(())
 }
 
@@ -582,7 +582,7 @@ pub fn intercept_voice_test(app: &AppHandle) -> bool {
     let state = app.state::<HotkeyState>();
     let mut runtime = state.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     if tested_action(app, &mut runtime, "voice") {
-        let _ = app.emit("hotkey-test-pressed", "voice");
+        let _ = app.emit(crate::events::HOTKEY_TEST_PRESSED, "voice");
         return true;
     }
     false
@@ -599,7 +599,7 @@ pub fn handle(app: &AppHandle, shortcut: &Shortcut) {
         };
         if let Some(action) = action.as_deref() {
             if tested_action(app, &mut runtime, action) {
-                let _ = app.emit("hotkey-test-pressed", action);
+                let _ = app.emit(crate::events::HOTKEY_TEST_PRESSED, action);
                 return;
             }
         }

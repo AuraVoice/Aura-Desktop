@@ -28,19 +28,22 @@ pub(crate) const MODEL_FRAME_JPEG_QUALITY: u8 = 82;
 /// front of the JPEG bytes (see `write_le`) so an `element.point` response
 /// naming a JPEG-space coordinate can be mapped back onto the real screen.
 /// Direct port of `ScreenFrameGeometry` (desktop_screen_capture_service.dart).
-struct ScreenFrameGeometry {
-    monitor_left_px: i32,
-    monitor_top_px: i32,
-    monitor_width_px: u32,
-    monitor_height_px: u32,
-    scale_factor: f32,
-    jpeg_width_px: u32,
-    jpeg_height_px: u32,
+/// Guide wraps this same struct for its envelope, so there is exactly one
+/// Rust serializer for the layout the TS `DataView` readers parse.
+#[derive(Clone, Debug)]
+pub(crate) struct ScreenFrameGeometry {
+    pub(crate) monitor_left_px: i32,
+    pub(crate) monitor_top_px: i32,
+    pub(crate) monitor_width_px: u32,
+    pub(crate) monitor_height_px: u32,
+    pub(crate) scale_factor: f32,
+    pub(crate) jpeg_width_px: u32,
+    pub(crate) jpeg_height_px: u32,
 }
 
 /// Byte length of the header `write_le` produces - 7 little-endian 4-byte
 /// fields. `useScreenSight.ts`'s `DataView` reads must match this layout.
-const GEOMETRY_HEADER_LEN: usize = 4 * 7;
+pub(crate) const GEOMETRY_HEADER_LEN: usize = 4 * 7;
 
 const LEGACY_SCREENSHOTS_DIR: &str = "screenshots";
 
@@ -85,7 +88,7 @@ pub struct CaptureStages {
 }
 
 impl ScreenFrameGeometry {
-    fn write_le(&self, out: &mut Vec<u8>) {
+    pub(crate) fn write_le(&self, out: &mut Vec<u8>) {
         out.extend_from_slice(&self.monitor_left_px.to_le_bytes());
         out.extend_from_slice(&self.monitor_top_px.to_le_bytes());
         out.extend_from_slice(&self.monitor_width_px.to_le_bytes());
@@ -94,6 +97,34 @@ impl ScreenFrameGeometry {
         out.extend_from_slice(&self.jpeg_width_px.to_le_bytes());
         out.extend_from_slice(&self.jpeg_height_px.to_le_bytes());
     }
+}
+
+/// The cursor position in physical screen pixels, read via the main window.
+pub(crate) fn cursor_point(app: &AppHandle) -> Result<(i32, i32), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    let cursor = window.cursor_position().map_err(|e| e.to_string())?;
+    Ok((cursor.x as i32, cursor.y as i32))
+}
+
+/// The shared middle of every screen-capture command: cursor -> blocking
+/// capture -> security recheck. Each command keeps its own `authorize` (and
+/// any extra gates between it and the capture) so error precedence is
+/// unchanged, and keeps its own persistence tail. The recheck runs AFTER the
+/// capture on purpose: a disarm or sign-out that lands during the
+/// capture+encode window drops the frame instead of returning it.
+async fn captured_under(
+    app: &AppHandle,
+    op: crate::security::Operation,
+    ticket: &crate::security::Ticket,
+) -> Result<CapturedFrame, String> {
+    let (cursor_x, cursor_y) = cursor_point(app)?;
+    let frame = tauri::async_runtime::spawn_blocking(move || capture_frame(cursor_x, cursor_y))
+        .await
+        .map_err(|e| e.to_string())??;
+    crate::security::recheck(app, op, ticket)?;
+    Ok(frame)
 }
 
 /// Captures the monitor the main window (or, once pointing lands, the cursor)
@@ -115,22 +146,7 @@ pub async fn capture_cursor_display_with_geometry(
     // signed-in session, a live voice call, and screen sight armed - all
     // tracked in security.rs, all cleared on sign-out/disconnect/restart.
     let ticket = crate::security::authorize(&app, crate::security::Operation::CaptureScreen)?;
-
-    let window = app
-        .get_webview_window("main")
-        .ok_or_else(|| "main window not found".to_string())?;
-    let cursor = window.cursor_position().map_err(|e| e.to_string())?;
-    let cursor_x = cursor.x as i32;
-    let cursor_y = cursor.y as i32;
-
-    let frame = tauri::async_runtime::spawn_blocking(move || capture_frame(cursor_x, cursor_y))
-        .await
-        .map_err(|e| e.to_string())??;
-
-    // A disarm/sign-out that landed during the capture+encode window drops
-    // the frame instead of returning it (the JS side already applied the same
-    // rule to its own armed flag; this makes it authoritative).
-    crate::security::recheck(&app, crate::security::Operation::CaptureScreen, &ticket)?;
+    let frame = captured_under(&app, crate::security::Operation::CaptureScreen, &ticket).await?;
     // An explicit capture is something the user asked for, so it keeps the
     // synchronous write: the command only succeeds once the frame is safely on
     // disk. Only the incidental per-turn capture below trades that for latency.
@@ -163,20 +179,12 @@ pub async fn capture_interview_screen_with_geometry(
     if !crate::interview::is_active(&app) {
         return Err("Interview Companion is not active.".to_string());
     }
-    let window = app
-        .get_webview_window("main")
-        .ok_or_else(|| "main window not found".to_string())?;
-    let cursor = window.cursor_position().map_err(|e| e.to_string())?;
-    let cursor_x = cursor.x as i32;
-    let cursor_y = cursor.y as i32;
-    let frame = tauri::async_runtime::spawn_blocking(move || capture_frame(cursor_x, cursor_y))
-        .await
-        .map_err(|e| e.to_string())??;
-    crate::security::recheck(
+    let frame = captured_under(
         &app,
         crate::security::Operation::CaptureInterviewScreen,
         &ticket,
-    )?;
+    )
+    .await?;
     if !crate::interview::is_active(&app) {
         return Err("Interview Companion stopped during screen capture.".to_string());
     }
@@ -194,19 +202,8 @@ pub async fn capture_turn_screen_with_geometry(
     turn_context_id: Option<String>,
 ) -> Result<Response, String> {
     let ticket = crate::security::authorize(&app, crate::security::Operation::CaptureTurnScreen)?;
-
-    let window = app
-        .get_webview_window("main")
-        .ok_or_else(|| "main window not found".to_string())?;
-    let cursor = window.cursor_position().map_err(|e| e.to_string())?;
-    let cursor_x = cursor.x as i32;
-    let cursor_y = cursor.y as i32;
-
-    let mut frame = tauri::async_runtime::spawn_blocking(move || capture_frame(cursor_x, cursor_y))
-        .await
-        .map_err(|e| e.to_string())??;
-
-    crate::security::recheck(&app, crate::security::Operation::CaptureTurnScreen, &ticket)?;
+    let mut frame =
+        captured_under(&app, crate::security::Operation::CaptureTurnScreen, &ticket).await?;
 
     let enqueue_started = Instant::now();
     #[cfg(windows)]
@@ -303,7 +300,7 @@ async fn capture_into_pending(app: AppHandle, point: (i32, i32)) {
             width_px: frame.stages.jpeg_width_px,
             height_px: frame.stages.jpeg_height_px,
             jpeg: frame.jpeg_bytes,
-            captured_at_ms: crate::meeting::now_ms(),
+            captured_at_ms: crate::util::now_ms(),
         });
         state.source_point = Some(point);
     }
@@ -367,13 +364,7 @@ pub async fn refresh_chat_capture(app: AppHandle) -> Result<(), String> {
     // hotkey, so the cursor's monitor is the only signal available.
     let point = match point {
         Some(point) => point,
-        None => {
-            let window = app
-                .get_webview_window("main")
-                .ok_or_else(|| "main window not found".to_string())?;
-            let cursor = window.cursor_position().map_err(|e| e.to_string())?;
-            (cursor.x as i32, cursor.y as i32)
-        }
+        None => cursor_point(&app)?,
     };
     capture_into_pending(app, point).await;
     Ok(())
@@ -400,7 +391,7 @@ fn emit_capture_stages(app: &AppHandle, stages: &CaptureStages) {
         stages.jpeg_width_px,
         stages.jpeg_height_px,
     );
-    let _ = app.emit("capture-stages", stages);
+    let _ = app.emit(crate::events::CAPTURE_STAGES, stages);
 }
 
 /// Removes plaintext turn screenshots written by v0.3.0 before turn capture
@@ -512,7 +503,7 @@ mod tests {
         let base = std::env::temp_dir().join(format!(
             "aura-screenshot-maintenance-{}-{}",
             std::process::id(),
-            crate::meeting::now_ms()
+            crate::util::now_ms()
         ));
         let screenshots = base.join(LEGACY_SCREENSHOTS_DIR);
         let sibling = base.join("meeting-captures");

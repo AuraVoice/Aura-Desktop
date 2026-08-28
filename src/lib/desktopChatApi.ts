@@ -1,4 +1,4 @@
-import { authFetch } from "./api";
+import { authGetJson } from "./api";
 
 /**
  * Typed client for the canonical desktop chat transcript.
@@ -98,13 +98,8 @@ interface RawPendingTurn {
 
 /** Returns null on 404 so an older backend revision is a soft degrade. Other
  * non-2xx statuses still throw, because they are real failures worth logging. */
-async function authGetJson<T>(path: string, signal?: AbortSignal): Promise<T | null> {
-  const response = await authFetch(path, signal ? { signal } : undefined);
-  if (response.status === 404) return null;
-  if (!response.ok) {
-    throw new Error(`GET ${path} -> HTTP ${response.status}`);
-  }
-  return (await response.json()) as T;
+function authGetJsonOr404<T>(path: string, signal?: AbortSignal): Promise<T | null> {
+  return authGetJson<T>(path, { signal, softStatuses: [404] });
 }
 
 function toSession(raw: RawChatSession): DesktopChatSession {
@@ -148,7 +143,7 @@ export async function listChatSessions(
 ): Promise<DesktopChatSessionPage> {
   const capped = Math.min(limit, MAX_SESSION_PAGE_SIZE);
   const query = `limit=${capped}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`;
-  const raw = await authGetJson<{
+  const raw = await authGetJsonOr404<{
     items: RawChatSession[];
     next_cursor: string | null;
   }>(`/desktop/chat/sessions?${query}`, signal);
@@ -173,7 +168,7 @@ export async function getChatSession(
 ): Promise<DesktopChatTranscript | null> {
   const capped = Math.min(limit, MAX_MESSAGE_PAGE_SIZE);
   const query = `limit=${capped}${before ? `&before=${encodeURIComponent(before)}` : ""}`;
-  const raw = await authGetJson<{
+  const raw = await authGetJsonOr404<{
     session: RawChatSession;
     items: RawChatMessage[];
     older_cursor: string | null;
@@ -190,7 +185,7 @@ export async function listPendingTurns(
   limit = 20,
   signal?: AbortSignal,
 ): Promise<DesktopPendingTurn[]> {
-  const raw = await authGetJson<{ items: RawPendingTurn[] }>(
+  const raw = await authGetJsonOr404<{ items: RawPendingTurn[] }>(
     `/desktop/chat/pending?limit=${limit}`,
     signal,
   );

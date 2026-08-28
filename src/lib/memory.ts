@@ -1,4 +1,4 @@
-import { authFetch, AuthRequiredError } from "./api";
+import { authFetch, authFetchWithTimeout, AuthRequiredError, TimeoutError } from "./api";
 import { logError } from "./log";
 
 /** One remembered fact, mirroring a users/{uid}/memories Firestore row. */
@@ -43,12 +43,12 @@ function parseChip(raw: unknown): MemoryChip | null {
  * error, and unlike drafts it never routes to sign-in on auth failure.
  */
 export async function fetchCallbackCard(timeoutMs: number): Promise<CallbackCardPayload | null> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const response = await authFetch(`/memories/callback?date=${localDateString()}`, {
-      signal: controller.signal,
-    });
+    const response = await authFetchWithTimeout(
+      `/memories/callback?date=${localDateString()}`,
+      undefined,
+      timeoutMs,
+    );
     if (!response.ok) return null;
     const data = (await response.json()) as { line?: unknown; chips?: unknown };
     if (typeof data.line !== "string" || !data.line.trim()) return null;
@@ -57,12 +57,10 @@ export async function fetchCallbackCard(timeoutMs: number): Promise<CallbackCard
       : [];
     return { line: data.line, chips };
   } catch (err) {
-    if (!(err instanceof AuthRequiredError) && !(err instanceof DOMException && err.name === "AbortError")) {
+    if (!(err instanceof AuthRequiredError) && !(err instanceof TimeoutError)) {
       logError("fetchCallbackCard", err);
     }
     return null;
-  } finally {
-    clearTimeout(timeoutId);
   }
 }
 

@@ -128,17 +128,12 @@ pub struct SegmentReadyPayload {
 }
 
 pub(crate) fn emit_capture_state(app: &AppHandle, payload: CaptureStatePayload) {
-    if let Err(e) = app.emit("meeting-capture-state", payload) {
+    if let Err(e) = app.emit(crate::events::MEETING_CAPTURE_STATE, payload) {
         error!("meeting: failed to emit capture state: {e}");
     }
 }
 
-pub fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
+pub use crate::util::now_ms;
 
 fn require_runtime_owner(app: &AppHandle) -> Result<(), String> {
     if app.state::<MeetingRuntimeLease>().owns_runtime() {
@@ -937,12 +932,15 @@ pub fn stop_join_watch(app: AppHandle, event_id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// One struct for `meeting-join-detected`, shared by the real detector
+/// (detect.rs) and the dev lever below, so the debug path can never drift to
+/// a different wire shape than production.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct JoinDetectedPayload {
-    event_id: String,
-    app: String,
-    window_title: String,
+pub(super) struct JoinDetectedPayload {
+    pub(super) event_id: String,
+    pub(super) app: String,
+    pub(super) window_title: String,
 }
 
 /// Dev-only lever: emits the same `meeting-join-detected` event the real
@@ -955,7 +953,7 @@ pub fn debug_force_join(app: AppHandle, event_id: String) -> Result<(), String> 
     }
     require_runtime_owner(&app)?;
     app.emit(
-        "meeting-join-detected",
+        crate::events::MEETING_JOIN_DETECTED,
         JoinDetectedPayload {
             event_id,
             app: "debug".to_string(),
@@ -1021,7 +1019,7 @@ pub(crate) fn record_segment(
     metadata.encrypted_byte_length = encrypted.len() as u64;
     queue::publish_segment(app, &metadata, &encrypted)?;
     if let Err(e) = app.emit(
-        "meeting-segment-ready",
+        crate::events::MEETING_SEGMENT_READY,
         SegmentReadyPayload {
             owner_uid: owner_uid.to_string(),
             meeting_id: meeting_id.to_string(),

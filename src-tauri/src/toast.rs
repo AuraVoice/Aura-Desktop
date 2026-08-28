@@ -108,7 +108,7 @@ fn on_toast_clicked(app: &AppHandle, payload: ToastActivation) {
     // can miss this emit and collects the parked payload on mount instead.
     if let Err(e) = app.emit_to(
         crate::dashboard::DASHBOARD_WINDOW,
-        "notification-toast-activated",
+        crate::events::NOTIFICATION_TOAST_ACTIVATED,
         payload,
     ) {
         log::error!("toast activation: emit failed: {e}");

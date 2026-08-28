@@ -3,6 +3,10 @@ import { load, type Store } from "@tauri-apps/plugin-store";
 import { trackEvent } from "../lib/analytics";
 import { logError } from "../lib/log";
 import {
+  presentationTreatingMoveAsBar,
+  type OverlayPresentation,
+} from "./overlayPresentation";
+import {
   deleteMemory,
   fetchCallbackCard,
   localDateString,
@@ -46,7 +50,7 @@ const INITIAL: CallbackCardData = {
 };
 
 interface CallbackCardInputs {
-  presentation: "hidden" | "panel" | "companion" | "pointing";
+  presentation: OverlayPresentation;
   signedIn: boolean;
   callLive: boolean;
   draftActive: boolean;
@@ -61,7 +65,13 @@ interface CallbackCardInputs {
  * that shows something generic or an error would be worse than no card.
  */
 export function useCallbackCard(inputs: CallbackCardInputs): CallbackCardState {
-  const { presentation, signedIn, callLive, draftActive, enabled = true } = inputs;
+  const { signedIn, callLive, draftActive, enabled = true } = inputs;
+  // This hook predates the companion->notch rename and keys its trigger off
+  // the old "companion" presentation; today's "bar" (and the transient
+  // move-mode takeover that starts and ends on it) map onto that rather than
+  // rewriting the (tested) logic below.
+  const normalized = presentationTreatingMoveAsBar(inputs.presentation);
+  const presentation = normalized === "bar" ? "companion" : normalized;
   const [data, setData] = useState<CallbackCardData>(INITIAL);
 
   const dataRef = useRef(data);

@@ -1,9 +1,10 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { auth } from "../lib/firebase";
 import { logError } from "../lib/log";
+import { useTauriEvent } from "../lib/useTauriEvent";
+import { SIGN_OUT_REQUESTED } from "../lib/ipcEvents";
 import { syncProfileOnSignIn } from "../lib/profile";
 import { initializeAcquisitionAnalytics } from "../lib/acquisitionAnalytics";
 import { signOutSession } from "../lib/signOutSession";
@@ -73,19 +74,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   // Ctrl+Shift+D: sign out immediately, bypassing VoiceBar's usual confirm step.
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    listen("sign-out-requested", () => {
+  useTauriEvent(
+    SIGN_OUT_REQUESTED,
+    () => {
       signOutSession().catch((err) => {
         logError("AuthProvider: sign-out-requested", err);
       });
-    })
-      .then((fn) => {
-        unlisten = fn;
-      })
-      .catch((err) => logError("AuthProvider: listen sign-out-requested", err));
-    return () => unlisten?.();
-  }, []);
+    },
+    "AuthProvider: listen sign-out-requested",
+  );
 
   return <AuthContext.Provider value={{ user, initializing }}>{children}</AuthContext.Provider>;
 }

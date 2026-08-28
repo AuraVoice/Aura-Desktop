@@ -1,10 +1,10 @@
-use std::time::{SystemTime, UNIX_EPOCH};
-
 use log::{error, warn};
 use serde::Serialize;
 use serde_json::Value;
 use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
+
+use crate::util::now_ms;
 
 const ENTITLEMENT_STORE: &str = "entitlement.json";
 const CACHE_KEY: &str = "cached";
@@ -15,13 +15,6 @@ const FRESH_TTL_MS: i64 = 12 * 60 * 60 * 1000;
 /// A failed fetch may lean on the cache up to this old (the 7-day offline
 /// grace); beyond it, the frontend degrades to free.
 const GRACE_TTL_MS: i64 = 7 * 24 * 60 * 60 * 1000;
-
-fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
 
 /// What `cached_entitlement` hands back to the frontend: the entitlement JSON
 /// exactly as the backend returned it, plus whether it is still fresh (< 12h).

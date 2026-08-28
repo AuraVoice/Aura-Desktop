@@ -69,6 +69,90 @@ export async function authFetch(
   return response;
 }
 
+/** Thrown by the *WithTimeout helpers when the deadline aborts the request,
+ * so callers can tell a timeout from any other transport failure without
+ * matching on AbortError DOMExceptions. */
+export class TimeoutError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TimeoutError";
+  }
+}
+
+async function withDeadline(
+  timeoutMs: number,
+  run: (signal: AbortSignal) => Promise<Response>,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await run(controller.signal);
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new TimeoutError(`request timed out after ${timeoutMs}ms`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+/** Plain fetch with a hard deadline; TimeoutError on the deadline, every
+ * other failure rethrown untouched. For the pre-auth endpoints. */
+export function fetchWithTimeout(
+  input: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  return withDeadline(timeoutMs, (signal) => fetch(input, { ...init, signal }));
+}
+
+/** authFetch with a hard deadline; same TimeoutError contract. */
+export function authFetchWithTimeout(
+  path: string,
+  init: RequestInit | undefined,
+  timeoutMs: number,
+): Promise<Response> {
+  return withDeadline(timeoutMs, (signal) => authFetch(path, { ...init, signal }));
+}
+
+interface AuthGetJsonOptions {
+  signal?: AbortSignal;
+  /** Overrides the default `GET {path} -> HTTP {status}` error message shape. */
+  errorPrefix?: string;
+}
+
+export async function authGetJson<T>(
+  path: string,
+  options?: AuthGetJsonOptions,
+): Promise<T>;
+export async function authGetJson<T>(
+  path: string,
+  options: AuthGetJsonOptions & { softStatuses: number[] },
+): Promise<T | null>;
+/** GET a JSON body over authFetch. Any non-2xx throws, EXCEPT a status the
+ * caller lists in softStatuses, which resolves to null instead - the opt-in
+ * makes a soft degrade (e.g. 404 from an older backend revision) visible at
+ * the call site rather than hiding in a same-named local helper. */
+export async function authGetJson<T>(
+  path: string,
+  options?: AuthGetJsonOptions & { softStatuses?: number[] },
+): Promise<T | null> {
+  const response = await authFetch(
+    path,
+    options?.signal ? { signal: options.signal } : undefined,
+  );
+  if (options?.softStatuses?.includes(response.status)) return null;
+  if (!response.ok) {
+    throw new Error(
+      options?.errorPrefix
+        ? `${options.errorPrefix} (${response.status})`
+        : `GET ${path} -> HTTP ${response.status}`,
+    );
+  }
+  return (await response.json()) as T;
+}
+
 export type PairingErrorKind = "bad_length" | "network" | "invalid_or_expired" | "timeout" | "other";
 
 export class PairingError extends Error {
@@ -100,24 +184,22 @@ export async function claimPairingCode(code: string): Promise<string> {
     getOrCreateDesktopInstallId(),
   ]);
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), CLAIM_TIMEOUT_MS);
-
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}/devices/pair/claim`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...PLATFORM_HEADERS },
-      body: JSON.stringify({ code: raw, device_name: deviceName ?? "", install_id: installId }),
-      signal: controller.signal,
-    });
+    response = await fetchWithTimeout(
+      `${API_BASE_URL}/devices/pair/claim`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...PLATFORM_HEADERS },
+        body: JSON.stringify({ code: raw, device_name: deviceName ?? "", install_id: installId }),
+      },
+      CLAIM_TIMEOUT_MS,
+    );
   } catch (err) {
-    if (err instanceof DOMException && err.name === "AbortError") {
+    if (err instanceof TimeoutError) {
       throw new PairingError("timeout", pairingErrorCopy.timeout);
     }
     throw new PairingError("network", pairingErrorCopy.network);
-  } finally {
-    clearTimeout(timeoutId);
   }
 
   if (response.status === 400) {
@@ -170,24 +252,22 @@ export async function startWebAuth(): Promise<WebAuthStartResult> {
     getOrCreateDesktopInstallId(),
   ]);
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), WEB_AUTH_START_TIMEOUT_MS);
-
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}/devices/web-auth/start`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...PLATFORM_HEADERS },
-      body: JSON.stringify({ device_name: deviceName ?? "", install_id: installId }),
-      signal: controller.signal,
-    });
+    response = await fetchWithTimeout(
+      `${API_BASE_URL}/devices/web-auth/start`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...PLATFORM_HEADERS },
+        body: JSON.stringify({ device_name: deviceName ?? "", install_id: installId }),
+      },
+      WEB_AUTH_START_TIMEOUT_MS,
+    );
   } catch (err) {
-    if (err instanceof DOMException && err.name === "AbortError") {
+    if (err instanceof TimeoutError) {
       throw new WebAuthError("timeout", webAuthCopy.timeout);
     }
     throw new WebAuthError("network", webAuthCopy.network);
-  } finally {
-    clearTimeout(timeoutId);
   }
 
   if (!response.ok) {
@@ -215,24 +295,22 @@ export type WebAuthStatusResult =
  * without ending the flow on one blip.
  */
 export async function pollWebAuthStatusOnce(code: string): Promise<WebAuthStatusResult> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), WEB_AUTH_STATUS_TIMEOUT_MS);
-
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}/devices/web-auth/status`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...PLATFORM_HEADERS },
-      body: JSON.stringify({ code }),
-      signal: controller.signal,
-    });
+    response = await fetchWithTimeout(
+      `${API_BASE_URL}/devices/web-auth/status`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...PLATFORM_HEADERS },
+        body: JSON.stringify({ code }),
+      },
+      WEB_AUTH_STATUS_TIMEOUT_MS,
+    );
   } catch (err) {
-    if (err instanceof DOMException && err.name === "AbortError") {
+    if (err instanceof TimeoutError) {
       throw new WebAuthError("timeout", webAuthCopy.timeout);
     }
     throw new WebAuthError("network", webAuthCopy.network);
-  } finally {
-    clearTimeout(timeoutId);
   }
 
   if (!response.ok) {

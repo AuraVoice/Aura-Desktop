@@ -3,19 +3,22 @@
 
 const DASH = "—";
 
-export function relativeTime(iso: string | null, compact = false): string {
-  if (!iso) return DASH;
-  const then = new Date(iso).getTime();
+/** The one relative-time formatter (ISO string or epoch ms input). Uses
+ * floor, never round, so a 90-second-old row reads "1m ago" - a timestamp
+ * must not appear older than it is, and every surface agrees on the answer. */
+export function relativeTime(at: string | number | null, compact = false): string {
+  if (at === null || at === "") return DASH;
+  const then = typeof at === "number" ? at : new Date(at).getTime();
   if (Number.isNaN(then)) return DASH;
   const diffMs = Date.now() - then;
-  const mins = Math.round(diffMs / 60000);
+  const mins = Math.floor(diffMs / 60000);
   if (mins < 1) return "just now";
   if (mins < 60) return compact ? `${mins}m ago` : `${mins} minute${mins === 1 ? "" : "s"} ago`;
-  const hours = Math.round(mins / 60);
+  const hours = Math.floor(mins / 60);
   if (hours < 24) return compact ? `${hours}h ago` : `${hours} hour${hours === 1 ? "" : "s"} ago`;
-  const days = Math.round(hours / 24);
+  const days = Math.floor(hours / 24);
   if (days < 7) return compact ? `${days}d ago` : `${days} day${days === 1 ? "" : "s"} ago`;
-  return new Date(iso).toLocaleDateString();
+  return new Date(then).toLocaleDateString();
 }
 
 export function shortDateTime(iso: string): string {
@@ -34,6 +37,15 @@ export function duration(seconds: number | null): string {
   const m = Math.floor(seconds / 60);
   const s = Math.round(seconds % 60);
   return `${m}m ${s.toString().padStart(2, "0")}s`;
+}
+
+/** Coarse duration for stat tiles ("<1 min", "12 min", "1.2 hr"), next to
+ * the precise `duration` above ("12m 05s"): two deliberate styles, one home
+ * so neither gets re-invented per page. */
+export function durationCoarse(seconds: number): string {
+  if (seconds < 60) return seconds > 0 ? "<1 min" : "0 min";
+  if (seconds >= 3600) return `${(seconds / 3600).toFixed(1)} hr`;
+  return `${Math.round(seconds / 60)} min`;
 }
 
 export function count(n: number | null | undefined): string {

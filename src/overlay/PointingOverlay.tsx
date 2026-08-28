@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
-import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { logError, logInfo } from "../lib/log";
+import { useTauriEvent } from "../lib/useTauriEvent";
+import { POINTING_TARGET } from "../lib/ipcEvents";
 import "./PointingOverlay.css";
 
 const FLIGHT_MS = 900;
@@ -37,36 +38,33 @@ export function PointingOverlay() {
   const [orbPos, setOrbPos] = useState<Point>({ x: 0, y: 0 });
   const [landed, setLanded] = useState(false);
 
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    listen<PointingTargetPayload>("pointing-target", (event) => {
+  useTauriEvent<PointingTargetPayload>(
+    POINTING_TARGET,
+    (payload) => {
       logInfo("GuideTrace", JSON.stringify({
         stage: "execution",
         outcome: "succeeded",
         reason: "pointer_overlay_target_received",
       }));
-      setTarget({ x: event.payload.x, y: event.payload.y });
-      setLabel(event.payload.label ?? "");
+      setTarget({ x: payload.x, y: payload.y });
+      setLabel(payload.label ?? "");
       setLanded(false);
-    })
-      .then((fn) => {
-        unlisten = fn;
-      })
-      .catch((err) => logError("PointingOverlay: listen pointing-target", err));
-    return () => unlisten?.();
-  }, []);
+    },
+    "PointingOverlay: listen pointing-target",
+  );
 
   useEffect(() => {
     if (!target) return;
 
+    const dest = target;
     const start: Point = { x: window.innerWidth / 2, y: 24 };
-    const dx = target.x - start.x;
-    const dy = target.y - start.y;
+    const dx = dest.x - start.x;
+    const dy = dest.y - start.y;
     const distance = Math.hypot(dx, dy) || 1;
     const offset = Math.min(160, distance * 0.25);
     const control: Point = {
-      x: (start.x + target.x) / 2 - (dy / distance) * offset,
-      y: (start.y + target.y) / 2 + (dx / distance) * offset,
+      x: (start.x + dest.x) / 2 - (dy / distance) * offset,
+      y: (start.y + dest.y) / 2 + (dx / distance) * offset,
     };
 
     let raf = 0;
@@ -77,8 +75,8 @@ export function PointingOverlay() {
       const eased = easeInOutCubic(t);
       const inv = 1 - eased;
       setOrbPos({
-        x: inv * inv * start.x + 2 * inv * eased * control.x + eased * eased * target!.x,
-        y: inv * inv * start.y + 2 * inv * eased * control.y + eased * eased * target!.y,
+        x: inv * inv * start.x + 2 * inv * eased * control.x + eased * eased * dest.x,
+        y: inv * inv * start.y + 2 * inv * eased * control.y + eased * eased * dest.y,
       });
       if (t < 1) {
         raf = requestAnimationFrame(tick);

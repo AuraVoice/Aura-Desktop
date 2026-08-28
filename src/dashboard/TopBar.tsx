@@ -4,6 +4,7 @@ import { Bell, ChevronDown, LogOut, UserRound } from "lucide-react";
 import { type User as FirebaseUser } from "firebase/auth";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { NOTIFICATION_TOAST_ACTIVATED } from "../lib/ipcEvents";
 import { logError } from "../lib/log";
 import { signOutSession } from "../lib/signOutSession";
 import { NotificationsPanel } from "./NotificationsPanel";
@@ -139,7 +140,7 @@ export function TopBar({ title, user, notifications }: TopBarProps) {
         logError("TopBar: pending toast activation", err);
       }
     };
-    listen<ToastActivation>("notification-toast-activated", (event) => {
+    listen<ToastActivation>(NOTIFICATION_TOAST_ACTIVATED, (event) => {
       void invoke<ToastActivation | null>("take_pending_toast_activation", {
         notificationId: event.payload.notificationId,
       })

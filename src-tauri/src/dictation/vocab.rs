@@ -14,27 +14,19 @@
 //! "two" once would wreck every later sentence.
 //!
 //! At rest both files are AES-256-GCM encrypted under a key wrapped by Windows
-//! DPAPI in current-user scope. This mirrors meeting/crypto.rs but mints its
-//! OWN key in its OWN directory on purpose: meeting's key.bin lives under the
-//! captures directory, so sharing it would mean "delete my recordings" silently
-//! bricks the dictation vocabulary.
+//! DPAPI in current-user scope. The mechanism lives in crate::crypto, but this
+//! module mints its OWN key in its OWN directory on purpose: meeting's key.bin
+//! lives under the captures directory, so sharing it would mean "delete my
+//! recordings" silently bricks the dictation vocabulary.
 
 #![cfg(windows)]
 
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::PathBuf;
 
-use aes_gcm::aead::{Aead, KeyInit, OsRng};
-use aes_gcm::{AeadCore, Aes256Gcm, Key, Nonce};
 use rphonetic::{DoubleMetaphone, Encoder};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
-use windows::core::PCWSTR;
-use windows::Win32::Foundation::{LocalFree, HLOCAL};
-use windows::Win32::Security::Cryptography::{
-    CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
-};
 
 /// Own directory, own key. See the module header for why this is not shared
 /// with the meeting module's captures directory.
@@ -42,7 +34,6 @@ const DICTATION_DIR: &str = "dictation";
 const KEY_FILE: &str = "key.bin";
 const VOCAB_FILE: &str = "vocab.enc";
 const CORRECTIONS_FILE: &str = "corrections.enc";
-const NONCE_LEN: usize = 12;
 
 /// A correction has to be confirmed this many times before it is ever applied.
 /// One mis-heard word is noise; three identical fixes is a pattern.
@@ -114,56 +105,18 @@ pub(super) fn dictation_dir(app: &AppHandle) -> Result<PathBuf, String> {
 /// replaced, so a machine/profile change surfaces as an error instead of
 /// silently discarding a vocabulary the user spent weeks building.
 pub(super) fn load_or_create_key(app: &AppHandle) -> Result<[u8; 32], String> {
-    let path = dictation_dir(app)?.join(KEY_FILE);
-    if let Ok(wrapped) = std::fs::read(&path) {
-        let key_bytes = dpapi_unprotect(&wrapped)
-            .map_err(|e| format!("stored dictation key could not be unwrapped: {e}"))?;
-        if key_bytes.len() != 32 {
-            return Err("stored dictation key has an invalid length".to_string());
-        }
-        let mut key = [0u8; 32];
-        key.copy_from_slice(&key_bytes);
-        return Ok(key);
-    }
-
-    let key = Aes256Gcm::generate_key(OsRng);
-    let wrapped = dpapi_protect(key.as_slice())?;
-    let tmp = path.with_extension(format!("bin.{}.tmp", std::process::id()));
-    let mut file = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .open(&tmp)
-        .map_err(|e| e.to_string())?;
-    file.write_all(&wrapped).map_err(|e| e.to_string())?;
-    file.sync_all().map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
-    let mut out = [0u8; 32];
-    out.copy_from_slice(key.as_slice());
-    Ok(out)
+    crate::crypto::load_or_create_key_at(&dictation_dir(app)?.join(KEY_FILE), "dictation")
 }
 
-pub(super) fn encrypt(key: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, String> {
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
-    let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
-    let ciphertext = cipher
-        .encrypt(&nonce, plaintext)
-        .map_err(|e| format!("encrypt failed: {e}"))?;
-    let mut out = Vec::with_capacity(NONCE_LEN + ciphertext.len());
-    out.extend_from_slice(nonce.as_slice());
-    out.extend_from_slice(&ciphertext);
-    Ok(out)
-}
+pub(super) use crate::crypto::encrypt;
 
 pub(super) fn decrypt(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>, String> {
-    if data.len() <= NONCE_LEN {
+    // Pre-check so the short-input error keeps naming the dictation store
+    // rather than the shared module's generic wording.
+    if data.len() <= crate::crypto::NONCE_LEN {
         return Err("dictation store too short to decrypt".to_string());
     }
-    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key));
-    let nonce = Nonce::from_slice(&data[..NONCE_LEN]);
-    cipher
-        .decrypt(nonce, &data[NONCE_LEN..])
-        .map_err(|e| format!("decrypt failed: {e}"))
+    crate::crypto::decrypt(key, data)
 }
 
 fn read_store<T: Default + for<'de> Deserialize<'de>>(
@@ -185,16 +138,7 @@ fn write_store<T: Serialize>(app: &AppHandle, file: &str, value: &T) -> Result<(
     let plain = serde_json::to_vec(value).map_err(|e| e.to_string())?;
     let sealed = encrypt(&key, &plain)?;
     let path = dir.join(file);
-    let tmp = path.with_extension(format!("enc.{}.tmp", std::process::id()));
-    let mut handle = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .open(&tmp)
-        .map_err(|e| e.to_string())?;
-    handle.write_all(&sealed).map_err(|e| e.to_string())?;
-    handle.sync_all().map_err(|e| e.to_string())?;
-    std::fs::rename(&tmp, &path).map_err(|e| e.to_string())
+    crate::fsx::write_atomic(&path, &sealed, crate::fsx::Durability::Fsync)
 }
 
 pub fn load_vocab(app: &AppHandle) -> Result<VocabStore, String> {
@@ -479,52 +423,6 @@ fn split_keeping_separators(text: &str) -> Vec<&str> {
         parts.push(&text[start..]);
     }
     parts
-}
-
-fn dpapi_protect(data: &[u8]) -> Result<Vec<u8>, String> {
-    let input = CRYPT_INTEGER_BLOB {
-        cbData: data.len() as u32,
-        pbData: data.as_ptr() as *mut u8,
-    };
-    let mut output = CRYPT_INTEGER_BLOB::default();
-    unsafe {
-        CryptProtectData(
-            &input,
-            PCWSTR::null(),
-            None,
-            None,
-            None,
-            CRYPTPROTECT_UI_FORBIDDEN,
-            &mut output,
-        )
-        .map_err(|e| format!("CryptProtectData failed: {e}"))?;
-        let bytes = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
-        let _ = LocalFree(Some(HLOCAL(output.pbData as *mut core::ffi::c_void)));
-        Ok(bytes)
-    }
-}
-
-fn dpapi_unprotect(data: &[u8]) -> Result<Vec<u8>, String> {
-    let input = CRYPT_INTEGER_BLOB {
-        cbData: data.len() as u32,
-        pbData: data.as_ptr() as *mut u8,
-    };
-    let mut output = CRYPT_INTEGER_BLOB::default();
-    unsafe {
-        CryptUnprotectData(
-            &input,
-            None,
-            None,
-            None,
-            None,
-            CRYPTPROTECT_UI_FORBIDDEN,
-            &mut output,
-        )
-        .map_err(|e| format!("CryptUnprotectData failed: {e}"))?;
-        let bytes = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
-        let _ = LocalFree(Some(HLOCAL(output.pbData as *mut core::ffi::c_void)));
-        Ok(bytes)
-    }
 }
 
 #[cfg(test)]

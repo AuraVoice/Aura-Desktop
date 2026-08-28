@@ -11,14 +11,9 @@ import { useOnboardingTail } from "../overlay/useOnboardingTail";
 import { useDashboardUser } from "./useDashboardUser";
 import { AccountOnboarding, type AccountOnboardingState } from "./AccountOnboarding";
 import { logError } from "../lib/log";
+import type { VoiceToggleKeyStatus } from "../lib/hotkeys";
 import "../overlay/OnboardingFlow.css";
 import "./DashboardOnboarding.css";
-
-interface VoiceToggleKeyStatus {
-  available: boolean;
-  keyLabel: string;
-  reason?: string;
-}
 
 /** Post-sign-in tail owned by the dashboard window: profile, hotkey tour,
  * privacy, voice choice, then live demo. The main overlay stays hidden while this runs. The
