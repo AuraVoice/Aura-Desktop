@@ -84,13 +84,7 @@ const DISCONTINUITY_FRAMES: usize = SAMPLE_RATE * 10; // 10s
 /// failure path's finalize always has state to clear.
 pub fn spawn_engine(
     app: AppHandle,
-    meeting_id: String,
-    capture_run_id: String,
-    capture_fence: i64,
-    owner_uid: String,
-    event_id: String,
-    runtime_instance_id: String,
-    installation_id: String,
+    run: super::queue::CaptureRunRef,
     next_seq: u32,
     timeline_base_ms: i64,
     finalization: super::FinalizationSignal,
@@ -100,20 +94,7 @@ pub fn spawn_engine(
     std::thread::Builder::new()
         .name("meeting-engine".to_string())
         .spawn(move || {
-            engine_thread(
-                app,
-                meeting_id,
-                capture_run_id,
-                capture_fence,
-                owner_uid,
-                event_id,
-                runtime_instance_id,
-                installation_id,
-                next_seq,
-                timeline_base_ms,
-                stop_rx,
-                finalization,
-            )
+            engine_thread(app, run, next_seq, timeline_base_ms, stop_rx, finalization)
         })
         .map_err(|e| format!("failed to spawn engine thread: {e}"))?;
     Ok(stop_tx)
@@ -184,7 +165,7 @@ impl ChannelState {
             self.reset_clock();
             return true;
         }
-        self.acc.extend(std::iter::repeat(0i16).take(deficit));
+        self.acc.extend(std::iter::repeat_n(0i16, deficit));
         self.produced += deficit;
         false
     }
@@ -245,13 +226,7 @@ fn drain_capture_events(
 
 fn engine_thread(
     app: AppHandle,
-    meeting_id: String,
-    capture_run_id: String,
-    capture_fence: i64,
-    owner_uid: String,
-    event_id: String,
-    runtime_instance_id: String,
-    installation_id: String,
+    run: super::queue::CaptureRunRef,
     next_seq: u32,
     timeline_base_ms: i64,
     stop_rx: Receiver<String>,
@@ -268,15 +243,13 @@ fn engine_thread(
     let session_budget =
         MAX_CAPTURE.saturating_sub(Duration::from_millis(timeline_base_ms.max(0) as u64));
     if session_budget.is_zero() {
-        info!("meeting.audio: cap already reached for {meeting_id}, not restarting capture");
+        info!(
+            "meeting.audio: cap already reached for {}, not restarting capture",
+            run.meeting_id
+        );
         let result = super::finalize_capture(
             &app,
-            &meeting_id,
-            &capture_run_id,
-            capture_fence,
-            &owner_uid,
-            &event_id,
-            &runtime_instance_id,
+            &run,
             started_at_ms,
             capped_timeline_ms(timeline_base_ms),
             "max_duration",
@@ -291,12 +264,7 @@ fn engine_thread(
             error!("meeting.audio: failed to subscribe to shared capture: {error}");
             let result = super::finalize_capture(
                 &app,
-                &meeting_id,
-                &capture_run_id,
-                capture_fence,
-                &owner_uid,
-                &event_id,
-                &runtime_instance_id,
+                &run,
                 started_at_ms,
                 capped_timeline_ms(timeline_base_ms),
                 "capture_failed",
@@ -343,13 +311,7 @@ fn engine_thread(
                 // span simply doesn't exist in the audio timeline.
                 if !close_segment(
                     &app,
-                    &meeting_id,
-                    &capture_run_id,
-                    capture_fence,
-                    &owner_uid,
-                    &event_id,
-                    &runtime_instance_id,
-                    &installation_id,
+                    &run,
                     started_at_ms,
                     &mut seq,
                     &mut mic_state,
@@ -389,13 +351,7 @@ fn engine_thread(
         while mic_state.acc.len() >= SEGMENT_FRAMES && loop_state.acc.len() >= SEGMENT_FRAMES {
             if !close_segment(
                 &app,
-                &meeting_id,
-                &capture_run_id,
-                capture_fence,
-                &owner_uid,
-                &event_id,
-                &runtime_instance_id,
-                &installation_id,
+                &run,
                 started_at_ms,
                 &mut seq,
                 &mut mic_state,
@@ -423,20 +379,12 @@ fn engine_thread(
     ) {
         stop_reason = "capture_failed".to_string();
     }
-    if !paused {
-        if mic_state.pump(false) | loop_state.pump(false) {
-            segment_incomplete = true;
-        }
+    if !paused && (mic_state.pump(false) | loop_state.pump(false)) {
+        segment_incomplete = true;
     }
     if !close_segment(
         &app,
-        &meeting_id,
-        &capture_run_id,
-        capture_fence,
-        &owner_uid,
-        &event_id,
-        &runtime_instance_id,
-        &installation_id,
+        &run,
         started_at_ms,
         &mut seq,
         &mut mic_state,
@@ -450,12 +398,7 @@ fn engine_thread(
     }
     let result = super::finalize_capture(
         &app,
-        &meeting_id,
-        &capture_run_id,
-        capture_fence,
-        &owner_uid,
-        &event_id,
-        &runtime_instance_id,
+        &run,
         started_at_ms,
         capped_timeline_ms(emitted_ms),
         &stop_reason,
@@ -473,13 +416,7 @@ fn engine_thread(
 #[allow(clippy::too_many_arguments)]
 fn close_segment(
     app: &AppHandle,
-    meeting_id: &str,
-    capture_run_id: &str,
-    capture_fence: i64,
-    owner_uid: &str,
-    event_id: &str,
-    runtime_instance_id: &str,
-    installation_id: &str,
+    run: &super::queue::CaptureRunRef,
     started_at_ms: i64,
     seq: &mut u32,
     mic: &mut ChannelState,
@@ -519,24 +456,23 @@ fn close_segment(
             let incomplete = *segment_incomplete;
             match super::record_segment(
                 app,
-                meeting_id,
-                capture_run_id,
-                capture_fence,
-                owner_uid,
-                event_id,
-                runtime_instance_id,
-                installation_id,
+                run,
                 started_at_ms,
-                *seq,
-                *segment_start_ms,
-                duration_ms,
+                super::SegmentSpan {
+                    seq: *seq,
+                    start_ms: *segment_start_ms,
+                    duration_ms,
+                    incomplete,
+                },
                 &flac,
-                incomplete,
                 segment_audio_metrics(&mic_frames, &loop_frames, mic, loopback),
             ) {
                 Ok(()) => {
                     info!(
-                        "meeting.audio: segment closed meeting={meeting_id} run={capture_run_id} fence={capture_fence} seq={seq} duration_ms={duration_ms} bytes={}{}",
+                        "meeting.audio: segment closed meeting={} run={} fence={} seq={seq} duration_ms={duration_ms} bytes={}{}",
+                        run.meeting_id,
+                        run.capture_run_id,
+                        run.capture_fence,
                         flac.len(),
                         if incomplete { ", incomplete" } else { "" },
                     );

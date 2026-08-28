@@ -162,7 +162,7 @@ impl Detector {
         let mut reintegrated = [false; TILE_COUNT];
         let mut total_committed_distance = 0.0;
 
-        for tile in 0..TILE_COUNT {
+        for (tile, reintegrated_tile) in reintegrated.iter_mut().enumerate() {
             let motion = tile_diff(previous, current, tile);
             let moving = is_motion(motion);
             if moving {
@@ -176,7 +176,7 @@ impl Detector {
                 self.still_streak[tile] = self.still_streak[tile].saturating_add(1);
                 if self.transient[tile] && self.still_streak[tile] >= LEAVE_TRANSIENT_AFTER {
                     self.transient[tile] = false;
-                    reintegrated[tile] = true;
+                    *reintegrated_tile = true;
                 }
             }
 
@@ -187,7 +187,7 @@ impl Detector {
             if let Some(committed) = committed {
                 let distance = tile_diff(committed, current, tile);
                 total_committed_distance += combined_distance(distance);
-                if (!self.transient[tile] || reintegrated[tile]) && is_change(distance) {
+                if (!self.transient[tile] || *reintegrated_tile) && is_change(distance) {
                     changed_tiles += 1;
                 }
             }

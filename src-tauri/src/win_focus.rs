@@ -212,8 +212,10 @@ pub fn foreground_window_center(_app: &AppHandle) -> Option<(i32, i32)> {
 /// for the notch.
 #[cfg(target_os = "windows")]
 fn tap_key(key: VIRTUAL_KEY) {
-    let mut key_down = INPUT::default();
-    key_down.r#type = INPUT_KEYBOARD;
+    let mut key_down = INPUT {
+        r#type: INPUT_KEYBOARD,
+        ..Default::default()
+    };
     key_down.Anonymous.ki = KEYBDINPUT {
         wVk: key,
         wScan: 0,
@@ -222,8 +224,10 @@ fn tap_key(key: VIRTUAL_KEY) {
         dwExtraInfo: 0,
     };
 
-    let mut key_up = INPUT::default();
-    key_up.r#type = INPUT_KEYBOARD;
+    let mut key_up = INPUT {
+        r#type: INPUT_KEYBOARD,
+        ..Default::default()
+    };
     key_up.Anonymous.ki = KEYBDINPUT {
         wVk: key,
         wScan: 0,

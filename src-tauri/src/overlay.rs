@@ -741,7 +741,7 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
     // dropdown toggle.
     let is_fresh_show = state
         .applied
-        .map_or(true, |a| a.presentation != presentation || a.variant != panel_variant);
+        .is_none_or(|a| a.presentation != presentation || a.variant != panel_variant);
     let size = size_for(&state);
     let position = position_for(&state, &window, size);
     state.applying_bounds = true;
@@ -1269,19 +1269,20 @@ pub fn capture_user_position(app: &AppHandle, x: f64, y: f64) {
     persist_center(app, position.0, position.1);
 }
 
+/// The target monitor's logical bounds for a pointing takeover, grouped so
+/// four adjacent `f64`s cannot be passed in a swapped order.
+#[derive(Clone, Copy)]
+pub struct MonitorRect {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
 /// Takes the window fullscreen over the target monitor and click-through, for
 /// the PointerBuddy flight animation the frontend renders. Direct port of
 /// `pointing_overlay_service.dart`'s `pointAt`.
-pub fn point_at(
-    app: &AppHandle,
-    target_x: f64,
-    target_y: f64,
-    monitor_x: f64,
-    monitor_y: f64,
-    monitor_w: f64,
-    monitor_h: f64,
-    label: &str,
-) {
+pub fn point_at(app: &AppHandle, target_x: f64, target_y: f64, monitor: MonitorRect, label: &str) {
     let (Some(handle), Some(window)) = (state_handle(app), main_window(app)) else {
         warn!(
             "GuideTrace: stage=execution outcome=failed \
@@ -1306,8 +1307,8 @@ pub fn point_at(
     );
 
     let result = window
-        .set_size(LogicalSize::new(monitor_w, monitor_h))
-        .and_then(|_| window.set_position(LogicalPosition::new(monitor_x, monitor_y)))
+        .set_size(LogicalSize::new(monitor.w, monitor.h))
+        .and_then(|_| window.set_position(LogicalPosition::new(monitor.x, monitor.y)))
         .and_then(|_| window.set_ignore_cursor_events(true))
         .and_then(|_| window.show());
 
@@ -1359,8 +1360,8 @@ pub fn point_at(
     if let Err(e) = window.emit(
         crate::events::POINTING_TARGET,
         serde_json::json!({
-            "x": target_x - monitor_x,
-            "y": target_y - monitor_y,
+            "x": target_x - monitor.x,
+            "y": target_y - monitor.y,
             "label": label,
         }),
     ) {

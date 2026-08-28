@@ -166,6 +166,10 @@ fn dismiss_idle_bar(app: AppHandle) {
 /// and at least one authorized capture this session (security.rs). The check
 /// completes (and its lock drops) before overlay::point_at touches any
 /// window API.
+// Flat args are the IPC contract with the frontend's invoke("point_at",
+// {targetX, ..., monitorH, label}); grouping them would change the JS payload
+// shape, so the width stays here and the struct grouping lives one call down.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 fn point_at(
     app: AppHandle,
@@ -179,7 +183,16 @@ fn point_at(
 ) -> Result<(), String> {
     security::authorize(&app, security::Operation::PointAt)?;
     overlay::point_at(
-        &app, target_x, target_y, monitor_x, monitor_y, monitor_w, monitor_h, &label,
+        &app,
+        target_x,
+        target_y,
+        overlay::MonitorRect {
+            x: monitor_x,
+            y: monitor_y,
+            w: monitor_w,
+            h: monitor_h,
+        },
+        &label,
     );
     Ok(())
 }

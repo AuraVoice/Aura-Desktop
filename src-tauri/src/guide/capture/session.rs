@@ -96,7 +96,7 @@ impl GuideCaptureSession {
     pub fn tick(&mut self, allow_unchanged: bool) -> CaptureTick {
         #[cfg(windows)]
         {
-            return match self.backend_tick() {
+            match self.backend_tick() {
                 Some(CaptureTick::Captured(image)) => CaptureTick::Captured(image),
                 // The ONLY path that may claim the screen is unchanged: a live
                 // duplication session positively reported no presentation, and
@@ -106,7 +106,7 @@ impl GuideCaptureSession {
                 // gave up - is Unavailable, and the caller falls back to xcap.
                 Some(CaptureTick::Unchanged) if allow_unchanged => CaptureTick::Unchanged,
                 _ => CaptureTick::Unavailable,
-            };
+            }
         }
         #[cfg(not(windows))]
         {

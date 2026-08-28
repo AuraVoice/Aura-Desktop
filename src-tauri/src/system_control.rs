@@ -109,8 +109,10 @@ fn media_control(args: &Value) -> Result<(), String> {
     };
     info!("system_control: media_control action={action}");
 
-    let mut down = INPUT::default();
-    down.r#type = INPUT_KEYBOARD;
+    let mut down = INPUT {
+        r#type: INPUT_KEYBOARD,
+        ..Default::default()
+    };
     down.Anonymous.ki = KEYBDINPUT {
         wVk: vk,
         wScan: 0,
@@ -118,8 +120,10 @@ fn media_control(args: &Value) -> Result<(), String> {
         time: 0,
         dwExtraInfo: 0,
     };
-    let mut up = INPUT::default();
-    up.r#type = INPUT_KEYBOARD;
+    let mut up = INPUT {
+        r#type: INPUT_KEYBOARD,
+        ..Default::default()
+    };
     up.Anonymous.ki = KEYBDINPUT {
         wVk: vk,
         wScan: 0,

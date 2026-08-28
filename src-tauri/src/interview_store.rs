@@ -373,6 +373,17 @@ pub async fn interview_sessions_list(
 
 /// Full detail for one session. Undecryptable turn/exchange rows are skipped, not
 /// fatal - a rotated key degrades to a thinner transcript, never a broken page.
+/// One `sessions` row's metadata columns, named so the load below stays
+/// readable instead of a six-way positional tuple.
+struct SessionMetaRow {
+    started_at_ms: i64,
+    ended_at_ms: i64,
+    round_kind: String,
+    company: Option<Vec<u8>>,
+    role: Option<Vec<u8>>,
+    brief_id: Option<String>,
+}
+
 #[tauri::command]
 pub async fn interview_session_load(
     app: AppHandle,
@@ -385,24 +396,32 @@ pub async fn interview_session_load(
     tauri::async_runtime::spawn_blocking(move || {
         let key = cache_key(&app)?;
         let conn = open(&app)?;
-        let meta: Option<(i64, i64, String, Option<Vec<u8>>, Option<Vec<u8>>, Option<String>)> = conn
+        let meta: Option<SessionMetaRow> = conn
             .query_row(
                 "SELECT started_at_ms, ended_at_ms, round_kind, company, role, brief_id
                  FROM sessions WHERE uid = ?1 AND session_id = ?2",
                 params![uid, session_id],
                 |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                        row.get(5)?,
-                    ))
+                    Ok(SessionMetaRow {
+                        started_at_ms: row.get(0)?,
+                        ended_at_ms: row.get(1)?,
+                        round_kind: row.get(2)?,
+                        company: row.get(3)?,
+                        role: row.get(4)?,
+                        brief_id: row.get(5)?,
+                    })
                 },
             )
             .ok();
-        let Some((started, ended, round_kind, company, role, brief_id)) = meta else {
+        let Some(SessionMetaRow {
+            started_at_ms: started,
+            ended_at_ms: ended,
+            round_kind,
+            company,
+            role,
+            brief_id,
+        }) = meta
+        else {
             return Ok(None);
         };
 

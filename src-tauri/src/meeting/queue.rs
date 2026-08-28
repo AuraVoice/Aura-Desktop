@@ -6,11 +6,11 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 
 pub use super::evidence_store::{
-    BeginCapture, CompletionReceipt, ExportResult, JobFailureResult, LocalRecording, QueueJobLease,
-    QueueSnapshot, ReconciliationReport, SegmentAudioMetrics, SegmentRecoveryMetadata,
-    UploadReceipt, CAPTURES_DIR,
+    BeginCapture, CaptureRunRef, CompletionReceipt, ExportResult, JobFailureResult, LocalRecording,
+    QueueJobLease, QueueSnapshot, ReconciliationReport, SegmentAudioMetrics,
+    SegmentRecoveryMetadata, UploadReceipt, CAPTURES_DIR,
 };
-use super::evidence_store::{Store, StoredSegment};
+use super::evidence_store::{ExportRequest, Store, StoredSegment};
 
 fn base_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let directory = app
@@ -62,23 +62,11 @@ pub fn publish_segment(
 
 pub fn finalize_capture(
     app: &AppHandle,
-    owner_uid: &str,
-    meeting_id: &str,
-    capture_run_id: &str,
-    capture_fence: i64,
-    runtime_instance_id: &str,
+    run: &CaptureRunRef,
     total_duration_ms: i64,
     reason: &str,
 ) -> Result<String, String> {
-    store(app)?.finalize_capture(
-        owner_uid,
-        meeting_id,
-        capture_run_id,
-        capture_fence,
-        runtime_instance_id,
-        total_duration_ms,
-        reason,
-    )
+    store(app)?.finalize_capture(run, total_duration_ms, reason)
 }
 
 pub fn snapshot_for_owner(app: &AppHandle, owner_uid: &str) -> Result<QueueSnapshot, String> {
@@ -232,13 +220,13 @@ pub fn reconcile(app: &AppHandle) -> Result<ReconciliationReport, String> {
     #[cfg(windows)]
     {
         let key = super::crypto::load_or_create_key(app)?;
-        return store.reconcile(|metadata, encrypted| {
+        store.reconcile(|metadata, encrypted| {
             if metadata.encryption_version >= 2 {
                 super::crypto::decrypt_with_aad(&key, encrypted, &metadata.aad())
             } else {
                 super::crypto::decrypt(&key, encrypted)
             }
-        });
+        })
     }
     #[cfg(not(windows))]
     {
@@ -289,13 +277,15 @@ pub fn export_bundle(
     #[cfg(windows)]
     {
         let key = super::crypto::load_or_create_key(app)?;
-        return store.export_bundle(
+        store.export_bundle(
             owner_uid,
             meeting_id,
             capture_run_id,
-            &destination_root,
-            include_audio,
-            sanitized_log_lines,
+            &ExportRequest {
+                destination_root: &destination_root,
+                include_audio,
+                sanitized_log_lines,
+            },
             |metadata, encrypted| {
                 if metadata.encryption_version >= 2 {
                     super::crypto::decrypt_with_aad(&key, encrypted, &metadata.aad())
@@ -303,7 +293,7 @@ pub fn export_bundle(
                     super::crypto::decrypt(&key, encrypted)
                 }
             },
-        );
+        )
     }
     #[cfg(not(windows))]
     {
@@ -325,7 +315,7 @@ pub fn installation_id(app: &AppHandle) -> Result<String, String> {
     {
         let key = super::crypto::load_or_create_key(app)?;
         let digest = format!("{:x}", Sha256::digest(key));
-        return Ok(format!("install_{}", &digest[..32]));
+        Ok(format!("install_{}", &digest[..32]))
     }
     #[cfg(not(windows))]
     {

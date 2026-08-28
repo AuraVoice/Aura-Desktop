@@ -227,6 +227,13 @@ pub struct LocalRecording {
     pub last_error_code: Option<String>,
 }
 
+/// Where and how `Store::export_bundle` writes a bundle.
+pub struct ExportRequest<'a> {
+    pub destination_root: &'a Path,
+    pub include_audio: bool,
+    pub sanitized_log_lines: &'a [String],
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportResult {
@@ -263,6 +270,22 @@ pub struct BeginCapture {
     pub owner_uid: String,
     pub event_id: String,
     pub started_at_ms: i64,
+    pub runtime_instance_id: String,
+    pub installation_id: String,
+}
+
+/// Identity of one capture run, threaded from the start command through the
+/// engine to every persistence call, so the same-typed identity values can
+/// never be passed in a swapped order. `runtime_instance_id` names the runtime
+/// performing the action (engine or recovery), not necessarily the runtime
+/// that originally started the run.
+#[derive(Clone, Debug)]
+pub struct CaptureRunRef {
+    pub owner_uid: String,
+    pub meeting_id: String,
+    pub capture_run_id: String,
+    pub capture_fence: i64,
+    pub event_id: String,
     pub runtime_instance_id: String,
     pub installation_id: String,
 }

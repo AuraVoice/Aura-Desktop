@@ -53,24 +53,31 @@ pub struct ActiveCapture {
 }
 
 #[cfg(windows)]
+#[derive(Default)]
+struct FinalizationState {
+    result: Mutex<Option<Result<(), String>>>,
+    condition: Condvar,
+}
+
+#[cfg(windows)]
 #[derive(Clone, Default)]
-pub(crate) struct FinalizationSignal(Arc<(Mutex<Option<Result<(), String>>>, Condvar)>);
+pub(crate) struct FinalizationSignal(Arc<FinalizationState>);
 
 #[cfg(windows)]
 impl FinalizationSignal {
     fn finish(&self, result: Result<(), String>) {
-        let (lock, condition) = &*self.0;
-        let mut state = lock.lock().unwrap_or_else(|error| error.into_inner());
+        let mut state = self.0.result.lock().unwrap_or_else(|error| error.into_inner());
         if state.is_none() {
             *state = Some(result);
         }
-        condition.notify_all();
+        self.0.condition.notify_all();
     }
 
     fn wait(&self, timeout: Duration) -> Result<(), String> {
-        let (lock, condition) = &*self.0;
-        let state = lock.lock().unwrap_or_else(|error| error.into_inner());
-        let (state, timeout_result) = condition
+        let state = self.0.result.lock().unwrap_or_else(|error| error.into_inner());
+        let (state, timeout_result) = self
+            .0
+            .condition
             .wait_timeout_while(state, timeout, |value| value.is_none())
             .map_err(|_| "meeting finalization wait failed".to_string())?;
         if timeout_result.timed_out() && state.is_none() {
@@ -365,13 +372,15 @@ pub async fn start_meeting_capture(
             let finalization = FinalizationSignal::default();
             let stop_tx = audio::spawn_engine(
                 app.clone(),
-                meeting_id.clone(),
-                capture_run_id.clone(),
-                capture_fence,
-                owner_uid.clone(),
-                event_id.clone(),
-                runtime_instance_id.clone(),
-                installation_id,
+                queue::CaptureRunRef {
+                    owner_uid: owner_uid.clone(),
+                    meeting_id: meeting_id.clone(),
+                    capture_run_id: capture_run_id.clone(),
+                    capture_fence,
+                    event_id: event_id.clone(),
+                    runtime_instance_id: runtime_instance_id.clone(),
+                    installation_id,
+                },
                 next_seq,
                 timeline_base_ms,
                 finalization.clone(),
@@ -965,28 +974,37 @@ pub fn debug_force_join(app: AppHandle, event_id: String) -> Result<(), String> 
 
 // ── Engine callbacks (windows only) ─────────────────────────────────────────
 
+/// One closed segment's place on the capture timeline, grouped so
+/// `record_segment` and `close_segment` pass it as a unit.
+#[cfg(windows)]
+pub(crate) struct SegmentSpan {
+    pub(crate) seq: u32,
+    pub(crate) start_ms: i64,
+    pub(crate) duration_ms: i64,
+    pub(crate) incomplete: bool,
+}
+
 /// Called by the engine thread for every closed segment: encrypt, write,
 /// record in the manifest, tell JS there's something to upload.
 #[cfg(windows)]
 pub(crate) fn record_segment(
     app: &AppHandle,
-    meeting_id: &str,
-    capture_run_id: &str,
-    capture_fence: i64,
-    owner_uid: &str,
-    event_id: &str,
-    runtime_instance_id: &str,
-    installation_id: &str,
+    run: &queue::CaptureRunRef,
     started_at_ms: i64,
-    seq: u32,
-    start_ms: i64,
-    duration_ms: i64,
+    span: SegmentSpan,
     flac_bytes: &[u8],
-    incomplete: bool,
     metrics: queue::SegmentAudioMetrics,
 ) -> Result<(), String> {
     use sha2::{Digest, Sha256};
 
+    let owner_uid: &str = &run.owner_uid;
+    let meeting_id: &str = &run.meeting_id;
+    let capture_run_id: &str = &run.capture_run_id;
+    let capture_fence = run.capture_fence;
+    let event_id: &str = &run.event_id;
+    let runtime_instance_id: &str = &run.runtime_instance_id;
+    let installation_id: &str = &run.installation_id;
+    let SegmentSpan { seq, start_ms, duration_ms, incomplete } = span;
     let key = crypto::load_or_create_key(app)?;
     let content_sha256 = format!("{:x}", Sha256::digest(flac_bytes));
     let mut metadata = queue::SegmentRecoveryMetadata {
@@ -1070,26 +1088,17 @@ pub(crate) fn notify_paused(app: &AppHandle, paused: bool) {
 #[cfg(windows)]
 pub(crate) fn finalize_capture(
     app: &AppHandle,
-    meeting_id: &str,
-    capture_run_id: &str,
-    capture_fence: i64,
-    owner_uid: &str,
-    event_id: &str,
-    runtime_instance_id: &str,
+    run: &queue::CaptureRunRef,
     started_at_ms: i64,
     total_duration_ms: i64,
     reason: &str,
 ) -> Result<(), String> {
-    let persistence = queue::finalize_capture(
-        app,
-        owner_uid,
-        meeting_id,
-        capture_run_id,
-        capture_fence,
-        runtime_instance_id,
-        total_duration_ms,
-        reason,
-    );
+    let owner_uid: &str = &run.owner_uid;
+    let meeting_id: &str = &run.meeting_id;
+    let capture_run_id: &str = &run.capture_run_id;
+    let capture_fence = run.capture_fence;
+    let event_id: &str = &run.event_id;
+    let persistence = queue::finalize_capture(app, run, total_duration_ms, reason);
     let final_reason = persistence
         .as_ref()
         .map(|_| reason)

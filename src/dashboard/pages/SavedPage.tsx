@@ -67,6 +67,7 @@ export function SavedPage() {
   const selectedImgSrc = selectedSave
     ? localImages.get(selectedSave.item_id) ?? selectedSave.image_url
     : null;
+  const selectedSourceUrl = selectedSave?.source_url ?? null;
 
   const closeDetail = () => {
     setSelected(null);
@@ -140,12 +141,12 @@ export function SavedPage() {
             {selectedSave.note?.trim() && (
               <p className="db-detail-context">{selectedSave.note}</p>
             )}
-            {selectedSave.source_url && (
+            {selectedSourceUrl && (
               <button
                 type="button"
                 className="db-detail-link"
                 onClick={() =>
-                  void openUrl(selectedSave.source_url!).catch((err) =>
+                  void openUrl(selectedSourceUrl).catch((err) =>
                     logError("SavedPage: open source", err),
                   )
                 }

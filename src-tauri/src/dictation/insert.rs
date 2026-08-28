@@ -215,8 +215,10 @@ fn send_tap(key: VIRTUAL_KEY) {
 }
 
 fn key_event(key: VIRTUAL_KEY, up: bool) -> INPUT {
-    let mut input = INPUT::default();
-    input.r#type = INPUT_KEYBOARD;
+    let mut input = INPUT {
+        r#type: INPUT_KEYBOARD,
+        ..Default::default()
+    };
     input.Anonymous.ki = KEYBDINPUT {
         wVk: key,
         wScan: 0,
@@ -232,8 +234,10 @@ fn key_event(key: VIRTUAL_KEY, up: bool) -> INPUT {
 }
 
 fn unicode_event(unit: u16, up: bool) -> INPUT {
-    let mut input = INPUT::default();
-    input.r#type = INPUT_KEYBOARD;
+    let mut input = INPUT {
+        r#type: INPUT_KEYBOARD,
+        ..Default::default()
+    };
     input.Anonymous.ki = KEYBDINPUT {
         wVk: VIRTUAL_KEY(0),
         wScan: unit,

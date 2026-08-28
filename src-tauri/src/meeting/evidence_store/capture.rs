@@ -454,14 +454,15 @@ impl Store {
 
     pub fn finalize_capture(
         &self,
-        owner_uid: &str,
-        meeting_id: &str,
-        capture_run_id: &str,
-        capture_fence: i64,
-        runtime_instance_id: &str,
+        run: &CaptureRunRef,
         total_duration_ms: i64,
         reason: &str,
     ) -> Result<String, String> {
+        let owner_uid: &str = &run.owner_uid;
+        let meeting_id: &str = &run.meeting_id;
+        let capture_run_id: &str = &run.capture_run_id;
+        let capture_fence = run.capture_fence;
+        let runtime_instance_id: &str = &run.runtime_instance_id;
         self.initialize()?;
         let mut conn = self.connect()?;
         let segments = query_segments(&conn, capture_run_id)?;
@@ -469,7 +470,7 @@ impl Store {
         let tx = conn
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(db_error)?;
-        let run: (String, String, i64, String, Option<i64>) = tx
+        let row: (String, String, i64, String, Option<i64>) = tx
             .query_row(
                 "SELECT owner_uid, meeting_id, capture_fence, state,
                         retain_local_until_ms
@@ -486,17 +487,17 @@ impl Store {
                 },
             )
             .map_err(db_error)?;
-        if run.0 != owner_uid || run.1 != meeting_id || run.2 != capture_fence {
+        if row.0 != owner_uid || row.1 != meeting_id || row.2 != capture_fence {
             return Err("capture finalization identity mismatch".to_string());
         }
         if matches!(
-            run.3.as_str(),
+            row.3.as_str(),
             "split_brain" | "local_missing" | "local_deleted"
         ) {
-            return Err(format!("capture cannot finalize from {}", run.3));
+            return Err(format!("capture cannot finalize from {}", row.3));
         }
         let finished_at_ms = now_ms();
-        let retain_until = run
+        let retain_until = row
             .4
             .unwrap_or(0)
             .max(finished_at_ms.saturating_add(AUDIO_RETENTION_MS));
@@ -600,7 +601,7 @@ impl Store {
             None,
             None,
             None,
-            Some(&run.3),
+            Some(&row.3),
             Some(next_state),
             integrity_failed.then_some("local_integrity_failed"),
             capture_run_id,

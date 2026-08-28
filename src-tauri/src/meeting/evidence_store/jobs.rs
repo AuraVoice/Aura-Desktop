@@ -1,5 +1,42 @@
 use super::*;
 
+/// One claimable row from the upload-job query, named so the lease and audit
+/// code below reads by field instead of tuple position.
+struct UploadJobRow {
+    job_id: String,
+    meeting_id: String,
+    capture_run_id: String,
+    seq: u32,
+    content_sha256: String,
+    attempt_count: u32,
+    event_id: String,
+    capture_fence: i64,
+    protocol_version: u8,
+    owner_uid: String,
+    start_ms: i64,
+    duration_ms: i64,
+    incomplete: bool,
+    byte_length: u64,
+    channel_count: u8,
+    sample_rate_hz: u32,
+    local_present: u32,
+}
+
+/// One claimable row from the completion-job query, same reasoning.
+struct CompletionJobRow {
+    job_id: String,
+    meeting_id: String,
+    capture_run_id: String,
+    manifest_sha256: String,
+    attempt_count: u32,
+    event_id: String,
+    capture_fence: i64,
+    protocol_version: u8,
+    owner_uid: String,
+    total_duration_ms: i64,
+    reason: String,
+}
+
 impl Store {
     pub fn claim_next_upload_job(
         &self,
@@ -12,25 +49,7 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(db_error)?;
         let timestamp = now_ms();
-        let candidate: Option<(
-            String,
-            String,
-            String,
-            u32,
-            String,
-            u32,
-            String,
-            i64,
-            u8,
-            String,
-            i64,
-            i64,
-            bool,
-            u64,
-            u8,
-            u32,
-            u32,
-        )> = tx
+        let candidate: Option<UploadJobRow> = tx
             .query_row(
                 "SELECT
                     j.job_id, j.meeting_id, j.capture_run_id, j.seq,
@@ -57,25 +76,25 @@ impl Store {
                  LIMIT 1",
                 params![owner_uid, timestamp],
                 |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get::<_, i64>(3)? as u32,
-                        row.get(4)?,
-                        row.get::<_, i64>(5)? as u32,
-                        row.get(6)?,
-                        row.get(7)?,
-                        row.get::<_, i64>(8)? as u8,
-                        row.get(9)?,
-                        row.get(10)?,
-                        row.get(11)?,
-                        row.get::<_, i64>(12)? != 0,
-                        row.get::<_, i64>(13)? as u64,
-                        row.get::<_, i64>(14)? as u8,
-                        row.get::<_, i64>(15)? as u32,
-                        row.get::<_, i64>(16)? as u32,
-                    ))
+                    Ok(UploadJobRow {
+                        job_id: row.get(0)?,
+                        meeting_id: row.get(1)?,
+                        capture_run_id: row.get(2)?,
+                        seq: row.get::<_, i64>(3)? as u32,
+                        content_sha256: row.get(4)?,
+                        attempt_count: row.get::<_, i64>(5)? as u32,
+                        event_id: row.get(6)?,
+                        capture_fence: row.get(7)?,
+                        protocol_version: row.get::<_, i64>(8)? as u8,
+                        owner_uid: row.get(9)?,
+                        start_ms: row.get(10)?,
+                        duration_ms: row.get(11)?,
+                        incomplete: row.get::<_, i64>(12)? != 0,
+                        byte_length: row.get::<_, i64>(13)? as u64,
+                        channel_count: row.get::<_, i64>(14)? as u8,
+                        sample_rate_hz: row.get::<_, i64>(15)? as u32,
+                        local_present: row.get::<_, i64>(16)? as u32,
+                    })
                 },
             )
             .optional()
@@ -84,11 +103,11 @@ impl Store {
             tx.commit().map_err(db_error)?;
             return Ok(None);
         };
-        if candidate.9 != owner_uid || candidate.16 == 0 {
+        if candidate.owner_uid != owner_uid || candidate.local_present == 0 {
             return Err("upload job ownership or local evidence check failed".to_string());
         }
         let lease_token = random_hex(16)?;
-        let attempt_count = candidate.5.saturating_add(1);
+        let attempt_count = candidate.attempt_count.saturating_add(1);
         let changed = tx
             .execute(
                 "UPDATE upload_jobs SET
@@ -100,7 +119,7 @@ impl Store {
                         OR (state='leased' AND lease_expires_at_ms<=?5)
                    )",
                 params![
-                    candidate.0,
+                    candidate.job_id,
                     attempt_count,
                     lease_token,
                     timestamp.saturating_add(JOB_LEASE_MS),
@@ -117,39 +136,39 @@ impl Store {
             "upload_attempted",
             owner_uid,
             Some(runtime_instance_id),
-            Some(&candidate.1),
-            Some(&candidate.2),
-            Some(candidate.7),
-            Some(&candidate.0),
+            Some(&candidate.meeting_id),
+            Some(&candidate.capture_run_id),
+            Some(candidate.capture_fence),
+            Some(&candidate.job_id),
             Some(attempt_count),
             Some(&lease_token),
             None,
             Some("leased"),
             None,
-            &candidate.2,
+            &candidate.capture_run_id,
             &json!({
-                "seq": candidate.3,
-                "content_sha256": candidate.4,
+                "seq": candidate.seq,
+                "content_sha256": candidate.content_sha256,
             }),
         )?;
         tx.commit().map_err(db_error)?;
         Ok(Some(QueueJobLease {
-            job_id: candidate.0,
+            job_id: candidate.job_id,
             lease_token,
             kind: "upload".to_string(),
-            meeting_id: candidate.1,
-            capture_run_id: candidate.2,
-            capture_fence: candidate.7,
-            protocol_version: candidate.8,
-            event_id: candidate.6,
-            seq: Some(candidate.3),
-            start_ms: Some(candidate.10),
-            duration_ms: Some(candidate.11),
-            incomplete: Some(candidate.12),
-            content_sha256: Some(candidate.4),
-            byte_length: Some(candidate.13),
-            channel_count: Some(candidate.14),
-            sample_rate_hz: Some(candidate.15),
+            meeting_id: candidate.meeting_id,
+            capture_run_id: candidate.capture_run_id,
+            capture_fence: candidate.capture_fence,
+            protocol_version: candidate.protocol_version,
+            event_id: candidate.event_id,
+            seq: Some(candidate.seq),
+            start_ms: Some(candidate.start_ms),
+            duration_ms: Some(candidate.duration_ms),
+            incomplete: Some(candidate.incomplete),
+            content_sha256: Some(candidate.content_sha256),
+            byte_length: Some(candidate.byte_length),
+            channel_count: Some(candidate.channel_count),
+            sample_rate_hz: Some(candidate.sample_rate_hz),
             manifest_sha256: None,
             segment_count: None,
             total_duration_ms: None,
@@ -171,19 +190,7 @@ impl Store {
             .transaction_with_behavior(TransactionBehavior::Immediate)
             .map_err(db_error)?;
         let timestamp = now_ms();
-        let candidate: Option<(
-            String,
-            String,
-            String,
-            String,
-            u32,
-            String,
-            i64,
-            u8,
-            String,
-            i64,
-            String,
-        )> = tx
+        let candidate: Option<CompletionJobRow> = tx
             .query_row(
                 "SELECT
                     j.job_id, j.meeting_id, j.capture_run_id,
@@ -229,19 +236,19 @@ impl Store {
                  LIMIT 1",
                 params![owner_uid, timestamp],
                 |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get::<_, i64>(4)? as u32,
-                        row.get(5)?,
-                        row.get(6)?,
-                        row.get::<_, i64>(7)? as u8,
-                        row.get(8)?,
-                        row.get(9)?,
-                        row.get(10)?,
-                    ))
+                    Ok(CompletionJobRow {
+                        job_id: row.get(0)?,
+                        meeting_id: row.get(1)?,
+                        capture_run_id: row.get(2)?,
+                        manifest_sha256: row.get(3)?,
+                        attempt_count: row.get::<_, i64>(4)? as u32,
+                        event_id: row.get(5)?,
+                        capture_fence: row.get(6)?,
+                        protocol_version: row.get::<_, i64>(7)? as u8,
+                        owner_uid: row.get(8)?,
+                        total_duration_ms: row.get(9)?,
+                        reason: row.get(10)?,
+                    })
                 },
             )
             .optional()
@@ -250,25 +257,26 @@ impl Store {
             tx.commit().map_err(db_error)?;
             return Ok(None);
         };
-        if candidate.8 != owner_uid {
+        if candidate.owner_uid != owner_uid {
             return Err("completion job ownership check failed".to_string());
         }
-        let segments = query_segments_tx(&tx, &candidate.2)?;
-        let computed_manifest = manifest_digest(&segments, candidate.9, &candidate.10);
-        if computed_manifest != candidate.3 {
+        let segments = query_segments_tx(&tx, &candidate.capture_run_id)?;
+        let computed_manifest =
+            manifest_digest(&segments, candidate.total_duration_ms, &candidate.reason);
+        if computed_manifest != candidate.manifest_sha256 {
             tx.execute(
                 "UPDATE completion_jobs SET state='terminal',
                     last_error_code='manifest_digest_changed',
                     last_error_at_ms=?2, updated_at_ms=?2
                  WHERE job_id=?1",
-                params![candidate.0, timestamp],
+                params![candidate.job_id, timestamp],
             )
             .map_err(db_error)?;
             tx.execute(
                 "UPDATE capture_runs SET state='split_brain',
                     last_error_code='manifest_digest_changed',
                     updated_at_ms=?2 WHERE capture_run_id=?1",
-                params![candidate.2, timestamp],
+                params![candidate.capture_run_id, timestamp],
             )
             .map_err(db_error)?;
             audit(
@@ -276,18 +284,18 @@ impl Store {
                 "completion_rejected",
                 owner_uid,
                 Some(runtime_instance_id),
-                Some(&candidate.1),
-                Some(&candidate.2),
-                Some(candidate.6),
-                Some(&candidate.0),
-                Some(candidate.4),
+                Some(&candidate.meeting_id),
+                Some(&candidate.capture_run_id),
+                Some(candidate.capture_fence),
+                Some(&candidate.job_id),
+                Some(candidate.attempt_count),
                 None,
                 Some("pending"),
                 Some("terminal"),
                 Some("manifest_digest_changed"),
-                &candidate.2,
+                &candidate.capture_run_id,
                 &json!({
-                    "expected": candidate.3,
+                    "expected": candidate.manifest_sha256,
                     "computed": computed_manifest,
                 }),
             )?;
@@ -295,7 +303,7 @@ impl Store {
             return Ok(None);
         }
         let lease_token = random_hex(16)?;
-        let attempt_count = candidate.4.saturating_add(1);
+        let attempt_count = candidate.attempt_count.saturating_add(1);
         let changed = tx
             .execute(
                 "UPDATE completion_jobs SET
@@ -307,7 +315,7 @@ impl Store {
                         OR (state='leased' AND lease_expires_at_ms<=?5)
                    )",
                 params![
-                    candidate.0,
+                    candidate.job_id,
                     attempt_count,
                     lease_token,
                     timestamp.saturating_add(JOB_LEASE_MS),
@@ -324,31 +332,31 @@ impl Store {
             "completion_attempted",
             owner_uid,
             Some(runtime_instance_id),
-            Some(&candidate.1),
-            Some(&candidate.2),
-            Some(candidate.6),
-            Some(&candidate.0),
+            Some(&candidate.meeting_id),
+            Some(&candidate.capture_run_id),
+            Some(candidate.capture_fence),
+            Some(&candidate.job_id),
             Some(attempt_count),
             Some(&lease_token),
             None,
             Some("leased"),
             None,
-            &candidate.2,
+            &candidate.capture_run_id,
             &json!({
-                "manifest_sha256": candidate.3,
+                "manifest_sha256": candidate.manifest_sha256,
                 "segment_count": segments.len(),
             }),
         )?;
         tx.commit().map_err(db_error)?;
         Ok(Some(QueueJobLease {
-            job_id: candidate.0,
+            job_id: candidate.job_id,
             lease_token,
             kind: "completion".to_string(),
-            meeting_id: candidate.1,
-            capture_run_id: candidate.2,
-            capture_fence: candidate.6,
-            protocol_version: candidate.7,
-            event_id: candidate.5,
+            meeting_id: candidate.meeting_id,
+            capture_run_id: candidate.capture_run_id,
+            capture_fence: candidate.capture_fence,
+            protocol_version: candidate.protocol_version,
+            event_id: candidate.event_id,
             seq: None,
             start_ms: None,
             duration_ms: None,
@@ -357,10 +365,10 @@ impl Store {
             byte_length: None,
             channel_count: None,
             sample_rate_hz: None,
-            manifest_sha256: Some(candidate.3),
+            manifest_sha256: Some(candidate.manifest_sha256),
             segment_count: Some(segments.len() as u32),
-            total_duration_ms: Some(candidate.9),
-            reason: Some(candidate.10),
+            total_duration_ms: Some(candidate.total_duration_ms),
+            reason: Some(candidate.reason),
             segment_digests: segments
                 .iter()
                 .map(|segment| segment.content_sha256.clone())
@@ -836,16 +844,27 @@ impl Store {
         runtime_instance_id: &str,
     ) -> Result<bool, String> {
         let conn = self.connect()?;
-        let run: Option<(String, String, i64, String)> = conn
+        let run: Option<(String, String, i64, String, String, String)> = conn
             .query_row(
-                "SELECT owner_uid, meeting_id, capture_fence, state
+                "SELECT owner_uid, meeting_id, capture_fence, state, event_id, installation_id
                  FROM capture_runs WHERE capture_run_id=?1",
                 params![capture_run_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
             )
             .optional()
             .map_err(db_error)?;
-        let Some((run_owner_uid, meeting_id, capture_fence, state)) = run else {
+        let Some((run_owner_uid, meeting_id, capture_fence, state, event_id, installation_id)) =
+            run
+        else {
             return Ok(false);
         };
         if run_owner_uid != owner_uid {
@@ -862,11 +881,15 @@ impl Store {
                 .map_err(db_error)?;
             drop(conn);
             self.finalize_capture(
-                owner_uid,
-                &meeting_id,
-                capture_run_id,
-                capture_fence,
-                runtime_instance_id,
+                &CaptureRunRef {
+                    owner_uid: owner_uid.to_string(),
+                    meeting_id,
+                    capture_run_id: capture_run_id.to_string(),
+                    capture_fence,
+                    event_id,
+                    runtime_instance_id: runtime_instance_id.to_string(),
+                    installation_id,
+                },
                 total_duration_ms.min(MAX_CAPTURE_DURATION_MS),
                 "capture_interrupted",
             )?;

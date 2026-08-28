@@ -6,14 +6,15 @@ impl Store {
         owner_uid: &str,
         meeting_id: &str,
         capture_run_id: &str,
-        destination_root: &Path,
-        include_audio: bool,
-        sanitized_log_lines: &[String],
+        request: &ExportRequest<'_>,
         decrypt: F,
     ) -> Result<ExportResult, String>
     where
         F: Fn(&SegmentRecoveryMetadata, &[u8]) -> Result<Vec<u8>, String>,
     {
+        let destination_root = request.destination_root;
+        let include_audio = request.include_audio;
+        let sanitized_log_lines = request.sanitized_log_lines;
         self.initialize()?;
         let snapshot = self.snapshot_for_owner(owner_uid)?;
         let capture = snapshot

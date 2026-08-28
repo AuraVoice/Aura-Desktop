@@ -31,7 +31,7 @@ impl MeetingRuntimeLease {
             let result = unsafe {
                 CreateMutexW(None, true, w!("Local\\com.aura.desktop.meeting-runtime-v2"))
             };
-            return match result {
+            match result {
                 Ok(handle) => {
                     let owns_runtime = unsafe { GetLastError() } != ERROR_ALREADY_EXISTS;
                     Self {
@@ -48,7 +48,7 @@ impl MeetingRuntimeLease {
                         handle: None,
                     }
                 }
-            };
+            }
         }
 
         #[cfg(not(windows))]

@@ -116,7 +116,7 @@ impl TraceSettings {
 
     pub fn excludes(&self, app: &str) -> bool {
         let app = app.to_ascii_lowercase();
-        self.excluded_apps.iter().any(|excluded| *excluded == app)
+        self.excluded_apps.contains(&app)
     }
 
     /// Sharing is genuinely on, under current terms. `sanitized` already

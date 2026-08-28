@@ -24,10 +24,10 @@ export function UpdateBanner({
     <div className="update-banner-copy" role="status">
       <strong>{copy.updatedNotice(updatedVersion)}</strong>
     </div>
-  ) : (
+  ) : version ? (
     <>
       <div className="update-banner-copy" role={phase === "failed" ? "alert" : "status"}>
-        <strong>{copy.ready(version!)}</strong>
+        <strong>{copy.ready(version)}</strong>
         <span>{messageFor(phase)}</span>
       </div>
       <div className="update-banner-actions">
@@ -35,7 +35,7 @@ export function UpdateBanner({
           type="button"
           className="update-banner-primary"
           disabled={phase === "installing"}
-          onClick={() => void install(version!, setPhase)}
+          onClick={() => void install(version, setPhase)}
         >
           {phase === "installing" ? copy.restartBusy : copy.restartIdle}
         </button>
@@ -43,13 +43,13 @@ export function UpdateBanner({
           type="button"
           className="update-banner-secondary"
           disabled={phase === "installing"}
-          onClick={() => void dismiss(version!)}
+          onClick={() => void dismiss(version)}
         >
           {copy.later}
         </button>
       </div>
     </>
-  );
+  ) : null;
 
   if (surface === "overlay") {
     return (

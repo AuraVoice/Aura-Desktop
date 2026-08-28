@@ -157,7 +157,7 @@ fn luhn_valid(digits: &str) -> bool {
         }
         sum += digit;
     }
-    sum % 10 == 0
+    sum.is_multiple_of(10)
 }
 
 /// A long unbroken token that mixes cases and digits is a key, a hash or a

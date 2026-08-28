@@ -126,11 +126,15 @@ fn receipts_and_manifest_are_bound_to_the_leased_evidence() {
 
     let manifest = store
         .finalize_capture(
-            "uid-1",
-            "meeting_1",
-            "run_1",
-            7,
-            "runtime_1",
+            &CaptureRunRef {
+                owner_uid: "uid-1".to_string(),
+                meeting_id: "meeting_1".to_string(),
+                capture_run_id: "run_1".to_string(),
+                capture_fence: 7,
+                event_id: "event-1".to_string(),
+                runtime_instance_id: "runtime_1".to_string(),
+                installation_id: "install_1".to_string(),
+            },
             1_000,
             "stopped_by_user",
         )
@@ -264,11 +268,15 @@ fn explicit_delete_removes_exact_files_and_keeps_receipt_metadata() {
     store.publish_segment(&metadata, b"cipher").unwrap();
     store
         .finalize_capture(
-            "uid-1",
-            "meeting_1",
-            "run_1",
-            7,
-            "runtime_1",
+            &CaptureRunRef {
+                owner_uid: "uid-1".to_string(),
+                meeting_id: "meeting_1".to_string(),
+                capture_run_id: "run_1".to_string(),
+                capture_fence: 7,
+                event_id: "event-1".to_string(),
+                runtime_instance_id: "runtime_1".to_string(),
+                installation_id: "install_1".to_string(),
+            },
             1_000,
             "stopped_by_user",
         )
