@@ -31,7 +31,7 @@ export function DashboardTitleBar({
             title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
             aria-expanded={!collapsed}
           >
-            <PanelLeftClose size={18} className="db-collapse-icon" aria-hidden />
+            <PanelLeftClose size={20} className="db-collapse-icon" aria-hidden />
           </button>
         </div>
       )}

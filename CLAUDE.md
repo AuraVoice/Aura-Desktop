@@ -39,6 +39,24 @@ Conversations, Drafts, and Saved (`src/dashboard/pages/`) read the user's real c
 
 The client is `src/lib/dashboardApi.ts` (typed, snake_case→camelCase, layered on `authFetch`). Fetch state goes through `useDashboardResource.ts` (stale-while-revalidate: in-memory-over-disk cache via `dashboardCache.ts`, freshness gate, single-flight, hard timeout, out-of-order guard). Screen-save `image_url`s are ephemeral signed URLs - the cache strips them (`toCache`) and they render only from a live fetch. UI is a data-driven fixed shell (`components/DashboardCard` fed a `CardModel`, `CardGrid`, `DetailModal`, `RangeChips`); keep the three-layer split (contracts / cache+fetch / presentational) when extending it. Open external links with `openUrl` from `@tauri-apps/plugin-opener`, never a bare `<a target="_blank">` (the webview ignores those).
 
+## Visual language: bright glassmorphism, not flat surfaces
+
+Any new card, panel, tile, or surface in the dashboard or onboarding must use the bright glass recipe, never a flat `var(--db-surface)` fill with a grey border (that is the dated 2005 look that got redesigned out in 2026-08). The canonical recipe, shared by onboarding (`src/overlay/PrivacySetupStep.css`, `src/overlay/OnboardingFlow.css`) and the dashboard stat/briefing cards (`.db-card`, `.db-today-briefing`, `.db-insight-summary-card` in `src/dashboard/dashboard.css`):
+
+```css
+border: 1px solid rgba(255, 255, 255, 0.82);
+background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
+box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
+backdrop-filter: blur(18px) saturate(1.2);   /* always with the -webkit- twin */
+```
+
+Rules that follow from it:
+
+- Everything INSIDE a glass surface must be alpha-based too: hovers use translucent white (e.g. `rgba(255, 255, 255, 0.5)`), dividers use soft `rgba(63, 86, 78, 0.1)`, never opaque `--db-border` or cream fills. One opaque child punches a hole in the glass.
+- Interactive glass elements get the hover sheen sweep: a rotated white-gradient `::after` bar animated across on hover (`db-glass-sheen` in dashboard.css, ported from `onboarding-glass-sheen`). The parent needs `position: relative; overflow: hidden;`.
+- Icons sit bare on the glass (tone-colored glyph, optional soft radial `::before` glow), no boxed chip behind them. Idle animations are long-period and low-amplitude; `.db-reduce-motion` already stills everything app-wide, so no per-animation guard.
+- A hand-rolled SVG icon next to lucide glyphs must match lucide's optical live area (~20 of 24 viewBox units); crop the viewBox to the artwork's bounding box rather than redrawing (see `StreakFlameIcon` in `HomePage.tsx`).
+
 ## Desktop notifications
 
 `src/lib/desktopNotifications.ts` is the ONE broker every producer calls (local Rust/JS events and backend events polled from the outbox). It owns the durable inbox, dedup, permission, and the toast-once guarantee (delivered ids persist across restart, so a relaunch never replays a toast). Two non-obvious rules:

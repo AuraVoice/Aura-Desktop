@@ -3,7 +3,6 @@ import {
   CalendarClock,
   Clock,
   FileText,
-  Flame,
   ListChecks,
   Sparkles,
   Timer,
@@ -55,11 +54,37 @@ function activeStreak(values: string[]): number {
   return result;
 }
 
-/// Per-card icon color. Each stat gets its own muted hue and a matching idle
+/// Per-card icon color. Each stat gets its own hue and a matching idle
 /// animation in dashboard.css, so the four cards read apart at a glance
 /// instead of being one wall of teal chips. Reduce motion stills all of them
 /// via the existing `.db-reduce-motion` rule.
 type CardTone = "ember" | "violet" | "cyan" | "slate";
+
+/// Filled streak flame in the Snapchat fire ramp (red base, amber tip, pale
+/// core). Lucide's Flame is a single-color stroke; a streak flame only reads
+/// as "fire" with the gradient fill, so this one is hand-rolled. Same size
+/// contract as a lucide icon so AnalyticsCard treats them alike.
+function StreakFlameIcon({ size = 18 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="4 1.9 16 20.6" fill="none" aria-hidden>
+      <defs>
+        <linearGradient id="streak-flame-fill" x1="12" y1="2" x2="12" y2="22" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stopColor="#ffdf5e" />
+          <stop offset="0.5" stopColor="#ff8a3c" />
+          <stop offset="1" stopColor="#f13c1f" />
+        </linearGradient>
+      </defs>
+      <path
+        fill="url(#streak-flame-fill)"
+        d="M12.9 2.4c.2-.3.6-.3.8 0 1.6 2.3 1.9 4.5 1.2 6.7 .5-.3 1-.8 1.4-1.5 .2-.3 .5-.3 .7 0 1.4 2 2.5 4.4 2.5 6.9 0 4.2-3.4 7.5-7.5 7.5S4.5 18.7 4.5 14.5c0-3.1 1.7-5.6 3.4-7.5 1.7-1.9 3.6-3.3 5-4.6Z"
+      />
+      <path
+        fill="#fff3c4"
+        d="M12.2 12.1c.1-.2.4-.2.6 0 1.2 1.3 2.4 2.8 2.4 4.4 0 1.8-1.4 3.2-3.2 3.2s-3.2-1.4-3.2-3.2c0-1.7 1.2-3.1 2.4-4.4 .3-.4 .7-.7 1-1Z"
+      />
+    </svg>
+  );
+}
 
 function AnalyticsCard({
   Icon,
@@ -69,7 +94,7 @@ function AnalyticsCard({
   accent = false,
   tone,
 }: {
-  Icon: LucideIcon;
+  Icon: LucideIcon | typeof StreakFlameIcon;
   label: string;
   value: string;
   sub: string;
@@ -81,7 +106,7 @@ function AnalyticsCard({
       <div className="db-card-head">
         <span className="db-card-label">{label}</span>
         <span className={`db-card-icon${tone ? ` is-${tone}` : ""}`}>
-          <Icon size={18} aria-hidden />
+          <Icon size={22} aria-hidden />
         </span>
       </div>
       <div className="db-card-value">{value}</div>
@@ -265,7 +290,7 @@ function TodayBriefing({
       </div>
       <div className="db-today-briefing-grid">
         <button type="button" onClick={() => navigate("/connectors")}>
-          <span className="db-today-briefing-icon"><CalendarClock size={17} aria-hidden /></span>
+          <span className="db-today-briefing-icon"><CalendarClock size={20} aria-hidden /></span>
           <span>
             <small>Schedule</small>
             <strong>
@@ -292,7 +317,7 @@ function TodayBriefing({
             )
           }
         >
-          <span className="db-today-briefing-icon"><FileText size={17} aria-hidden /></span>
+          <span className="db-today-briefing-icon"><FileText size={20} aria-hidden /></span>
           <span>
             <small>Continue</small>
             <strong>{resumeItem?.title || "Nothing waiting"}</strong>
@@ -300,7 +325,7 @@ function TodayBriefing({
           </span>
         </button>
         <button type="button" onClick={() => navigate("/meetings")}>
-          <span className="db-today-briefing-icon"><ListChecks size={17} aria-hidden /></span>
+          <span className="db-today-briefing-icon"><ListChecks size={20} aria-hidden /></span>
           <span>
             <small>Follow-ups</small>
             <strong>
@@ -392,7 +417,7 @@ export function HomePage() {
           >
             {(items) => (
               <div className="db-list">
-                {items.map((item) => (
+                {items.slice(0, 5).map((item) => (
                   <button
                     type="button"
                     className="db-list-item db-list-item-button"
@@ -419,7 +444,7 @@ export function HomePage() {
 
         <aside className="db-analytics">
           <AnalyticsCard
-            Icon={Flame}
+            Icon={StreakFlameIcon}
             label="Active streak"
             value={`${streak} day${streak === 1 ? "" : "s"}`}
             sub="Consecutive days with Aura"

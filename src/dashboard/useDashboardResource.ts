@@ -55,6 +55,14 @@ export function DashboardResourceScope({
   return createElement(DashboardResourceScopeContext.Provider, { value: uid }, children);
 }
 
+/** The authenticated uid the dashboard is scoped to, for hooks that manage
+ * their own cache entries outside useDashboardResource. */
+export function useDashboardScopeUid(): string {
+  const uid = useContext(DashboardResourceScopeContext);
+  if (!uid) throw new Error("useDashboardScopeUid requires an authenticated dashboard scope");
+  return uid;
+}
+
 export interface ResourceState<T> {
   data: T | null;
   /** Cold load with nothing to show yet - render skeletons. */

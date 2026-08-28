@@ -230,6 +230,33 @@ export async function getMeeting(
   return parseMeetingDoc(raw);
 }
 
+// ── Voice profile (Insights persona card) ─────────────────────────────────
+export interface VoiceProfile {
+  title: string;
+  blurb: string;
+  generatedAt: string;
+}
+
+interface RawVoiceProfileResponse {
+  profile?: { title?: string; blurb?: string; generated_at?: string } | null;
+}
+
+/** Null on ANY failure, including a backend that predates the endpoint (404):
+ * the persona card simply stays hidden rather than erroring the page. */
+export async function getVoiceProfile(signal?: AbortSignal): Promise<VoiceProfile | null> {
+  try {
+    const raw = await authGetJson<RawVoiceProfileResponse>("/insights/voice-profile", signal);
+    if (!raw.profile?.title || !raw.profile.blurb) return null;
+    return {
+      title: raw.profile.title,
+      blurb: raw.profile.blurb,
+      generatedAt: raw.profile.generated_at ?? "",
+    };
+  } catch {
+    return null;
+  }
+}
+
 // ── Usage ────────────────────────────────────────────────────────────────
 export interface Usage {
   voiceMinutesUsed: number;

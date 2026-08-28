@@ -12,17 +12,14 @@ import { createPortal } from "react-dom";
 import { invoke } from "@tauri-apps/api/core";
 import {
   AudioLines,
-  Bot,
   Check,
-  Clock3,
   FileText,
   Info,
   Keyboard,
   Monitor,
   MousePointer2,
   Save,
-  Share2,
-  Sparkles,
+  Share,
   Video,
 } from "lucide-react";
 import {
@@ -30,12 +27,16 @@ import {
   getHistorySessions,
   getMeetings,
   getScreenSaves,
+  getVoiceProfile,
   type HistorySessions,
   type RawDraft,
   type RawScreenSave,
+  type VoiceProfile,
 } from "../../lib/dashboardApi";
 import type { MeetingDoc } from "../../lib/meetings";
+import { durationSeconds, formatHour, peakMoment } from "../../lib/voiceInsights";
 import { durationCoarse as formatDuration } from "../format";
+import { useVoiceLexicon } from "../useVoiceLexicon";
 import { PageError } from "../components/PageError";
 import { RefreshIndicator } from "../components/RefreshIndicator";
 import { useDashboardResource } from "../useDashboardResource";
@@ -133,20 +134,6 @@ function longestStreak(dates: string[]): number {
   return longest;
 }
 
-function durationSeconds(value: string): number {
-  const clock = value.trim().match(/^(?:(\d+):)?(\d+):(\d+)$/);
-  if (clock) {
-    return Number(clock[1] ?? 0) * 3600 + Number(clock[2]) * 60 + Number(clock[3]);
-  }
-  const human = value.trim().match(/^(?:(\d+)h\s*)?(?:(\d+)m\s*)?(?:(\d+)s)?$/i);
-  if (!human || !human.slice(1).some(Boolean)) return 0;
-  return (
-    Number(human[1] ?? 0) * 3600 +
-    Number(human[2] ?? 0) * 60 +
-    Number(human[3] ?? 0)
-  );
-}
-
 function comparisonLabel(current: number, previous: number): string {
   if (current === 0 && previous === 0) return "No activity yet";
   if (previous === 0) return current > 0 ? "New this period" : "No change";
@@ -168,7 +155,7 @@ function CountingNumber({ value }: { value: number }) {
     setDisplayValue("0");
     const animate = (now: number) => {
       startedAt ??= now;
-      const progress = Math.min(1, (now - startedAt) / 2_000);
+      const progress = Math.min(1, (now - startedAt) / 800);
       setDisplayValue(Math.floor(value * progress).toLocaleString());
       if (progress < 1) {
         frame = window.requestAnimationFrame(animate);
@@ -194,6 +181,7 @@ function SummaryCard({
   animateValue = false,
   children,
   wide = false,
+  valueClassName,
 }: {
   label: string;
   value: string | number;
@@ -201,11 +189,12 @@ function SummaryCard({
   animateValue?: boolean;
   children?: React.ReactNode;
   wide?: boolean;
+  valueClassName?: string;
 }) {
   const tooltipId = useId();
   return (
     <article className={`db-insight-summary-card${wide ? " is-wide" : ""}`}>
-      <strong className="db-insight-summary-value">
+      <strong className={`db-insight-summary-value${valueClassName ? ` ${valueClassName}` : ""}`}>
         {typeof value === "number"
           ? animateValue ? <CountingNumber value={value} /> : value.toLocaleString()
           : value}
@@ -244,7 +233,7 @@ function Gauge({ value, label }: { value: number; label: string }) {
         { strokeDashoffset: String(100 - bounded) },
       ],
       {
-        duration: 3_000,
+        duration: 800,
         easing: "cubic-bezier(0.4, 0, 0.2, 1)",
         fill: "both",
       },
@@ -336,6 +325,24 @@ export function InsightsPage() {
       cancelled = true;
     };
   }, []);
+
+  const lexicon = useVoiceLexicon(res.data?.history.sessions);
+  const profileRes = useDashboardResource<VoiceProfile | null>(
+    "insights:voice-profile",
+    (signal) => getVoiceProfile(signal),
+    { freshnessMs: 60 * 60_000 },
+  );
+  const voiceProfile = profileRes.data;
+  // A habit metric, not a range stat: computed over the full fetched history
+  // (16 weeks) so it does not vanish when the 7d window holds few sessions.
+  const peak = useMemo(() => {
+    if (!res.data) return null;
+    return peakMoment(res.data.history.sessions.map((item) => new Date(item.started_at)));
+  }, [res.data]);
+  const paceWpm =
+    lexicon && lexicon.minedSeconds > 0 && lexicon.totalDialogueWords > 0
+      ? Math.round(lexicon.totalDialogueWords / (lexicon.minedSeconds / 60))
+      : null;
 
   const metrics = useMemo(() => {
     if (!res.data) return null;
@@ -493,9 +500,20 @@ export function InsightsPage() {
 
   async function shareInsights() {
     if (!metrics) return;
-    const text = `Aura insights: ${metrics.conversations} conversations, ${formatDuration(
-      metrics.voiceSeconds,
-    )} of voice time, and a ${metrics.streak}-day streak.`;
+    let text: string;
+    if (tab === "voice") {
+      const bits = [`${formatDuration(metrics.voiceSeconds)} of voice time`];
+      if (paceWpm !== null) bits.push(`a ${paceWpm} wpm talking pace`);
+      if (lexicon?.catchphrases[0]) {
+        bits.push(`my catchphrase "${lexicon.catchphrases[0].word}"`);
+      }
+      if (peak) bits.push(`a ${peak.weekday} ${formatHour(peak.hour)} peak hour`);
+      text = `My Aura voice insights: ${bits.join(", ")}.`;
+    } else {
+      text = `Aura insights: ${metrics.conversations} conversations, ${formatDuration(
+        metrics.voiceSeconds,
+      )} of voice time, and a ${metrics.streak}-day streak.`;
+    }
     try {
       if (navigator.share) {
         await navigator.share({ title: "My Aura insights", text });
@@ -566,35 +584,6 @@ export function InsightsPage() {
       ]
     : [];
 
-  const voiceRows: UsageRow[] = metrics
-    ? [
-        {
-          Icon: AudioLines,
-          label: "conversations",
-          value: metrics.conversations,
-          displayValue: `${metrics.conversations} conversations`,
-        },
-        {
-          Icon: Sparkles,
-          label: "dialogue exchanges",
-          value: metrics.exchanges,
-          displayValue: `${metrics.exchanges} exchanges`,
-        },
-        {
-          Icon: Bot,
-          label: "tool calls",
-          value: metrics.toolCalls,
-          displayValue: `${metrics.toolCalls} tool calls`,
-        },
-        {
-          Icon: Monitor,
-          label: "screen context",
-          value: metrics.screenFrames,
-          displayValue: `${metrics.screenFrames} screen frames`,
-        },
-      ]
-    : [];
-
   return (
     <div className="db-page db-page-full db-insights-page">
       <header className="db-insight-header">
@@ -616,24 +605,28 @@ export function InsightsPage() {
           </div>
         </div>
         <div className="db-insight-header-actions">
-          <div className="db-insight-range" aria-label="Insights range">
-            {(["7d", "30d"] as const).map((item) => (
-              <button
-                type="button"
-                key={item}
-                className={range === item ? "is-active" : ""}
-                onClick={() => setRange(item)}
-              >
-                {item === "7d" ? "7 days" : "30 days"}
-              </button>
-            ))}
+          <div className="db-insight-range-group">
+            <div className="db-insight-range" aria-label="Insights range">
+              {(["7d", "30d"] as const).map((item) => (
+                <button
+                  type="button"
+                  key={item}
+                  className={range === item ? "is-active" : ""}
+                  onClick={() => setRange(item)}
+                >
+                  {item === "7d" ? "7 days" : "30 days"}
+                </button>
+              ))}
+            </div>
+            {/* cachedAt stays null by design: the "Updated <time>" line is
+                permanently suppressed here; refreshing and retry states remain. */}
+            <RefreshIndicator
+              refreshing={res.refreshing}
+              stale={res.stale}
+              cachedAt={null}
+              onRetry={res.reload}
+            />
           </div>
-          <RefreshIndicator
-            refreshing={res.refreshing}
-            stale={res.stale}
-            cachedAt={res.cachedAt}
-            onRetry={res.reload}
-          />
           <button
             type="button"
             className={`db-insight-share${shareState === "done" ? " is-done" : ""}`}
@@ -642,8 +635,20 @@ export function InsightsPage() {
             disabled={!metrics}
             onClick={() => void shareInsights()}
           >
-            {shareState === "done" ? <Check size={21} aria-hidden /> : <Share2 size={21} aria-hidden />}
-            <span>Share</span>
+            <svg className="db-insight-share-ring" viewBox="0 0 100 100" aria-hidden>
+              <defs>
+                <path
+                  id="db-insight-share-ring-path"
+                  d="M 50 50 m -38 0 a 38 38 0 1 1 76 0 a 38 38 0 1 1 -76 0"
+                />
+              </defs>
+              <text>
+                <textPath href="#db-insight-share-ring-path">
+                  · SHARE · SHARE · SHARE ·
+                </textPath>
+              </text>
+            </svg>
+            {shareState === "done" ? <Check size={22} aria-hidden /> : <Share size={22} aria-hidden />}
           </button>
           <span className="db-sr-only" aria-live="polite">
             {shareState === "done"
@@ -756,13 +761,22 @@ export function InsightsPage() {
                   label="Dialogue exchanges"
                   value={metrics.exchanges}
                   detail="User and Aura turns in this period"
-                  wide
                 >
-                  <div className="db-insight-device">
-                    <span><Clock3 size={19} aria-hidden /> Voice activity</span>
-                    <strong>{formatDuration(metrics.voiceSeconds)}</strong>
-                    <span className="db-insight-comparison">
-                      {comparisonLabel(metrics.voiceSeconds, metrics.previousVoiceSeconds)}
+                  <div className="db-insight-breakdown">
+                    <span><strong>{metrics.toolCalls}</strong> tool calls</span>
+                    <span><strong>{metrics.screenFrames}</strong> screen frames</span>
+                  </div>
+                </SummaryCard>
+                <SummaryCard
+                  label="Talking pace"
+                  value={paceWpm !== null ? `${paceWpm} wpm` : "…"}
+                  detail="Estimated dialogue words per minute across your recent conversations, computed on this device. Typical conversation runs 140 to 160 wpm; pauses and thinking time count against the clock."
+                >
+                  <div className="db-insight-breakdown">
+                    <span>
+                      {paceWpm !== null
+                        ? "Across recent conversations"
+                        : "Reading your conversations"}
                     </span>
                   </div>
                 </SummaryCard>
@@ -770,17 +784,16 @@ export function InsightsPage() {
             )}
           </section>
 
+          {tab === "usage" ? (
           <section className="db-insight-lower-grid" key={`details-${tab}-${range}`}>
             <article className="db-insight-panel db-insight-usage">
               <div className="db-insight-panel-head">
-                <h3>{tab === "usage" ? "Desktop usage" : "Voice activity"}</h3>
+                <h3>Desktop usage</h3>
                 <span>
-                  {tab === "usage"
-                    ? `${usageRows.filter((row) => row.value > 0).length} active categories`
-                    : `${metrics.conversations} conversations`}
+                  {`${usageRows.filter((row) => row.value > 0).length} active categories`}
                 </span>
               </div>
-              <UsageBars rows={tab === "usage" ? usageRows : voiceRows} />
+              <UsageBars rows={usageRows} />
             </article>
 
             <article className="db-insight-panel db-insight-streak-panel">
@@ -827,12 +840,94 @@ export function InsightsPage() {
               </div>
             </article>
           </section>
+          ) : (
+          <section
+            className="db-insight-voice-grid"
+            key={`voice-cards-${range}`}
+            aria-label="Voice highlights"
+          >
+            {voiceProfile && (
+              <article className="db-insight-summary-card is-hero db-insight-persona">
+                <span className="db-insight-persona-kicker">Voice profile</span>
+                <strong className="db-insight-persona-title">{voiceProfile.title}</strong>
+                <p className="db-insight-persona-blurb">{voiceProfile.blurb}</p>
+                <span className="db-insight-persona-footnote">
+                  Based on your recent conversations
+                </span>
+              </article>
+            )}
+            <div className="db-insight-voice-stack">
+            <SummaryCard
+              label="Catchphrase"
+              value={
+                lexicon?.catchphrases[0]
+                  ? `"${lexicon.catchphrases[0].word}"`
+                  : "Learning your style"
+              }
+              detail="Your most repeated phrases across recent voice conversations. Computed on this device."
+              valueClassName="is-quote"
+            >
+              <div className="db-insight-breakdown">
+                {lexicon?.catchphrases[0] ? (
+                  <>
+                    <span>
+                      Said <strong>{lexicon.catchphrases[0].count}</strong> times recently
+                    </span>
+                    {lexicon.catchphrases.slice(1).map((phrase) => (
+                      <span key={phrase.word}>
+                        "{phrase.word}" <strong>{phrase.count}</strong> times
+                      </span>
+                    ))}
+                  </>
+                ) : (
+                  <span>Keep talking, Aura is still learning your style</span>
+                )}
+              </div>
+            </SummaryCard>
+            <SummaryCard
+              label="Most used word"
+              value={lexicon?.topWords[0] ? `"${lexicon.topWords[0].word}"` : "Learning your style"}
+              detail="The word you say most in voice conversations. Computed on this device."
+              valueClassName="is-quote"
+            >
+              <div className="db-insight-breakdown">
+                {lexicon && lexicon.topWords.length > 1 ? (
+                  lexicon.topWords.slice(1).map((entry) => (
+                    <span key={entry.word}>
+                      "{entry.word}" <strong>{entry.count}</strong> times
+                    </span>
+                  ))
+                ) : lexicon?.topWords[0] ? (
+                  <span>Said <strong>{lexicon.topWords[0].count}</strong> times recently</span>
+                ) : (
+                  <span>Keep talking, Aura is still learning your style</span>
+                )}
+              </div>
+            </SummaryCard>
+            </div>
+            <SummaryCard
+              label="Your peak time"
+              value={peak ? `${peak.weekday} at ${formatHour(peak.hour)}` : "Still learning"}
+              detail="When you most often start voice conversations, across your recent history"
+            >
+              <p className="db-insight-peak-blurb">
+                {peak
+                  ? `${peak.weekday} at ${formatHour(peak.hour)} is your window for voice ` +
+                    `conversations with Aura. ${peak.count} of your recent sessions started ` +
+                    `around then, about ${Math.max(1, Math.round(peak.share * 100))}% of ` +
+                    "everything you have talked through lately."
+                  : "A few more conversations will reveal your rhythm."}
+              </p>
+            </SummaryCard>
+          </section>
+          )}
 
-          <aside className="db-insight-note">
-            <Info size={15} aria-hidden />
+          <aside className={`db-insight-note${tab === "voice" ? " is-voice" : ""}`}>
+            {tab !== "voice" && <Info size={15} aria-hidden />}
             <span>
-              Insights use verified activity available across your Aura account. Some
-              saved, draft, and meeting history may be capped.
+              {tab === "voice"
+                ? "Catchphrases, words, and pace are computed on this device from your own conversations. Your insights stay private to your Aura account and are never shared."
+                : "Insights use verified activity available across your Aura account. Some saved, draft, and meeting history may be capped."}
             </span>
           </aside>
           {heatmapTooltip && tooltipRoot && createPortal(
