@@ -18,7 +18,12 @@ use log::{error, info, warn};
 use wasapi::{DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat};
 
 pub(crate) const SAMPLE_RATE: usize = 16_000;
-const CAPTURE_POLL: Duration = Duration::from_millis(40);
+// Drained every tick, so this is the dominant per-cycle capture latency for the
+// interview companion (the WASAPI buffer_duration_hns below is ring CAPACITY, not
+// delay). 20ms halves the average add over the old 40ms while draining Meeting
+// Notes' shared stream more often, not less, so it never reduces that lossless
+// consumer's starvation tolerance.
+const CAPTURE_POLL: Duration = Duration::from_millis(20);
 const DEVICE_CHECK_EVERY: Duration = Duration::from_secs(2);
 const MAX_REOPEN_ATTEMPTS: u32 = 5;
 // Wait between a failed capture attempt and the next open, scaled by attempt.

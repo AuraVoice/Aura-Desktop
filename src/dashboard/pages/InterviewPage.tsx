@@ -56,7 +56,16 @@ import {
   type InterviewWorkspace,
   type InterviewWorkspaceRecord,
 } from "../../lib/interviewWorkspace";
+import {
+  listInterviewSessions,
+  loadInterviewSession,
+  deleteInterviewSession,
+  clearInterviewSessions,
+  type InterviewSessionSummary,
+  type InterviewSessionDetail,
+} from "../../lib/interviewSessions";
 import { logError } from "../../lib/log";
+import { shortDateTime } from "../format";
 import { useAuth } from "../../state/AuthProvider";
 import "./InterviewPage.css";
 
@@ -74,7 +83,7 @@ const EMPTY_INPUT: InterviewPreparationInput = {
   answerLength: "balanced",
 };
 
-type InterviewPageTab = "current" | "history";
+type InterviewPageTab = "current" | "preparation" | "sessions";
 type InterviewTabTransition = "idle" | "exiting" | "entering";
 
 const UPDATED_AT_FORMATTER = new Intl.DateTimeFormat(undefined, {
@@ -1021,6 +1030,225 @@ function InterviewHistoryPanel({
   );
 }
 
+const ROUND_LABEL: Record<string, string> = Object.fromEntries(
+  ROUND_KIND_OPTIONS.map((option) => [option.value, option.label]),
+);
+
+function sessionDurationMinutes(session: InterviewSessionSummary): number {
+  return Math.max(0, Math.round((session.endedAtMs - session.startedAtMs) / 60_000));
+}
+
+/** Past interview rounds, read from the local encrypted store. Unlike the
+ * Preparation tab (saved briefs), these are the actual transcripts and answers
+ * from sessions the user ran. Local-only: the backend never held them. */
+function InterviewSessionsPanel({ uid }: { uid: string | null }) {
+  const [sessions, setSessions] = useState<InterviewSessionSummary[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [detail, setDetail] = useState<InterviewSessionDetail | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const [confirmingClear, setConfirmingClear] = useState(false);
+
+  useEffect(() => {
+    if (!uid) {
+      setSessions([]);
+      setLoading(false);
+      return;
+    }
+    let active = true;
+    setLoading(true);
+    listInterviewSessions(uid)
+      .then((rows) => {
+        if (active) setSessions(rows);
+      })
+      .catch((error) => logError("InterviewPage: list sessions", error))
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [uid]);
+
+  const openDetail = (sessionId: string) => {
+    if (!uid) return;
+    setDetailOpen(true);
+    setDetail(null);
+    loadInterviewSession(uid, sessionId)
+      .then((loaded) => setDetail(loaded))
+      .catch((error) => logError("InterviewPage: load session", error));
+  };
+
+  const removeSession = (sessionId: string) => {
+    if (!uid) return;
+    setPendingDeleteId(null);
+    setSessions((current) => current.filter((row) => row.sessionId !== sessionId));
+    deleteInterviewSession(uid, sessionId).catch((error) =>
+      logError("InterviewPage: delete session", error),
+    );
+  };
+
+  const clearAll = () => {
+    if (!uid) return;
+    setConfirmingClear(false);
+    setSessions([]);
+    clearInterviewSessions(uid).catch((error) =>
+      logError("InterviewPage: clear sessions", error),
+    );
+  };
+
+  const detailTitle = detail
+    ? `${detail.company?.trim() || "Interview"}${detail.role ? ` · ${detail.role}` : ""}`
+    : "Interview session";
+
+  return (
+    <section
+      id="interview-sessions-panel"
+      className="db-interview-history"
+      role="tabpanel"
+      aria-labelledby="interview-sessions-tab"
+    >
+      <div className="db-interview-section-head">
+        <div>
+          <span className="db-interview-eyebrow">Past rounds</span>
+          <h2>Interview sessions</h2>
+          <p>The transcript and answers from each session you ran, kept on this device. Last 25 sessions or 90 days.</p>
+        </div>
+        {sessions.length > 0 && (
+          confirmingClear ? (
+            <div className="db-interview-delete-confirm" role="alert">
+              <p>Delete every stored session on this device?</p>
+              <div>
+                <button type="button" onClick={() => setConfirmingClear(false)}>Cancel</button>
+                <button type="button" className="is-danger" onClick={clearAll}>
+                  <Trash2 size={13} aria-hidden />
+                  Delete all
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button type="button" className="db-interview-delete-button" onClick={() => setConfirmingClear(true)}>
+              <Trash2 size={15} aria-hidden />
+              Delete all
+            </button>
+          )
+        )}
+      </div>
+
+      {loading ? (
+        <div className="db-interview-history-empty">
+          <Loader2 size={22} className="db-interview-spin" aria-hidden />
+          <div><strong>Loading sessions...</strong></div>
+        </div>
+      ) : sessions.length === 0 ? (
+        <div className="db-interview-history-empty">
+          <History size={22} aria-hidden />
+          <div>
+            <strong>No sessions yet</strong>
+            <span>Run Interview Companion and stop it, and the round will appear here.</span>
+          </div>
+        </div>
+      ) : (
+        <div className="db-interview-history-grid">
+          {sessions.map((session) => {
+            const isConfirmingDelete = pendingDeleteId === session.sessionId;
+            return (
+              <article key={session.sessionId} className="db-interview-history-card">
+                <div className="db-interview-history-card-top">
+                  <span className="db-interview-company-icon"><Building2 size={17} aria-hidden /></span>
+                  <span className="db-interview-history-status">
+                    {ROUND_LABEL[session.roundKind] ?? session.roundKind}
+                  </span>
+                </div>
+                <div className="db-interview-history-copy">
+                  <h3>{session.company?.trim() || "Interview"}</h3>
+                  <p>{session.role?.trim() || "Role not recorded"}</p>
+                </div>
+                <div className="db-interview-history-meta">
+                  <span>{shortDateTime(new Date(session.startedAtMs).toISOString())}</span>
+                  <span>{session.exchangeCount} answers</span>
+                  <span>{sessionDurationMinutes(session)} min</span>
+                </div>
+
+                {isConfirmingDelete ? (
+                  <div className="db-interview-delete-confirm" role="alert">
+                    <p>Delete this session's transcript from this device?</p>
+                    <div>
+                      <button type="button" onClick={() => setPendingDeleteId(null)}>Cancel</button>
+                      <button type="button" className="is-danger" onClick={() => removeSession(session.sessionId)}>
+                        <Trash2 size={13} aria-hidden />
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="db-interview-history-actions">
+                    <button type="button" className="db-interview-open-button" onClick={() => openDetail(session.sessionId)}>
+                      Open transcript
+                      <ArrowRight size={14} aria-hidden />
+                    </button>
+                    <button
+                      type="button"
+                      className="db-interview-delete-button"
+                      aria-label="Delete session"
+                      title="Delete session"
+                      onClick={() => setPendingDeleteId(session.sessionId)}
+                    >
+                      <Trash2 size={15} aria-hidden />
+                    </button>
+                  </div>
+                )}
+              </article>
+            );
+          })}
+        </div>
+      )}
+
+      <DetailModal open={detailOpen} title={detailTitle} onClose={() => setDetailOpen(false)}>
+        {!detail ? (
+          <div className="db-interview-session-detail-loading">
+            <Loader2 size={20} className="db-interview-spin" aria-hidden />
+            Loading transcript...
+          </div>
+        ) : (
+          <div className="db-interview-session-detail">
+            {detail.exchanges.length > 0 && (
+              <div className="db-interview-session-block">
+                <h4>Questions and answers</h4>
+                {detail.exchanges.map((exchange) => (
+                  <div key={`ex-${exchange.seq}`} className="db-interview-session-qa">
+                    <p className="db-interview-session-q">{exchange.question}</p>
+                    <p className="db-interview-session-a">
+                      {exchange.unverified && (
+                        <span className="db-interview-session-unverified">Not from brief</span>
+                      )}
+                      {exchange.answer}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+            {detail.turns.length > 0 && (
+              <div className="db-interview-session-block">
+                <h4>Full transcript</h4>
+                {detail.turns.map((turn) => (
+                  <p
+                    key={`turn-${turn.seq}`}
+                    className={`db-interview-session-turn is-${turn.source}`}
+                  >
+                    <span>{turn.source === "candidate" ? "You" : "Interviewer"}</span>
+                    {turn.text}
+                  </p>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </DetailModal>
+    </section>
+  );
+}
+
 export function InterviewPage() {
   const { user } = useAuth();
   const uid = user?.uid ?? null;
@@ -1122,7 +1350,7 @@ export function InterviewPage() {
         };
       }
       setWorkspace(restoredWorkspace);
-      const restoredTab = restoredActiveInterviewId ? "current" : restoredHasHistory ? "history" : "current";
+      const restoredTab = restoredActiveInterviewId ? "current" : restoredHasHistory ? "preparation" : "current";
       setTab(restoredTab);
       setRenderedTab(restoredTab);
       setPersistenceReady(true);
@@ -1436,23 +1664,37 @@ export function InterviewPage() {
         </button>
         <button
           type="button"
-          id="interview-history-tab"
+          id="interview-preparation-tab"
           role="tab"
           aria-controls="interview-history-panel"
-          aria-selected={tab === "history"}
-          className={tab === "history" ? "is-active" : ""}
-          onClick={() => switchTab("history")}
+          aria-selected={tab === "preparation"}
+          className={tab === "preparation" ? "is-active" : ""}
+          onClick={() => switchTab("preparation")}
+        >
+          <FileText size={15} aria-hidden />
+          Preparation
+          <span>{history.length}</span>
+        </button>
+        <button
+          type="button"
+          id="interview-sessions-tab"
+          role="tab"
+          aria-controls="interview-sessions-panel"
+          aria-selected={tab === "sessions"}
+          className={tab === "sessions" ? "is-active" : ""}
+          onClick={() => switchTab("sessions")}
         >
           <History size={15} aria-hidden />
-          History
-          <span>{history.length}</span>
+          Sessions
         </button>
       </div>
 
       <div className={`db-interview-tab-stage is-${tabTransition}`}>
       {error && <div className="db-interview-error">{error}</div>}
 
-      {renderedTab === "history" ? (
+      {renderedTab === "sessions" ? (
+        <InterviewSessionsPanel uid={uid} />
+      ) : renderedTab === "preparation" ? (
         <InterviewHistoryPanel
           interviews={history}
           activeInterviewId={workspace.activeInterviewId}

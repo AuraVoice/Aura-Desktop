@@ -26,14 +26,19 @@ export type RoundKind =
 export type PlannedMinutes = 15 | 30 | 45 | 60;
 
 /**
- * How the live answer is shaped on screen.
+ * How the live answer is shaped.
  *
- * Nobody reads a paragraph aloud while listening, so the default for most rounds
- * is a hook the candidate can say verbatim followed by keywords to riff on.
- * `prose` survives only for system design, where the precise phrasing of a
- * tradeoff is the answer and a bullet loses it.
+ * Every round now resolves to a spoken script the candidate reads almost
+ * verbatim, not keyword bullets. The distinction between rounds is register, not
+ * layout: conversational for behavioural-adjacent rounds, STAR narration for
+ * behavioural, concept-then-tradeoff for technical, and precise structured prose
+ * for system design where exact wording carries the answer.
  */
-export type AnswerShape = "hook_bullets" | "star_bullets" | "concept_steps" | "prose";
+export type AnswerShape =
+  | "script_conversational"
+  | "script_star"
+  | "script_technical"
+  | "script_structured";
 
 export type Segment = "intro" | "core" | "wrap";
 
@@ -79,12 +84,12 @@ const ASSEMBLY_MS: Record<RoundKind, number> = {
  * every request from a client that shipped ahead of the backend deploy.
  */
 const ANSWER_SHAPE: Record<RoundKind, AnswerShape> = {
-  hr_screen: "hook_bullets",
-  technical: "concept_steps",
-  system_design: "prose",
-  behavioral: "star_bullets",
-  hiring_manager: "hook_bullets",
-  final_exec: "hook_bullets",
+  hr_screen: "script_conversational",
+  technical: "script_technical",
+  system_design: "script_structured",
+  behavioral: "script_star",
+  hiring_manager: "script_conversational",
+  final_exec: "script_conversational",
 };
 
 export const DEFAULT_ROUND_KIND: RoundKind = "technical";

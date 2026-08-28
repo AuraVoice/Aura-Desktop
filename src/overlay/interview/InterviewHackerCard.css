@@ -252,9 +252,20 @@
   }
 }
 
+/* Relative host for the thread and the jump-to-latest pill, sized as the flex
+   child so the thread inside it absorbs the leftover card height. */
+.interview-hacker-thread-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 /* Stacked chat thread. Question left, answer right, same as any chat client.
-   The scrollbar is hidden rather than styled: this is the overlay window, not
-   .db-app, so the dashboard's app-wide scrollbar rule does not reach it. */
+   This is the overlay window, not .db-app, so the dashboard's app-wide scrollbar
+   rule does not reach it: a slim custom scrollbar is styled here so history above
+   the fold is discoverable (the old hidden scrollbar left it invisible). */
 .interview-hacker-thread {
   display: flex;
   flex-direction: column;
@@ -262,11 +273,43 @@
   flex: 1 1 auto;
   min-height: 72px;
   overflow-y: auto;
-  scrollbar-width: none;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
 }
 
 .interview-hacker-thread::-webkit-scrollbar {
-  display: none;
+  width: 4px;
+}
+
+.interview-hacker-thread::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.22);
+  border-radius: 4px;
+}
+
+.interview-hacker-thread::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Appears only when the reader has scrolled back off the tail. Re-arms
+   follow-the-tail and returns to the newest answer. */
+.interview-hacker-jump {
+  position: absolute;
+  bottom: 8px;
+  right: 12px;
+  padding: 5px 11px;
+  border: none;
+  border-radius: 999px;
+  background: rgba(20, 20, 22, 0.82);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14), 0 4px 12px rgba(0, 0, 0, 0.4);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  backdrop-filter: blur(6px);
+}
+
+.interview-hacker-jump:hover {
+  background: rgba(32, 32, 36, 0.9);
 }
 
 .interview-hacker-bubble {
@@ -302,9 +345,22 @@
 }
 
 /* pre-wrap lives on the text node, not the bubble, so the badge above it does
-   not have its surrounding JSX whitespace preserved. */
+   not have its surrounding JSX whitespace preserved. Answers are now full spoken
+   scripts rather than keyword bullets, so line-height opens up for readability,
+   and ::first-line gives the opening line (the part you say first) a touch more
+   weight. ::first-line is used instead of splitting the first sentence in JS,
+   which would flicker as the sentence boundary shifts during token streaming. */
 .interview-hacker-answer-text {
   white-space: pre-wrap;
+  line-height: 1.55;
+}
+
+.interview-hacker-bubble.is-answer {
+  max-width: 88%;
+}
+
+.interview-hacker-answer-text::first-line {
+  font-weight: 600;
 }
 
 .interview-hacker-unverified {

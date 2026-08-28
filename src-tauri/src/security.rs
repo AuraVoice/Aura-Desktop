@@ -516,7 +516,11 @@ pub fn session_changed(app: &AppHandle, signed_in: bool, uid: Option<String>) {
     // not only `revoked`, so a fresh sign-in that follows a crash (no sign-out
     // ever ran) still drops the previous account's cached messages before the
     // overlay can paint them.
-    crate::chat_cache::retain_only_for_session(app, session_uid);
+    crate::chat_cache::retain_only_for_session(app, session_uid.clone());
+    // Stored interview sessions are per-account for the same reason and get the
+    // same crash-safe boundary: the backend never holds these transcripts, so
+    // this is the only thing that isolates them across accounts.
+    crate::interview_store::retain_only_for_session(app, session_uid);
 }
 
 /// Voice lifecycle hook - called from the `set_voice_active` command and from

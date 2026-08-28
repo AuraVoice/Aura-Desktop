@@ -3,6 +3,7 @@ import { signOut } from "firebase/auth";
 import { auth } from "./firebase";
 import { clearDashboardCache } from "./dashboardCache";
 import { flushInterviewWorkspaceWrites } from "./interviewWorkspace";
+import { clearInterviewSessions } from "./interviewSessions";
 import { logError } from "./log";
 import { revokeSavedImages } from "./savedImageCache";
 
@@ -49,6 +50,14 @@ async function performSignOut(): Promise<void> {
     await signOut(auth);
     await flushInterviewWorkspaceWrites();
     await clearDashboardCache(departingUid);
+    // Locally stored interview transcripts are per-account. The native session
+    // hook already prunes on every transition; this is the explicit React-side
+    // drop, matching how the dashboard cache is cleared here.
+    if (departingUid) {
+      await clearInterviewSessions(departingUid).catch((err) =>
+        logError("signOutSession: clearInterviewSessions", err),
+      );
+    }
   } catch (err) {
     // A failed Firebase sign-out leaves the user authenticated. Restore the
     // native mirror so the signed-in UI and native authorization cannot split.

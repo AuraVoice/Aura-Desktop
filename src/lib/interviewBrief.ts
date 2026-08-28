@@ -287,6 +287,63 @@ function storyClaims(story: InterviewStarStory): InterviewBriefClaim[] {
   return [story.situation, story.task, story.action, story.result];
 }
 
+/**
+ * The brief slice for the live answer path: verified-first, deterministically
+ * truncated, and INDEPENDENT of the question, so it is byte-identical across a
+ * session's turns and the backend can hold it in a prompt cache instead of
+ * re-prefilling it every turn.
+ *
+ * It also removes the demotion the ranked slice caused: a reviewed brief asked
+ * an off-axis question could rank to an empty slice and silently drop the
+ * candidate into unverified mode. Natural-order truncation of a reviewed brief
+ * with candidate evidence always carries that evidence, so grounded stays
+ * grounded.
+ *
+ * Per-list caps stay at the ranked slice's counts, which sit under the server's
+ * InterviewBriefSlice max_length limits - a rich brief is bounded here rather
+ * than rejected at the wire.
+ */
+export function stableInterviewBriefSlice(
+  brief: InterviewBrief | null,
+): InterviewBriefSlice | null {
+  if (!brief || brief.reviewedAtMs === null) return null;
+  const verifiedStories = brief.starStories.filter(verifiedStory);
+  const slice: InterviewBriefSlice = {
+    contractVersion: 3,
+    briefId: brief.briefId,
+    company: brief.company,
+    role: brief.role,
+    sources: [],
+    targetFacts: brief.targetFacts.slice(0, 8),
+    candidateFacts: verified(brief.candidateFacts).slice(0, 6),
+    projects: verified(brief.projects).slice(0, 5),
+    starStories: verifiedStories.slice(0, 4),
+    metrics: verified(brief.metrics).slice(0, 6),
+    jdRequirements: brief.jdRequirements.slice(0, 6),
+    gaps: brief.gaps.slice(0, 8),
+    doNotClaim: brief.doNotClaim.slice(0, 8),
+    answerLength: brief.answerLength,
+    likelyInterviewerQuestions: [],
+  };
+  const claims = [
+    ...(slice.company ? [slice.company] : []),
+    ...(slice.role ? [slice.role] : []),
+    ...slice.targetFacts,
+    ...slice.candidateFacts,
+    ...slice.projects,
+    ...slice.starStories.flatMap(storyClaims),
+    ...slice.metrics,
+    ...slice.jdRequirements,
+    ...slice.gaps,
+    ...slice.doNotClaim,
+  ];
+  const sourceIds = new Set(claims.flatMap((claim) => claim.sourceIds));
+  slice.sources = brief.sources
+    .filter((source) => sourceIds.has(source.sourceId))
+    .map(({ text: _text, ...source }) => source);
+  return slice;
+}
+
 export function relevantInterviewBriefSlice(
   brief: InterviewBrief | null,
   question: string,

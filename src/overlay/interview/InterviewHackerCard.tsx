@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import iconUrl from "../../assets/icons/Aura-Icon.png";
 import { GlassSurface } from "../GlassSurface";
 import { DocumentIcon, MicIcon, MicOffIcon, StopSquareIcon, UploadArrowIcon } from "../icons";
@@ -10,7 +10,7 @@ import { isInterviewCaptureActive } from "./useInterviewHacker";
 import type { InterviewExchange, InterviewHackerState } from "./useInterviewHacker";
 import "./InterviewHackerCard.css";
 
-export const INTERVIEW_HACKER_SLOT_HEIGHT = 360;
+export const INTERVIEW_HACKER_SLOT_HEIGHT = 420;
 /** Preflight is the tallest non-pitch state: three widgets with icon bands, both
  * pickers with their pills wrapped, and the Start button. Measured against the
  * six-option Round row wrapping to three lines, which is the worst case. */
@@ -257,11 +257,23 @@ export function InterviewHackerCard({
   // the new content is already in the DOM and "was I at the bottom?" can no
   // longer be answered from the current scroll position.
   const followingRef = useRef(true);
+  // Mirrors !followingRef.current into render state so the jump-to-latest pill
+  // can appear. The ref stays the source of truth for the auto-scroll effect
+  // (it must be readable synchronously before paint); this only drives the pill.
+  const [detached, setDetached] = useState(false);
   const handleThreadScroll = () => {
     const thread = threadRef.current;
     if (!thread) return;
     followingRef.current =
       thread.scrollHeight - thread.scrollTop - thread.clientHeight <= FOLLOW_THRESHOLD_PX;
+    setDetached(!followingRef.current);
+  };
+  const jumpToLatest = () => {
+    const thread = threadRef.current;
+    if (!thread) return;
+    thread.scrollTop = thread.scrollHeight;
+    followingRef.current = true;
+    setDetached(false);
   };
   useEffect(() => {
     const thread = threadRef.current;
@@ -386,36 +398,47 @@ export function InterviewHackerCard({
         )}
 
         {active && (
-          <div
-            className="interview-hacker-thread"
-            ref={threadRef}
-            onScroll={handleThreadScroll}
-          >
-            {hacker.history.map((exchange: InterviewExchange) => (
-              <Exchange
-                key={exchange.id}
-                question={exchange.question}
-                answer={exchange.answer}
-                unverified={exchange.unverified}
-              />
-            ))}
-            {(hacker.question || hacker.answer) && (
-              <Exchange
-                question={hacker.question}
-                answer={hacker.answer}
-                unverified={!hacker.briefReady}
-                live
-              />
-            )}
-            {hacker.interimQuestion && (
-              <div className="interview-hacker-bubble is-question is-pending">
-                {hacker.interimQuestion}
-              </div>
-            )}
-            {threadIsEmpty && (
-              <div className="interview-hacker-thread-empty">
-                Questions and answers appear here.
-              </div>
+          <div className="interview-hacker-thread-wrap">
+            <div
+              className="interview-hacker-thread"
+              ref={threadRef}
+              onScroll={handleThreadScroll}
+            >
+              {hacker.history.map((exchange: InterviewExchange) => (
+                <Exchange
+                  key={exchange.id}
+                  question={exchange.question}
+                  answer={exchange.answer}
+                  unverified={exchange.unverified}
+                />
+              ))}
+              {(hacker.question || hacker.answer) && (
+                <Exchange
+                  question={hacker.question}
+                  answer={hacker.answer}
+                  unverified={!hacker.briefReady}
+                  live
+                />
+              )}
+              {hacker.interimQuestion && (
+                <div className="interview-hacker-bubble is-question is-pending">
+                  {hacker.interimQuestion}
+                </div>
+              )}
+              {threadIsEmpty && (
+                <div className="interview-hacker-thread-empty">
+                  Questions and answers appear here.
+                </div>
+              )}
+            </div>
+            {detached && (
+              <button
+                type="button"
+                className="interview-hacker-jump"
+                onClick={jumpToLatest}
+              >
+                Jump to latest
+              </button>
             )}
           </div>
         )}

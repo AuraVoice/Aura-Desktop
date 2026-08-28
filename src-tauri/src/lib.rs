@@ -11,6 +11,7 @@ mod entitlement;
 mod guide;
 mod hotkeys;
 mod interview;
+mod interview_store;
 mod logging;
 mod meeting;
 mod overlay;
@@ -391,6 +392,11 @@ pub fn run() {
             interview::clear_interview_resume,
             interview::stop_interview_hacker,
             interview::save_interview_reflection,
+            interview_store::interview_session_save,
+            interview_store::interview_sessions_list,
+            interview_store::interview_session_load,
+            interview_store::interview_session_delete,
+            interview_store::interview_sessions_clear,
             dictation::trace_commands::dictation_trace_settings,
             dictation::trace_commands::dictation_set_trace_settings,
             dictation::trace_commands::dictation_trace_summary,

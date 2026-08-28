@@ -10,7 +10,11 @@ import {
   type InterviewScreenSightFrame,
   type InterviewTranscriptTurn,
 } from "../../lib/interviewHackerApi";
-import { relevantInterviewBriefSlice, type InterviewBrief } from "../../lib/interviewBrief";
+import {
+  relevantInterviewBriefSlice,
+  stableInterviewBriefSlice,
+  type InterviewBrief,
+} from "../../lib/interviewBrief";
 import { listenForInterviewBrief, loadInterviewBrief } from "../../lib/interviewBriefMemory";
 import {
   listenForInterviewResume,
@@ -24,6 +28,7 @@ import {
   resumeStats,
 } from "../../lib/resumeText";
 import { loadInterviewWorkspace } from "../../lib/interviewWorkspace";
+import { saveInterviewSession, type InterviewSessionRecord } from "../../lib/interviewSessions";
 import { useAuth } from "../../state/AuthProvider";
 import {
   DEFAULT_PLANNED_MINUTES,
@@ -111,19 +116,6 @@ const CALL_DETECTION_RETRY_MS = 1_500;
 // A 30 minute round runs 15-25 questions, so this is headroom rather than a
 // limit anyone should hit. Strings only, no images, so the cost is negligible.
 const MAX_HISTORY_EXCHANGES = 40;
-
-/** Whether a ranked slice actually says anything about the candidate. Drives
- * the resume fallback: an empty slice means the model has nothing of the user's
- * own history to answer from. */
-function hasCandidateEvidence(
-  slice: ReturnType<typeof relevantInterviewBriefSlice>,
-): boolean {
-  if (!slice) return false;
-  return slice.candidateFacts.length > 0
-    || slice.projects.length > 0
-    || slice.starStories.length > 0
-    || slice.metrics.length > 0;
-}
 
 function reflectionMarkdown(reflection: InterviewReflection): string {
   const section = (title: string, items: string[]) =>
@@ -306,10 +298,16 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   const assemblyMsRef = useRef(PANEL_ASSEMBLY_MS);
   const answerShapeRef = useRef<AnswerShape>(answerShapeFor(DEFAULT_ROUND_KIND));
   const plannedMinutesRef = useRef<PlannedMinutes>(DEFAULT_PLANNED_MINUTES);
+  // Mirrored so the Stop handler can collect the finished session without
+  // reading changing state through useCallback deps.
+  const roundKindRef = useRef<RoundKind>(DEFAULT_ROUND_KIND);
+  const historyRef = useRef<InterviewExchange[]>([]);
 
   briefRef.current = brief;
   resumeTextRef.current = resumeText;
   answerRef.current = answer;
+  roundKindRef.current = roundKind;
+  historyRef.current = history;
 
   const clearSession = useCallback(() => {
     generationRef.current?.abort();
@@ -611,10 +609,49 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     );
   }, []);
 
+  // Writes the finished session to the local encrypted store, once, on Stop.
+  // The whole session is already in memory, so this keeps disk IO off the live
+  // answer path; a crash before Stop loses only that one session.
+  const persistCurrentSession = useCallback(() => {
+    const uid = user?.uid;
+    const identity = identityRef.current;
+    const metrics = metricsRef.current;
+    if (!uid || !identity || !metrics) return;
+    const turns = reflectionTurnsRef.current;
+    const exchanges = historyRef.current;
+    if (turns.length === 0 && exchanges.length === 0) return;
+    const brief = briefRef.current;
+    const record: InterviewSessionRecord = {
+      session_id: identity.sessionId,
+      started_at_ms: metrics.startedAtMs,
+      ended_at_ms: Date.now(),
+      round_kind: roundKindRef.current,
+      company: brief?.company?.text ?? null,
+      role: brief?.role?.text ?? null,
+      brief_id: brief?.briefId ?? null,
+      turns: turns.map((turn, index) => ({
+        seq: index,
+        source: turn.source,
+        at_ms: turn.finalWordAtMs ?? turn.endMs ?? turn.startMs,
+        text: turn.text,
+      })),
+      exchanges: exchanges.map((exchange, index) => ({
+        seq: index,
+        question: exchange.question,
+        answer: exchange.answer,
+        unverified: exchange.unverified,
+      })),
+    };
+    void saveInterviewSession(uid, record).catch((error) =>
+      logError("Interview Companion: save session", error),
+    );
+  }, [user?.uid]);
+
   const stop = useCallback(() => {
     startAttemptRef.current += 1;
     const current = identityRef.current;
     const snapshot = reflectionSnapshotForCurrentSession();
+    persistCurrentSession();
     if (current) lastStoppedEpochRef.current = Math.max(lastStoppedEpochRef.current, current.epoch);
     recordSessionEnd("user");
     clearSession();
@@ -624,7 +661,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     invoke("stop_interview_hacker").catch((error) =>
       logError("Interview Companion: stop", error),
     );
-  }, [clearSession, recordSessionEnd, reflectionSnapshotForCurrentSession]);
+  }, [clearSession, persistCurrentSession, recordSessionEnd, reflectionSnapshotForCurrentSession]);
 
   useEffect(() => {
     if (signedIn) return;
@@ -821,16 +858,19 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     };
 
     if (action !== "automatic") activate();
-    const recentText = recentTurns.slice(-6).map((item) => item.text).join(" ");
-    const slice = relevantInterviewBriefSlice(briefRef.current, turn.text, recentText);
+    // Question-independent, so it is byte-identical across the session and the
+    // backend can hold it in a prompt cache instead of re-prefilling it. Also
+    // fixes the old demotion: a reviewed brief no longer ranks to an empty slice
+    // for an off-axis question and silently drops into unverified mode.
+    const slice = stableInterviewBriefSlice(briefRef.current);
     void streamInterviewAnswer({
       turn,
       recentTurns,
       brief: slice,
-      // Only when the ranked slice carries no evidence about the candidate.
-      // A prepared user already sends stronger, verified material, and paying
-      // for the whole resume on top of it on every single turn is waste.
-      resume: hasCandidateEvidence(slice) ? "" : (resumeTextRef.current ?? ""),
+      // Always sent now. It rides the cached prefix, so a cache read costs a
+      // fraction of a prefill - the per-turn re-upload the old conditional
+      // avoided is no longer the cost it was guarding against.
+      resume: resumeTextRef.current ?? "",
       answerShape: answerShapeRef.current,
       action,
       currentAnswer: previousAnswer,

@@ -1030,7 +1030,10 @@ fn run_worker(
                 );
             }
         }
-        std::thread::sleep(Duration::from_millis(10));
+        // This poll loop drains capture + both ASR sockets, so its tick bounds
+        // how long a final transcript waits before emission. 5ms halves the old
+        // 10ms worst case without spinning the CPU the way 2ms would.
+        std::thread::sleep(Duration::from_millis(5));
     }
 
     close_streams(&mut streams);
