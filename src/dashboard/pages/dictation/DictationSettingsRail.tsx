@@ -15,7 +15,7 @@ import {
   type DictationHistorySettings,
 } from "../../../lib/dictationHistory";
 import { dictationConsent as consentCopy, dictationChord as chordCopy } from "../../../lib/copy";
-import { chordLabelOf, useDictationStatus } from "../../../lib/dictationStatus";
+import { chordKeysOf, useDictationStatus } from "../../../lib/dictationStatus";
 import { bytes as formatBytes } from "../../format";
 
 /**
@@ -158,11 +158,13 @@ export function DictationSettingsRail({
         <div className="db-setting-row">
           <span>
             <span className="db-setting-label">{chordCopy.rowLabel}</span>
-            <span className="db-setting-description">
-              {chordCopy.fixedNote(chordLabelOf(dictationStatus))}
-            </span>
+            <span className="db-setting-description">{chordCopy.fixedNote}</span>
           </span>
-          <span className="db-setting-label">{chordCopy.fixed}</span>
+          <span className="db-shortcut-keys db-chord-flash">
+            {chordKeysOf(dictationStatus).map((key) => (
+              <kbd key={key}>{key}</kbd>
+            ))}
+          </span>
         </div>
         {/* Only surfaced when something is actually wrong. A permanent "Ready"
             row is a line of furniture that says nothing on every normal day. */}
@@ -202,8 +204,8 @@ export function DictationSettingsRail({
 
       <RailSection title="Dictation history">
         <ToggleRow
-          label="Keep my dictations on this PC"
-          description="Saves each finished dictation and its audio so you can find and replay it here."
+          label="Save dictation history"
+          description="Keeps each finished dictation and its audio encrypted on this PC so you can replay it here. Off keeps nothing, anywhere."
           checked={historySettings?.enabled ?? true}
           disabled={busy === "history" || !uid}
           onChange={(value) => void updateHistory(value)}
@@ -227,9 +229,8 @@ export function DictationSettingsRail({
 
       <p className="db-trace-privacy">
         <ShieldCheck size={14} />
-        Online transcription runs only while you are holding the keys. What you
-        dictate is kept encrypted on this PC for up to 90 days so you can find it
-        again, is erased when you sign out, and never leaves this machine.
+        Online transcription runs only while you hold the keys; what you
+        dictate never leaves this machine.
       </p>
 
       {error && <p className="db-settings-error">{error}</p>}

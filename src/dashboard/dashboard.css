@@ -166,7 +166,8 @@
   animation-iteration-count: 1 !important;
   transition-duration: 0.01ms !important;
 }
-.db-app.db-reduce-motion .aura-polished-pill::after {
+.db-app.db-reduce-motion .aura-polished-pill::after,
+.db-app.db-reduce-motion .db-chord-flash kbd::after {
   animation-duration: 1.4s !important;
   animation-iteration-count: infinite !important;
 }
@@ -3725,6 +3726,29 @@
   font-family: var(--font-mono, monospace);
   font-size: 11px;
   text-align: center;
+}
+/* The dictation rail's chord keys carry the same diagonal light sweep as the
+   Beta pill; the keyframes come from PolishedPill.css, which the dashboard
+   already loads for the sidebar badge. */
+.db-chord-flash kbd {
+  position: relative;
+  overflow: hidden;
+}
+.db-chord-flash kbd::after {
+  position: absolute;
+  top: -90%;
+  left: -40%;
+  width: 32%;
+  height: 280%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.9), transparent);
+  content: "";
+  pointer-events: none;
+  transform: translate3d(-180%, -35%, 0) rotate(-25deg);
+  animation: aura-polished-pill-flash 1.4s linear infinite;
+}
+/* Staggered so the light appears to travel across the pair, not strobe both. */
+.db-chord-flash kbd:nth-child(2)::after {
+  animation-delay: 0.18s;
 }
 .db-settings-error {
   margin: 22px 0 0 308px;

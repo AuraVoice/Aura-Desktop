@@ -44,7 +44,7 @@ export const dictationConsent = {
   body: "While you hold the keys, your speech is sent to our transcription provider and turned into text. Each finished dictation is then kept encrypted on this PC so you can find and replay it. Cloud sharing is separate and starts off.",
   /** Shown in Settings under the toggle, where there is room for the rest. */
   detail:
-    "Your saved dictation words are sent with each request so they are recognised correctly. Each finished dictation and its audio are kept encrypted on this PC for up to 90 days, are erased when you sign out, and can be cleared or switched off below. Cloud sharing is a separate choice that uploads eligible audio and transcript data for speech-model evaluation and training, keeps server copies for up to 180 days, and deletes them sooner when you request it. Data already incorporated into a completed model cannot practically be removed from that model. Dictation needs you to be signed in and online.",
+    "Your saved dictation words go with each request so they are recognised correctly. Finished dictations stay encrypted on this PC for up to 90 days and are erased when you sign out. Cloud sharing is a separate opt-in under Settings > General > Privacy and stays off until you turn it on. Dictation needs you signed in and online.",
   accept: "Turn on",
   decline: "Not now",
   settingsHeading: "Online dictation",
@@ -73,7 +73,7 @@ export const dictationChord = {
   systemDescription: "A fixed hold shortcut that works in supported text fields.",
   rowLabel: "Hold to dictate",
   fixed: "Fixed",
-  fixedNote: (label: string) => `${label} is fixed for every supported app.`,
+  fixedNote: "Fixed for every supported app.",
   statusLabel: "Status",
   /** The window between mount and the first status reply. */
   statusChecking: "Checking listener...",
