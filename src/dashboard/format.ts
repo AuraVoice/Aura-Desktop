@@ -91,3 +91,36 @@ export function bodyAfterTitle(text: string | null | undefined): string {
     .join(" ")
     .replace(/\s+/g, " ");
 }
+
+/** Sortable local day key ("2026-08-24"). en-CA is the shortest route to
+ * ISO-shaped output that still respects the machine's timezone, so a day
+ * boundary means the same thing on every page that groups by date. */
+export function localDateKey(value: string | number | Date): string {
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString("en-CA");
+}
+
+/** The uppercase date header over a day's group ("AUGUST 24, 2026"). */
+export function dayHeading(value: string | number | Date): string {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return DASH;
+  return date
+    .toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" })
+    .toUpperCase();
+}
+
+/** Time of day for a list row ("2:09 pm"). */
+export function timeOfDay(value: string | number | Date): string {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) return DASH;
+  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).toLowerCase();
+}
+
+/** Byte sizes for storage figures ("41 MB"). */
+export function bytes(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return DASH;
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} KB`;
+  if (value < 1024 * 1024 * 1024) return `${Math.round(value / (1024 * 1024))} MB`;
+  return `${(value / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}

@@ -33,6 +33,15 @@
 //! at any level, and sentry_setup.rs drops any event originating in this
 //! module.
 //!
+//! Local history (`history`) is the one deliberate change to what "unencrypted"
+//! used to imply in practice, which was "not stored at all". Finished
+//! dictations and their audio ARE retained on this PC, sealed under the
+//! dictation key with per-row associated data, capped at 90 days and 512 MB,
+//! and erased on every session transition. They never leave the machine, a
+//! password-field dictation is never recorded, and the toggle to stop it lives
+//! on the Dictation page. Everything above still holds: nothing readable
+//! reaches the disk and nothing about a transcript reaches a log.
+//!
 //! Logging discipline (copied from meeting/audio.rs): counts, durations, byte
 //! sizes and outcomes only. Never a transcript, a partial, a hotword, or a
 //! correction, at any level. redact.rs runs on the log READ path only
@@ -49,6 +58,9 @@ mod audio;
 mod consent;
 #[cfg(windows)]
 mod credential;
+#[cfg(windows)]
+pub mod import_traces;
+pub mod history;
 #[cfg(windows)]
 mod hud;
 #[cfg(windows)]
@@ -112,6 +124,7 @@ mod platform {
     use super::chord::ChordSignal;
     use super::consent;
     use super::credential;
+    use super::history;
     use super::hud::{self, HudPhase, HudUpdate};
     use super::insert::{self, InsertOutcome};
     use super::polish;
@@ -823,8 +836,9 @@ mod platform {
                     );
                     return shutting_down;
                 }
-                // Accumulated so failure paths can report how much audio was
-                // affected; nothing downstream re-transcribes it.
+                // Accumulated for two consumers: the failure paths, which
+                // report how much audio was affected, and history.rs, which
+                // encodes it to a replayable clip once the insert succeeds.
                 utterance.extend_from_slice(&samples);
             }
 
@@ -1025,6 +1039,23 @@ mod platform {
             probe.role,
             probe.verdict
         );
+
+        // Local history (history.rs). The one call site, placed here because
+        // this is the last point at which both the final text and the captured
+        // samples are still owned, and because the outcome is now known: a
+        // password field is never archived, and the deferred NoTextField path
+        // below must not record the same utterance twice. Everything past the
+        // gate happens on the blocking pool, so the caption is already on
+        // screen while the clip encodes.
+        if !matches!(outcome, InsertOutcome::PasswordField) {
+            history::record_later(
+                app,
+                final_text.clone(),
+                std::mem::take(&mut utterance),
+                hold_ms as i64,
+                usage::word_count(&final_text),
+            );
+        }
 
         // The one outcome that does not end the utterance. The words are kept
         // and the HUD says so; the worker loop waits for a text box and types

@@ -520,7 +520,12 @@ pub fn session_changed(app: &AppHandle, signed_in: bool, uid: Option<String>) {
     // Stored interview sessions are per-account for the same reason and get the
     // same crash-safe boundary: the backend never holds these transcripts, so
     // this is the only thing that isolates them across accounts.
-    crate::interview_store::retain_only_for_session(app, session_uid);
+    crate::interview_store::retain_only_for_session(app, session_uid.clone());
+    // Dictation history holds transcripts AND audio clips for one account, and
+    // the backend has no copy of either, so this hook is the only thing that
+    // isolates them across accounts. It deletes clip files as well as rows.
+    #[cfg(windows)]
+    crate::dictation::history::retain_only_for_session(app, session_uid);
 }
 
 /// Voice lifecycle hook - called from the `set_voice_active` command and from

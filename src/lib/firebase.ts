@@ -2,7 +2,7 @@ import { initializeApp } from "firebase/app";
 import { indexedDBLocalPersistence, initializeAuth } from "firebase/auth";
 import { firebaseConfig } from "./firebaseConfig";
 
-const app = initializeApp(firebaseConfig);
+export const app = initializeApp(firebaseConfig);
 
 // Persistence is configured EXPLICITLY rather than through getAuth()'s
 // default chain, so what gets stored where is a documented decision, not an

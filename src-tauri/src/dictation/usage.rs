@@ -2,6 +2,9 @@
 //!
 //! Only an hourly timestamp and a word count are stored. Transcript text,
 //! audio, application names, and field information never enter this store.
+//! That is still true and still deliberate: this file feeds a chart. The
+//! transcripts and audio themselves live in `history.rs`, sealed, capped, and
+//! separately switchable off; application names are in neither.
 
 #![cfg(windows)]
 

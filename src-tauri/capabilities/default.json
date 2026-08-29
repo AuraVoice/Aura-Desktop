@@ -10,7 +10,15 @@
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",
     "opener:default",
-    "opener:allow-open-path",
+    {
+      "identifier": "opener:allow-open-path",
+      "allow": [
+        { "path": "$DOWNLOAD/Aura Dictation" },
+        { "path": "$DOWNLOAD/Aura Dictation/**" },
+        { "path": "$DOWNLOAD/Aura Recordings" },
+        { "path": "$DOWNLOAD/Aura Recordings/**" }
+      ]
+    },
     "os:allow-hostname",
     "log:default",
     "store:default",

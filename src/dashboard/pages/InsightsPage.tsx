@@ -35,7 +35,7 @@ import {
 } from "../../lib/dashboardApi";
 import type { MeetingDoc } from "../../lib/meetings";
 import { durationSeconds, formatHour, peakMoment } from "../../lib/voiceInsights";
-import { durationCoarse as formatDuration } from "../format";
+import { durationCoarse as formatDuration, localDateKey } from "../format";
 import { useVoiceLexicon } from "../useVoiceLexicon";
 import { PageError } from "../components/PageError";
 import { RefreshIndicator } from "../components/RefreshIndicator";
@@ -98,11 +98,6 @@ function daysAgo(days: number): Date {
   const date = startOfLocalDay(new Date());
   date.setDate(date.getDate() - days);
   return date;
-}
-
-function localDateKey(value: string | Date): string {
-  const date = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString("en-CA");
 }
 
 function activeStreak(dates: string[]): number {

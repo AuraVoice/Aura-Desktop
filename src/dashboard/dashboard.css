@@ -6823,3 +6823,406 @@
   line-height: 1.5;
 }
 
+
+/* ------------------------------------------------------------------ *
+ * Dictation history (pages/DictationPage.tsx)
+ *
+ * Two columns: the transcript list, and a narrow rail holding everything
+ * that used to be the whole Dictation settings page. The list deliberately
+ * does not span the window - long spoken sentences are unreadable at full
+ * desktop width.
+ * ------------------------------------------------------------------ */
+.db-dictation-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 24px;
+  align-items: start;
+}
+.db-dictation-main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+}
+.db-dictation-toolbar {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: flex-end;
+}
+@media (max-width: 1080px) {
+  .db-dictation-layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+.db-dictation-day-group {
+  margin-bottom: 22px;
+}
+.db-dictation-day {
+  margin: 0 0 10px 2px;
+  color: var(--db-text-mute);
+  font-family: var(--font-title, system-ui, sans-serif);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+/* The bright glass recipe. Every child below sits on alpha, never an opaque
+   fill, or it punches a hole through the blur. */
+.db-dictation-day-card {
+  /* Deliberately NOT overflow: hidden - that clipped the row overflow menu
+     inside the card. The first and last rows round their own corners below so
+     a hover fill still cannot square off the card. */
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+}
+
+/* The action cluster is a fixed column that is always laid out and only
+   fades, so neither the row height nor the text width moves on hover. */
+.db-dictation-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr) 132px;
+  align-items: start;
+  gap: 14px;
+  padding: 16px 18px;
+  transition: background 0.15s var(--db-ease);
+}
+.db-dictation-row + .db-dictation-row {
+  border-top: 1px solid rgba(63, 86, 78, 0.1);
+}
+.db-dictation-row:hover,
+.db-dictation-row.is-active {
+  background: rgba(255, 255, 255, 0.5);
+}
+.db-dictation-row:first-child {
+  border-radius: 17px 17px 0 0;
+}
+.db-dictation-row:last-child {
+  border-radius: 0 0 17px 17px;
+}
+.db-dictation-row:only-child {
+  border-radius: 17px;
+}
+.db-dictation-time {
+  padding-top: 2px;
+  color: var(--db-text-mute);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.db-dictation-text {
+  display: -webkit-box;
+  overflow: hidden;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--db-text);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 15px;
+  line-height: 1.55;
+  text-align: left;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.db-dictation-text.is-expanded {
+  display: block;
+}
+
+.db-dictation-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.12s var(--db-ease);
+}
+/* :focus-within, not only :hover - without it the cluster is mouse-only and
+   a keyboard user can never reach play, copy, flag or the menu. */
+.db-dictation-row:hover .db-dictation-actions,
+.db-dictation-row.is-active .db-dictation-actions,
+.db-dictation-actions:focus-within {
+  opacity: 1;
+}
+
+.db-row-action {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--db-text-dim);
+  cursor: pointer;
+  place-items: center;
+  transition: background 0.12s var(--db-ease), color 0.12s var(--db-ease);
+}
+.db-row-action:hover:not(:disabled) {
+  color: var(--db-text);
+}
+.db-row-action:active:not(:disabled) {
+  transform: scale(0.92);
+}
+.db-row-action:disabled {
+  cursor: default;
+  opacity: 0.32;
+}
+.db-row-action-flag svg {
+  transition: fill 0.12s var(--db-ease);
+}
+.db-row-action-flag:hover:not(:disabled),
+.db-row-action-flag.is-flagged {
+  color: #cf2b2b;
+}
+.db-row-action-flag:hover:not(:disabled) svg,
+.db-row-action-flag.is-flagged svg {
+  fill: #cf2b2b;
+}
+/* CopyButton's compact variant is normally pinned to a corner; inside the
+   row it is one item in the cluster like any other. */
+.db-dictation-actions .db-copy-compact {
+  position: static;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--db-text-dim);
+  box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.db-dictation-actions .db-copy-compact:hover {
+  border: none;
+  background: none;
+  color: var(--db-text);
+}
+.db-dictation-actions .db-copy-compact svg {
+  width: 19px;
+  height: 19px;
+}
+.db-dictation-actions .db-copy-compact-done,
+.db-dictation-actions .db-copy-compact-done:hover {
+  color: #1f9d55;
+}
+.db-dictation-actions .db-copy-compact-done svg {
+  width: 21px;
+  height: 21px;
+  stroke-width: 2.5;
+}
+
+.db-row-menu {
+  position: relative;
+}
+.db-row-menu-panel {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 4px);
+  right: 0;
+  /* `is-up` is set by RowMenu when the trigger is too close to the bottom of
+     the viewport for the menu to fit below it. */
+  display: flex;
+  min-width: 196px;
+  flex-direction: column;
+  padding: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  border-radius: 12px;
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.94), rgba(247, 246, 241, 0.86));
+  box-shadow: 0 12px 30px rgba(31, 35, 40, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(20px) saturate(135%);
+  -webkit-backdrop-filter: blur(20px) saturate(135%);
+}
+.db-row-menu-panel.is-up {
+  top: auto;
+  bottom: calc(100% + 4px);
+}
+.db-row-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--db-text);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  white-space: nowrap;
+}
+.db-row-menu-item:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.7);
+}
+.db-row-menu-item:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+.db-row-menu-danger {
+  color: #a33232;
+}
+.db-row-menu-danger:hover:not(:disabled) {
+  background: rgba(205, 63, 63, 0.1);
+}
+
+/* The field grows leftward because the toggle is pinned to the right end of
+   a flex-end cluster: widening the field can only move its left edge, and
+   the icon never shifts. */
+.db-expanding-search {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+.db-expanding-search-field {
+  width: 0;
+  overflow: hidden;
+  opacity: 0;
+  transition: width 220ms var(--db-ease), opacity 120ms var(--db-ease);
+}
+.db-expanding-search.is-open .db-expanding-search-field {
+  width: 260px;
+  opacity: 1;
+  /* Width leads, text follows, so the placeholder never smears through a
+     20px-wide box on the way open. */
+  transition: width 220ms var(--db-ease), opacity 140ms var(--db-ease) 80ms;
+}
+.db-expanding-search-field input {
+  width: 100%;
+  padding: 7px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.7);
+  color: var(--db-text);
+  font-family: inherit;
+  font-size: 13.5px;
+  outline: none;
+  backdrop-filter: blur(14px) saturate(125%);
+  -webkit-backdrop-filter: blur(14px) saturate(125%);
+}
+.db-expanding-search-field input::-webkit-search-cancel-button {
+  display: none;
+}
+.db-expanding-search-toggle {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  flex: 0 0 auto;
+  margin-left: 4px;
+  border: none;
+  border-radius: 999px;
+  background: none;
+  color: var(--db-text-dim);
+  cursor: pointer;
+  place-items: center;
+  transition: background 0.12s var(--db-ease), color 0.12s var(--db-ease);
+}
+.db-expanding-search-toggle:hover {
+  color: var(--db-text);
+}
+.db-expanding-search-toggle:active {
+  transform: scale(0.92);
+}
+
+/* The rail: the old settings page, stacked narrow beside the list. */
+.db-dictation-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+}
+.db-dictation-rail-section + .db-dictation-rail-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(63, 86, 78, 0.1);
+}
+.db-dictation-rail-section h3 {
+  margin: 0 0 6px;
+  color: var(--db-text-mute);
+  font-family: var(--font-title, system-ui, sans-serif);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.db-dictation-rail .db-setting-row {
+  display: flex;
+  min-height: 0;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 0;
+  border: none;
+}
+.db-dictation-rail .db-setting-row + .db-setting-row {
+  border-top: 1px solid rgba(63, 86, 78, 0.08);
+}
+.db-dictation-rail .db-setting-description {
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.db-dictation-rail .db-local-delete {
+  margin-top: 8px;
+  align-self: flex-start;
+}
+.db-dictation-import-btn {
+  margin-top: 10px;
+  align-self: flex-start;
+}
+.db-dictation-rail-section .db-setting-description {
+  display: block;
+}
+.db-dictation-rail .db-trace-privacy {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(63, 86, 78, 0.1);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.db-dictation-feedback textarea {
+  width: 100%;
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.66);
+  color: var(--db-text);
+  font-family: inherit;
+  font-size: 14px;
+  outline: none;
+  resize: vertical;
+}
+/* The flag dialog borrows the confirm shell but is a form, not a warning: no
+   icon medallion, and wide enough that the textarea is not a square box. */
+.db-dictation-feedback {
+  width: min(560px, calc(100vw - 40px));
+}
+.db-dictation-feedback h2,
+.db-dictation-confirm h2 {
+  /* The shared panel reserves top margin for an icon medallion; neither of
+     these dialogs has one. */
+  margin-top: 0;
+}
+.db-dictation-feedback .db-trace-privacy {
+  margin-top: 14px;
+}
+
+@keyframes db-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.db-spin {
+  animation: db-spin 0.9s linear infinite;
+}

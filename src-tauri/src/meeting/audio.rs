@@ -451,7 +451,7 @@ fn close_segment(
     }
 
     let duration_ms = (frames * 1000 / SAMPLE_RATE) as i64;
-    let persisted = match encode_flac(&interleaved) {
+    let persisted = match encode_flac(&interleaved, 2) {
         Ok(flac) => {
             let incomplete = *segment_incomplete;
             match super::record_segment(
@@ -587,11 +587,14 @@ fn channel_metrics(samples: &[i16]) -> (f64, f64, f64, i64) {
     )
 }
 
-fn encode_flac(interleaved: &[i32]) -> Result<Vec<u8>, String> {
+/// The tree's one FLAC encoder. Shared with `dictation/history.rs`, which
+/// stores single-channel clips, so the channel count is a parameter rather than
+/// the 2 this module always passes. Pure Rust (flacenc), no C toolchain.
+pub(crate) fn encode_flac(interleaved: &[i32], channels: usize) -> Result<Vec<u8>, String> {
     let config = flacenc::config::Encoder::default()
         .into_verified()
         .map_err(|e| format!("flac config: {e:?}"))?;
-    let source = flacenc::source::MemSource::from_samples(interleaved, 2, 16, SAMPLE_RATE);
+    let source = flacenc::source::MemSource::from_samples(interleaved, channels, 16, SAMPLE_RATE);
     let stream = flacenc::encode_with_fixed_block_size(&config, source, config.block_size)
         .map_err(|e| format!("flac encode: {e:?}"))?;
     let mut sink = flacenc::bitsink::ByteSink::new();

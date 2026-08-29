@@ -17,7 +17,7 @@ mod runtime_lease;
 pub use runtime_lease::MeetingRuntimeLease;
 
 #[cfg(windows)]
-mod audio;
+pub(crate) mod audio;
 #[cfg(windows)]
 pub(crate) mod crypto;
 #[cfg(windows)]
