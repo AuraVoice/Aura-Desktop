@@ -113,6 +113,11 @@ stateDiagram-v2
 | `start_interview_hacker` | `accessToken` | Starts the explicit source-separated Interview Companion capture and STT session |
 | `pause_interview_hacker` / `resume_interview_hacker` / `stop_interview_hacker` | - | Controls only Interview Companion; Meeting Notes and LiveKit voice keep their own lifecycles |
 | `save_interview_reflection` | `markdown` | Writes an explicitly saved reflection to Downloads; unsaved reflection and transcript remain memory-only |
+| `dictation_history_list` | `uid` | Every stored dictation for that account, newest first, with the retention sweep run first. Decrypts each transcript, so search happens client-side over the result rather than in SQL |
+| `dictation_history_audio` | `uid, id` | Decrypts one stored clip and returns raw FLAC bytes as an `ArrayBuffer`; React wraps them in a Blob because the on-disk file is ciphertext and `convertFileSrc` would hand `<audio>` garbage |
+| `dictation_history_delete` / `dictation_history_clear` | `uid[, id]` | Removes one entry, or the whole history, including the clip files |
+| `dictation_history_export_audio` / `dictation_history_export_text` | `uid, id` | Writes a decrypted `.flac`/`.txt` into `Downloads/Aura Dictation` and returns the path for `openPath` |
+| `dictation_history_settings` / `dictation_history_set_settings` | `uid[, enabled]` | The retention toggle plus the current entry count and retained audio size |
 
 **Selected events** (Rust emits, React listens with `listen("name", cb)`):
 

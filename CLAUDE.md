@@ -57,6 +57,43 @@ Rules that follow from it:
 - Icons sit bare on the glass (tone-colored glyph, optional soft radial `::before` glow), no boxed chip behind them. Idle animations are long-period and low-amplitude; `.db-reduce-motion` already stills everything app-wide, so no per-animation guard.
 - A hand-rolled SVG icon next to lucide glyphs must match lucide's optical live area (~20 of 24 viewBox units); crop the viewBox to the artwork's bounding box rather than redrawing (see `StreakFlameIcon` in `HomePage.tsx`).
 
+## Dictation history is the one place transcripts touch disk
+
+`src-tauri/src/dictation/history.rs` retains every finished dictation and its
+audio locally, which reverses what the rest of the dictation module still says
+about storage. The reversal is narrow and the invariants around it are not:
+
+- Text is AES-256-GCM in a BLOB column of `dictation/history.sqlite3`; audio is
+  AES-256-GCM over FLAC under `dictation/clips/`. Both are sealed with the
+  DICTATION key (`vocab.rs`), never meeting's, so "delete my recordings" cannot
+  brick dictation. Nothing in this module is ever logged beyond counts, sizes,
+  durations and outcomes.
+- **A password-field dictation is never recorded.** Aura already refuses to type
+  into one; archiving it would be strictly worse. So are failed holds, which have
+  no transcript. The single gate is the `InsertOutcome` check at the one
+  `history::record_later` call site in `mod.rs`.
+- **Text and audio have separate caps**: text is 90 days, audio is 90 days OR
+  512 MB, evicted oldest first. Eviction unlinks the clip and NULLs
+  `audio_path` while KEEPING the row, so "audio gone, transcript present"
+  (`has_audio: false`) is a designed state, not an error. Any new UI must handle
+  it as normal.
+- `security::session_changed` calls `history::retain_only_for_session` on EVERY
+  transition, deleting clip files as well as rows. That is the only thing
+  isolating dictations across accounts; do not make it conditional on `revoked`.
+- The transcript column is ciphertext, so there is no SQL search and there must
+  never be a plaintext-searchable copy. `dictation_history_list` decrypts once
+  and the page filters in memory.
+- Turning history off stops future capture and deliberately keeps existing rows.
+  Clearing is a separate, confirmed action. Do not conflate them.
+
+The flag button writes to the `user_feedback` Firestore collection directly via
+the Firebase SDK (`src/lib/dictationFeedback.ts`), the same way the Flutter app
+does. There is no `product_feedback` collection, `observed_feedback` is
+backend-only with a closed schema, and `POST /feedback/alarm-interest` is
+hardcoded to alarm slugs. Writing directly is what keeps this shippable without
+a separate `juno-backend` deploy; it needed `firestore.googleapis.com` in the
+CSP's `connect-src`.
+
 ## Desktop notifications
 
 `src/lib/desktopNotifications.ts` is the ONE broker every producer calls (local Rust/JS events and backend events polled from the outbox). It owns the durable inbox, dedup, permission, and the toast-once guarantee (delivered ids persist across restart, so a relaunch never replays a toast). Two non-obvious rules:
