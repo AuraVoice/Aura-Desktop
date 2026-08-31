@@ -5885,13 +5885,15 @@
 .db-card2-actions.is-open {
   opacity: 1;
 }
-/* Translucent backdrop so the glyph stays readable over card preview text. */
-.db-card2-actions .db-row-action {
-  background: rgba(255, 255, 255, 0.65);
-  box-shadow: var(--db-shadow-sm);
+/* The trigger is a bare glyph on the card, no box or backdrop behind it. */
+.db-card2-actions .db-row-action,
+.db-card2-actions .db-row-action:hover {
+  background: none;
+  border-radius: 0;
+  box-shadow: none;
 }
 .db-card2-actions .db-row-action:hover {
-  background: rgba(255, 255, 255, 0.9);
+  color: var(--db-text);
 }
 .db-card2-media {
   position: relative;

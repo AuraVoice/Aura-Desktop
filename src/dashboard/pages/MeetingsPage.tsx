@@ -150,7 +150,7 @@ function meetingToCard(
         : stateCopy(meeting, local),
     menu: [
       {
-        label: "Delete this meeting",
+        label: "Delete this recording",
         Icon: Trash2,
         danger: true,
         onSelect: () => onDelete(meeting),
@@ -779,16 +779,15 @@ export function MeetingsPage() {
           <button
             type="button"
             className="db-local-confirm-scrim"
-            aria-label="Keep this meeting"
+            aria-label="Keep this recording"
             disabled={deleting}
             onClick={() => setPendingMeetingDelete(null)}
           />
           <div className="db-local-confirm-panel">
-            <span className="db-local-confirm-icon"><Trash2 size={20} /></span>
-            <h2 id="meeting-delete-title">Delete this meeting?</h2>
+            <h2 id="meeting-delete-title">Delete this recording?</h2>
             <p>
-              The meeting, its notes and transcript are permanently deleted from
-              Aura's servers. Any recording still on this device is removed too.
+              The recording, its notes and transcript are permanently deleted from
+              Aura's servers. Any copy still on this device is removed too.
               This cannot be undone.
             </p>
             <div className="db-local-confirm-actions">
@@ -799,7 +798,7 @@ export function MeetingsPage() {
                 disabled={deleting}
                 onClick={() => setPendingMeetingDelete(null)}
               >
-                Keep meeting
+                Keep recording
               </button>
               <button
                 type="button"
@@ -808,7 +807,7 @@ export function MeetingsPage() {
                 onClick={() => void removeMeeting(pendingMeetingDelete)}
               >
                 <Trash2 size={15} />
-                {deleting ? "Deleting..." : "Delete meeting"}
+                {deleting ? "Deleting..." : "Delete recording"}
               </button>
             </div>
           </div>
