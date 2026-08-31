@@ -431,6 +431,7 @@ pub fn run() {
             interview_store::interview_sessions_list,
             interview_store::interview_session_load,
             interview_store::interview_session_delete,
+            interview_store::interview_reflection_save,
             interview_store::interview_sessions_clear,
             dictation::polish_commands::dictation_polish_settings,
             dictation::polish_commands::dictation_set_polish_settings,

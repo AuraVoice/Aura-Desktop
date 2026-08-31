@@ -63,6 +63,7 @@ export type InterviewAnswerFrame =
       intent: string | null;
     }
   | { type: "answer_delta"; delta: string }
+  | { type: "screen_note"; note: string }
   | { type: "answer_done"; generated: boolean; answerMs: number | null }
   | { type: "error"; code: string; message: string }
   | { type: "terminator" };
@@ -174,6 +175,10 @@ function parseFrame(
       return typeof frame.delta === "string"
         ? { type: "answer_delta", delta: frame.delta }
         : null;
+    case "screen_note":
+      return typeof frame.note === "string" && frame.note.trim() !== ""
+        ? { type: "screen_note", note: frame.note }
+        : null;
     case "answer_done":
       if (typeof frame.generated !== "boolean") return null;
       return {
@@ -203,6 +208,7 @@ export async function streamInterviewAnswer({
   action = "automatic",
   currentAnswer = "",
   screenSight = null,
+  screenNotes = [],
   signal,
   onFrame,
 }: {
@@ -216,6 +222,9 @@ export async function streamInterviewAnswer({
   action?: InterviewAnswerAction;
   currentAnswer?: string;
   screenSight?: InterviewScreenSightFrame | null;
+  /** Captions of screens shown earlier this round, so a later question about
+   *  "that" still resolves. Bounded by the backend at three. */
+  screenNotes?: string[];
   signal: AbortSignal;
   onFrame: (frame: InterviewAnswerFrame) => void;
 }): Promise<void> {
@@ -227,12 +236,13 @@ export async function streamInterviewAnswer({
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       turn: wireTurn(turn),
-      recent_turns: recentTurns.slice(-12).map(wireTurn),
+      recent_turns: recentTurns.slice(-8).map(wireTurn),
       brief: brief ? wireBriefSlice(brief) : null,
       resume: resume.slice(0, RESUME_MAX_CHARS),
       answer_shape: answerShape,
       action,
       current_answer: currentAnswer,
+      screen_notes: screenNotes.slice(-3),
       screen_sight: screenSight ? {
         mime_type: screenSight.mimeType,
         data: screenSight.data,
@@ -774,6 +784,7 @@ export async function createInterviewReflection({
   startedAtMs,
   endedAtMs,
   turns,
+  exchanges = [],
   brief,
   signal,
 }: {
@@ -781,6 +792,9 @@ export async function createInterviewReflection({
   startedAtMs: number;
   endedAtMs: number;
   turns: InterviewTranscriptTurn[];
+  /** What Aura suggested during the round. Context for the coach, so it can
+   *  tell a point the candidate never had from one they did not use. */
+  exchanges?: Array<{ question: string; answer: string }>;
   brief: InterviewBriefSlice | null;
   signal?: AbortSignal;
 }): Promise<InterviewReflection> {
@@ -793,6 +807,13 @@ export async function createInterviewReflection({
       started_at_ms: startedAtMs,
       ended_at_ms: endedAtMs,
       turns: turns.filter((turn) => turn.isFinal).slice(-120).map(wireTurn),
+      exchanges: exchanges
+        .filter((item) => item.question.trim() !== "" && item.answer.trim() !== "")
+        .slice(-60)
+        .map((item) => ({
+          question: item.question.slice(0, 4_000),
+          answer: item.answer.slice(0, 4_000),
+        })),
       brief: brief ? wireBriefSlice(brief) : null,
     }),
     signal,

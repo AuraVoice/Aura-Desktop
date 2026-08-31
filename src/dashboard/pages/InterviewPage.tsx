@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { invoke } from "@tauri-apps/api/core";
 import {
   ArrowRight,
   ArrowUpRight,
@@ -7,6 +8,7 @@ import {
   Building2,
   CheckCircle2,
   ClipboardPaste,
+  Download,
   FileText,
   History,
   Loader2,
@@ -63,6 +65,7 @@ import {
   clearInterviewSessions,
   type InterviewSessionSummary,
   type InterviewSessionDetail,
+  type StoredReflection,
 } from "../../lib/interviewSessions";
 import { logError } from "../../lib/log";
 import { shortDateTime } from "../format";
@@ -1041,6 +1044,35 @@ function sessionDurationMinutes(session: InterviewSessionSummary): number {
 /** Past interview rounds, read from the local encrypted store. Unlike the
  * Preparation tab (saved briefs), these are the actual transcripts and answers
  * from sessions the user ran. Local-only: the backend never held them. */
+function ReflectionList({ title, items }: { title: string; items: string[] }) {
+  if (items.length === 0) return null;
+  return (
+    <>
+      <h5>{title}</h5>
+      <ul>{items.map((item) => <li key={item}>{item}</li>)}</ul>
+    </>
+  );
+}
+
+/** Same markdown the overlay writes, so a reflection downloaded here and one
+ *  downloaded from the card are byte-identical. */
+function reflectionMarkdown(reflection: StoredReflection): string {
+  const section = (title: string, items: string[]) =>
+    items.length > 0
+      ? `\n## ${title}\n\n${items.map((item) => `- ${item}`).join("\n")}\n`
+      : "";
+  return `# Interview reflection\n\n${reflection.summary}\n`
+    + section("Strengths", reflection.strengths)
+    + section("Improve next time", reflection.improvements)
+    + section("Follow-up actions", reflection.followUpActions);
+}
+
+function downloadReflection(reflection: StoredReflection): void {
+  void invoke<{ path: string }>("save_interview_reflection", {
+    markdown: reflectionMarkdown(reflection),
+  }).catch((error) => logError("InterviewPage: download reflection", error));
+}
+
 function InterviewSessionsPanel({ uid }: { uid: string | null }) {
   const [sessions, setSessions] = useState<InterviewSessionSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1168,6 +1200,7 @@ function InterviewSessionsPanel({ uid }: { uid: string | null }) {
                   <span>{shortDateTime(new Date(session.startedAtMs).toISOString())}</span>
                   <span>{session.exchangeCount} answers</span>
                   <span>{sessionDurationMinutes(session)} min</span>
+                  {session.hasReflection && <span>Reflection</span>}
                 </div>
 
                 {isConfirmingDelete ? (
@@ -1212,6 +1245,25 @@ function InterviewSessionsPanel({ uid }: { uid: string | null }) {
           </div>
         ) : (
           <div className="db-interview-session-detail">
+            {detail.reflection && (
+              <div className="db-interview-session-block db-interview-reflection">
+                <div className="db-interview-reflection-head">
+                  <h4>Reflection</h4>
+                  <button
+                    type="button"
+                    className="db-interview-reflection-download"
+                    onClick={() => downloadReflection(detail.reflection!)}
+                  >
+                    <Download size={14} aria-hidden />
+                    Download
+                  </button>
+                </div>
+                <p>{detail.reflection.summary}</p>
+                <ReflectionList title="Strengths" items={detail.reflection.strengths} />
+                <ReflectionList title="Improve next time" items={detail.reflection.improvements} />
+                <ReflectionList title="Follow-up actions" items={detail.reflection.followUpActions} />
+              </div>
+            )}
             {detail.exchanges.length > 0 && (
               <div className="db-interview-session-block">
                 <h4>Questions and answers</h4>

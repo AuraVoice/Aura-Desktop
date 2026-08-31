@@ -32,7 +32,12 @@ import {
   resumeStats,
 } from "../../lib/resumeText";
 import { loadInterviewWorkspace } from "../../lib/interviewWorkspace";
-import { saveInterviewSession, type InterviewSessionRecord } from "../../lib/interviewSessions";
+import { interviewKeyterms } from "../../lib/interviewKeyterms";
+import {
+  saveInterviewSession,
+  saveInterviewReflection,
+  type InterviewSessionRecord,
+} from "../../lib/interviewSessions";
 import { useAuth } from "../../state/AuthProvider";
 import {
   DEFAULT_PLANNED_MINUTES,
@@ -169,6 +174,7 @@ interface ReflectionSnapshot {
   startedAtMs: number;
   endedAtMs: number;
   turns: InterviewTranscriptTurn[];
+  exchanges: Array<{ question: string; answer: string }>;
   brief: ReturnType<typeof relevantInterviewBriefSlice>;
 }
 
@@ -193,6 +199,8 @@ export interface InterviewHackerState {
   recoverable: boolean;
   candidateSpeaking: boolean;
   capturingScreen: boolean;
+  /** What Aura saw on the last screen it was shown, for the current answer. */
+  screenNote: string | null;
   savingReflection: boolean;
   reflection: InterviewReflection | null;
   message: string | null;
@@ -237,6 +245,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   const [brief, setBrief] = useState<InterviewBrief | null>(null);
   const [candidateSpeaking, setCandidateSpeaking] = useState(false);
   const [capturingScreen, setCapturingScreen] = useState(false);
+  const [screenNote, setScreenNote] = useState<string | null>(null);
   const [savingReflection, setSavingReflection] = useState(false);
   const [reflectionSnapshot, setReflectionSnapshot] = useState<ReflectionSnapshot | null>(null);
   const [reflection, setReflection] = useState<InterviewReflection | null>(null);
@@ -259,6 +268,13 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   const reflectionTurnsRef = useRef<InterviewTranscriptTurn[]>([]);
   const briefRef = useRef<InterviewBrief | null>(null);
   const resumeTextRef = useRef<string | null>(null);
+  // Company, role, and JD from the dashboard's prepared interview. Held only to
+  // bias recognition at Start; the brief remains the source of truth for answers.
+  const prepInputRef = useRef<{
+    company: string;
+    role: string;
+    jobDescription: string;
+  } | null>(null);
   const answerRef = useRef("");
   const lastRemoteTurnRef = useRef<InterviewTranscriptTurn | null>(null);
   // Tracks whether the answer currently on screen was produced without a
@@ -268,6 +284,10 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   const reflectionRequestRef = useRef<AbortController | null>(null);
   const screenCaptureInFlightRef = useRef(false);
   const screenCaptureSequenceRef = useRef(0);
+  // Captions of screens shown this round, newest last. Session-scoped context
+  // only: the images themselves are never stored, so these short strings are all
+  // that survives a Screen Sight, and they die with the session.
+  const screenNotesRef = useRef<string[]>([]);
   const savingReflectionRef = useRef(false);
   const savingReflectionSequenceRef = useRef(0);
   const activeAnswerTurnRef = useRef<InterviewTranscriptTurn | null>(null);
@@ -332,6 +352,8 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     setRecoverable(false);
     recentRef.current = [];
     reflectionTurnsRef.current = [];
+    screenNotesRef.current = [];
+    setScreenNote(null);
     lastRemoteTurnRef.current = null;
     setCanSuggest(false);
     activeUnverifiedRef.current = false;
@@ -391,6 +413,29 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     reflectionTurnsRef.current = next;
   }, []);
 
+  /**
+   * Archived exchanges plus the one still on screen.
+   *
+   * `history` only gains an exchange when a DIFFERENT question supersedes it
+   * (see activate()), so the answer visible at Stop had never been archived and
+   * the last question of every session was lost from both the saved session and
+   * the reflection. Anything reading exchanges outside the render path must go
+   * through here.
+   */
+  const exchangesIncludingLive = useCallback((): InterviewExchange[] => {
+    const archived = historyRef.current;
+    const liveTurn = activeAnswerTurnRef.current;
+    const liveAnswer = answerRef.current.trim();
+    if (!liveTurn || !liveAnswer) return archived;
+    if (archived.some((exchange) => exchange.id === liveTurn.turnId)) return archived;
+    return [...archived, {
+      id: liveTurn.turnId,
+      question: liveTurn.text,
+      answer: liveAnswer,
+      unverified: activeUnverifiedRef.current,
+    }].slice(-MAX_HISTORY_EXCHANGES);
+  }, []);
+
   const reflectionSnapshotForCurrentSession = useCallback((): ReflectionSnapshot | null => {
     const identity = identityRef.current;
     const metrics = metricsRef.current;
@@ -404,9 +449,13 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       startedAtMs: metrics.startedAtMs,
       endedAtMs: Date.now(),
       turns,
+      exchanges: exchangesIncludingLive().map((exchange) => ({
+        question: exchange.question,
+        answer: exchange.answer,
+      })),
       brief: relevantInterviewBriefSlice(briefRef.current, transcript, transcript),
     };
-  }, []);
+  }, [exchangesIncludingLive]);
 
   const armCredentialRefresh = useCallback((expiresInSeconds: number) => {
     if (credentialTimerRef.current) clearTimeout(credentialTimerRef.current);
@@ -559,6 +608,15 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
         return invoke<StatusPayload>("start_interview_hacker", {
           accessToken: credential.accessToken,
           openaiAccessToken: credential.openaiAccessToken,
+          // Frozen for the session: Deepgram takes keyterms as query parameters
+          // when the socket opens and cannot be re-biased mid-stream.
+          keyterms: interviewKeyterms({
+            brief: briefRef.current,
+            resumeText: resumeTextRef.current,
+            company: prepInputRef.current?.company,
+            role: prepInputRef.current?.role,
+            jobDescription: prepInputRef.current?.jobDescription,
+          }),
         }).then((status) => ({ status, credential }));
       })
       .then((started) => {
@@ -622,7 +680,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     const metrics = metricsRef.current;
     if (!uid || !identity || !metrics) return;
     const turns = reflectionTurnsRef.current;
-    const exchanges = historyRef.current;
+    const exchanges = exchangesIncludingLive();
     if (turns.length === 0 && exchanges.length === 0) return;
     const brief = briefRef.current;
     const record: InterviewSessionRecord = {
@@ -649,7 +707,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     void saveInterviewSession(uid, record).catch((error) =>
       logError("Interview Companion: save session", error),
     );
-  }, [user?.uid]);
+  }, [user?.uid, exchangesIncludingLive]);
 
   const stop = useCallback(() => {
     startAttemptRef.current += 1;
@@ -713,16 +771,23 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     loadInterviewResume()
       .then(async (stored) => {
         if (!active) return;
-        if (stored) {
-          setResumeText(stored);
-          return;
-        }
+        if (stored) setResumeText(stored);
         if (!user?.uid) return;
+        // Read on every path, not only the no-resume one: company, role, and the
+        // job description feed keyterms even when the resume came from Rust.
         const workspace = await loadInterviewWorkspace(user.uid);
         if (!active || !workspace) return;
         const current = workspace.interviews.find(
           (record) => record.interviewId === workspace.currentInterviewId,
         );
+        if (current) {
+          prepInputRef.current = {
+            company: current.input.company,
+            role: current.input.role,
+            jobDescription: current.input.jobDescription,
+          };
+        }
+        if (stored) return;
         const fromWorkspace = current?.input.resume.trim();
         if (fromWorkspace) setResumeText(fromWorkspace);
       })
@@ -841,6 +906,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
           },
         ].slice(-MAX_HISTORY_EXCHANGES));
       }
+      if (previousTurn && previousTurn.turnId !== turn.turnId) setScreenNote(null);
       activeAnswerTurnRef.current = turn;
       activeAnswerActionRef.current = action;
       activeUnverifiedRef.current =
@@ -879,6 +945,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       action,
       currentAnswer: previousAnswer,
       screenSight,
+      screenNotes: screenNotesRef.current,
       signal: controller.signal,
       onFrame: (frame) => {
         if (controller.signal.aborted) return;
@@ -939,6 +1006,10 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
             }
             setMessage(null);
           }
+        } else if (frame.type === "screen_note") {
+          if (!activated || generationRef.current !== controller) return;
+          screenNotesRef.current = [...screenNotesRef.current, frame.note].slice(-3);
+          setScreenNote(frame.note);
         } else if (frame.type === "answer_delta") {
           if (!activated || generationRef.current !== controller) return;
           if (!firstDeltaTracked) {
@@ -1062,9 +1133,17 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     void createInterviewReflection({ ...reflectionSnapshot, signal: controller.signal })
       .then((result) => {
         setReflection(result);
-        setMessage("Nothing is saved unless you choose Save reflection.");
+        setMessage("Saved with this session. Download it any time from the Interview page.");
         setPhase("reflection");
         trackEvent("interview_companion_reflection", { outcome: "generated" });
+        // Kept beside the transcript it was derived from, in the same encrypted
+        // store and under the same retention. Dismiss used to destroy this.
+        const uid = user?.uid;
+        if (uid) {
+          void saveInterviewReflection(uid, reflectionSnapshot.sessionId, result)
+            .catch((error) =>
+              logError("Interview Companion: save reflection to store", error));
+        }
       })
       .catch((error) => {
         if (controller.signal.aborted) return;
@@ -1076,14 +1155,14 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       .finally(() => {
         if (reflectionRequestRef.current === controller) reflectionRequestRef.current = null;
       });
-  }, [phase, reflectionSnapshot]);
+  }, [phase, reflectionSnapshot, user?.uid]);
 
   const saveReflection = useCallback(() => {
     if (!reflection || savingReflectionRef.current) return;
     const sequence = ++savingReflectionSequenceRef.current;
     savingReflectionRef.current = true;
     setSavingReflection(true);
-    setMessage("Saving reflection...");
+    setMessage("Writing a copy to Downloads...");
     void invoke<{ path: string }>("save_interview_reflection", {
       markdown: reflectionMarkdown(reflection),
     })
@@ -1095,7 +1174,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       .catch((error) => {
         if (sequence !== savingReflectionSequenceRef.current) return;
         logError("Interview Companion: save reflection", error);
-        setMessage("Aura could not save the reflection. The in-memory copy is still here.");
+        setMessage("Aura could not write the file. The reflection is still saved with this session.");
       })
       .finally(() => {
         if (sequence !== savingReflectionSequenceRef.current) return;
@@ -1336,6 +1415,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     recoverable,
     candidateSpeaking,
     capturingScreen,
+    screenNote,
     savingReflection,
     reflection,
     message,

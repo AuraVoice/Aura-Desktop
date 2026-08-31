@@ -626,3 +626,19 @@
 .interview-hacker-text-button {
   padding: 5px 11px;
 }
+
+/* What Aura saw on the last screen it was shown. Alpha-based like everything
+   else on the glass: an opaque fill here would punch a hole in the surface. */
+.interview-hacker-screen-note {
+  margin: 2px 0 6px;
+  padding: 4px 9px;
+  border-radius: 8px;
+  align-self: flex-end;
+  max-width: 82%;
+  font-size: 11px;
+  line-height: 1.35;
+  letter-spacing: 0.01em;
+  color: rgba(63, 86, 78, 0.72);
+  background: rgba(255, 255, 255, 0.42);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+}

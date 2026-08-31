@@ -50,6 +50,9 @@ const ENCRYPTION_AVAILABLE: bool = cfg!(windows);
 /// not a record to keep forever.
 const MAX_AGE_MS: i64 = 90 * 24 * 60 * 60 * 1000;
 const MAX_SESSIONS: i64 = 25;
+/// Same ceiling the Downloads export uses (`interview.rs`), so the two copies of
+/// one reflection can never disagree about what fits.
+const MAX_REFLECTION_BYTES: usize = 64_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredTurn {
@@ -94,6 +97,9 @@ pub struct InterviewSessionSummary {
     pub role: Option<String>,
     pub exchange_count: i64,
     pub turn_count: i64,
+    /// Whether a reflection exists. Read from the column being non-NULL, so the
+    /// list stays metadata-only and never decrypts a body.
+    pub has_reflection: bool,
 }
 
 /// Full detail for one session, for the dashboard modal.
@@ -108,6 +114,11 @@ pub struct InterviewSessionDetail {
     pub brief_id: Option<String>,
     pub turns: Vec<StoredTurn>,
     pub exchanges: Vec<StoredExchange>,
+    /// The post-interview reflection, when one was generated. NULL for every
+    /// session saved before reflections were stored, and for every session the
+    /// user chose not to reflect on: absent is a normal state, not an error.
+    pub reflection: Option<String>,
+    pub reflection_at_ms: Option<i64>,
 }
 
 fn db_path(app: &AppHandle) -> Result<PathBuf, String> {
@@ -157,6 +168,20 @@ fn open(app: &AppHandle) -> Result<Connection, String> {
          );",
     )
     .map_err(|e| e.to_string())?;
+    // Added after the table shipped, so existing databases need the column
+    // grafted on rather than the table recreated: the AAD namespace is frozen
+    // and the rows already on disk must keep decrypting.
+    let has_reflection = conn
+        .prepare("SELECT 1 FROM pragma_table_info('sessions') WHERE name = 'reflection'")
+        .and_then(|mut stmt| stmt.exists([]))
+        .map_err(|e| e.to_string())?;
+    if !has_reflection {
+        conn.execute_batch(
+            "ALTER TABLE sessions ADD COLUMN reflection BLOB;
+             ALTER TABLE sessions ADD COLUMN reflection_at_ms INTEGER;",
+        )
+        .map_err(|e| e.to_string())?;
+    }
     Ok(conn)
 }
 
@@ -330,7 +355,8 @@ pub async fn interview_sessions_list(
                         (SELECT COUNT(*) FROM exchanges e
                            WHERE e.uid = s.uid AND e.session_id = s.session_id),
                         (SELECT COUNT(*) FROM turns t
-                           WHERE t.uid = s.uid AND t.session_id = s.session_id)
+                           WHERE t.uid = s.uid AND t.session_id = s.session_id),
+                        s.reflection IS NOT NULL
                  FROM sessions s
                  WHERE s.uid = ?1
                  ORDER BY s.started_at_ms DESC",
@@ -347,13 +373,23 @@ pub async fn interview_sessions_list(
                     row.get::<_, Option<Vec<u8>>>(5)?,
                     row.get::<_, i64>(6)?,
                     row.get::<_, i64>(7)?,
+                    row.get::<_, bool>(8)?,
                 ))
             })
             .map_err(|e| e.to_string())?;
         let mut out = Vec::new();
         for row in rows {
-            let (session_id, started, ended, round_kind, company, role, exchanges, turns) =
-                row.map_err(|e| e.to_string())?;
+            let (
+                session_id,
+                started,
+                ended,
+                round_kind,
+                company,
+                role,
+                exchanges,
+                turns,
+                has_reflection,
+            ) = row.map_err(|e| e.to_string())?;
             out.push(InterviewSessionSummary {
                 company: unseal_optional(&key, &company, &row_aad(&uid, &session_id, "company")),
                 role: unseal_optional(&key, &role, &row_aad(&uid, &session_id, "role")),
@@ -363,6 +399,7 @@ pub async fn interview_sessions_list(
                 round_kind,
                 exchange_count: exchanges,
                 turn_count: turns,
+                has_reflection,
             });
         }
         Ok(out)
@@ -382,6 +419,8 @@ struct SessionMetaRow {
     company: Option<Vec<u8>>,
     role: Option<Vec<u8>>,
     brief_id: Option<String>,
+    reflection: Option<Vec<u8>>,
+    reflection_at_ms: Option<i64>,
 }
 
 #[tauri::command]
@@ -398,7 +437,8 @@ pub async fn interview_session_load(
         let conn = open(&app)?;
         let meta: Option<SessionMetaRow> = conn
             .query_row(
-                "SELECT started_at_ms, ended_at_ms, round_kind, company, role, brief_id
+                "SELECT started_at_ms, ended_at_ms, round_kind, company, role, brief_id,
+                        reflection, reflection_at_ms
                  FROM sessions WHERE uid = ?1 AND session_id = ?2",
                 params![uid, session_id],
                 |row| {
@@ -409,6 +449,8 @@ pub async fn interview_session_load(
                         company: row.get(3)?,
                         role: row.get(4)?,
                         brief_id: row.get(5)?,
+                        reflection: row.get(6)?,
+                        reflection_at_ms: row.get(7)?,
                     })
                 },
             )
@@ -420,6 +462,8 @@ pub async fn interview_session_load(
             company,
             role,
             brief_id,
+            reflection,
+            reflection_at_ms,
         }) = meta
         else {
             return Ok(None);
@@ -482,6 +526,12 @@ pub async fn interview_session_load(
         Ok(Some(InterviewSessionDetail {
             company: unseal_optional(&key, &company, &row_aad(&uid, &session_id, "company")),
             role: unseal_optional(&key, &role, &row_aad(&uid, &session_id, "role")),
+            // Before `session_id` is moved into the struct, like company and role.
+            reflection: unseal_optional(
+                &key,
+                &reflection,
+                &row_aad(&uid, &session_id, "reflection"),
+            ),
             session_id,
             started_at_ms: started,
             ended_at_ms: ended,
@@ -489,6 +539,7 @@ pub async fn interview_session_load(
             brief_id,
             turns,
             exchanges,
+            reflection_at_ms,
         }))
     })
     .await
@@ -496,6 +547,41 @@ pub async fn interview_session_load(
 }
 
 /// Deletes one stored session. Turns and exchanges cascade.
+/// Attaches a reflection to a session already on disk.
+///
+/// An UPDATE rather than part of the save: the session is written on Stop and
+/// the reflection is generated afterwards, from an explicit Reflect action. A
+/// missing row is a silent no-op, matching `interview_session_save`'s
+/// best-effort contract - a storage miss must never surface mid-interview.
+#[tauri::command]
+pub async fn interview_reflection_save(
+    app: AppHandle,
+    uid: String,
+    session_id: String,
+    reflection: String,
+) -> Result<(), String> {
+    if !ENCRYPTION_AVAILABLE || uid.is_empty() || session_id.is_empty() {
+        return Ok(());
+    }
+    if reflection.len() > MAX_REFLECTION_BYTES {
+        return Err("Interview reflection is too large.".to_string());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let key = cache_key(&app)?;
+        let conn = open(&app)?;
+        let sealed = seal(&key, &reflection, &row_aad(&uid, &session_id, "reflection"))?;
+        conn.execute(
+            "UPDATE sessions SET reflection = ?3, reflection_at_ms = ?4
+             WHERE uid = ?1 AND session_id = ?2",
+            params![uid, session_id, sealed, now_ms()],
+        )
+        .map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 pub async fn interview_session_delete(
     app: AppHandle,

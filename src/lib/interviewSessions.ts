@@ -28,6 +28,16 @@ export interface StoredExchange {
   unverified: boolean;
 }
 
+/** The stored post-interview reflection. Structured rather than markdown so the
+ *  dashboard can render it natively and the Downloads export stays one
+ *  formatter away. */
+export interface StoredReflection {
+  summary: string;
+  strengths: string[];
+  improvements: string[];
+  followUpActions: string[];
+}
+
 /** Sessions-list row: metadata only, no bodies. */
 export interface InterviewSessionSummary {
   sessionId: string;
@@ -38,6 +48,8 @@ export interface InterviewSessionSummary {
   role: string | null;
   exchangeCount: number;
   turnCount: number;
+  /** Read from the column being non-NULL, so the list never decrypts a body. */
+  hasReflection: boolean;
 }
 
 /** Full detail for one session. */
@@ -51,6 +63,10 @@ export interface InterviewSessionDetail {
   briefId: string | null;
   turns: StoredTurn[];
   exchanges: StoredExchange[];
+  /** Null for sessions saved before reflections were stored and for sessions
+   *  the user never reflected on. Absent is normal, not an error. */
+  reflection: StoredReflection | null;
+  reflectionAtMs: number | null;
 }
 
 /** The record handed over on Stop. Snake_case to match the Rust deserializer. */
@@ -89,6 +105,7 @@ interface RawSummary {
   role: string | null;
   exchange_count: number;
   turn_count: number;
+  has_reflection: boolean;
 }
 
 interface RawDetail {
@@ -101,6 +118,8 @@ interface RawDetail {
   brief_id: string | null;
   turns: RawTurn[];
   exchanges: RawExchange[];
+  reflection: string | null;
+  reflection_at_ms: number | null;
 }
 
 function toTurn(raw: RawTurn): StoredTurn {
@@ -137,6 +156,7 @@ export async function listInterviewSessions(
     role: raw.role,
     exchangeCount: raw.exchange_count,
     turnCount: raw.turn_count,
+    hasReflection: raw.has_reflection,
   }));
 }
 
@@ -159,7 +179,41 @@ export async function loadInterviewSession(
     briefId: raw.brief_id,
     turns: raw.turns.map(toTurn),
     exchanges: raw.exchanges.map(toExchange),
+    reflection: parseReflection(raw.reflection),
+    reflectionAtMs: raw.reflection_at_ms,
   };
+}
+
+/** Tolerant on purpose: a reflection that cannot be parsed reads as absent,
+ *  which the UI already handles, rather than failing the whole session load. */
+function parseReflection(raw: string | null): StoredReflection | null {
+  if (!raw) return null;
+  try {
+    const value = JSON.parse(raw) as Partial<StoredReflection>;
+    if (typeof value?.summary !== "string") return null;
+    return {
+      summary: value.summary,
+      strengths: value.strengths ?? [],
+      improvements: value.improvements ?? [],
+      followUpActions: value.followUpActions ?? [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+/** Attaches a reflection to a session already on disk. Best-effort, like
+ *  saveInterviewSession: a storage failure never blocks the card. */
+export async function saveInterviewReflection(
+  uid: string,
+  sessionId: string,
+  reflection: StoredReflection,
+): Promise<void> {
+  await invoke("interview_reflection_save", {
+    uid,
+    sessionId,
+    reflection: JSON.stringify(reflection),
+  });
 }
 
 export async function deleteInterviewSession(

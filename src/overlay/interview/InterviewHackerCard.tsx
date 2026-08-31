@@ -443,6 +443,12 @@ export function InterviewHackerCard({
           </div>
         )}
 
+        {active && hacker.screenNote && (
+          <div className="interview-hacker-screen-note">
+            Looked at: {hacker.screenNote}
+          </div>
+        )}
+
         {active && hacker.phase !== "starting" && (
           <div className="interview-hacker-answer-actions">
             <button type="button" disabled={!hacker.canSuggest || hacker.candidateSpeaking} onClick={hacker.suggest}>Suggest</button>
@@ -463,7 +469,7 @@ export function InterviewHackerCard({
           <div className="interview-hacker-answer">
             {hacker.phase === "reflecting"
               ? "Aura is building a private reflection from this session."
-              : "The interview transcript is still in memory for this card. Nothing has been saved."}
+              : "This session is saved to your device, encrypted. Reflect to add coaching notes to it."}
           </div>
         )}
 
@@ -483,7 +489,7 @@ export function InterviewHackerCard({
           <div className="interview-hacker-controls">
             <button type="button" className="interview-hacker-text-button" onClick={hacker.dismissReflection}>Dismiss</button>
             {hacker.phase === "ended" && <button type="button" className="interview-hacker-primary" onClick={hacker.reflect}>Reflect</button>}
-            {hacker.phase === "reflection" && <button type="button" className="interview-hacker-primary" disabled={hacker.savingReflection} onClick={hacker.saveReflection}>{hacker.savingReflection ? "Saving" : "Save reflection"}</button>}
+            {hacker.phase === "reflection" && <button type="button" className="interview-hacker-primary" disabled={hacker.savingReflection} onClick={hacker.saveReflection}>{hacker.savingReflection ? "Downloading" : "Download"}</button>}
           </div>
         )}
       </div>

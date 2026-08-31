@@ -188,6 +188,7 @@ pub async fn start_interview_hacker(
     app: AppHandle,
     access_token: String,
     openai_access_token: Option<String>,
+    keyterms: Option<Vec<String>>,
 ) -> Result<InterviewStatusPayload, String> {
     let credentials = TranscriptionCredentials {
         deepgram: access_token,
@@ -196,6 +197,15 @@ pub async fn start_interview_hacker(
     if credentials.deepgram.trim().is_empty() && credentials.openai.trim().is_empty() {
         return Err("transcription credential is required".to_string());
     }
+    // Recognition bias for this session, resolved on the desktop from the brief,
+    // job description, and resume. The provider truncates to its own cap, so this
+    // only drops blanks and bounds what a malformed caller can hand us.
+    let keyterms: Vec<String> = keyterms
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|term| !term.trim().is_empty())
+        .take(asr::deepgram::MAX_KEYTERMS)
+        .collect();
     let cancel_generation = app.state::<InterviewHandle>().1.load(Ordering::Relaxed);
     let ticket = crate::security::authorize(
         &app,
@@ -258,6 +268,7 @@ pub async fn start_interview_hacker(
                 run_worker(
                     worker_app,
                     credentials,
+                    keyterms,
                     session_id,
                     app_name,
                     epoch,
@@ -637,6 +648,7 @@ struct Streams {
 fn open_streams(
     provider: TranscriptionProvider,
     credentials: &TranscriptionCredentials,
+    keyterms: &[String],
 ) -> Result<Streams, AsrError> {
     let capture = audio_capture::subscribe(
         "interview-hacker",
@@ -650,7 +662,7 @@ fn open_streams(
     };
     let config = |diarize| ContinuousSessionConfig {
         sample_rate: asr::SAMPLE_RATE,
-        keyterms: Vec::new(),
+        keyterms: keyterms.to_vec(),
         credential: credential.to_string(),
         endpointing_ms: ENDPOINTING_MS,
         diarize,
@@ -705,6 +717,7 @@ fn source_failure_code(source: TranscriptSource, error: AsrError) -> &'static st
 fn run_worker(
     app: AppHandle,
     mut credentials: TranscriptionCredentials,
+    keyterms: Vec<String>,
     session_id: String,
     app_name: String,
     epoch: u64,
@@ -716,7 +729,7 @@ fn run_worker(
     } else {
         TranscriptionProvider::Deepgram
     };
-    let (mut streams, mut credential_blocked, initial_failure) = match open_streams(provider, &credentials) {
+    let (mut streams, mut credential_blocked, initial_failure) = match open_streams(provider, &credentials, &keyterms) {
         Ok(streams) => (Some(streams), false, None),
         Err(error) => (
             None,
@@ -819,7 +832,7 @@ fn run_worker(
             let switched_provider = provider != next_provider;
             provider = next_provider;
             reconnects += 1;
-            match open_streams(provider, &credentials) {
+            match open_streams(provider, &credentials, &keyterms) {
                 Ok(next_streams) => {
                     streams = Some(next_streams);
                     stable_since = Some(Instant::now());
