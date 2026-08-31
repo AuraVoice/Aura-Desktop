@@ -602,6 +602,18 @@ export async function retryMeeting(meetingId: string): Promise<void> {
   }
 }
 
+/** Permanent server-side deletion of a meeting and everything attached to it
+ * (notes, transcript artifacts). A 404 counts as success: the meeting already
+ * being gone IS the requested end state. */
+export async function deleteMeeting(meetingId: string): Promise<void> {
+  const response = await authFetch(`/meetings/${encodeURIComponent(meetingId)}`, {
+    method: "DELETE",
+  });
+  if (!response.ok && response.status !== 404) {
+    throw new Error(`Meeting deletion failed (${response.status})`);
+  }
+}
+
 /** Ambient-surface read (null on every failure), like fetchUpcomingMeetings:
  * the delivery card must never surface an error. */
 export async function fetchMeeting(

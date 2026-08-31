@@ -5862,6 +5862,37 @@
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
+/* Wrapper a card grows when it carries an overflow menu: the kebab cannot live
+   inside the card <button>, so it floats over the top-right corner of this
+   positioned sibling shell instead. */
+.db-card2-shell {
+  position: relative;
+  display: flex;
+}
+.db-card2-shell > .db-card2 {
+  flex: 1;
+  min-width: 0;
+}
+.db-card2-actions {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  opacity: 0;
+  transition: opacity 0.12s var(--db-ease);
+}
+.db-card2-shell:hover .db-card2-actions,
+.db-card2-actions:focus-within,
+.db-card2-actions.is-open {
+  opacity: 1;
+}
+/* Translucent backdrop so the glyph stays readable over card preview text. */
+.db-card2-actions .db-row-action {
+  background: rgba(255, 255, 255, 0.65);
+  box-shadow: var(--db-shadow-sm);
+}
+.db-card2-actions .db-row-action:hover {
+  background: rgba(255, 255, 255, 0.9);
+}
 .db-card2-media {
   position: relative;
   width: 100%;
@@ -6956,6 +6987,28 @@
 }
 .db-dictation-text.is-expanded {
   display: block;
+}
+.db-dictation-text-cell {
+  min-width: 0;
+}
+.db-dictation-raw {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(63, 86, 78, 0.1);
+}
+.db-dictation-raw-label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--db-text-mute);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.db-dictation-raw p {
+  margin: 0;
+  color: var(--db-text-dim);
+  font-size: 14px;
+  line-height: 1.55;
 }
 
 .db-dictation-actions {

@@ -131,6 +131,9 @@ pub struct DictationHistoryEntry {
     /// normal end state for an old dictation, not a failure.
     pub has_audio: bool,
     pub flagged: bool,
+    /// The transcript as it left ASR (after vocab corrections), present only
+    /// when AI polish changed the text. None means the final text IS the raw.
+    pub raw_text: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -214,6 +217,11 @@ fn open(app: &AppHandle) -> Result<Connection, String> {
             ON transcripts (recorded_at_ms) WHERE audio_path IS NOT NULL;",
     )
     .map_err(|e| e.to_string())?;
+    // Nullable column added after v0.11.2: the raw transcript as it left ASR,
+    // stored only when AI polish changed it. CREATE TABLE IF NOT EXISTS is a
+    // no-op on an existing table, so the upgrade is this guarded ALTER; the
+    // only expected error is "duplicate column name" on an already-upgraded DB.
+    let _ = conn.execute_batch("ALTER TABLE transcripts ADD COLUMN raw_text BLOB;");
     Ok(conn)
 }
 
@@ -256,8 +264,8 @@ pub(super) fn insert_imported(
     conn.execute(
         "INSERT INTO transcripts (
             uid, id, recorded_at_ms, word_count, duration_ms, text,
-            flagged, audio_path, audio_bytes
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8)",
+            flagged, audio_path, audio_bytes, raw_text
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, NULL)",
         params![
             uid,
             id,
@@ -387,6 +395,7 @@ fn sweep(app: &AppHandle, conn: &Connection, uid: &str) -> Result<(), String> {
 pub fn record_later(
     app: &AppHandle,
     text: String,
+    raw_text: Option<String>,
     samples: Vec<f32>,
     duration_ms: i64,
     words: u64,
@@ -399,7 +408,15 @@ pub fn record_later(
     };
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        if let Err(error) = record(&app, &uid, &text, &samples, duration_ms, words) {
+        if let Err(error) = record(
+            &app,
+            &uid,
+            &text,
+            raw_text.as_deref(),
+            &samples,
+            duration_ms,
+            words,
+        ) {
             warn!("dictation.history: entry was not saved: {error}");
         }
     });
@@ -409,6 +426,7 @@ fn record(
     app: &AppHandle,
     uid: &str,
     text: &str,
+    raw_text: Option<&str>,
     samples: &[f32],
     duration_ms: i64,
     words: u64,
@@ -416,6 +434,10 @@ fn record(
     let key = load_or_create_key(app)?;
     let id = new_id();
     let sealed_text = seal(&key, text, &row_aad(uid, &id, "text"))?;
+    let sealed_raw = match raw_text {
+        Some(raw) => Some(seal(&key, raw, &row_aad(uid, &id, "raw"))?),
+        None => None,
+    };
 
     // The clip is best effort on top of the transcript. A row with no audio is
     // a normal state; a transcript lost because its audio failed is not.
@@ -435,8 +457,8 @@ fn record(
     conn.execute(
         "INSERT INTO transcripts (
             uid, id, recorded_at_ms, word_count, duration_ms, text,
-            flagged, audio_path, audio_bytes
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8)",
+            flagged, audio_path, audio_bytes, raw_text
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, ?9)",
         params![
             uid,
             id,
@@ -446,6 +468,7 @@ fn record(
             sealed_text,
             relative,
             audio_bytes,
+            sealed_raw,
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -529,7 +552,8 @@ pub async fn dictation_history_list(
         sweep(&app, &conn, &uid)?;
         let mut statement = conn
             .prepare(
-                "SELECT id, recorded_at_ms, word_count, duration_ms, text, flagged, audio_path
+                "SELECT id, recorded_at_ms, word_count, duration_ms, text, flagged, audio_path,
+                        raw_text
                  FROM transcripts WHERE uid = ?1 ORDER BY recorded_at_ms DESC",
             )
             .map_err(|e| e.to_string())?;
@@ -543,6 +567,7 @@ pub async fn dictation_history_list(
                     row.get::<_, Vec<u8>>(4)?,
                     row.get::<_, i64>(5)?,
                     row.get::<_, Option<String>>(6)?,
+                    row.get::<_, Option<Vec<u8>>>(7)?,
                 ))
             })
             .map_err(|e| e.to_string())?;
@@ -551,7 +576,7 @@ pub async fn dictation_history_list(
         // per stored dictation on every page load.
         let dir = dictation_dir(&app)?;
         let mut entries = Vec::new();
-        for (id, recorded_at_ms, word_count, duration_ms, sealed, flagged, audio_path) in
+        for (id, recorded_at_ms, word_count, duration_ms, sealed, flagged, audio_path, sealed_raw) in
             rows.flatten()
         {
             // A row that will not decrypt is skipped, never fatal: one bad blob
@@ -559,6 +584,10 @@ pub async fn dictation_history_list(
             let Ok(text) = unseal(&key, &sealed, &row_aad(&uid, &id, "text")) else {
                 continue;
             };
+            // The raw slot degrades to None instead, so a bad raw blob costs
+            // the "view original speech" affordance, not the whole entry.
+            let raw_text = sealed_raw
+                .and_then(|sealed| unseal(&key, &sealed, &row_aad(&uid, &id, "raw")).ok());
             let has_audio = audio_path
                 .as_deref()
                 .is_some_and(|relative| dir.join(relative).exists());
@@ -570,6 +599,7 @@ pub async fn dictation_history_list(
                 duration_ms,
                 has_audio,
                 flagged: flagged != 0,
+                raw_text,
             });
         }
         Ok(entries)

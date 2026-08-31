@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import type { IconComponent } from "./channelIcons";
+import { RowMenu, type RowMenuItem } from "./RowMenu";
 
 /** The single JSON/props model that drives every card. A page maps its raw
  * backend rows into this shape; the fixed visual shell below never changes.
@@ -13,6 +14,10 @@ export interface CardModel {
   title: string;
   meta: string;
   preview?: string;
+  /** Optional overflow actions, revealed as a kebab at the card's top right on
+   * hover/focus. The card cannot host it inside its own <button>, so a card
+   * with a menu gets a positioned wrapper shell around the button instead. */
+  menu?: RowMenuItem[];
 }
 
 /** Fixed, presentational card shell. The whole card is the open target, so it
@@ -32,9 +37,12 @@ export function DashboardCard({
    * footer instead of a prominent line under the title. */
   tall?: boolean;
 }) {
-  const { media, badge, title, meta, preview } = model;
+  const { media, badge, title, meta, preview, menu } = model;
   const { Icon } = badge;
-  return (
+  // Only one menu per card, so "one open at a time" is per-card local state;
+  // outside-click already closes a stray open menu when another one opens.
+  const [menuOpen, setMenuOpen] = useState(false);
+  const card = (
     <button
       type="button"
       className={`db-card2${tall ? " db-card2-tall" : ""}`}
@@ -55,6 +63,18 @@ export function DashboardCard({
         </div>
       )}
     </button>
+  );
+  if (!menu) return card;
+  // The kebab is a SIBLING of the card button, never a child: a button inside
+  // a button is invalid HTML and untabbable. The stagger style stays on the
+  // button because that is the element `db-card-in` animates.
+  return (
+    <div className="db-card2-shell">
+      {card}
+      <div className={menuOpen ? "db-card2-actions is-open" : "db-card2-actions"}>
+        <RowMenu open={menuOpen} onOpenChange={setMenuOpen} items={menu} />
+      </div>
+    </div>
   );
 }
 

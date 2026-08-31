@@ -23,6 +23,9 @@ export interface DictationHistoryEntry {
   /** False once the clip has aged out of the size budget. Expected, not an error. */
   hasAudio: boolean;
   flagged: boolean;
+  /** The transcript as it left speech recognition, present only when AI polish
+   * changed the text. Null means `text` IS the raw transcript. */
+  rawText: string | null;
 }
 
 /** Mirrors `HistorySettings` in src-tauri/src/dictation/history.rs. */

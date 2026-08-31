@@ -448,7 +448,6 @@ export function HomePage() {
             label="Active streak"
             value={`${streak} day${streak === 1 ? "" : "s"}`}
             sub="Consecutive days with Aura"
-            accent
             tone="ember"
           />
           <DataView

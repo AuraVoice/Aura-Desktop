@@ -1025,6 +1025,13 @@ mod platform {
         } else {
             None
         };
+        // Kept only when polish actually changed the text, so history can show
+        // "original speech" next to what was typed; otherwise it would just
+        // duplicate the row's text.
+        let raw_for_history = match &polish_result {
+            Some(polished) if *polished != corrected => Some(corrected.clone()),
+            _ => None,
+        };
         let final_text = polish_result.unwrap_or(corrected);
 
         // Asked here, at the last possible moment, because this is the only
@@ -1051,6 +1058,7 @@ mod platform {
             history::record_later(
                 app,
                 final_text.clone(),
+                raw_for_history,
                 std::mem::take(&mut utterance),
                 hold_ms as i64,
                 usage::word_count(&final_text),

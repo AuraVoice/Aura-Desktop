@@ -55,6 +55,7 @@ export function DictationFeedbackDialog({
       await sendDictationFeedback({
         message,
         transcript: entry.text,
+        rawTranscript: entry.rawText ?? undefined,
         dictationId: entry.id,
         recordedAtMs: entry.recordedAtMs,
         durationMs: entry.durationMs,
@@ -94,7 +95,8 @@ export function DictationFeedbackDialog({
         <p className="db-trace-privacy">
           <ShieldCheck size={14} />
           The transcript you flagged is sent with your report so we can see what
-          went wrong. The audio is never uploaded and stays on this PC.
+          went wrong, along with the original speech text when AI formatting
+          changed it. The audio is never uploaded and stays on this PC.
         </p>
         {error && <p className="db-trace-note">{error}</p>}
         <div className="db-local-confirm-actions">

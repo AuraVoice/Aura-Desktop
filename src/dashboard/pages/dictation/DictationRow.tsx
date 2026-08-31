@@ -1,4 +1,4 @@
-import { Play, Square, Loader2, Flag, Trash2, FileText, Download } from "lucide-react";
+import { Play, Square, Loader2, Flag, Trash2, FileText, Download, ScrollText } from "lucide-react";
 import { CopyButton } from "../../components/CopyButton";
 import { RowMenu } from "../../components/RowMenu";
 import { timeOfDay } from "../../format";
@@ -21,10 +21,12 @@ export function DictationRow({
   entry,
   playback,
   expanded,
+  showRaw,
   menuOpen,
   onMenuOpenChange,
   onPlay,
   onToggleExpanded,
+  onToggleRaw,
   onFlag,
   onDelete,
   onExportText,
@@ -33,10 +35,12 @@ export function DictationRow({
   entry: DictationHistoryEntry;
   playback: PlaybackState;
   expanded: boolean;
+  showRaw: boolean;
   menuOpen: boolean;
   onMenuOpenChange: (open: boolean) => void;
   onPlay: () => void;
   onToggleExpanded: () => void;
+  onToggleRaw: () => void;
   onFlag: () => void;
   onDelete: () => void;
   onExportText: () => void;
@@ -52,14 +56,22 @@ export function DictationRow({
   return (
     <div className={active ? "db-dictation-row is-active" : "db-dictation-row"}>
       <span className="db-dictation-time">{timeOfDay(entry.recordedAtMs)}</span>
-      <button
-        type="button"
-        className={expanded ? "db-dictation-text is-expanded" : "db-dictation-text"}
-        aria-expanded={expanded}
-        onClick={onToggleExpanded}
-      >
-        {entry.text}
-      </button>
+      <div className="db-dictation-text-cell">
+        <button
+          type="button"
+          className={expanded ? "db-dictation-text is-expanded" : "db-dictation-text"}
+          aria-expanded={expanded}
+          onClick={onToggleExpanded}
+        >
+          {entry.text}
+        </button>
+        {showRaw && entry.rawText && (
+          <div className="db-dictation-raw">
+            <span className="db-dictation-raw-label">Original speech</span>
+            <p>{entry.rawText}</p>
+          </div>
+        )}
+      </div>
       <div className="db-dictation-actions">
         <button
           type="button"
@@ -105,6 +117,14 @@ export function DictationRow({
               Icon: Download,
               onSelect: onExportAudio,
               disabled: !entry.hasAudio,
+            },
+            {
+              label: showRaw ? "Hide original speech" : "View original speech",
+              Icon: ScrollText,
+              onSelect: onToggleRaw,
+              // Present but greyed when polish never changed this dictation,
+              // so the option is discoverable without implying hidden text.
+              disabled: !entry.rawText,
             },
             { label: "Delete this transcript", Icon: Trash2, onSelect: onDelete, danger: true },
           ]}

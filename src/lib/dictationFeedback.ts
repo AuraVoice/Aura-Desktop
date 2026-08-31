@@ -29,6 +29,9 @@ export interface DictationFeedbackInput {
   message: string;
   /** The transcript being reported. Included deliberately; the dialog says so. */
   transcript: string;
+  /** The pre-polish transcript, when AI polish changed the text. Lets a report
+   * about the formatting step carry what the user actually said. */
+  rawTranscript?: string;
   dictationId: string;
   recordedAtMs: number;
   durationMs: number;
@@ -56,6 +59,8 @@ export async function sendDictationFeedback(input: DictationFeedbackInput): Prom
     platform: "windows",
     source: "dictation_history",
     transcript: input.transcript,
+    // Spread rather than a bare field: Firestore rejects undefined values.
+    ...(input.rawTranscript ? { raw_transcript: input.rawTranscript } : {}),
     dictation_id: input.dictationId,
     recorded_at_ms: input.recordedAtMs,
     duration_ms: input.durationMs,

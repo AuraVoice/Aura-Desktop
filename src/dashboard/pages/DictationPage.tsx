@@ -81,6 +81,7 @@ export function DictationPage() {
   const [query, setQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [rawShownIds, setRawShownIds] = useState<Set<string>>(new Set());
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [feedbackFor, setFeedbackFor] = useState<DictationHistoryEntry | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<DictationHistoryEntry | null>(null);
@@ -244,6 +245,18 @@ export function DictationPage() {
       return next;
     });
 
+  // Turning the raw view on also expands the row: a clamped final text above
+  // an unclamped original reads as two different dictations.
+  const toggleRaw = (id: string) =>
+    setRawShownIds((current) => {
+      const next = new Set(current);
+      if (!next.delete(id)) {
+        next.add(id);
+        setExpandedIds((expanded) => new Set(expanded).add(id));
+      }
+      return next;
+    });
+
   const historyOff = settings?.enabled === false;
 
   return (
@@ -306,10 +319,12 @@ export function DictationPage() {
                       entry={entry}
                       playback={playbackFor(entry.id)}
                       expanded={expandedIds.has(entry.id) || debouncedQuery !== ""}
+                      showRaw={rawShownIds.has(entry.id)}
                       menuOpen={openMenuId === entry.id}
                       onMenuOpenChange={(open) => setOpenMenuId(open ? entry.id : null)}
                       onPlay={() => void play(entry)}
                       onToggleExpanded={() => toggleExpanded(entry.id)}
+                      onToggleRaw={() => toggleRaw(entry.id)}
                       onFlag={() => setFeedbackFor(entry)}
                       onDelete={() => setConfirmDelete(entry)}
                       onExportText={() =>

@@ -17,6 +17,7 @@ import { getMeeting, getMeetings } from "../../lib/dashboardApi";
 import { logError } from "../../lib/log";
 import { meetingFailureCopy, meetingNotes } from "../../lib/meetingCopy";
 import {
+  deleteMeeting,
   retryMeeting,
   type MeetingDoc,
   type MeetingProcessingStage,
@@ -132,7 +133,11 @@ function stateCopy(meeting: MeetingDoc, local?: LocalRecording): string {
   return meetingNotes.processing;
 }
 
-function meetingToCard(meeting: MeetingDoc, local?: LocalRecording): CardModel {
+function meetingToCard(
+  meeting: MeetingDoc,
+  local: LocalRecording | undefined,
+  onDelete: (meeting: MeetingDoc) => void,
+): CardModel {
   const state = visualState(meeting, local);
   return {
     id: meeting.meetingId,
@@ -143,6 +148,14 @@ function meetingToCard(meeting: MeetingDoc, local?: LocalRecording): CardModel {
       state === "ready"
         ? meeting.note?.summary || meetingNotes.processing
         : stateCopy(meeting, local),
+    menu: [
+      {
+        label: "Delete this meeting",
+        Icon: Trash2,
+        danger: true,
+        onSelect: () => onDelete(meeting),
+      },
+    ],
   };
 }
 
@@ -652,6 +665,9 @@ export function MeetingsPage() {
   );
   const local = useLocalRecordings();
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [pendingMeetingDelete, setPendingMeetingDelete] = useState<MeetingDoc | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const meetings = useMemo(() => res.data ?? [], [res.data]);
   const localByMeeting = useMemo(() => {
     const map = new Map<string, LocalRecording>();
@@ -661,12 +677,48 @@ export function MeetingsPage() {
     return map;
   }, [local.recordings]);
   const models = useMemo(
-    () => meetings.map((meeting) => meetingToCard(meeting, localByMeeting.get(meeting.meetingId))),
+    () =>
+      meetings.map((meeting) =>
+        meetingToCard(meeting, localByMeeting.get(meeting.meetingId), setPendingMeetingDelete),
+      ),
     [meetings, localByMeeting],
   );
   const selectedMeeting = selectedId
     ? meetings.find((meeting) => meeting.meetingId === selectedId) ?? null
     : null;
+
+  const removeMeeting = async (meeting: MeetingDoc) => {
+    setDeleting(true);
+    setNotice(null);
+    try {
+      // Server first: it holds the authoritative copy (doc, notes, transcript).
+      await deleteMeeting(meeting.meetingId);
+    } catch (err) {
+      logError("MeetingsPage: delete meeting", err);
+      setNotice("Aura could not delete this meeting. Nothing was removed - try again.");
+      setDeleting(false);
+      setPendingMeetingDelete(null);
+      return;
+    }
+    // Best effort local cascade: on failure the evidence store retains the
+    // clip and retries its own deletion job, same as the recovery section.
+    const recording = localByMeeting.get(meeting.meetingId);
+    if (recording) {
+      try {
+        await invoke("delete_local_recording", {
+          meetingId: recording.meetingId,
+          captureRunId: recording.captureRunId,
+        });
+      } catch (err) {
+        logError("MeetingsPage: delete meeting local audio", err);
+      }
+    }
+    if (selectedId === meeting.meetingId) setSelectedId(null);
+    setDeleting(false);
+    setPendingMeetingDelete(null);
+    res.reload();
+    local.loadRecordings();
+  };
 
   return (
     <div className="db-page db-page-full">
@@ -689,6 +741,11 @@ export function MeetingsPage() {
             />
           </div>
 
+          {notice && (
+            <p className="db-local-recordings-message" role="status">
+              {notice}
+            </p>
+          )}
           {res.error ? (
             <PageError authExpired={res.authExpired} onRetry={res.reload} />
           ) : (
@@ -707,6 +764,55 @@ export function MeetingsPage() {
             />
           )}
         </>
+      )}
+
+      {pendingMeetingDelete && (
+        <div
+          className="db-local-confirm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="meeting-delete-title"
+          onKeyDown={(event) => {
+            if (event.key === "Escape" && !deleting) setPendingMeetingDelete(null);
+          }}
+        >
+          <button
+            type="button"
+            className="db-local-confirm-scrim"
+            aria-label="Keep this meeting"
+            disabled={deleting}
+            onClick={() => setPendingMeetingDelete(null)}
+          />
+          <div className="db-local-confirm-panel">
+            <span className="db-local-confirm-icon"><Trash2 size={20} /></span>
+            <h2 id="meeting-delete-title">Delete this meeting?</h2>
+            <p>
+              The meeting, its notes and transcript are permanently deleted from
+              Aura's servers. Any recording still on this device is removed too.
+              This cannot be undone.
+            </p>
+            <div className="db-local-confirm-actions">
+              <button
+                type="button"
+                className="db-local-confirm-cancel"
+                autoFocus
+                disabled={deleting}
+                onClick={() => setPendingMeetingDelete(null)}
+              >
+                Keep meeting
+              </button>
+              <button
+                type="button"
+                className="db-local-confirm-delete"
+                disabled={deleting}
+                onClick={() => void removeMeeting(pendingMeetingDelete)}
+              >
+                <Trash2 size={15} />
+                {deleting ? "Deleting..." : "Delete meeting"}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
