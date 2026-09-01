@@ -38,6 +38,8 @@ mod macos_ax;
 #[cfg(target_os = "macos")]
 mod macos_input;
 #[cfg(target_os = "macos")]
+mod macos_install;
+#[cfg(target_os = "macos")]
 mod macos_window;
 mod meeting;
 mod overlay;
@@ -470,6 +472,13 @@ pub fn run() {
         ])
         .setup(|app| {
             logging::install_panic_hook();
+
+            // First, and before anything is started: it can exit the process
+            // to relaunch from /Applications, and nothing below should have
+            // a thread, a hook or a window up when that happens.
+            #[cfg(target_os = "macos")]
+            macos_install::ensure_in_applications();
+
             app.manage(connector_oauth::ConnectorOAuthState::default());
 
             if let Ok(Some(urls)) = app.deep_link().get_current() {

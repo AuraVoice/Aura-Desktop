@@ -197,25 +197,42 @@ Fast, silent checks - fine to run directly, no need to ask:
 
 ### Releasing
 
-Releases are cut by tag. `.github/workflows/release.yml` builds, signs every artifact with Azure Artifact Signing, and publishes a GitHub Release carrying the updater `.sig` files. `workflow_dispatch` is a three minute preflight (credential + tooling only, no build); add `-f full_build=true` to also rehearse bundling.
+Releases are cut by tag. `.github/workflows/release.yml` runs a Windows job (Azure Artifact Signing), then a macOS job (Developer ID + notarization), then one publish job that flips the draft GitHub Release carrying both installers and the updater `.sig` files. `workflow_dispatch` is a three minute preflight (both credential smoke tests, no build); add `-f full_build=true` to also rehearse bundling on both.
 
 ```
 tag vX.Y.Z pushed
   │
-  ├─ version guard        3 files must agree with the tag        fails in ~20s
-  ├─ npm ci
-  ├─ updater key check    signs a probe, then verify-updater-key.mjs
-  │                       confirms the pubkey in tauri.conf.json matches
-  ├─ install client tools MSI + dlib/signtool discovery, ~30s, NO Azure needed
-  ├─ azure/login          OIDC assertion, alive for exactly 5 MINUTES
-  ├─ smoke test  ◄────────signs a throwaway PE ~20s later. Proves credential,
-  │                       RBAC, cert profile, dlib and signtool in 10 seconds,
-  │                       AND caches an access token good for ~1 hour
-  ├─ tauri-action         ~12 min build, then every signature calls
-  │                       scripts/sign-windows-artifact.ps1, which mints a
-  │                       FRESH OIDC assertion per batch (150s stamp)
-  ├─ verify artifacts     Authenticode on the NSIS exe and the MSI, .sig present
-  └─ publish              flips the draft to latest
+  ├─ job windows (windows-latest)
+  │    ├─ version guard        3 files must agree with the tag        fails in ~20s
+  │    ├─ npm ci
+  │    ├─ updater key check    signs a probe, then verify-updater-key.mjs
+  │    │                       confirms the pubkey in tauri.conf.json matches
+  │    ├─ install client tools MSI + dlib/signtool discovery, ~30s, NO Azure needed
+  │    ├─ azure/login          OIDC assertion, alive for exactly 5 MINUTES
+  │    ├─ smoke test  ◄────────signs a throwaway PE ~20s later. Proves credential,
+  │    │                       RBAC, cert profile, dlib and signtool in 10 seconds,
+  │    │                       AND caches an access token good for ~1 hour
+  │    ├─ tauri-action         ~12 min build, then every signature calls
+  │    │                       scripts/sign-windows-artifact.ps1, which mints a
+  │    │                       FRESH OIDC assertion per batch (150s stamp)
+  │    └─ verify artifacts     Authenticode on the NSIS exe and the MSI, .sig present
+  │
+  ├─ job macos (macos-latest, needs windows: tauri-action's latest.json merge is a
+  │            download-then-upload with no lock, so the two jobs must not overlap)
+  │    ├─ version guard, npm ci, updater key check    same as above
+  │    ├─ Apple smoke test     imports the .p12 into a throwaway keychain, signs a
+  │    │                       copy of /bin/ls, runs `notarytool history`. Proves the
+  │    │                       cert is a Developer ID Application one and the API key
+  │    │                       works, in ~15s instead of after the build
+  │    ├─ tauri-action         --target universal-apple-darwin. Tauri itself signs,
+  │    │                       notarizes (notarytool --wait, 2 to 20 min) and staples
+  │    └─ verify artifacts     codesign/spctl/stapler on the .app AND on the .app
+  │                            inside the updater tar.gz, lipo shows both slices,
+  │                            DMG signed
+  │
+  └─ job publish (needs both)
+       ├─ latest.json must carry windows-x86_64, darwin-aarch64 AND darwin-x86_64
+       └─ flips the draft to latest
 ```
 
 To ship:
@@ -234,6 +251,12 @@ To ship:
 Do not "simplify" this by arranging build steps around the five minute window. That was tried (split compile, second sign-in, separate cache warm) and it works only until the next step gets slower. The refresh belongs at the choke point.
 
 Signing config lives in the Entra app registration (federated credential subject `repo:AuraVoice/Aura-Desktop:environment:production`, audience `api://AzureADTokenExchange`) and the `production` GitHub environment, which holds `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. There is no `AZURE_CLIENT_SECRET` and the workflow does not want one. When signing breaks, query the live resource with `az` rather than reading the portal or the config that is supposed to describe it.
+
+**macOS signing is five secrets and no script.** How to obtain each, the run order, and the company-certificate switch are written up in [`MACOS_RELEASE_CHECKLIST.md`](./MACOS_RELEASE_CHECKLIST.md); read it before the first Mac tag. The same `production` environment holds `APPLE_CERTIFICATE` (base64 of the Developer ID Application `.p12`), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_API_KEY` (App Store Connect Team key ID), `APPLE_API_ISSUER`, and `APPLE_API_KEY_P8` (the `.p8` body; the job writes it to disk and sets `APPLE_API_KEY_PATH`). `KEYCHAIN_PASSWORD` is generated per run because it only guards a keychain the runner deletes. There is no `APPLE_ID`/`APPLE_PASSWORD` and the workflow does not want them: an app-specific password rides on a human account Apple can lock at any time. Individual keys cannot notarize; the key must be a Team key, Developer role is enough. Tauri does the import, `codesign --options runtime`, `notarytool submit --wait` and `stapler staple` itself from those env vars; a missing notarization credential is a build failure, never a silent skip.
+
+**BEFORE PUBLIC LAUNCH: the certificate is the individual membership's.** Replacing it with the company's Developer ID changes the Team ID, and macOS keys every TCC grant and the login-keychain master key's ACL on that identity. Every beta install will re-prompt for Microphone, Accessibility, Input Monitoring and Screen Recording, plus one keychain "Always Allow", on its first launch after that update. Ship that release with a note that says so; nothing in the code can avoid it. The updater itself is unaffected: it trusts the minisign key, not the Apple one. The same release is the moment to test dropping the unproven JIT entitlements (see `entitlements.plist`).
+
+**Local Mac builds.** `tauri dev` runs an unsigned binary, and every rebuild is a new identity to TCC: Accessibility, Input Monitoring and Screen Recording grants vanish each time, and Sequoia refuses screen capture to ad-hoc binaries entirely. To test permissions or capture, build the real bundle with `APPLE_SIGNING_IDENTITY="Developer ID Application: <name> (<team>)" npm run tauri build -- --target universal-apple-darwin` and run the `.app` from /Applications. A locally built bundle carries no quarantine flag, so it launches without notarization.
 
 ### Adding a new Tauri command
 

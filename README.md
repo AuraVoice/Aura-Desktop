@@ -255,9 +255,13 @@ through `DictationStatus.reason`, never as a silent failure.
 
 macOS bundle configuration lives in `src-tauri/tauri.conf.json` (`bundle.macOS`, **14.4** floor -
 the process-tap API exists from 14.2 but its TCC category only behaves correctly from 14.4),
-`src-tauri/Info.plist` (TCC purpose strings) and `src-tauri/entitlements.plist` (the JIT
-entitlements WKWebView needs to survive notarization). `release.yml` has no macOS job yet, so
-tagging still produces Windows-only artifacts.
+`src-tauri/Info.plist` (TCC purpose strings) and `src-tauri/entitlements.plist` (hardened
+runtime exceptions; the comments there say which are still unproven). `release.yml` builds
+the Mac half on `macos-latest` after the Windows job: a universal `.dmg` for download and a
+stapled `.app.tar.gz` (+ `.sig`) for the updater, with `darwin-aarch64` and `darwin-x86_64`
+both pointing at that one archive in `latest.json`. On a first launch from the disk image or
+Downloads, `src-tauri/src/macos_install.rs` offers to move the bundle into /Applications,
+because the updater cannot swap a bundle that sits on a read-only or translocated path.
 
 ## Desktop notifications
 
@@ -437,7 +441,7 @@ cd src-tauri && cargo check   # Rust compiles, no binary produced
 npx tsc --noEmit              # TypeScript type-checks
 ```
 
-CI (`.github/workflows/ci.yml`) runs those same two checks plus dependency audits (`npx audit-ci --config ./audit-ci.jsonc`, `cargo audit`) on every PR and push to `main`. The Rust checks run twice, on `windows-latest` and `macos-14`, so the non-Windows halves of every platform seam are compiled and linted rather than left to rot. `release.yml` builds and publishes tagged releases (Windows artifacts only for now).
+CI (`.github/workflows/ci.yml`) runs those same two checks plus dependency audits (`npx audit-ci --config ./audit-ci.jsonc`, `cargo audit`) on every PR and push to `main`. The Rust checks run twice, on `windows-latest` and `macos-14`, so the non-Windows halves of every platform seam are compiled and linted rather than left to rot. `release.yml` builds and publishes tagged releases for Windows and macOS (see Platform support for the macOS artifacts).
 
 
 Config worth knowing about:

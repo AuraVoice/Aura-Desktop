@@ -181,6 +181,14 @@ mod keywrap {
 /// with the same AES-GCM used everywhere else. The key files stay exactly where
 /// Windows puts them, which keeps the "each feature owns its own key file"
 /// invariant identical across platforms.
+///
+/// The keychain item's access control is bound to the signing identity that
+/// created it. BEFORE PUBLIC LAUNCH: replacing the individual Developer ID
+/// with the company's changes the Team ID, so every beta install sees one
+/// "Aura Desktop wants to use your confidential information" prompt on its
+/// first launch after that update. "Always Allow" resolves it for good; Deny
+/// leaves every encrypted store unavailable by design (see `master_key`), and
+/// must never be answered by minting a replacement.
 #[cfg(target_os = "macos")]
 mod keywrap {
     use security_framework::passwords::{get_generic_password, set_generic_password};

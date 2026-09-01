@@ -1,7 +1,7 @@
 import { fetch } from "@tauri-apps/plugin-http";
 import { auth } from "./firebase";
 import { logError } from "./log";
-import { analyticsOsName } from "./platform";
+import { analyticsOsName, cpuArch } from "./platform";
 
 /** Public PostHog project token - same project the Flutter app reports to, so
  * events are comparable across platforms. Client-side-safe by PostHog's own
@@ -9,7 +9,7 @@ import { analyticsOsName } from "./platform";
 const PROJECT_TOKEN = "phc_CDtz3DmNraHdnJ2w9W7WJNkJ8VANYPBWAcqV2Uf77k5s";
 const HOST = "https://us.i.posthog.com";
 
-const STATIC_PROPERTIES = { platform: "desktop-react", $os: analyticsOsName };
+const STATIC_PROPERTIES = { platform: "desktop-react", $os: analyticsOsName, cpu_arch: cpuArch };
 let superProperties: Record<string, unknown> = {};
 
 // Single shared gate: both PostHog (here) and Sentry (see lib/sentry.ts) check

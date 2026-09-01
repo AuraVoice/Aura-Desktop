@@ -7,9 +7,16 @@
       tauri.conf.json. These entitlements re-open the specific holes the app
       genuinely needs. Nothing here is optional decoration.
 
-      The three JIT/memory keys are what keep WKWebView alive. Without them the
-      app launches fine in development and then crashes on launch AFTER
-      notarization, which is the worst possible time to find out.
+      The three JIT/memory keys are the ones WKWebView-hosting apps commonly
+      declare. They have NOT been proven necessary here: WKWebView runs its
+      JIT inside Apple's own WebContent XPC process, and Tauri's signing docs
+      require no entitlements for notarization; the "crashes after
+      notarization" story comes from Electron, whose V8 runs in-process.
+      BEFORE PUBLIC LAUNCH: run the release workflow's full_build dry run with
+      allow-dyld-environment-variables and allow-unsigned-executable-memory
+      removed, launch the notarized bundle on a clean Mac, and keep only what
+      that launch actually needs. Each key left in is a hole in the hardened
+      runtime.
     -->
     <key>com.apple.security.cs.allow-jit</key>
     <true/>

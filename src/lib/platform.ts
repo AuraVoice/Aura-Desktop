@@ -13,7 +13,7 @@
  * api.ts and analytics.ts.
  */
 
-import { platform } from "@tauri-apps/plugin-os";
+import { arch, platform } from "@tauri-apps/plugin-os";
 
 type DesktopPlatform = "macos" | "windows" | "other";
 
@@ -34,6 +34,17 @@ function detect(): DesktopPlatform {
 export const currentPlatform: DesktopPlatform = detect();
 export const isMac = currentPlatform === "macos";
 export const isWindows = currentPlatform === "windows";
+
+/** CPU architecture ("aarch64", "x86_64"), reported to analytics for one
+ * decision: whether the universal Mac build still needs its Intel half.
+ * "unknown" outside a native shell, same fallback reasoning as `detect`. */
+export const cpuArch: string = (() => {
+  try {
+    return arch();
+  } catch {
+    return "unknown";
+  }
+})();
 
 /** The value backend and analytics expect. Lowercase, matching the mobile
  * clients' convention for the same header. */

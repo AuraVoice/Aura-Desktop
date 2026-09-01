@@ -47,7 +47,7 @@ jobs:
   # macOS is a shipping target, so the cfg(not(windows)) halves of every
   # platform seam have to compile and lint like the Windows halves do. Without
   # this job they were never built by CI at all and quietly rotted.
-  # macos-14 is arm64 and matches the 14.2 minimumSystemVersion floor.
+  # macos-14 is arm64 and matches the 14.4 minimumSystemVersion floor.
   # cargo-audit is target-independent, so it stays on the Windows job only.
   rust-macos:
     runs-on: macos-14
