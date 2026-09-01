@@ -8,12 +8,10 @@
 //! undecryptable), so each grammar lives next to its store, marked FROZEN.
 //! New stores build theirs with `aad` below instead of inventing a format.
 
-#[cfg(windows)]
 pub fn seal(key: &[u8; 32], plaintext: &str, aad: &str) -> Result<Vec<u8>, String> {
     crate::crypto::encrypt_with_aad(key, plaintext.as_bytes(), aad.as_bytes())
 }
 
-#[cfg(windows)]
 pub fn unseal(key: &[u8; 32], sealed: &[u8], aad: &str) -> Result<String, String> {
     let plain = crate::crypto::decrypt_with_aad(key, sealed, aad.as_bytes())?;
     String::from_utf8(plain).map_err(|e| e.to_string())

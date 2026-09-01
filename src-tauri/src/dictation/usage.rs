@@ -6,7 +6,6 @@
 //! transcripts and audio themselves live in `history.rs`, sealed, capped, and
 //! separately switchable off; application names are in neither.
 
-#![cfg(windows)]
 
 use std::sync::{Mutex, OnceLock};
 

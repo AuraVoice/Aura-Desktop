@@ -14,6 +14,7 @@ import { trackOnboardingStepCompleted } from "../lib/acquisitionAnalytics";
 import { recordDesktopOnboardingEvent } from "../lib/profile";
 import { logError } from "../lib/log";
 import "./HotkeyTourStep.css";
+import { osName, primaryModifierLabel } from "../lib/platform";
 
 interface HotkeyTourStepProps {
   keyLabel?: string;
@@ -50,9 +51,9 @@ export function HotkeyTourStep({ keyLabel, onContinue }: HotkeyTourStepProps) {
   const [bindings, setBindings] = useState<HotkeyBinding[]>([]);
   const [voice, setVoice] = useState<VoiceToggleKeyStatus>({
     available: true,
-    keyLabel: keyLabel || "Left Ctrl",
+    keyLabel: keyLabel || primaryModifierLabel,
     accelerator: keyLabel === "Right Ctrl" ? "ControlRight" : "ControlLeft",
-    keys: [keyLabel || "Left Ctrl"],
+    keys: [keyLabel || primaryModifierLabel],
     gesture: "doubleTap",
   });
   const [screen, setScreen] = useState<"voice" | "chat" | "list">("voice");
@@ -165,9 +166,9 @@ export function HotkeyTourStep({ keyLabel, onContinue }: HotkeyTourStepProps) {
   const shortcutLabel = currentKeys.join(" + ");
   const gestureCopy = screen === "voice"
     ? isDoubleTap
-      ? `Double-tap ${voice.keyLabel} anywhere in Windows to start talking to Buddy. Double-tap ${voice.keyLabel} again when you're done.`
-      : `Press ${shortcutLabel} anywhere in Windows to start talking to Buddy. Press ${shortcutLabel} again when you're done.`
-    : `Press ${shortcutLabel} anywhere in Windows to open text chat with Buddy.`;
+      ? `Double-tap ${voice.keyLabel} anywhere in ${osName} to start talking to Buddy. Double-tap ${voice.keyLabel} again when you're done.`
+      : `Press ${shortcutLabel} anywhere in ${osName} to start talking to Buddy. Press ${shortcutLabel} again when you're done.`
+    : `Press ${shortcutLabel} anywhere in ${osName} to open text chat with Buddy.`;
   const heading = screen === "voice" ? "Talk to Buddy" : "Type to Buddy";
   const currentAvailable = (screen === "voice" ? voice.available : Boolean(chat)) && !testError;
 
@@ -276,7 +277,7 @@ export function HotkeyTourStep({ keyLabel, onContinue }: HotkeyTourStepProps) {
         <>
           <h2 className="hotkey-test-question">Your other shortcuts</h2>
           <p className="hotkey-test-purpose">
-            These work anywhere in Windows while Aura is running. Change any of them now or later in Settings.
+            These work anywhere in {osName} while Aura is running. Change any of them now or later in Settings.
           </p>
 
           <div className="hotkey-test-card">

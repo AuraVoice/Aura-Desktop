@@ -25,7 +25,6 @@
 //! every `AsrEvent::Partial`/`Final` payload as radioactive: move it, never
 //! format it.
 
-#![cfg(windows)]
 
 use std::time::Instant;
 

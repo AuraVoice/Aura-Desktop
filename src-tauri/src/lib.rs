@@ -1,3 +1,17 @@
+// A large part of this crate still sits behind `cfg(windows)`: the low-level
+// keyboard hook, WASAPI meeting capture, the UIA walker, the tray recording
+// indicator. Compiling for macOS builds the shared halves of those modules
+// without their Windows callers, so rustc reports them as unreachable even
+// though they are fully live on Windows.
+//
+// Only the two structural lints are silenced, and only off Windows. Do NOT
+// widen this list: macOS is a shipping target now, so `unused_variables`,
+// `unused_mut` and `unreachable_code` are real signal in new macOS code and
+// must keep failing `clippy -- -D warnings` on the macos CI leg. This whole
+// attribute should shrink to nothing as the platform seams get real macOS
+// implementations rather than stubs.
+#![cfg_attr(not(windows), allow(dead_code, unused_imports))]
+
 mod audio_ducking;
 #[cfg(windows)]
 mod audio_capture;
@@ -5,7 +19,6 @@ mod auth_cache;
 mod autostart;
 mod chat_cache;
 mod connector_oauth;
-#[cfg(windows)]
 mod crypto;
 mod dashboard;
 mod dictation;
@@ -22,7 +35,6 @@ mod overlay;
 mod redact;
 mod saved_images;
 mod screenshot;
-#[cfg(windows)]
 mod screenshot_store;
 mod sealed_store;
 mod security;
@@ -580,11 +592,9 @@ pub fn run() {
             // v0.3.0 briefly persisted every spoken-turn frame as plaintext.
             // Turn frames are memory-only now, so remove that legacy directory.
             screenshot::startup_maintenance(app.handle());
-            #[cfg(windows)]
             screenshot_store::startup_maintenance(app.handle());
             // Owns the one background thread that encrypts and writes per-turn
             // captures, so the voice response never waits on disk.
-            #[cfg(windows)]
             app.manage(screenshot_store::PersistenceQueue::start(app.handle()));
             let updater_handle = app.handle().clone();
             tauri::async_runtime::spawn(updater::run_update_loop(updater_handle));
@@ -604,7 +614,6 @@ pub fn run() {
             // the process goes away. Best effort by design: a frame still in the
             // queue at exit is lost, which is the durability trade the queue
             // makes so a spoken turn never blocks on encryption.
-            #[cfg(windows)]
             if matches!(event, tauri::RunEvent::Exit) {
                 if let Some(queue) = app.try_state::<screenshot_store::PersistenceQueue>() {
                     queue.drain_for_shutdown();

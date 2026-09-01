@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { logError } from "../lib/log";
 import { useHotkeyBindings } from "../state/useHotkeyBindings";
 import type { VoiceToggleKeyStatus } from "../lib/hotkeys";
+import { defaultVoiceKeyLabel } from "../lib/platform";
 
 const ROTATE_MS = 4200;
 
@@ -28,7 +29,7 @@ export function AnimatedHotkeyGuide({ onTryVoice }: { onTryVoice: () => void }) 
   const items = useMemo<GuideItem[]>(() => {
     const voiceKeys = voiceStatus?.gesture === "press"
       ? voiceStatus.keys
-      : [`Double tap ${voiceStatus?.keyLabel || "Left Ctrl"}`];
+      : [`Double tap ${voiceStatus?.keyLabel || defaultVoiceKeyLabel}`];
     const dashboard = bindings.find((binding) => binding.id === "dashboard");
     const screenSight = bindings.find((binding) => binding.id === "screenSight");
     const guide = bindings.find((binding) => binding.id === "guide");

@@ -41,14 +41,14 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 
-#[cfg(windows)]
 use crate::meeting::crypto;
 
 const DATABASE_FILE: &str = "chat-cache.sqlite3";
 
-/// Whether message text can be sealed on this platform. False means the cache
-/// is disabled outright rather than degraded to plaintext.
-const ENCRYPTION_AVAILABLE: bool = cfg!(windows);
+/// Whether message text can be sealed. Key wrapping is per-OS (crypto.rs) but
+/// present on every shipping platform, so this stays true; a runtime keystore
+/// failure surfaces as an Err from `cache_key`, never as a silent no-op.
+const ENCRYPTION_AVAILABLE: bool = true;
 
 /// One cached message. Field names mirror the canonical Firestore message
 /// document so hydration can round-trip a server row through the cache without
@@ -117,28 +117,11 @@ fn row_aad(uid: &str, conversation_id: &str, message_id: &str) -> String {
     format!("{uid}:{conversation_id}:{message_id}")
 }
 
-#[cfg(windows)]
 fn cache_key(app: &AppHandle) -> Result<[u8; 32], String> {
     crypto::load_or_create_key(app)
 }
 
-#[cfg(not(windows))]
-fn cache_key(_app: &AppHandle) -> Result<[u8; 32], String> {
-    Err("chat cache encryption is unavailable on this platform".to_string())
-}
-
-#[cfg(windows)]
 use crate::sealed_store::{seal, unseal};
-
-#[cfg(not(windows))]
-fn seal(_key: &[u8; 32], _plaintext: &str, _aad: &str) -> Result<Vec<u8>, String> {
-    Err("chat cache encryption is unavailable on this platform".to_string())
-}
-
-#[cfg(not(windows))]
-fn unseal(_key: &[u8; 32], _sealed: &[u8], _aad: &str) -> Result<String, String> {
-    Err("chat cache encryption is unavailable on this platform".to_string())
-}
 
 /// Replaces one conversation's cached messages wholesale.
 ///

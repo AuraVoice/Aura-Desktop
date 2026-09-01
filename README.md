@@ -1,6 +1,6 @@
 # Aura Desktop
 
-Tauri v2 (Rust) + React 19 (TypeScript) Windows companion app. It has three Tauri webview windows: the opaque dashboard is the primary app surface, the borderless transparent overlay is the signed-in voice and text companion, and the passive dictation HUD handles hold-to-talk feedback without stealing focus. It's a from-scratch rewrite of the sibling Flutter app (`../Aura`, "Buddy"), talking to the same backend (`juno-backend` on Cloud Run) and Firebase project (`juno-2ea45`).
+Tauri v2 (Rust) + React 19 (TypeScript) desktop companion app. Windows is the shipping target; macOS builds and runs but is not yet at feature parity (see [Platform support](#platform-support)). It has three Tauri webview windows: the opaque dashboard is the primary app surface, the borderless transparent overlay is the signed-in voice and text companion, and the passive dictation HUD handles hold-to-talk feedback without stealing focus. It's a from-scratch rewrite of the sibling Flutter app (`../Aura`, "Buddy"), talking to the same backend (`juno-backend` on Cloud Run) and Firebase project (`juno-2ea45`).
 
 ## System overview
 
@@ -201,13 +201,40 @@ claims the meeting (`POST /meetings/claim`, monthly cap server-side: 5/month on 
 Companion, unlimited count on Pro, 402 mirrors the voice-cap shape) and starts
 `meeting/audio.rs`: WASAPI mic + render-loopback, both autoconverted to 16 kHz mono, written as
 5-minute 2-channel FLAC segments (ch0 = you, ch1 = everyone else), AES-256-GCM encrypted at
-rest (DPAPI-wrapped key). A red recording indicator shows in the bar the whole time (tray
+rest (key wrapped by DPAPI on Windows, by a login-Keychain master key on macOS). A red recording indicator shows in the bar the whole time (tray
 tooltip too), capture pauses while the session is locked, and defers any pending update
 install. The JS pump uploads segments over REST, sends `/complete`, and the backend synthesizes
 (Deepgram nova-3 multichannel + LLM) into `users/{uid}/meetings/{id}` (7-day TTL on non-pro),
 deleting the raw audio immediately. The finished note arrives as a below-bar card
 (`MeetingNotesCard.tsx`). In dev builds, `window.__meetingDebug.forceJoin("evt-1")` (see
 `src/debug/meetingDebug.ts`) drives the whole loop with no Zoom/Teams installed.
+
+## Platform support
+
+Windows ships today. macOS compiles, runs, and is genuinely usable for voice, text chat,
+Screen Sight, Guide Mode, the dashboard and notifications, with local data encrypted at rest.
+It is not at parity, and the gap is specific:
+
+| Area | Windows | macOS |
+|---|---|---|
+| Voice, text chat, dashboard, tray, hotkeys, updater | yes | yes |
+| Screen Sight / Guide Mode | DXGI fast path | `xcap` fallback, full readback per tick |
+| At-rest encryption and the stores on it | DPAPI-wrapped key | login-Keychain master key |
+| Dictation transcription stack (ASR, vocab, polish, usage) | yes | yes |
+| Dictation capture and text insertion | WASAPI + SendInput | not implemented |
+| Meeting Notes capture | WASAPI loopback | not implemented |
+| Structured screen context | UI Automation | falls back to pixels, by design |
+| Actionable toasts, audio ducking, media/window control | yes | not implemented |
+
+`crypto.rs` has exactly one platform seam, its `keywrap` submodule; the AES-256-GCM cipher and
+the per-feature key-file layout are shared. On the frontend, `src/lib/platform.ts` is the single
+source of truth for every string that differs between the two (key labels, device and tray
+nouns, the backend and analytics platform tags, System Settings deep links).
+
+macOS bundle configuration lives in `src-tauri/tauri.conf.json` (`bundle.macOS`, 14.2 floor),
+`src-tauri/Info.plist` (TCC purpose strings) and `src-tauri/entitlements.plist` (the JIT
+entitlements WKWebView needs to survive notarization). `release.yml` has no macOS job yet, so
+tagging still produces Windows-only artifacts.
 
 ## Desktop notifications
 
@@ -387,7 +414,7 @@ cd src-tauri && cargo check   # Rust compiles, no binary produced
 npx tsc --noEmit              # TypeScript type-checks
 ```
 
-CI (`.github/workflows/ci.yml`) runs those same two checks plus dependency audits (`npx audit-ci --config ./audit-ci.jsonc`, `cargo audit`) on every PR and push to `main`; `release.yml` builds and publishes tagged releases.
+CI (`.github/workflows/ci.yml`) runs those same two checks plus dependency audits (`npx audit-ci --config ./audit-ci.jsonc`, `cargo audit`) on every PR and push to `main`. The Rust checks run twice, on `windows-latest` and `macos-14`, so the non-Windows halves of every platform seam are compiled and linted rather than left to rot. `release.yml` builds and publishes tagged releases (Windows artifacts only for now).
 
 
 Config worth knowing about:

@@ -173,6 +173,10 @@ pub fn read_segment(
     read_and_verify(app, &stored)
 }
 
+// Off Windows the `plain` binding below is initialised by a diverging block, so
+// it is never read and everything after it is unreachable. Both go away once
+// the segment cipher is cross-platform; keep the scope to this one function.
+#[cfg_attr(not(windows), allow(unused_variables, unreachable_code))]
 fn read_and_verify(app: &AppHandle, stored: &StoredSegment) -> Result<Vec<u8>, String> {
     if !stored.local_present {
         return Err("segment retention window has expired".to_string());

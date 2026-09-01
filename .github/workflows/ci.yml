@@ -43,3 +43,23 @@ jobs:
 
       - run: cargo audit
         working-directory: src-tauri
+
+  # macOS is a shipping target, so the cfg(not(windows)) halves of every
+  # platform seam have to compile and lint like the Windows halves do. Without
+  # this job they were never built by CI at all and quietly rotted.
+  # macos-14 is arm64 and matches the 14.2 minimumSystemVersion floor.
+  # cargo-audit is target-independent, so it stays on the Windows job only.
+  rust-macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - run: cargo check
+        working-directory: src-tauri
+
+      - run: cargo clippy -- -D warnings
+        working-directory: src-tauri

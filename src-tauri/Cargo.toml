@@ -18,7 +18,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon"] }
+# macos-private-api unlocks WebviewWindowBuilder::transparent on macOS, which
+# the whole overlay/HUD design depends on. It is a no-op on Windows. Note the
+# trade: an app built with it cannot be distributed through the Mac App Store,
+# only Developer ID + notarization, which is how this app ships anyway.
+tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -54,6 +58,49 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 # aliases via double-metaphone. Pure Rust, no C deps.
 rphonetic = "3"
 
+# Server-side download of screen-save images for the encrypted local cache
+# (saved_images.rs). Rust-side, not a webview fetch, because GCS signed URLs
+# send no CORS header - the browser can render them in an <img> but cannot read
+# their bytes. rustls-tls keeps it off any native OpenSSL. Windows-only: the
+# cache commands no-op on other platforms; site_icons.rs uses it on all.
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+
+# At-rest encryption for every local store (crypto.rs). The cipher is
+# cross-platform; only the key WRAPPING differs (DPAPI on Windows, Keychain on
+# macOS). aes-gcm's default features include getrandom, so key/nonce generation
+# needs no separate rand dependency.
+aes-gcm = "0.10"
+
+# Dictation's cloud speech recognition (dictation/asr/deepgram.rs): one
+# WebSocket per hold to Deepgram's streaming endpoint. rustls, never native
+# OpenSSL, and deliberately the same rustls 0.23 / tokio-rustls 0.26 pair
+# reqwest and sentry already resolve to, so the binary carries ONE TLS stack.
+# futures-util is only for the sink/stream split on that socket.
+# Pinned to 0.28, not 0.30: 0.30 moves to the digest 0.11 / rand 0.10 trait
+# generation, which would put a SECOND crypto stack in the binary alongside the
+# one aes-gcm and sha2 already use. 0.28 adds only an extra root-cert data
+# crate.
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+base64 = "0.22"
+# The TLS config for that socket is built BY HAND rather than left to
+# tokio-tungstenite's default. Its default calls rustls' ClientConfig::builder(),
+# which resolves the crypto provider from the process, and this tree contains
+# BOTH ring and aws-lc-rs (via sentry/reqwest and tauri respectively). With two
+# providers and no process-level default installed, that call panics at runtime
+# rather than failing to compile - it would have shipped and only shown up on
+# the first dictation in an installed build. Naming ring explicitly makes the
+# choice a compile-time fact. webpki-roots is already in the tree.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
+
+# macOS key wrapping. crypto.rs holds the per-feature key files exactly where
+# Windows does and wraps them with one master key kept in the login Keychain,
+# which is the closest analogue to DPAPI's "useless on another machine or user
+# account" property.
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"
+
 # Win32 bindings - win_focus.rs and the meeting/ module use this, Windows
 # only. Scoping it to a target-specific dependency table (rather than
 # [dependencies]) keeps it out of a macOS/Linux build entirely, since the
@@ -63,6 +110,7 @@ rphonetic = "3"
 # is PID -> exe name; Security_Cryptography is DPAPI key wrapping (its
 # LocalAlloc'd output is freed with Foundation's LocalFree); RemoteDesktop is
 # the lock/unlock session notifications.
+
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [
     "Win32_Foundation",
@@ -102,35 +150,6 @@ windows = { version = "0.61", features = [
 # 16 kHz mono f32 regardless of the device's native format.
 wasapi = "0.23"
 flacenc = "0.5"
-aes-gcm = "0.10"
-# Server-side download of screen-save images for the encrypted local cache
-# (saved_images.rs). Rust-side, not a webview fetch, because GCS signed URLs
-# send no CORS header - the browser can render them in an <img> but cannot read
-# their bytes. rustls-tls keeps it off any native OpenSSL. Windows-only: the
-# cache commands no-op on other platforms.
-reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
-# Dictation's cloud speech recognition (dictation/asr/deepgram.rs): one
-# WebSocket per hold to Deepgram's streaming endpoint. rustls, never native
-# OpenSSL, and deliberately the same rustls 0.23 / tokio-rustls 0.26 pair
-# reqwest and sentry already resolve to, so the binary carries ONE TLS stack.
-# futures-util is only for the sink/stream split on that socket.
-# Pinned to 0.28, not 0.30: 0.30 moves to the digest 0.11 / rand 0.10 trait
-# generation, which would put a SECOND crypto stack in the binary alongside the
-# one aes-gcm and sha2 already use. 0.28 adds only an extra root-cert data
-# crate.
-tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "handshake", "rustls-tls-webpki-roots"] }
-futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
-base64 = "0.22"
-# The TLS config for that socket is built BY HAND rather than left to
-# tokio-tungstenite's default. Its default calls rustls' ClientConfig::builder(),
-# which resolves the crypto provider from the process, and this tree contains
-# BOTH ring and aws-lc-rs (via sentry/reqwest and tauri respectively). With two
-# providers and no process-level default installed, that call panics at runtime
-# rather than failing to compile - it would have shipped and only shown up on
-# the first dictation in an installed build. Naming ring explicitly makes the
-# choice a compile-time fact. webpki-roots is already in the tree.
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
-webpki-roots = "1"
 # Actionable Windows toasts (toast.rs): the notification plugin cannot route a
 # toast click on Windows (its action API is mobile-only), this crate can via
 # the in-process Activated handler.

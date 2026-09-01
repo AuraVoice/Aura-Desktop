@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { isMac, modifierLabel, osName } from "./platform";
 
 export interface HotkeyBinding {
   id: string;
@@ -95,29 +96,34 @@ export function captureShortcut(event: KeyboardEvent): ShortcutCapture {
   if (event.shiftKey) modifiers.push("Shift");
 
   if (event.metaKey) {
-    return { kind: "rejected", reason: "Windows-key shortcuts are reserved for Windows. Use Ctrl, Alt, and Shift instead." };
+    // The Windows key belongs to the shell; Command is the primary modifier on
+    // macOS and Tauri registers it through the same "Super" accelerator part.
+    if (!isMac) {
+      return { kind: "rejected", reason: "Windows-key shortcuts are reserved for Windows. Use Ctrl, Alt, and Shift instead." };
+    }
+    modifiers.push("Super");
   }
-  if (event.code === "F12") {
+  if (event.code === "F12" && !isMac) {
     return { kind: "rejected", reason: "F12 is reserved by Windows for debuggers." };
   }
   if (modifiers.length === 0 && BARE_KEY_BLOCKLIST.includes(event.code)) {
     return { kind: "rejected", reason: "Pick a key you do not need for normal typing." };
   }
-  if (event.code === "Tab" && event.altKey) {
-    return { kind: "rejected", reason: "Alt+Tab is reserved for switching windows." };
+  if (event.code === "Tab" && (isMac ? event.metaKey : event.altKey)) {
+    return { kind: "rejected", reason: isMac ? "Cmd+Tab is reserved for switching apps." : "Alt+Tab is reserved for switching windows." };
   }
-  if (event.code === "Escape" && (event.altKey || event.ctrlKey)) {
-    return { kind: "rejected", reason: "That Escape shortcut is reserved by Windows." };
+  if (event.code === "Escape" && (event.altKey || event.ctrlKey || event.metaKey)) {
+    return { kind: "rejected", reason: `That Escape shortcut is reserved by ${osName}.` };
   }
-  if (event.code === "F4" && event.altKey) {
-    return { kind: "rejected", reason: "Alt+F4 is reserved for closing windows." };
+  if (isMac ? event.code === "KeyQ" && event.metaKey : event.code === "F4" && event.altKey) {
+    return { kind: "rejected", reason: isMac ? "Cmd+Q is reserved for quitting apps." : "Alt+F4 is reserved for closing windows." };
   }
 
   const key = displayKey(event.code);
   const isTypingKey = /^Key[A-Z]$/.test(event.code) || /^Digit[0-9]$/.test(event.code) || event.code === "Space";
   let warning: string | undefined;
   if (modifiers.length === 0) {
-    warning = `This captures ${key} everywhere in Windows, including while you type. You will not be able to use it in other apps.`;
+    warning = `This captures ${key} everywhere in ${osName}, including while you type. You will not be able to use it in other apps.`;
   } else if (modifiers.length === 1 && isTypingKey) {
     warning = "Single-modifier shortcuts often collide with whatever app you are in.";
   } else if (event.ctrlKey && event.altKey && !event.shiftKey && /^Key[A-Z]$/.test(event.code)) {
@@ -127,15 +133,16 @@ export function captureShortcut(event: KeyboardEvent): ShortcutCapture {
   return {
     kind: "ok",
     accelerator: [...modifiers, event.code].join("+"),
-    keys: [...modifiers.map((modifier) => (modifier === "Control" ? "Ctrl" : modifier)), key],
+    keys: [...modifiers.map(modifierLabel), key],
     warning,
   };
 }
 
 export function keysFromAccelerator(accelerator: string): string[] {
   return accelerator.split("+").map((part) => {
-    if (part === "Control") return "Ctrl";
-    if (part === "Super") return "Win";
+    if (part === "Control" || part === "Alt" || part === "Shift" || part === "Super") {
+      return modifierLabel(part);
+    }
     return displayKey(part);
   });
 }

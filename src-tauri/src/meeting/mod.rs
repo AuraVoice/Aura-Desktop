@@ -18,7 +18,9 @@ pub use runtime_lease::MeetingRuntimeLease;
 
 #[cfg(windows)]
 pub(crate) mod audio;
-#[cfg(windows)]
+// Segment/row encryption. Cross-platform: the cipher is shared and only the
+// key wrapping is per-OS (crate::crypto). chat_cache and interview_store
+// depend on this on every platform, so it must not be gated.
 pub(crate) mod crypto;
 #[cfg(windows)]
 pub mod detect;
@@ -456,6 +458,7 @@ pub async fn start_meeting_capture(
             capture_fence,
             event_id,
             ticket,
+            owner_uid,
         );
         Err("meeting capture is Windows-only".to_string())
     }

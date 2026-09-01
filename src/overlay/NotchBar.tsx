@@ -5,6 +5,11 @@ import type { VoiceBarState } from "./useVoiceBar";
 import type { NotchEdge } from "./notchEdge";
 import { useAudioLevels } from "./useAudioLevels";
 import "./NotchBar.css";
+import { modifierLabel } from "../lib/platform";
+
+/** Matches the Ctrl+Alt+M binding registered in hotkeys.rs, which is the same
+ * physical combination on both platforms; only the label differs. */
+const MUTE_SHORTCUT_LABEL = [modifierLabel("Control"), modifierLabel("Alt"), "M"].join("+");
 
 // The compact waveform-only pill (subtitle removed): a "\_/" bucket silhouette
 // authored in a fixed 184x29 logical space (40% of the old 460x72 bar, matching
@@ -74,7 +79,7 @@ export function NotchBar({
               <span
                 className="notch-mute-indicator"
                 aria-label="Voice muted"
-                title="Voice muted. Ctrl+Alt+M"
+                title={`Voice muted. ${MUTE_SHORTCUT_LABEL}`}
               >
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M4 9.5h4L13 5v14l-5-4.5H4z" />

@@ -1,6 +1,6 @@
 # Aura Desktop
 
-Tauri v2 + React 19 + TypeScript Windows companion app, a from-scratch rewrite of the sibling Flutter app (`../Aura`, "Buddy") for better UI performance and maintainability. The desktop client talks to the same backend (`juno-backend` on Cloud Run) and Firebase project (`juno-2ea45`) as the Flutter app.
+Tauri v2 + React 19 + TypeScript desktop companion app, a from-scratch rewrite of the sibling Flutter app (`../Aura`, "Buddy") for better UI performance and maintainability. Windows ships today; macOS is a work in progress (see "Platform support" below). The desktop client talks to the same backend (`juno-backend` on Cloud Run) and Firebase project (`juno-2ea45`) as the Flutter app.
 
 This file is working instructions for Claude Code in this repo. For the full architecture - diagrams, the IPC surface, session flows - see [`README.md`](./README.md). For the incident log behind the rules below, see [`lessons-learnt.txt`](./lessons-learnt.txt).
 
@@ -20,6 +20,41 @@ The runtime has three Tauri webview windows:
 - Rust owns window geometry, the configurable voice trigger (default Left Ctrl double-tap), global hotkeys (Ctrl+Alt+Space chat, Ctrl+Alt+D dashboard, Ctrl+Alt+S Screen Sight, Ctrl+Alt+G Guide Mode, Ctrl+Alt+M output mute, Ctrl+Shift+D sign-out), tray, and foreground handling (`win_focus.rs`, needed because Windows denies `SetForegroundWindow` while another app owns focus). Force foreground ONLY for the Setup `Panel` or the explicit chat summon path that uses `raise_for_hotkey`. Never force it for the resting notch/`Bar`: the notch is always-on-top, so it shows without stealing focus - see the 2026-07-16 "fail to dismiss" lesson.
 - React owns all visual content and copy (`src/dashboard/`, `src/overlay/`, `src/dictation/`), Firebase auth (`src/state/AuthProvider.tsx`), standard per-turn screen capture (`useTurnScreenCapture`), continuous change-filtered Guide capture (`useGuideMode`), and the LiveKit call.
 - The overlay drag surface is one continuous drag region (`data-tauri-drag-region="deep"` on `GlassSurface`) - real inputs/buttons/links block dragging on themselves automatically (Tauri's own rule), nothing else needs to opt in or out individually. Don't add a narrower `data-tauri-drag-region` (bare, no value) on an inner element unless you mean to shadow/restrict the outer region - a bare attribute closer to the click target short-circuits the walk and blocks the deep region from ever being reached. Clickable overlay elements must be real `<button>`s, inputs, or links, not `<div role="button">`.
+
+## Platform support
+
+Windows is the shipping target. macOS builds and runs, but is NOT at parity, and the gap is
+specific rather than general. Check here before assuming a feature exists on both.
+
+**Cross-platform (one implementation, no gates):** hotkeys, tray, overlay geometry and docking,
+screenshots (`xcap`), Guide Mode (slower, no DXGI fast path), updater, autostart, deep links,
+plain notifications, atomic writes, dashboard data pages, at-rest encryption, the encrypted
+stores built on it (chat cache, interview sessions, saved images, screenshot store), the
+dictation ASR socket, and dictation's vocabulary/consent/credential/usage/polish modules.
+
+**Windows-only, genuinely:** `dictation/audio.rs` (WASAPI), `dictation/insert.rs` (SendInput),
+`dictation/hud.rs`, `meeting/audio.rs` (WASAPI loopback), `meeting/detect.rs`, `uia/` (UI
+Automation), `audio_ducking.rs`, `toast.rs`, three of four `system_control.rs` verbs, and the
+`voice_toggle_key.rs` double-tap hook. macOS gets a stub that errors or reports unavailable.
+
+**The rule that keeps this honest:** a module belongs behind `#[cfg(windows)]` ONLY if it
+actually calls a Win32 API. Several modules were gated for merely sitting downstream of one
+(the whole `asr/` tree and `screenshot_store.rs` contain zero Win32 calls), which made them
+vanish on macOS for no reason and left `usePolishCredential.ts` retrying an unregistered command
+forever. Before adding a gate, grep the file for `windows::` and gate the caller instead.
+
+**At-rest encryption has exactly one platform seam.** `crypto.rs` is AES-256-GCM everywhere;
+only key WRAPPING differs (DPAPI on Windows, a login-Keychain master key on macOS), and that
+lives in its `keywrap` submodule. Per-feature key files stay in the same place on both, so
+deleting the meeting captures directory still cannot brick the dictation vocabulary. Both
+implementations MUST fail closed: on macOS only `errSecItemNotFound` may mint a new key.
+Treating a locked or denied keychain as "no key" silently mints a replacement and makes every
+already-sealed row permanently unreadable while new writes look healthy.
+
+**User-visible strings never hardcode a platform.** `src/lib/platform.ts` is the only place that
+knows which OS this is: key labels (Ctrl/Win vs the macOS symbols), `deviceNoun`, `trayNoun`,
+`osName`, the backend and analytics platform tags, and the System Settings deep links. Adding a
+platform-varying string means adding it there, not branching at the call site.
 
 ## Optimistic "applied" caches
 
@@ -116,7 +151,7 @@ Fast, silent checks - fine to run directly, no need to ask:
 
 | Command | Does |
 |---|---|
-| `cd src-tauri && cargo check` | Rust compiles, no binary produced. If `cargo` isn't on PATH in the shell, use `& "$env:USERPROFILE\.cargo\bin\cargo.exe"`. Use PowerShell, not Bash - Git Bash's `link.exe` shadows MSVC's. |
+| `cd src-tauri && cargo check` | Rust compiles, no binary produced. CI runs this and `cargo clippy -- -D warnings` on BOTH windows-latest and macos-14, so the non-Windows halves cannot rot. If `cargo` isn't on PATH in the shell, use `& "$env:USERPROFILE\.cargo\bin\cargo.exe"`. Use PowerShell, not Bash - Git Bash's `link.exe` shadows MSVC's. |
 | `npx tsc --noEmit` | TypeScript type-checks |
 
 ### Releasing

@@ -36,15 +36,16 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
-#[cfg(windows)]
 use crate::meeting::crypto;
 use crate::util::now_ms;
 
 const DATABASE_FILE: &str = "interview-sessions.sqlite3";
 
-/// Whether session text can be sealed on this platform. False disables the store
+/// Whether session text can be sealed. Key wrapping is per-OS (crypto.rs) but
+/// present on every shipping platform, so this stays true; a runtime keystore
+/// failure surfaces as an Err, never as a silent no-op. False disables the store
 /// outright rather than degrading it to plaintext.
-const ENCRYPTION_AVAILABLE: bool = cfg!(windows);
+const ENCRYPTION_AVAILABLE: bool = true;
 
 /// Retention: whichever bites first. A stored interview is preparation exhaust,
 /// not a record to keep forever.
@@ -194,28 +195,11 @@ fn row_aad(uid: &str, session_id: &str, slot: &str) -> String {
     crate::sealed_store::aad(AAD_NAMESPACE, &[uid, session_id, slot])
 }
 
-#[cfg(windows)]
 fn cache_key(app: &AppHandle) -> Result<[u8; 32], String> {
     crypto::load_or_create_key(app)
 }
 
-#[cfg(not(windows))]
-fn cache_key(_app: &AppHandle) -> Result<[u8; 32], String> {
-    Err("interview store encryption is unavailable on this platform".to_string())
-}
-
-#[cfg(windows)]
 use crate::sealed_store::{seal, unseal};
-
-#[cfg(not(windows))]
-fn seal(_key: &[u8; 32], _plaintext: &str, _aad: &str) -> Result<Vec<u8>, String> {
-    Err("interview store encryption is unavailable on this platform".to_string())
-}
-
-#[cfg(not(windows))]
-fn unseal(_key: &[u8; 32], _sealed: &[u8], _aad: &str) -> Result<String, String> {
-    Err("interview store encryption is unavailable on this platform".to_string())
-}
 
 fn seal_optional(key: &[u8; 32], value: &Option<String>, aad: &str) -> Result<Option<Vec<u8>>, String> {
     match value {

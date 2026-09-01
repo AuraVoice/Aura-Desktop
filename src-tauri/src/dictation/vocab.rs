@@ -19,7 +19,6 @@
 //! lives under the captures directory, so sharing it would mean "delete my
 //! recordings" silently bricks the dictation vocabulary.
 
-#![cfg(windows)]
 
 use std::collections::HashMap;
 use std::path::PathBuf;

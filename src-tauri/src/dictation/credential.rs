@@ -21,7 +21,6 @@
 //! - Expiry is checked on read, with a safety margin, so a token that would
 //!   die mid-handshake is treated as already gone.
 
-#![cfg(windows)]
 
 use std::sync::Mutex;
 use std::time::{Duration, Instant};

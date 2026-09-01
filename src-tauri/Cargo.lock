@@ -330,6 +330,7 @@ dependencies = [
  "rphonetic",
  "rusqlite",
  "rustls",
+ "security-framework",
  "sentry",
  "serde",
  "serde_json",

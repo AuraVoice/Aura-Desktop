@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      Tauri merges this into the generated Info.plist rather than replacing it,
+      so only the keys Tauri does not already set belong here.
+
+      These strings are shown verbatim in the system permission prompts, so they
+      are product copy, not boilerplate. Apple rejects vague ones, and a missing
+      NSMicrophoneUsageDescription terminates the process outright the first
+      time the mic is touched.
+    -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Aura needs your microphone so you can talk to Buddy and use dictation. Audio is streamed only while you are speaking to Aura.</string>
+
+    <!--
+      Screen recording is granted through TCC, not through an entitlement, and
+      Apple does not document a usage-description key for it. This string is
+      included defensively: it is harmless if unused, and several capture
+      frameworks surface it in the prompt.
+    -->
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Aura reads your screen only when you use Screen Sight or Guide Mode, so Buddy can see what you are working on.</string>
+
+    <!--
+      Aura sends synthetic keystrokes to insert dictated text and reads the
+      focused element to avoid typing into password fields. Both go through the
+      Accessibility grant.
+    -->
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Aura needs accessibility access to type dictated text into the app you are using and to avoid typing into password fields.</string>
+
+    <!--
+      The app lives in the menu bar, not the Dock. lib.rs already calls
+      set_activation_policy(Accessory) at runtime, but declaring it here too
+      means the Dock icon never flashes during launch before that call lands.
+    -->
+    <key>LSUIElement</key>
+    <true/>
+</dict>
+</plist>

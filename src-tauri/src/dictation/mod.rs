@@ -50,13 +50,10 @@
 
 pub mod chord;
 
-#[cfg(windows)]
 pub(crate) mod asr;
 #[cfg(windows)]
 mod audio;
-#[cfg(windows)]
 mod consent;
-#[cfg(windows)]
 mod credential;
 #[cfg(windows)]
 pub mod import_traces;
@@ -65,11 +62,8 @@ pub mod history;
 mod hud;
 #[cfg(windows)]
 mod insert;
-#[cfg(windows)]
 mod usage;
-#[cfg(windows)]
 mod vocab;
-#[cfg(windows)]
 pub mod polish;
 
 use serde::{Deserialize, Serialize};
@@ -1504,7 +1498,6 @@ pub async fn dictation_add_vocabulary(
 /// `#[tauri::command]` generates companion items alongside each function that
 /// `generate_handler!` resolves by module path, so a plain `pub use` of the
 /// functions alone leaves those behind.
-#[cfg(windows)]
 pub mod polish_commands {
     use serde::Serialize;
 
