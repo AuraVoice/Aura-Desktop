@@ -368,7 +368,8 @@ describe("useGuideMode", () => {
       for (
         let index = 0;
         index < 20 &&
-        !mocks.invoke.mock.calls.some(([command]) => command === "commit_guide_frame");
+        (!mocks.invoke.mock.calls.some(([command]) => command === "commit_guide_frame")
+          || room.streamBytes.mock.calls.length < 1);
         index += 1
       ) {
         await Promise.resolve();
