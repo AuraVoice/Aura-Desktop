@@ -114,8 +114,10 @@ fn wav_to_pcm(wav: &[u8]) -> Option<Vec<i32>> {
     }
     Some(
         wav[WAV_HEADER_BYTES..]
-            .chunks_exact(2)
-            .map(|pair| i32::from(i16::from_le_bytes([pair[0], pair[1]])))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| i32::from(i16::from_le_bytes(*pair)))
             .collect(),
     )
 }
