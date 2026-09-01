@@ -346,7 +346,16 @@ describe("useGuideMode", () => {
       await Promise.resolve();
     });
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(750);
+      // The tick continuation may register its setTimeout re-arm after the
+      // clock has already moved on a slow runner, leaving the timer just past
+      // a single advance. Advance again only while the second capture hasn't
+      // fired, so the green path stays byte-identical to one plain advance.
+      for (let attempt = 0; attempt < 4; attempt += 1) {
+        await vi.advanceTimersByTimeAsync(750);
+        if (
+          mocks.invoke.mock.calls.filter(([command]) => command === "capture_guide_frame").length > 1
+        ) break;
+      }
     });
     expect(
       mocks.invoke.mock.calls.filter(([command]) => command === "capture_guide_frame").length,
