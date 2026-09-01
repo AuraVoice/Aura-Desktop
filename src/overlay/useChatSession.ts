@@ -513,6 +513,13 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
     };
 
     const refresh = async () => {
+      // A focus event can land while a poll chain is already armed; without
+      // this the reassignment below orphans the old timer and forks a second
+      // chain, multiplying reconcile calls for as long as the window stays up.
+      if (timer !== undefined) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
       try {
         const outcome = await reconcile(controller.signal);
         if (cancelled) return;

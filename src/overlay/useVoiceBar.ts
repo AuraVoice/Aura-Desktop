@@ -829,8 +829,13 @@ export function useVoiceBar() {
         // room exactly once and let the normal LiveKit path own the call.
         if (!desiredActiveRef.current) return;
         bridgedRef.current = false;
+        // endSession zeroes desiredActiveRef itself, so the ref can't tell us
+        // whether the user intervened during the await. Every intent change
+        // bumps the generation, so anything past endSession's own +1 means a
+        // toggle landed mid-teardown and owns the session now.
+        const generation = sessionGenerationRef.current;
         await endSession();
-        if (desiredActiveRef.current) return;
+        if (sessionGenerationRef.current !== generation + 1) return;
         await startSession(mode);
       };
       try {

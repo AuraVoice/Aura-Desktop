@@ -31,8 +31,6 @@
       "identifier": "http:default",
       "allow": [
         { "url": "https://juno-backend-620715294422.us-central1.run.app/*" },
-        { "url": "http://127.0.0.1:8000/*" },
-        { "url": "http://localhost:8000/*" },
         { "url": "https://us.i.posthog.com/*" },
         { "url": "https://api.openai.com/*" }
       ]

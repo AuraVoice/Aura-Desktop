@@ -13,7 +13,7 @@ dist-ssr
 *.local
 /src-tauri/target
 graphify-out/
-.claude/settings.local.json
+/.claude/
 
 # Editor directories and files
 .vscode/*
@@ -41,3 +41,16 @@ graphify-out/
 # public repo should carry. CLAUDE.md still points at it for anyone working in
 # a local checkout, where the file is present.
 /lessons-learnt.txt
+
+# Internal strategy, feature and architecture planning docs - this repo is
+# public, keep them local only.
+/STRATEGY.md
+/FEATURE_IMPROVEMENTS.txt
+/future-features.txt
+/TEXT_CHAT_VOICE_CONTROLS_NOTE.txt
+/BACKGROUND_RESEARCH_AGENT_ARCHITECTURE.md
+/FOCUSED_REGION_PHASE1_PLAN.md
+/INTERVIEW_COMPANION_PLAN.md
+/INTERVIEW_LIVE_ANSWER_ARCHITECTURE.md
+/INTERVIEW_PROFILE_ARCHITECTURE.md
+/VOICE_GUIDE_MODE_ARCHITECTURE.md

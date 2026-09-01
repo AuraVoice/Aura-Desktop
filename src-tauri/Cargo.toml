@@ -135,3 +135,11 @@ webpki-roots = "1"
 # toast click on Windows (its action API is mobile-only), this crate can via
 # the in-process Activated handler.
 tauri-winrt-notification = "0.7"
+
+[profile.release]
+# Silent integer wrap in shipped builds is worse than a loud panic for code
+# doing buffer sizes, audio offsets and image geometry.
+overflow-checks = true
+lto = true
+codegen-units = 1
+strip = "symbols"

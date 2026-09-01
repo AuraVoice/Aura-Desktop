@@ -553,10 +553,10 @@ fn default_position(window: &WebviewWindow, size: LogicalSize<f64>) -> LogicalPo
 
 /// Whether the draft slot is showing. Setup and Pointing ignore its remembered
 /// height.
-fn slot_showing(state: &OverlayState) -> bool {
-    state.slot_height.is_some()
+fn slot_showing(presentation: OverlayPresentation, slot_height: Option<f64>) -> bool {
+    slot_height.is_some()
         && matches!(
-            state.presentation,
+            presentation,
             OverlayPresentation::Bar | OverlayPresentation::Companion
         )
 }
@@ -570,17 +570,29 @@ fn default_companion_position(window: &WebviewWindow) -> LogicalPosition<f64> {
     )
 }
 
+/// The `Copy` fields `position_for` reads, snapshotted so `apply_result` can
+/// drop the state lock before the window round-trips below run (see its
+/// reentrancy note at the top of the function).
+struct PositionSnapshot {
+    presentation: OverlayPresentation,
+    centered_slot: bool,
+    centered_slot_anchor: Option<(f64, f64)>,
+    notch_edge: NotchEdge,
+    user_center: Option<(f64, f64)>,
+    slot_height: Option<f64>,
+}
+
 fn position_for(
-    state: &OverlayState,
+    snap: &PositionSnapshot,
     window: &WebviewWindow,
     size: LogicalSize<f64>,
 ) -> LogicalPosition<f64> {
     // The notch docks to one of four screen edges (persisted as an edge, not a
     // position). A card grows the window inward from that edge. The notch ignores
     // the companion's persisted drag center entirely.
-    if state.presentation == OverlayPresentation::Bar && state.centered_slot {
+    if snap.presentation == OverlayPresentation::Bar && snap.centered_slot {
         let (work_pos, work_size) = active_display_work_area(window);
-        return state.centered_slot_anchor.map_or_else(
+        return snap.centered_slot_anchor.map_or_else(
             || LogicalPosition::new(
                 work_pos.x + (work_size.width - size.width) / 2.0,
                 work_pos.y,
@@ -588,24 +600,26 @@ fn position_for(
             |(center_x, top_y)| LogicalPosition::new(center_x - size.width / 2.0, top_y),
         );
     }
-    if state.presentation == OverlayPresentation::Bar {
+    if snap.presentation == OverlayPresentation::Bar {
         let (work_pos, work_size) = active_display_work_area(window);
-        return bar_position(state.notch_edge, work_pos, work_size, size);
+        return bar_position(snap.notch_edge, work_pos, work_size, size);
     }
 
-    match state.user_center {
+    match snap.user_center {
         // user_center always means the OWL BASE's center. Moving the window's
         // top upward by the slot height keeps that base pinned in place.
-        Some((cx, cy)) if slot_showing(state) => LogicalPosition::new(
-            cx - size.width / 2.0,
-            cy - COMPANION_HEIGHT / 2.0 - state.slot_height.unwrap_or(0.0),
-        ),
-        Some((cx, cy)) => LogicalPosition::new(cx - size.width / 2.0, cy - size.height / 2.0),
-        None if slot_showing(state) => {
-            let base = default_companion_position(window);
-            LogicalPosition::new(base.x, base.y - state.slot_height.unwrap_or(0.0))
+        Some((cx, cy)) if slot_showing(snap.presentation, snap.slot_height) => {
+            LogicalPosition::new(
+                cx - size.width / 2.0,
+                cy - COMPANION_HEIGHT / 2.0 - snap.slot_height.unwrap_or(0.0),
+            )
         }
-        None if state.presentation == OverlayPresentation::Companion => {
+        Some((cx, cy)) => LogicalPosition::new(cx - size.width / 2.0, cy - size.height / 2.0),
+        None if slot_showing(snap.presentation, snap.slot_height) => {
+            let base = default_companion_position(window);
+            LogicalPosition::new(base.x, base.y - snap.slot_height.unwrap_or(0.0))
+        }
+        None if snap.presentation == OverlayPresentation::Companion => {
             default_companion_position(window)
         }
         None => default_position(window, size),
@@ -743,9 +757,19 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
         .applied
         .is_none_or(|a| a.presentation != presentation || a.variant != panel_variant);
     let size = size_for(&state);
-    let position = position_for(&state, &window, size);
+    let snapshot = PositionSnapshot {
+        presentation,
+        centered_slot,
+        centered_slot_anchor: state.centered_slot_anchor,
+        notch_edge,
+        user_center: state.user_center,
+        slot_height,
+    };
     state.applying_bounds = true;
+    // position_for round-trips through window.* monitor queries; per the
+    // reentrancy note above, the guard must be gone before any of those run.
     drop(state);
+    let position = position_for(&snapshot, &window, size);
 
     info!("overlay::apply: applying presentation={presentation:?} variant={panel_variant:?}");
 
@@ -1239,7 +1263,7 @@ pub fn capture_user_position(app: &AppHandle, x: f64, y: f64) {
         } else {
             // With the slot open, user_center keeps meaning the owl base center,
             // so dragging while a card shows cannot shift the owl when it closes.
-            let center = if slot_showing(&state) {
+            let center = if slot_showing(state.presentation, state.slot_height) {
                 (
                     x + size.width / 2.0,
                     y + state.slot_height.unwrap_or(0.0) + COMPANION_HEIGHT / 2.0,

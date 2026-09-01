@@ -706,13 +706,18 @@ pub async fn capture_guide_frame(
             ));
         }
         if let FrameLifecycle::PendingDelivery(frame) = &runtime.lifecycle {
-            return Ok(response(
+            // Re-delivers the retained frame; no capture actually starts, so
+            // the in-flight flag set above must come back off or every later
+            // tick short-circuits at try_begin_capture and Guide goes blind.
+            let pending = response(
                 EnvelopeVerdict::Pending,
                 runtime.session_id,
                 runtime.epoch,
                 frame.sequence,
                 Some((&frame.geometry, &frame.bytes)),
-            ));
+            );
+            runtime.capture_in_flight = false;
+            return Ok(pending);
         }
         let awaiting = matches!(runtime.lifecycle, FrameLifecycle::AwaitingResponse(_));
         if awaiting && force {
@@ -725,11 +730,12 @@ pub async fn capture_guide_frame(
         // down, which is a different answer from Same.
         let allow_unchanged =
             !force && !awaiting && !runtime.needs_reseed && runtime.prev_tick.is_some();
+        let Some(pinned) = runtime.monitor.clone() else {
+            runtime.capture_in_flight = false;
+            return Err("Guide monitor is not pinned".to_string());
+        };
         (
-            runtime
-                .monitor
-                .clone()
-                .ok_or_else(|| "Guide monitor is not pinned".to_string())?,
+            pinned,
             runtime.session_id,
             runtime.sequence,
             awaiting,
@@ -738,11 +744,27 @@ pub async fn capture_guide_frame(
     };
 
     let capture_app = app.clone();
-    let captured = tauri::async_runtime::spawn_blocking(move || {
+    let captured = match tauri::async_runtime::spawn_blocking(move || {
         capture_tick(&capture_app, &pinned, allow_unchanged)
     })
     .await
-    .map_err(|e| e.to_string())??;
+    .map_err(|e| e.to_string())
+    .and_then(|inner| inner)
+    {
+        Ok(captured) => captured,
+        Err(error) => {
+            // The capture never produced a frame; release the in-flight flag
+            // or Guide skips every tick until the user disarms and re-arms.
+            if let Some(handle) = runtime_handle(&app) {
+                handle
+                    .0
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .capture_in_flight = false;
+            }
+            return Err(error);
+        }
+    };
 
     // Nothing on screen has been presented since the previous tick, so the
     // fingerprint the runtime already holds is still exactly right. This is the
