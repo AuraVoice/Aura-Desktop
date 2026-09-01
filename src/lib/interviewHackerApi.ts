@@ -61,6 +61,9 @@ export type InterviewAnswerFrame =
       gateMs: number | null;
       target: string | null;
       intent: string | null;
+      /** Which provider model produced this turn's answer. Absent until the
+       *  backend deploy that adds it, so always optional. */
+      model: string | null;
     }
   | { type: "answer_delta"; delta: string }
   | { type: "screen_note"; note: string }
@@ -169,6 +172,7 @@ function parseFrame(
             gateMs: typeof frame.gate_ms === "number" ? frame.gate_ms : null,
             target: typeof frame.target === "string" ? frame.target : null,
             intent: typeof frame.intent === "string" ? frame.intent : null,
+            model: typeof frame.model === "string" ? frame.model : null,
           }
         : null;
     case "answer_delta":

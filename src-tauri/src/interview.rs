@@ -30,6 +30,12 @@ const MAX_BRIEF_BYTES: usize = 128_000;
 const MAX_RESUME_BYTES: usize = 64_000;
 #[cfg(windows)]
 const ENDPOINTING_MS: u16 = 300;
+// The interviewer stream waits longer before finalizing than the candidate
+// stream: a remote speaker pausing past the silence window splits one question
+// in two and the first half gets answered alone. The candidate stream stays
+// fast because its finals are what release an answer held during speech.
+#[cfg(windows)]
+const REMOTE_ENDPOINTING_MS: u16 = 500;
 #[cfg(windows)]
 const MAX_RECONNECTS: u8 = 10;
 #[cfg(windows)]
@@ -660,15 +666,15 @@ fn open_streams(
         TranscriptionProvider::Deepgram => asr::deepgram_provider(),
         TranscriptionProvider::OpenAi => asr::openai_provider(),
     };
-    let config = |diarize| ContinuousSessionConfig {
+    let config = |diarize, endpointing_ms| ContinuousSessionConfig {
         sample_rate: asr::SAMPLE_RATE,
         keyterms: keyterms.to_vec(),
         credential: credential.to_string(),
-        endpointing_ms: ENDPOINTING_MS,
+        endpointing_ms,
         diarize,
     };
-    let mut candidate = asr_provider.start_continuous(config(false))?;
-    let remote = match asr_provider.start_continuous(config(true)) {
+    let mut candidate = asr_provider.start_continuous(config(false, ENDPOINTING_MS))?;
+    let remote = match asr_provider.start_continuous(config(true, REMOTE_ENDPOINTING_MS)) {
         Ok(session) => session,
         Err(error) => {
             candidate.cancel();

@@ -346,6 +346,24 @@
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
+/* An answer is on its way but no text is visible yet. Muted and pulsing so
+   the wait reads as work in progress rather than silence. */
+.interview-hacker-bubble.is-answer.is-drafting {
+  color: var(--text-muted, rgba(255, 255, 255, 0.55));
+  animation: interview-hacker-drafting 1.6s ease-in-out infinite;
+}
+
+@keyframes interview-hacker-drafting {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 0.95; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .interview-hacker-bubble.is-answer.is-drafting {
+    animation: none;
+  }
+}
+
 /* pre-wrap lives on the text node, not the bubble, so the badge above it does
    not have its surrounding JSX whitespace preserved. Answers are now full spoken
    scripts rather than keyword bullets, so line-height opens up for readability,

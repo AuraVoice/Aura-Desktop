@@ -278,7 +278,7 @@ export function InterviewHackerCard({
   useEffect(() => {
     const thread = threadRef.current;
     if (thread && followingRef.current) thread.scrollTop = thread.scrollHeight;
-  }, [hacker.history, hacker.question, hacker.answer, hacker.interimQuestion]);
+  }, [hacker.history, hacker.question, hacker.answer, hacker.interimQuestion, hacker.drafting]);
 
   const active = isInterviewCaptureActive(hacker.phase);
   const threadIsEmpty =
@@ -425,6 +425,11 @@ export function InterviewHackerCard({
                   {hacker.interimQuestion}
                 </div>
               )}
+              {hacker.drafting && !hacker.answer && (
+                <div className="interview-hacker-bubble is-answer is-drafting" aria-live="polite">
+                  Drafting...
+                </div>
+              )}
               {threadIsEmpty && (
                 <div className="interview-hacker-thread-empty">
                   Questions and answers appear here.
@@ -451,6 +456,14 @@ export function InterviewHackerCard({
 
         {active && hacker.phase !== "starting" && (
           <div className="interview-hacker-answer-actions">
+            <button
+              type="button"
+              disabled={!hacker.questionPending || hacker.phase !== "listening"}
+              onClick={hacker.sendNow}
+              title="Answer what has been said so far, without waiting"
+            >
+              Answer now
+            </button>
             <button type="button" disabled={!hacker.canSuggest || hacker.candidateSpeaking} onClick={hacker.suggest}>Suggest</button>
             <button type="button" disabled={!hacker.answer || hacker.candidateSpeaking} onClick={hacker.shorter}>Shorter</button>
             <button type="button" disabled={!hacker.answer || hacker.candidateSpeaking} onClick={hacker.anotherExample}>Another example</button>

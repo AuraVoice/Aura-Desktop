@@ -117,6 +117,13 @@ function callLabel(app: string | null): string {
 // interviewPolicy), which costs latency on every answer, so the default stays
 // where it shipped.
 const PANEL_ASSEMBLY_MS = 150;
+// A final without terminal punctuation is probably a question split by the
+// provider's silence endpointing, so it waits longer for its continuation than
+// a punctuated one. Smart formatting is on, so punctuation is dependable.
+const INCOMPLETE_HOLD_MS = 700;
+// While a pending question's speaker is demonstrably still talking (interims
+// keep arriving), the flush waits for their next final instead of firing.
+const INTERIM_EXTEND_MS = 1_200;
 const PACING_TICK_MS = 1_000;
 const PITCH_COLLAPSE_AFTER_ACCEPTED = 2;
 const ECHO_WINDOW_MS = 2_500;
@@ -159,6 +166,24 @@ function mergeRemoteTurns(
   };
 }
 
+/** Per-turn latency stamps, one object per evaluation. Promoted into
+ * `turnTimingRef` on activation so the transcript listener can close the
+ * frozen-hold measurement when the candidate stops speaking. */
+interface TurnTiming {
+  turnId: string;
+  action: InterviewAnswerAction;
+  finalWordAtMs: number | null;
+  queuedAtMs: number;
+  requestAtMs: number;
+  decisionAtMs: number | null;
+  firstDeltaAtMs: number | null;
+  frozenAtMs: number | null;
+  visibleAtMs: number | null;
+  frozenHoldMs: number;
+  model: string | null;
+  reported: boolean;
+}
+
 interface SessionMetrics {
   startedAtMs: number;
   accepted: number;
@@ -198,6 +223,13 @@ export interface InterviewHackerState {
   canSuggest: boolean;
   recoverable: boolean;
   candidateSpeaking: boolean;
+  /** True from the moment an answer request is accepted until its first text
+   *  is visible, so the card can show something during the wait. */
+  drafting: boolean;
+  /** A question is forming (interim speech or a pending merge window), so the
+   *  Answer now action has something to send. */
+  questionPending: boolean;
+  sendNow: () => void;
   capturingScreen: boolean;
   /** What Aura saw on the last screen it was shown, for the current answer. */
   screenNote: string | null;
@@ -263,6 +295,8 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   // already current, which it is on a second consecutive interviewer turn).
   const [recoverable, setRecoverable] = useState(false);
   const [canSuggest, setCanSuggest] = useState(false);
+  const [drafting, setDrafting] = useState(false);
+  const [questionPending, setQuestionPending] = useState(false);
   const identityRef = useRef<{ sessionId: string; epoch: number } | null>(null);
   const recentRef = useRef<InterviewTranscriptTurn[]>([]);
   const reflectionTurnsRef = useRef<InterviewTranscriptTurn[]>([]);
@@ -303,7 +337,11 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   const assemblyRef = useRef<{
     turn: InterviewTranscriptTurn;
     timer: ReturnType<typeof setTimeout>;
+    queuedAtMs: number;
   } | null>(null);
+  const turnTimingRef = useRef<TurnTiming | null>(null);
+  const lastRemoteInterimRef = useRef<InterviewTranscriptTurn | null>(null);
+  const flushNowRef = useRef<((action: InterviewAnswerAction) => void) | null>(null);
   const credentialTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const credentialRetryRef = useRef(0);
   const credentialRefreshInFlightRef = useRef(false);
@@ -346,6 +384,10 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     evaluationsRef.current.clear();
     if (assemblyRef.current) clearTimeout(assemblyRef.current.timer);
     assemblyRef.current = null;
+    turnTimingRef.current = null;
+    lastRemoteInterimRef.current = null;
+    setDrafting(false);
+    setQuestionPending(false);
     if (credentialTimerRef.current) clearTimeout(credentialTimerRef.current);
     credentialTimerRef.current = null;
     identityRef.current = null;
@@ -402,6 +444,33 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       credential_rotation_count: metrics.credentialRotations,
     });
     metricsRef.current = null;
+  }, []);
+
+  // One line and one event per answered turn, with the whole pipeline split by
+  // stage: STT finalization lag, merge window, network + provider first token,
+  // and how long a finished answer sat frozen behind candidate speech.
+  const reportTurnLatency = useCallback((timing: TurnTiming) => {
+    if (timing.reported || timing.visibleAtMs === null) return;
+    timing.reported = true;
+    const base = timing.finalWordAtMs ?? timing.queuedAtMs;
+    const breakdown = {
+      action: timing.action,
+      model: timing.model,
+      stt_final_lag_ms: timing.finalWordAtMs !== null
+        ? Math.max(0, timing.queuedAtMs - timing.finalWordAtMs)
+        : null,
+      assembly_ms: Math.max(0, timing.requestAtMs - timing.queuedAtMs),
+      decision_ms: timing.decisionAtMs !== null
+        ? Math.max(0, timing.decisionAtMs - timing.requestAtMs)
+        : null,
+      first_delta_ms: timing.firstDeltaAtMs !== null
+        ? Math.max(0, timing.firstDeltaAtMs - timing.requestAtMs)
+        : null,
+      frozen_hold_ms: timing.frozenHoldMs,
+      total_ms: Math.max(0, timing.visibleAtMs - base),
+    };
+    console.info("[interview-latency]", JSON.stringify(breakdown));
+    trackEvent("interview_companion_turn_latency", breakdown);
   }, []);
 
   const rememberReflectionTurn = useCallback((turn: InterviewTranscriptTurn) => {
@@ -863,6 +932,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     recentTurns: InterviewTranscriptTurn[],
     action: InterviewAnswerAction,
     screenSight: InterviewScreenSightFrame | null = null,
+    queuedAtMs: number = Date.now(),
   ) => {
     const previousAnswer = answerRef.current;
     if (
@@ -876,6 +946,22 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     evaluationsRef.current.add(controller);
     let activated = false;
     let firstDeltaTracked = false;
+    // Local to this evaluation; only the activated one is promoted to
+    // turnTimingRef, so concurrent evaluations cannot smear each other's stamps.
+    const timing: TurnTiming = {
+      turnId: turn.turnId,
+      action,
+      finalWordAtMs: typeof turn.finalWordAtMs === "number" ? turn.finalWordAtMs : null,
+      queuedAtMs,
+      requestAtMs: Date.now(),
+      decisionAtMs: null,
+      firstDeltaAtMs: null,
+      frozenAtMs: null,
+      visibleAtMs: null,
+      frozenHoldMs: 0,
+      model: null,
+      reported: false,
+    };
 
     const activate = () => {
       if (sequence < acceptedSequenceRef.current) {
@@ -915,7 +1001,10 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       // turn the gate rejects can never re-label the answer already on screen.
       setQuestion(turn.text);
       setInterimQuestion("");
+      setQuestionPending(false);
       activated = true;
+      turnTimingRef.current = timing;
+      setDrafting(true);
       if (candidateSpeakingRef.current) {
         frozenDeltasRef.current = "";
         replaceAfterSpeechRef.current = true;
@@ -950,6 +1039,8 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       onFrame: (frame) => {
         if (controller.signal.aborted) return;
         if (frame.type === "decision") {
+          timing.decisionAtMs = Date.now();
+          timing.model = frame.model;
           if (action === "automatic") {
             if (metricsRef.current) {
               if (frame.accepted) metricsRef.current.accepted += 1;
@@ -996,6 +1087,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
               generationRef.current = null;
               activeAnswerTurnRef.current = null;
               activeAnswerActionRef.current = null;
+              setDrafting(false);
               if (candidateSpeakingRef.current) {
                 frozenDeltasRef.current = "";
                 replaceAfterSpeechRef.current = true;
@@ -1014,6 +1106,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
           if (!activated || generationRef.current !== controller) return;
           if (!firstDeltaTracked) {
             firstDeltaTracked = true;
+            timing.firstDeltaAtMs = Date.now();
             const timingAvailable = typeof turn.finalWordAtMs === "number";
             trackEvent("interview_companion_first_answer_text", {
               action,
@@ -1024,13 +1117,20 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
             });
           }
           if (candidateSpeakingRef.current) {
+            if (timing.frozenAtMs === null) timing.frozenAtMs = Date.now();
             frozenDeltasRef.current += frame.delta;
           } else {
+            if (timing.visibleAtMs === null) {
+              timing.visibleAtMs = Date.now();
+              reportTurnLatency(timing);
+              setDrafting(false);
+            }
             answerRef.current += frame.delta;
             setAnswer((current) => current + frame.delta);
           }
         } else if (frame.type === "answer_done") {
           if (!activated || generationRef.current !== controller) return;
+          setDrafting(false);
           trackEvent("interview_companion_answer_completed", {
             action,
             generated: frame.generated,
@@ -1040,6 +1140,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
         } else if (frame.type === "error") {
           if (metricsRef.current) metricsRef.current.errors += 1;
           trackEvent("interview_companion_error", { code: frame.code, stage: "answer" });
+          if (generationRef.current === controller) setDrafting(false);
           if (activated || generationRef.current === null) setMessage(frame.message);
         }
       },
@@ -1054,6 +1155,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       if (activated) {
         replaceAfterSpeechRef.current = false;
         frozenDeltasRef.current = "";
+        setDrafting(false);
       }
       logError("Interview Companion: answer stream", error);
       if (activated || generationRef.current === null) {
@@ -1063,7 +1165,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       evaluationsRef.current.delete(controller);
       if (generationRef.current === controller) generationRef.current = null;
     });
-  }, []);
+  }, [reportTurnLatency]);
 
   const runManualAction = useCallback((
     action: Exclude<InterviewAnswerAction, "automatic" | "screen_sight">,
@@ -1202,18 +1304,28 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     let unlistenStatus: (() => void) | undefined;
     let unlistenTranscript: (() => void) | undefined;
 
-    const flushRemoteTurn = () => {
+    const flushRemoteTurn = (action: InterviewAnswerAction = "automatic") => {
       const pending = assemblyRef.current;
       if (!pending) return;
       clearTimeout(pending.timer);
       assemblyRef.current = null;
+      setQuestionPending(false);
       const recentTurns = recentRef.current;
       recentRef.current = [...recentTurns, pending.turn].slice(-12);
       rememberReflectionTurn(pending.turn);
       lastRemoteTurnRef.current = pending.turn;
       setCanSuggest(true);
-      evaluate(pending.turn, recentTurns, "automatic");
+      evaluate(pending.turn, recentTurns, action, null, pending.queuedAtMs);
     };
+    flushNowRef.current = flushRemoteTurn;
+
+    // A final that ends mid-sentence is probably a question the silence
+    // endpointing split, so it waits longer for its continuation than one that
+    // arrived with terminal punctuation.
+    const flushDelayFor = (text: string) =>
+      /[.?!]["')\]]?$/.test(text.trim())
+        ? assemblyMsRef.current
+        : Math.max(assemblyMsRef.current, INCOMPLETE_HOLD_MS);
 
     const queueRemoteTurn = (turn: InterviewTranscriptTurn) => {
       const pending = assemblyRef.current;
@@ -1225,15 +1337,18 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
           const merged = mergeRemoteTurns(pending.turn, turn);
           assemblyRef.current = {
             turn: merged,
-            timer: setTimeout(flushRemoteTurn, assemblyMsRef.current),
+            timer: setTimeout(flushRemoteTurn, flushDelayFor(merged.text)),
+            queuedAtMs: pending.queuedAtMs,
           };
           return;
         }
         flushRemoteTurn();
       }
+      setQuestionPending(true);
       assemblyRef.current = {
         turn,
-        timer: setTimeout(flushRemoteTurn, assemblyMsRef.current),
+        timer: setTimeout(flushRemoteTurn, flushDelayFor(turn.text)),
+        queuedAtMs: Date.now(),
       };
     };
 
@@ -1367,6 +1482,19 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
           answerRef.current += frozen;
           setAnswer((current) => current + frozen);
         }
+        if (frozen) {
+          // The answer only became visible now; the hold behind candidate
+          // speech is its own stage in the latency report.
+          const timing = turnTimingRef.current;
+          if (timing && timing.visibleAtMs === null) {
+            timing.visibleAtMs = Date.now();
+            if (timing.frozenAtMs !== null) {
+              timing.frozenHoldMs = timing.visibleAtMs - timing.frozenAtMs;
+            }
+            reportTurnLatency(timing);
+            setDrafting(false);
+          }
+        }
         frozenDeltasRef.current = "";
         replaceAfterSpeechRef.current = false;
         if (isEchoOrRepeat(turn)) return;
@@ -1376,7 +1504,21 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       }
 
       if (!turn.isFinal) {
-        if (turn.text.trim()) setInterimQuestion(turn.text);
+        if (turn.text.trim()) {
+          setInterimQuestion(turn.text);
+          lastRemoteInterimRef.current = turn;
+          setQuestionPending(true);
+          // The speaker is demonstrably still talking, so a pending flush from
+          // their earlier fragment waits for the final this interim precedes.
+          const pending = assemblyRef.current;
+          if (
+            pending
+            && (pending.turn.remoteSpeakerId ?? null) === (turn.remoteSpeakerId ?? null)
+          ) {
+            clearTimeout(pending.timer);
+            pending.timer = setTimeout(flushRemoteTurn, INTERIM_EXTEND_MS);
+          }
+        }
         return;
       }
       if (!turn.text.trim() || isEchoOrRepeat(turn)) return;
@@ -1396,7 +1538,37 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       unlistenStatus?.();
       unlistenTranscript?.();
     };
-  }, [clearSession, evaluate, recordSessionEnd, rememberReflectionTurn]);
+  }, [clearSession, evaluate, recordSessionEnd, rememberReflectionTurn, reportTurnLatency]);
+
+  /** User-initiated "answer this now": flushes a held question immediately, or,
+   * when only interim speech exists, answers from the freshest interim text.
+   * Runs as "suggest" because a question the user explicitly sent must not be
+   * second-guessed by the gate. */
+  const sendNow = useCallback(() => {
+    if (!identityRef.current) return;
+    if (assemblyRef.current) {
+      flushNowRef.current?.("suggest");
+      return;
+    }
+    const interim = lastRemoteInterimRef.current;
+    if (!interim || !interim.text.trim()) return;
+    lastRemoteInterimRef.current = null;
+    const synthetic: InterviewTranscriptTurn = { ...interim, isFinal: true };
+    // Seed the echo window so the provider's own final for this speech dedups
+    // unless it carries materially more words than what was sent.
+    recentAudioRef.current.push({
+      source: "remote",
+      text: synthetic.text,
+      atMs: Date.now(),
+    });
+    const recentTurns = recentRef.current.filter((item) => item.turnId !== synthetic.turnId);
+    recentRef.current = [...recentTurns, synthetic].slice(-12);
+    rememberReflectionTurn(synthetic);
+    lastRemoteTurnRef.current = synthetic;
+    setCanSuggest(true);
+    setQuestionPending(false);
+    evaluate(synthetic, recentTurns, "suggest");
+  }, [evaluate, rememberReflectionTurn]);
 
   return {
     phase,
@@ -1414,6 +1586,9 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     canSuggest,
     recoverable,
     candidateSpeaking,
+    drafting,
+    questionPending,
+    sendNow,
     capturingScreen,
     screenNote,
     savingReflection,
