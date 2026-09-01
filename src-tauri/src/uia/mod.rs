@@ -26,6 +26,11 @@
 pub mod contract;
 #[cfg(windows)]
 mod focus;
+#[cfg(target_os = "macos")]
+mod focus_ax;
+/// The probe's answer type, shared: dictation's insert path takes a verdict
+/// whichever platform produced it.
+mod focus_verdict;
 #[cfg(windows)]
 mod tree;
 #[cfg(windows)]
@@ -35,14 +40,15 @@ use log::info;
 use tauri::AppHandle;
 
 pub use contract::StructuredContext;
-#[cfg(windows)]
-pub use focus::{FocusProbe, FocusVerdict};
+pub use focus_verdict::{FocusProbe, FocusVerdict};
 #[cfg(windows)]
 pub use worker::UiaWorker;
 
 /// UI Automation is a Windows API. Everywhere else the structured path reports
 /// itself unavailable and the caller uses pixels - the same fallback a Windows
-/// machine without working UI Automation takes.
+/// machine without working UI Automation takes. Note this is only about the
+/// CONTEXT walk: the focus probe below has a real macOS implementation, because
+/// dictation cannot type safely without one.
 #[cfg(not(windows))]
 pub struct UiaWorker;
 
@@ -70,6 +76,16 @@ pub fn probe_focus(app: &AppHandle) -> FocusProbe {
         Some(worker) => worker.probe_focus(),
         None => FocusProbe::unknown(),
     }
+}
+
+/// macOS reads the same question off the Accessibility tree. No worker thread
+/// and no app state: AX calls are not apartment-bound the way `IUIAutomation`
+/// is, and `macos_ax` bounds each read with a messaging timeout instead, which
+/// is the failure mode that actually exists here (a hung target application,
+/// not a busy apartment).
+#[cfg(target_os = "macos")]
+pub fn probe_focus(_app: &AppHandle) -> FocusProbe {
+    focus_ax::probe()
 }
 
 /// Reads the focused element (pointer element as fallback) and its bounded

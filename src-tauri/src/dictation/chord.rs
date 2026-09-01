@@ -65,6 +65,14 @@ impl DictationChord {
 
     /// Rendered verbatim in the HUD and any other user-facing copy. Nothing
     /// anywhere may hardcode a chord string.
+    ///
+    /// The keys are the same physical ones on both platforms - `vk_sets` above
+    /// does not branch - but their NAMES are not, so this is the one place in
+    /// the module that knows which OS it is on. macOS users read Control and
+    /// Command as symbols, and the Windows key's counterpart on an Apple
+    /// keyboard is Command. `src/lib/dictationStatus.ts` carries the same
+    /// strings as its pre-reply fallback; keep the two in agreement.
+    #[cfg(not(target_os = "macos"))]
     pub fn label(self) -> &'static str {
         match self {
             DictationChord::CtrlWin => "Ctrl + Win",
@@ -73,6 +81,18 @@ impl DictationChord {
             DictationChord::WinShift => "Win + Shift",
             DictationChord::WinAlt => "Win + Alt",
             DictationChord::RightCtrlOnly => "Right Ctrl",
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    pub fn label(self) -> &'static str {
+        match self {
+            DictationChord::CtrlWin => "\u{2303} + \u{2318}",
+            DictationChord::CtrlShift => "\u{2303} + \u{21e7}",
+            DictationChord::CtrlAlt => "\u{2303} + \u{2325}",
+            DictationChord::WinShift => "\u{2318} + \u{21e7}",
+            DictationChord::WinAlt => "\u{2318} + \u{2325}",
+            DictationChord::RightCtrlOnly => "Right \u{2303}",
         }
     }
 

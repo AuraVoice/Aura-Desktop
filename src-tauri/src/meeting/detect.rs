@@ -13,11 +13,10 @@
 //! Browser-hosted Google Meet, Teams, and Zoom calls are recognized from the
 //! visible browser window title while the matching calendar window is live.
 //!
-//! Win32 discipline mirrors win_focus.rs: HWNDs never cross threads (only
-//! the data read from them does), and nothing here ever touches the
-//! OverlayState mutex.
-
-#![cfg(windows)]
+//! The watch loop, the polling cadence and the app-matching table are shared;
+//! only `scan` at the bottom is per-platform, and it exists solely to answer
+//! "which apps have visible windows, and what are they called". Nothing here
+//! ever touches the OverlayState mutex.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -28,15 +27,6 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use super::JoinWatchHandle;
-use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
-use windows::Win32::System::Threading::{
-    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
-    PROCESS_QUERY_LIMITED_INFORMATION,
-};
-use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
-    IsWindowVisible,
-};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// Consecutive match-free polls before the meeting counts as left - one blip
@@ -183,22 +173,17 @@ fn watch_thread(
 
 /// One desktop scan. Returns ("zoom" | "teams", window title) for the first
 /// visible in-call window found.
+///
+/// The matching table below is shared: the platform scan is only responsible
+/// for producing (app stem, window title) pairs, and it maps its own notion of
+/// a process onto the SAME stems the table already knows. That is what keeps
+/// the "zoom" / "google-meet" / "teams-web" app strings identical on both
+/// platforms, which matters because `joined_in_browser` and the backend claim
+/// both key off them.
 pub(crate) fn find_meeting_window() -> Option<(String, String)> {
-    let mut windows: Vec<(isize, String)> = Vec::new();
-    unsafe {
-        // HWNDs are collected as raw isize (win_focus.rs rule) and consumed
-        // inside this same scan - never stored, never crossing threads.
-        let _ = EnumWindows(
-            Some(enum_callback),
-            LPARAM(&mut windows as *mut Vec<(isize, String)> as isize),
-        );
-    }
-    for (hwnd_raw, title) in windows {
+    for (app_stem, title) in scan::visible_windows() {
         let title_lower = title.to_lowercase();
-        let Some(exe_stem) = process_stem_for_window(hwnd_raw) else {
-            continue;
-        };
-        if let Some(app_name) = meeting_app_for_window(&exe_stem, &title_lower) {
+        if let Some(app_name) = meeting_app_for_window(&app_stem, &title_lower) {
             return Some((app_name.to_string(), title));
         }
     }
@@ -256,54 +241,138 @@ mod tests {
     }
 }
 
-unsafe extern "system" fn enum_callback(
-    hwnd: HWND,
-    lparam: LPARAM,
-) -> windows::core::BOOL {
-    unsafe {
-        let windows = &mut *(lparam.0 as *mut Vec<(isize, String)>);
-        if !IsWindowVisible(hwnd).as_bool() {
-            return true.into();
+/// The platform scan: every visible window as (app stem, title).
+///
+/// Windows walks the desktop with EnumWindows and resolves each window's exe
+/// stem. Win32 discipline mirrors win_focus.rs: HWNDs are collected as raw
+/// isize, consumed inside this same scan, never stored, never crossing threads.
+#[cfg(windows)]
+mod scan {
+    use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
+    use windows::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
+        IsWindowVisible,
+    };
+
+    pub(super) fn visible_windows() -> Vec<(String, String)> {
+        let mut windows: Vec<(isize, String)> = Vec::new();
+        unsafe {
+            let _ = EnumWindows(
+                Some(enum_callback),
+                LPARAM(&mut windows as *mut Vec<(isize, String)> as isize),
+            );
         }
-        let length = GetWindowTextLengthW(hwnd);
-        if length <= 0 {
-            return true.into();
+        windows
+            .into_iter()
+            .filter_map(|(hwnd_raw, title)| {
+                process_stem_for_window(hwnd_raw).map(|stem| (stem, title))
+            })
+            .collect()
+    }
+
+    unsafe extern "system" fn enum_callback(
+        hwnd: HWND,
+        lparam: LPARAM,
+    ) -> windows::core::BOOL {
+        unsafe {
+            let windows = &mut *(lparam.0 as *mut Vec<(isize, String)>);
+            if !IsWindowVisible(hwnd).as_bool() {
+                return true.into();
+            }
+            let length = GetWindowTextLengthW(hwnd);
+            if length <= 0 {
+                return true.into();
+            }
+            let mut buffer = vec![0u16; length as usize + 1];
+            let copied = GetWindowTextW(hwnd, &mut buffer);
+            if copied > 0 {
+                let title = String::from_utf16_lossy(&buffer[..copied as usize]);
+                windows.push((hwnd.0 as isize, title));
+            }
+            true.into()
         }
-        let mut buffer = vec![0u16; length as usize + 1];
-        let copied = GetWindowTextW(hwnd, &mut buffer);
-        if copied > 0 {
-            let title = String::from_utf16_lossy(&buffer[..copied as usize]);
-            windows.push((hwnd.0 as isize, title));
+    }
+
+    /// PID -> lowercase exe file stem ("zoom", "ms-teams") for one window.
+    fn process_stem_for_window(hwnd_raw: isize) -> Option<String> {
+        unsafe {
+            let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
+            let mut pid: u32 = 0;
+            GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            if pid == 0 {
+                return None;
+            }
+            let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+            let mut buffer = vec![0u16; 1024];
+            let mut size = buffer.len() as u32;
+            let result = QueryFullProcessImageNameW(
+                process,
+                PROCESS_NAME_FORMAT(0),
+                windows::core::PWSTR(buffer.as_mut_ptr()),
+                &mut size,
+            );
+            let _ = CloseHandle(process);
+            result.ok()?;
+            let path = String::from_utf16_lossy(&buffer[..size as usize]);
+            let stem = std::path::Path::new(&path)
+                .file_stem()?
+                .to_string_lossy()
+                .to_lowercase();
+            Some(stem)
         }
-        true.into()
     }
 }
 
-/// PID -> lowercase exe file stem ("zoom", "ms-teams") for one window.
-fn process_stem_for_window(hwnd_raw: isize) -> Option<String> {
-    unsafe {
-        let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
-        let mut pid: u32 = 0;
-        GetWindowThreadProcessId(hwnd, Some(&mut pid));
-        if pid == 0 {
-            return None;
+/// macOS has no permission-free EnumWindows analogue, so this is assembled from
+/// two sources rather than one:
+///
+/// - `NSWorkspace.runningApplications` gives every running app's bundle id with
+///   no TCC grant at all. `bundle_stem` maps those onto the same stems the
+///   Windows exe names produce, so the matching table needs no macOS branch.
+/// - Window TITLES come from the accessibility tree, which needs the
+///   Accessibility grant dictation already asks for.
+///
+/// Without that grant the titles come back empty and detection simply never
+/// fires. That is the correct failure direction: a missed auto-join is a
+/// nuisance, a false one would start recording a meeting the user is not in.
+#[cfg(target_os = "macos")]
+mod scan {
+    use objc2_app_kit::NSWorkspace;
+
+    pub(super) fn visible_windows() -> Vec<(String, String)> {
+        let mut found = Vec::new();
+        let apps = NSWorkspace::sharedWorkspace().runningApplications();
+        for app in apps.iter() {
+            let Some(bundle_id) = app.bundleIdentifier() else {
+                continue;
+            };
+            let Some(stem) = bundle_stem(&bundle_id.to_string().to_lowercase()) else {
+                continue;
+            };
+            let pid = app.processIdentifier();
+            for title in crate::macos_ax::window_titles(pid) {
+                found.push((stem.to_string(), title));
+            }
         }
-        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
-        let mut buffer = vec![0u16; 1024];
-        let mut size = buffer.len() as u32;
-        let result = QueryFullProcessImageNameW(
-            process,
-            PROCESS_NAME_FORMAT(0),
-            windows::core::PWSTR(buffer.as_mut_ptr()),
-            &mut size,
-        );
-        let _ = CloseHandle(process);
-        result.ok()?;
-        let path = String::from_utf16_lossy(&buffer[..size as usize]);
-        let stem = std::path::Path::new(&path)
-            .file_stem()?
-            .to_string_lossy()
-            .to_lowercase();
-        Some(stem)
+        found
+    }
+
+    /// Bundle id -> the same stem the Windows exe name yields, so
+    /// `meeting_app_for_window`'s table is genuinely shared rather than
+    /// duplicated. Anything not listed is not an app this detector cares about.
+    fn bundle_stem(bundle_id: &str) -> Option<&'static str> {
+        Some(match bundle_id {
+            "us.zoom.xos" => "zoom",
+            "com.microsoft.teams" | "com.microsoft.teams2" => "ms-teams",
+            "com.google.chrome" | "com.google.chrome.beta" => "chrome",
+            "com.microsoft.edgemac" => "msedge",
+            "com.brave.browser" => "brave",
+            "org.mozilla.firefox" => "firefox",
+            _ => return None,
+        })
     }
 }

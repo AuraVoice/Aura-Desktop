@@ -1,12 +1,23 @@
-//! Shared WASAPI microphone and render-loopback capture.
+//! Shared microphone and system-audio capture.
 //!
-//! One broker owns both default devices and fans timestamped 16 kHz mono PCM
+//! One broker owns both default sources and fans timestamped 16 kHz mono PCM
 //! frames out to named consumers. Meeting Notes uses a lossless queue because
 //! dropping audio would corrupt its durable recording. Live consumers use a
 //! bounded queue and `try_send`; a slow recognizer can observe overflow and
 //! enter a degraded state without ever blocking Meeting Notes.
-
-#![cfg(windows)]
+//!
+//! Everything above the `backend` module is portable: the consumer registry,
+//! the generation/cancellation handshake, the reopen budget and the capture
+//! loop are all plain Rust and behave identically on both platforms. `backend`
+//! is the whole platform seam, and it is narrow by design - open a source,
+//! drain whatever it has, name the device it bound to.
+//!
+//! The two backends are NOT symmetric in one important way. WASAPI shared mode
+//! with `autoconvert: true` asks the Windows audio engine for 16 kHz mono f32
+//! and gets it, which is why this tree has no resampler dependency. Core Audio
+//! has no such thing, so the macOS backend carries its own conversion (see
+//! `macos_audio::Resampler`). Everything downstream sees the same format either
+//! way, which is the point of putting the seam here.
 
 use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,7 +26,6 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use log::{error, info, warn};
-use wasapi::{DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat};
 
 pub(crate) const SAMPLE_RATE: usize = 16_000;
 // Drained every tick, so this is the dominant per-cycle capture latency for the
@@ -360,8 +370,11 @@ fn capture_thread(
     cancellation: Arc<AtomicBool>,
     origin: Instant,
 ) {
-    if wasapi::initialize_mta().is_err() {
-        error!("audio.capture: COM init failed source={}", source_name(source));
+    if let Err(error) = backend::init_thread() {
+        error!(
+            "audio.capture: init failed source={}: {error}",
+            source_name(source)
+        );
         publish(generation, CaptureEvent::Failed { source });
         return;
     }
@@ -373,7 +386,7 @@ fn capture_thread(
         if cancellation.load(Ordering::Relaxed) {
             break;
         }
-        let (client, capture, device_id) = match open_stream(source) {
+        let (mut stream, device_id) = match backend::DeviceStream::open(source) {
             Ok(opened) => {
                 stream_started = Instant::now();
                 opened
@@ -407,79 +420,43 @@ fn capture_thread(
             },
         );
 
-        let mut raw = VecDeque::new();
         let mut last_device_check = Instant::now();
         loop {
             if cancellation.load(Ordering::Relaxed) {
-                let _ = client.stop_stream();
+                stream.stop();
                 break 'lifetime;
             }
-            // GetBuffer consumes one packet. Drain every queued packet before
-            // sleeping so captured speech is never replaced by alignment zeros.
-            loop {
-                let packet_frames = match capture.get_next_packet_size() {
-                    Ok(Some(frames)) => frames,
-                    Ok(None) => 0,
-                    Err(error) => {
-                        warn!(
-                            "audio.capture: packet query failed source={}: {error}",
-                            source_name(source),
-                        );
-                        let _ = client.stop_stream();
-                        publish(generation, CaptureEvent::DeviceRebound { source });
-                        if !backoff_before_reopen(
-                            source,
-                            generation,
-                            &cancellation,
-                            &mut reopen_attempts,
-                            stream_started.elapsed(),
-                        ) {
-                            break 'lifetime;
-                        }
-                        continue 'lifetime;
+            // One drain takes EVERY frame the source has queued, so captured
+            // speech is never replaced by alignment zeros.
+            let (samples, glitches) = match stream.drain() {
+                Ok(drained) => drained,
+                Err(error) => {
+                    warn!(
+                        "audio.capture: source={} {error}",
+                        source_name(source),
+                    );
+                    stream.stop();
+                    publish(generation, CaptureEvent::DeviceRebound { source });
+                    if !backoff_before_reopen(
+                        source,
+                        generation,
+                        &cancellation,
+                        &mut reopen_attempts,
+                        stream_started.elapsed(),
+                    ) {
+                        break 'lifetime;
                     }
-                };
-                if packet_frames == 0 {
-                    break;
+                    continue 'lifetime;
                 }
-                match capture.read_from_device_to_deque(&mut raw) {
-                    Ok(buffer) => {
-                        if buffer.flags.data_discontinuity || buffer.flags.timestamp_error {
-                            publish(generation, CaptureEvent::Glitch { source });
-                        }
-                    }
-                    Err(error) => {
-                        warn!(
-                            "audio.capture: read failed source={}: {error}",
-                            source_name(source),
-                        );
-                        let _ = client.stop_stream();
-                        publish(generation, CaptureEvent::DeviceRebound { source });
-                        if !backoff_before_reopen(
-                            source,
-                            generation,
-                            &cancellation,
-                            &mut reopen_attempts,
-                            stream_started.elapsed(),
-                        ) {
-                            break 'lifetime;
-                        }
-                        continue 'lifetime;
-                    }
-                }
+            };
+            // One event per glitch the drain saw, not one per drain: a consumer
+            // only latches these into "this segment is incomplete", but keeping
+            // the count faithful means the Windows path emits exactly what it
+            // always did.
+            for _ in 0..glitches {
+                publish(generation, CaptureEvent::Glitch { source });
             }
-            let full = raw.len() / 4;
-            if full > 0 {
-                let mut samples = Vec::with_capacity(full);
-                for _ in 0..full {
-                    let bytes = [
-                        raw.pop_front().unwrap_or(0),
-                        raw.pop_front().unwrap_or(0),
-                        raw.pop_front().unwrap_or(0),
-                        raw.pop_front().unwrap_or(0),
-                    ];
-                    samples.push(f32::from_le_bytes(bytes));
-                }
+            if !samples.is_empty() {
                 publish(
                     generation,
                     CaptureEvent::Frame(PcmFrame {
@@ -492,12 +469,12 @@ fn capture_thread(
             }
             if last_device_check.elapsed() >= DEVICE_CHECK_EVERY {
                 last_device_check = Instant::now();
-                if default_device_id(source).is_some_and(|current| current != device_id) {
+                if backend::default_device_id(source).is_some_and(|current| current != device_id) {
                     info!(
                         "audio.capture: default device changed source={}, re-binding",
                         source_name(source),
                     );
-                    let _ = client.stop_stream();
+                    stream.stop();
                     publish(generation, CaptureEvent::DeviceRebound { source });
                     continue 'lifetime;
                 }
@@ -562,44 +539,204 @@ fn source_name(source: AudioSource) -> &'static str {
     }
 }
 
-fn device_direction(source: AudioSource) -> Direction {
-    match source {
-        AudioSource::Microphone => Direction::Capture,
-        AudioSource::Loopback => Direction::Render,
+/// The platform device layer, and the whole of what differs between Windows
+/// and macOS in this module.
+///
+/// Three things are asked of a backend, and nothing else:
+///
+/// - `init_thread` prepares the calling thread (COM on Windows, nothing on
+///   macOS).
+/// - `DeviceStream::open` binds the default source and reports a stable id for
+///   it, so `capture_thread` can notice the user switching devices.
+/// - `DeviceStream::drain` returns every whole 16 kHz mono frame available now,
+///   plus how many timing discontinuities it saw. An empty result is normal.
+#[cfg(windows)]
+mod backend {
+    use std::collections::VecDeque;
+
+    use wasapi::{DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat};
+
+    use super::{AudioSource, SAMPLE_RATE};
+
+    pub fn init_thread() -> Result<(), String> {
+        wasapi::initialize_mta()
+            .ok()
+            .map_err(|_| "COM init failed".to_string())
+    }
+
+    fn device_direction(source: AudioSource) -> Direction {
+        match source {
+            AudioSource::Microphone => Direction::Capture,
+            AudioSource::Loopback => Direction::Render,
+        }
+    }
+
+    pub fn default_device_id(source: AudioSource) -> Option<String> {
+        DeviceEnumerator::new()
+            .ok()?
+            .get_default_device(&device_direction(source))
+            .ok()?
+            .get_id()
+            .ok()
+    }
+
+    pub struct DeviceStream {
+        client: wasapi::AudioClient,
+        capture: wasapi::AudioCaptureClient,
+        raw: VecDeque<u8>,
+        stopped: bool,
+    }
+
+    impl DeviceStream {
+        pub fn open(source: AudioSource) -> Result<(Self, String), String> {
+            let enumerator = DeviceEnumerator::new().map_err(|error| error.to_string())?;
+            let device = enumerator
+                .get_default_device(&device_direction(source))
+                .map_err(|error| error.to_string())?;
+            let device_id = device.get_id().map_err(|error| error.to_string())?;
+            let mut client = device.get_iaudioclient().map_err(|error| error.to_string())?;
+            let format = WaveFormat::new(32, 32, &SampleType::Float, SAMPLE_RATE, 1, None);
+            let mode = StreamMode::PollingShared {
+                autoconvert: true,
+                // Preserve Meeting Notes' 400 ms tolerance for segment encoding stalls.
+                buffer_duration_hns: 4_000_000,
+            };
+            // Capture direction on a render device is WASAPI shared-mode loopback.
+            client
+                .initialize_client(&format, &Direction::Capture, &mode)
+                .map_err(|error| error.to_string())?;
+            let capture = client
+                .get_audiocaptureclient()
+                .map_err(|error| error.to_string())?;
+            client.start_stream().map_err(|error| error.to_string())?;
+            Ok((
+                Self {
+                    client,
+                    capture,
+                    raw: VecDeque::new(),
+                    stopped: false,
+                },
+                device_id,
+            ))
+        }
+
+        pub fn drain(&mut self) -> Result<(Vec<f32>, u32), String> {
+            let mut glitches = 0u32;
+            // GetBuffer consumes one packet. Drain every queued packet before
+            // returning so captured speech is never replaced by alignment zeros.
+            loop {
+                let packet_frames = match self.capture.get_next_packet_size() {
+                    Ok(Some(frames)) => frames,
+                    Ok(None) => 0,
+                    Err(error) => return Err(format!("packet query failed: {error}")),
+                };
+                if packet_frames == 0 {
+                    break;
+                }
+                match self.capture.read_from_device_to_deque(&mut self.raw) {
+                    Ok(buffer) => {
+                        if buffer.flags.data_discontinuity || buffer.flags.timestamp_error {
+                            glitches += 1;
+                        }
+                    }
+                    Err(error) => return Err(format!("read failed: {error}")),
+                }
+            }
+            let full = self.raw.len() / 4;
+            let mut samples = Vec::with_capacity(full);
+            for _ in 0..full {
+                let bytes = [
+                    self.raw.pop_front().unwrap_or(0),
+                    self.raw.pop_front().unwrap_or(0),
+                    self.raw.pop_front().unwrap_or(0),
+                    self.raw.pop_front().unwrap_or(0),
+                ];
+                samples.push(f32::from_le_bytes(bytes));
+            }
+            Ok((samples, glitches))
+        }
+
+        pub fn stop(&mut self) {
+            if !self.stopped {
+                let _ = self.client.stop_stream();
+                self.stopped = true;
+            }
+        }
     }
 }
 
-fn default_device_id(source: AudioSource) -> Option<String> {
-    DeviceEnumerator::new()
-        .ok()?
-        .get_default_device(&device_direction(source))
-        .ok()?
-        .get_id()
-        .ok()
-}
+/// AVAudioEngine for the microphone, a Core Audio process tap for system audio.
+///
+/// The tap is the interesting half: it is what replaces WASAPI's render
+/// loopback, it needs macOS 14.4, and its TCC prompt only fires when IO
+/// actually starts. `macos_audio` carries all of that; this is the adapter onto
+/// the broker's contract.
+///
+/// Neither source reports a WASAPI-style discontinuity flag, so a ring overrun
+/// stands in: it is the same statement (audio is missing from this stretch) and
+/// the same consumer reaction (mark the segment incomplete).
+#[cfg(target_os = "macos")]
+mod backend {
+    use std::time::Duration;
 
-fn open_stream(
-    source: AudioSource,
-) -> Result<(wasapi::AudioClient, wasapi::AudioCaptureClient, String), String> {
-    let enumerator = DeviceEnumerator::new().map_err(|error| error.to_string())?;
-    let device = enumerator
-        .get_default_device(&device_direction(source))
-        .map_err(|error| error.to_string())?;
-    let device_id = device.get_id().map_err(|error| error.to_string())?;
-    let mut client = device.get_iaudioclient().map_err(|error| error.to_string())?;
-    let format = WaveFormat::new(32, 32, &SampleType::Float, SAMPLE_RATE, 1, None);
-    let mode = StreamMode::PollingShared {
-        autoconvert: true,
-        // Preserve Meeting Notes' 400 ms tolerance for segment encoding stalls.
-        buffer_duration_hns: 4_000_000,
-    };
-    // Capture direction on a render device is WASAPI shared-mode loopback.
-    client
-        .initialize_client(&format, &Direction::Capture, &mode)
-        .map_err(|error| error.to_string())?;
-    let capture = client
-        .get_audiocaptureclient()
-        .map_err(|error| error.to_string())?;
-    client.start_stream().map_err(|error| error.to_string())?;
-    Ok((client, capture, device_id))
+    use crate::macos_audio::{self, MicCapture, SystemAudioCapture};
+
+    use super::AudioSource;
+
+    /// One drain's wait. Matches the poll cadence the shared loop already uses,
+    /// so a silent source costs one parked thread rather than a spin.
+    const DRAIN_WAIT: Duration = Duration::from_millis(20);
+
+    pub fn init_thread() -> Result<(), String> {
+        // No apartment to join: Core Audio and AVFoundation are not COM.
+        Ok(())
+    }
+
+    pub fn default_device_id(source: AudioSource) -> Option<String> {
+        match source {
+            AudioSource::Microphone => macos_audio::default_input_uid(),
+            // The tap is not a device the user can switch, so this never
+            // changes for the life of a capture and the broker's re-bind check
+            // correctly never fires for it.
+            AudioSource::Loopback => None,
+        }
+    }
+
+    pub enum DeviceStream {
+        Microphone(Box<MicCapture>),
+        SystemAudio(Box<SystemAudioCapture>),
+    }
+
+    impl DeviceStream {
+        pub fn open(source: AudioSource) -> Result<(Self, String), String> {
+            match source {
+                AudioSource::Microphone => {
+                    let capture = MicCapture::open()?;
+                    let id = macos_audio::default_input_uid()
+                        .unwrap_or_else(|| "default-input".to_string());
+                    Ok((Self::Microphone(Box::new(capture)), id))
+                }
+                AudioSource::Loopback => {
+                    let capture = SystemAudioCapture::open()?;
+                    let id = capture.uid();
+                    Ok((Self::SystemAudio(Box::new(capture)), id))
+                }
+            }
+        }
+
+        pub fn drain(&mut self) -> Result<(Vec<f32>, u32), String> {
+            let (samples, overran) = match self {
+                Self::Microphone(capture) => capture.drain(DRAIN_WAIT),
+                Self::SystemAudio(capture) => capture.drain(DRAIN_WAIT),
+            };
+            Ok((samples, u32::from(overran)))
+        }
+
+        pub fn stop(&mut self) {
+            match self {
+                Self::Microphone(capture) => capture.stop(),
+                Self::SystemAudio(capture) => capture.stop(),
+            }
+        }
+    }
 }

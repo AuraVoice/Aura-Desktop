@@ -1,6 +1,6 @@
 # Aura Desktop
 
-Tauri v2 (Rust) + React 19 (TypeScript) desktop companion app. Windows is the shipping target; macOS builds and runs but is not yet at feature parity (see [Platform support](#platform-support)). It has three Tauri webview windows: the opaque dashboard is the primary app surface, the borderless transparent overlay is the signed-in voice and text companion, and the passive dictation HUD handles hold-to-talk feedback without stealing focus. It's a from-scratch rewrite of the sibling Flutter app (`../Aura`, "Buddy"), talking to the same backend (`juno-backend` on Cloud Run) and Firebase project (`juno-2ea45`).
+Tauri v2 (Rust) + React 19 (TypeScript) desktop companion app. Windows is the shipping target; macOS runs the same feature set, with a few subsystems implemented differently (see [Platform support](#platform-support)). It has three Tauri webview windows: the opaque dashboard is the primary app surface, the borderless transparent overlay is the signed-in voice and text companion, and the passive dictation HUD handles hold-to-talk feedback without stealing focus. It's a from-scratch rewrite of the sibling Flutter app (`../Aura`, "Buddy"), talking to the same backend (`juno-backend` on Cloud Run) and Firebase project (`juno-2ea45`).
 
 ## System overview
 
@@ -211,9 +211,8 @@ deleting the raw audio immediately. The finished note arrives as a below-bar car
 
 ## Platform support
 
-Windows ships today. macOS compiles, runs, and is genuinely usable for voice, text chat,
-Screen Sight, Guide Mode, the dashboard and notifications, with local data encrypted at rest.
-It is not at parity, and the gap is specific:
+Windows ships today. macOS now covers the same feature set, including dictation and Meeting
+Notes; what still differs is how a few of them are implemented, not whether they exist:
 
 | Area | Windows | macOS |
 |---|---|---|
@@ -221,17 +220,41 @@ It is not at parity, and the gap is specific:
 | Screen Sight / Guide Mode | DXGI fast path | `xcap` fallback, full readback per tick |
 | At-rest encryption and the stores on it | DPAPI-wrapped key | login-Keychain master key |
 | Dictation transcription stack (ASR, vocab, polish, usage) | yes | yes |
-| Dictation capture and text insertion | WASAPI + SendInput | not implemented |
-| Meeting Notes capture | WASAPI loopback | not implemented |
-| Structured screen context | UI Automation | falls back to pixels, by design |
+| Dictation microphone capture | WASAPI shared-mode autoconvert | AVAudioEngine + AVAudioConverter |
+| Dictation text insertion | SendInput | CGEvent, Accessibility grant |
+| Dictation hold chord | low-level keyboard hook | CGEventTap, Input Monitoring grant |
+| Meeting Notes capture | WASAPI loopback | Core Audio process tap, 14.4+ |
+| Meeting join detection | EnumWindows + exe name | NSWorkspace bundle id + AX titles |
+| Overlay / HUD focus behaviour | `WS_EX_NOACTIVATE` | non-activating `NSPanel` |
+| Structured screen context | UI Automation | focus probe only, pixels for context |
 | Actionable toasts, audio ducking, media/window control | yes | not implemented |
+| Interview Companion | yes | not implemented |
 
-`crypto.rs` has exactly one platform seam, its `keywrap` submodule; the AES-256-GCM cipher and
-the per-feature key-file layout are shared. On the frontend, `src/lib/platform.ts` is the single
-source of truth for every string that differs between the two (key labels, device and tray
-nouns, the backend and analytics platform tags, System Settings deep links).
+Two properties hold across every row above. Each seam lives inside the module that owns the
+behaviour rather than in a parallel macOS tree (`crypto.rs`'s `keywrap`, `audio_capture.rs`'s
+`backend`, `dictation/audio.rs`'s and `dictation/insert.rs`'s `backend`, `session.rs`'s
+`platform`), and the Windows code inside each seam is the same code it always was. The only
+shared macOS files are the ones several callers genuinely need: `macos_window.rs` (AppKit),
+`macos_ax.rs` (Accessibility), `macos_audio.rs` (capture + conversion) and `macos_input.rs`
+(keycodes, Secure Input).
 
-macOS bundle configuration lives in `src-tauri/tauri.conf.json` (`bundle.macOS`, 14.2 floor),
+The one capability with no Windows counterpart is format conversion. WASAPI shared mode with
+`autoconvert` makes the audio engine deliver 16 kHz mono f32, which is why this tree has no
+resampler dependency; Core Audio has no equivalent, so `macos_audio::Resampler` does that work
+with `AVAudioConverter` on every callback.
+
+On the frontend, `src/lib/platform.ts` is the single source of truth for every string that
+differs between the two (key labels, device and tray nouns, the backend and analytics platform
+tags, System Settings deep links).
+
+macOS needs three TCC grants, none of which is an entitlement: **Microphone**, **Accessibility**
+(text insertion and the focus probe) and **Input Monitoring** (the hold chord). Meeting Notes
+additionally needs **System Audio Recording**, whose prompt only appears when capture actually
+starts, because Core Audio has no request-permission API to call earlier. A denied grant surfaces
+through `DictationStatus.reason`, never as a silent failure.
+
+macOS bundle configuration lives in `src-tauri/tauri.conf.json` (`bundle.macOS`, **14.4** floor -
+the process-tap API exists from 14.2 but its TCC category only behaves correctly from 14.4),
 `src-tauri/Info.plist` (TCC purpose strings) and `src-tauri/entitlements.plist` (the JIT
 entitlements WKWebView needs to survive notarization). `release.yml` has no macOS job yet, so
 tagging still produces Windows-only artifacts.

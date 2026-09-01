@@ -31,17 +31,7 @@ use windows::Win32::UI::Accessibility::{
 
 use super::tree::{is_own_process, role_name};
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum FocusVerdict {
-    /// A text field has focus. Type.
-    Typable,
-    /// Certainly not a text field. Hold the text and wait for one.
-    NotTypable,
-    /// A password field has focus. Never typed into, never held.
-    Password,
-    /// Could not tell. Type, because refusing is the worse mistake.
-    Unknown,
-}
+pub use super::focus_verdict::{FocusProbe, FocusVerdict};
 
 /// Roles that cannot accept typed text in any implementation. Everything absent
 /// from this list resolves to `Unknown` and therefore types, including `Pane`,
@@ -75,23 +65,6 @@ const NEVER_TYPABLE: &[&str] = &[
     "ToolTip",
     "AppBar",
 ];
-
-/// The verdict, plus the role that produced it. The role is logged (it is a
-/// control type, not content) so a misjudged application can be identified from
-/// a user's log without ever asking what they were typing.
-pub struct FocusProbe {
-    pub verdict: FocusVerdict,
-    pub role: &'static str,
-}
-
-impl FocusProbe {
-    pub fn unknown() -> Self {
-        Self {
-            verdict: FocusVerdict::Unknown,
-            role: "unknown",
-        }
-    }
-}
 
 /// Runs on the UIA worker thread only: `IUIAutomation` and its elements belong
 /// to that apartment.

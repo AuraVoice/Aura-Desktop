@@ -244,7 +244,24 @@ fn sync_activation(window: &tauri::WebviewWindow, phase: HudPhase) {
     }
 }
 
-#[cfg(not(windows))]
+/// macOS gets the same guarantee from a different direction. The HUD is built
+/// through `window_util::build_accessory_window`, so it is already a
+/// non-activating NSPanel and CANNOT steal focus no matter which phase it is
+/// in - there is no style to toggle. What still has to happen is the second
+/// half of the Windows function: a phase the user can click needs the panel to
+/// actually own key input, and being eligible is not the same as having it.
+///
+/// The tao style-rewrite hazard applies here too, which is why the panel style
+/// is re-asserted rather than assumed.
+#[cfg(target_os = "macos")]
+fn sync_activation(window: &tauri::WebviewWindow, phase: HudPhase) {
+    crate::macos_window::reassert_panel_style(window);
+    if needs_activation(phase) {
+        crate::macos_window::make_key_without_activating(window);
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn sync_activation(_window: &tauri::WebviewWindow, _phase: HudPhase) {}
 
 /// Centre of a window in PHYSICAL screen pixels, which is what
@@ -269,7 +286,25 @@ fn target_center(target: isize) -> Option<(f64, f64)> {
     ))
 }
 
-#[cfg(not(windows))]
+/// The macOS twin. `target` is a pid here rather than a window handle (see
+/// `insert::foreground_window`), so the frame comes from the accessibility
+/// tree instead of the window server.
+///
+/// AX reports points, and `monitor_from_point` wants physical pixels, so the
+/// result is scaled by the primary display's backing factor. That is the same
+/// approximation `bar_position` already lives with, and it only has to be good
+/// enough to pick the right display.
+#[cfg(target_os = "macos")]
+fn target_center(target: isize) -> Option<(f64, f64)> {
+    if target <= 0 {
+        return None;
+    }
+    let (x, y) = crate::macos_ax::focused_window_center(target as i32)?;
+    let scale = crate::macos_window::primary_backing_scale();
+    Some((x * scale, y * scale))
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 fn target_center(_target: isize) -> Option<(f64, f64)> {
     None
 }

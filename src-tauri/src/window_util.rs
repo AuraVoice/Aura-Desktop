@@ -62,5 +62,14 @@ pub(crate) fn apply_no_activate(window: &tauri::WebviewWindow) {
     }
 }
 
-#[cfg(not(windows))]
+/// macOS has no window style that stops a click from activating the owning
+/// application; only an NSPanel carrying `NonactivatingPanel` does. So the
+/// equivalent of the ex-style above is a class swap plus that mask, in
+/// macos_window.rs.
+#[cfg(target_os = "macos")]
+pub(crate) fn apply_no_activate(window: &tauri::WebviewWindow) {
+    crate::macos_window::make_non_activating_panel(window);
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 pub(crate) fn apply_no_activate(_window: &tauri::WebviewWindow) {}

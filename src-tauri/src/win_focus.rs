@@ -243,20 +243,37 @@ fn tap_key(key: VIRTUAL_KEY) {
 
 /// macOS equivalent of the Windows dance above. macOS has no analogue of
 /// Windows' foreground-lock restriction - any process may raise its own
-/// window via a direct focus call, so none of the `SendInput`/
-/// `SetForegroundWindow`/generation-guard machinery above is needed here.
-/// `ForegroundGeneration` stays defined and `.manage()`-ed regardless of
-/// platform (see lib.rs) since it costs nothing idle; it's simply never read
-/// on this path.
-#[cfg(not(target_os = "windows"))]
+/// window, so none of the `SendInput`/`SetForegroundWindow`/generation-guard
+/// machinery above is needed here. `ForegroundGeneration` stays defined and
+/// `.manage()`-ed regardless of platform (see lib.rs) since it costs nothing
+/// idle; it's simply never read on this path.
+///
+/// This is the Setup panel path only, and it deliberately DOES activate Aura:
+/// sign-in is the one overlay surface the user is switching into on purpose.
+#[cfg(target_os = "macos")]
+pub fn force_foreground(_app: &AppHandle, window: &WebviewWindow) {
+    crate::macos_window::activate_and_focus(window);
+}
+
+/// The hotkey/chat summon path, and NOT the same call as `force_foreground`
+/// here. `window.set_focus()` activates the application on macOS, which would
+/// pull the foreground away from whatever the user was typing in - the same
+/// harm the Windows side avoids by never forcing the notch forward. A
+/// non-activating panel can take key focus without activating, so this orders
+/// forward and makes key, and stops there.
+#[cfg(target_os = "macos")]
+pub fn raise_for_hotkey(_app: &AppHandle, window: &WebviewWindow) {
+    crate::macos_window::make_key_without_activating(window);
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn force_foreground(_app: &AppHandle, window: &WebviewWindow) {
     if let Err(e) = window.set_focus() {
         error!("win_focus::force_foreground: failed to focus window: {e}");
     }
 }
 
-/// No Alt tap exists to skip here, so this is the same direct focus call.
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn raise_for_hotkey(app: &AppHandle, window: &WebviewWindow) {
     force_foreground(app, window);
 }

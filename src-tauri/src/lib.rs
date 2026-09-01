@@ -1,19 +1,20 @@
-// A large part of this crate still sits behind `cfg(windows)`: the low-level
-// keyboard hook, WASAPI meeting capture, the UIA walker, the tray recording
-// indicator. Compiling for macOS builds the shared halves of those modules
-// without their Windows callers, so rustc reports them as unreachable even
-// though they are fully live on Windows.
+// What still needs this, now that dictation, meeting capture and the overlay
+// have real macOS implementations, is almost entirely `interview.rs`: it is
+// the last module gated wholesale on `cfg(windows)`, and its continuous-ASR
+// machinery (providers, sessions, the socket loop) is therefore dead code off
+// Windows. The rest is small and genuine: `chord.rs`'s Win-key and menu-mode
+// guards describe hazards that only exist on Windows, and `audio_ducking.rs`
+// and `toast.rs` are stubs.
 //
 // Only the two structural lints are silenced, and only off Windows. Do NOT
-// widen this list: macOS is a shipping target now, so `unused_variables`,
+// widen this list: macOS is a shipping target, so `unused_variables`,
 // `unused_mut` and `unreachable_code` are real signal in new macOS code and
-// must keep failing `clippy -- -D warnings` on the macos CI leg. This whole
-// attribute should shrink to nothing as the platform seams get real macOS
-// implementations rather than stubs.
+// must keep failing `clippy -- -D warnings` on the macos CI leg. Un-gating
+// interview.rs (it depends only on the now-portable audio broker) is what
+// would let this attribute go entirely.
 #![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
 mod audio_ducking;
-#[cfg(windows)]
 mod audio_capture;
 mod auth_cache;
 mod autostart;
@@ -30,6 +31,14 @@ mod hotkeys;
 mod interview;
 mod interview_store;
 mod logging;
+#[cfg(target_os = "macos")]
+mod macos_audio;
+#[cfg(target_os = "macos")]
+mod macos_ax;
+#[cfg(target_os = "macos")]
+mod macos_input;
+#[cfg(target_os = "macos")]
+mod macos_window;
 mod meeting;
 mod overlay;
 mod redact;
@@ -477,23 +486,28 @@ pub fn run() {
             // the hook thread to unhook when the process exits.
             // Started BEFORE the keyboard listener so the hook's first chord
             // edge already has a worker to signal. Owns the "aura-dictation"
-            // thread: WASAPI capture, the wait on the transcription socket,
-            // and the SendInput burst all live there, never on the message
-            // pump.
+            // thread: microphone capture, the wait on the transcription
+            // socket, and the synthetic-keystroke burst all live there, never
+            // on the thread that pumps the native window's events.
             app.manage(dictation::start(app.handle().clone()));
 
             // Optional AI transcript cleanup. Also cheap when unused: one
             // small JSON read and, only if a key was ever saved, one decrypt.
-            #[cfg(windows)]
+            // polish.rs contains no Win32 at all, so gating this was the
+            // "downstream of a Windows module" mistake CLAUDE.md warns about:
+            // it left usePolishCredential.ts retrying an unregistered command
+            // forever on macOS.
             app.manage(dictation::polish::start(app.handle().clone()));
 
             // Owns the COM apartment for UI Automation. Started once here so
-            // the first turn does not pay for CoCreateInstance, and so
-            // dictation's insert path has a worker to ask before it types.
+            // the first turn does not pay for CoCreateInstance. A placeholder
+            // on macOS, where the focus probe reads the accessibility tree
+            // directly and needs no apartment thread (uia/focus_ax.rs).
             app.manage(uia::UiaWorker::start());
 
             app.manage(voice_toggle_key::start(app.handle().clone()));
-            #[cfg(windows)]
+            // After the listener, so the first status the UI sees already
+            // reflects whether the key hook / event tap actually came up.
             dictation::emit_status_changed(app.handle());
 
             // tauri.conf.json's `skipTaskbar: true` keeps this off the Windows
@@ -530,6 +544,17 @@ pub fn run() {
             tray::build(app.handle())?;
 
             if let Some(window) = app.get_webview_window("main") {
+                // The overlay is the one window Tauri builds from
+                // tauri.conf.json rather than through window_util's builder, so
+                // this is the only place holding its handle early enough to
+                // convert it before the first overlay::apply(). Without the
+                // conversion, clicking the notch activates Aura and pulls
+                // foreground off whatever the user was working in.
+                #[cfg(target_os = "macos")]
+                {
+                    macos_window::make_non_activating_panel(&window);
+                    macos_window::refresh_screen_cache(&window);
+                }
                 overlay::exclude_main_window_from_capture(&window)?;
                 let moved_handle = handle.clone();
                 window.on_window_event(move |event| {

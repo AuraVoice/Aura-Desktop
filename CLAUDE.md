@@ -16,32 +16,73 @@ The runtime has three Tauri webview windows:
 
 - `main` is the borderless, transparent, always-on-top companion overlay. It resizes/repositions itself between `hidden`, `panel`, `bar`, `companion`, `pointing`, and `movingnotch`; `panel` carries the `setup` or `companion` variant. See `src-tauri/src/overlay.rs` for the native state machine and `src/overlay/OverlayRoot.tsx` for the matching React root.
 - `dashboard` is the opaque, resizable app window built on demand by `src-tauri/src/dashboard.rs`, routed by `src/main.tsx` into `src/dashboard/DashboardApp`.
-- `dictation` is the separate transparent HUD built by `src-tauri/src/dictation/hud.rs`, routed by `src/main.tsx` into `src/dictation/DictationHud`. It shares the overlay notch edge, stays off the taskbar, and must not steal focus from the target app except for the consent prompt.
-- Rust owns window geometry, the configurable voice trigger (default Left Ctrl double-tap), global hotkeys (Ctrl+Alt+Space chat, Ctrl+Alt+D dashboard, Ctrl+Alt+S Screen Sight, Ctrl+Alt+G Guide Mode, Ctrl+Alt+M output mute, Ctrl+Shift+D sign-out), tray, and foreground handling (`win_focus.rs`, needed because Windows denies `SetForegroundWindow` while another app owns focus). Force foreground ONLY for the Setup `Panel` or the explicit chat summon path that uses `raise_for_hotkey`. Never force it for the resting notch/`Bar`: the notch is always-on-top, so it shows without stealing focus - see the 2026-07-16 "fail to dismiss" lesson.
+- `dictation` is the separate transparent HUD built by `src-tauri/src/dictation/hud.rs`, routed by `src/main.tsx` into `src/dictation/DictationHud`. It shares the overlay notch edge, stays out of the taskbar and Dock, and must not steal focus from the target app except for the consent prompt (a `WS_EX_NOACTIVATE` window on Windows, a non-activating `NSPanel` on macOS).
+- Rust owns window geometry, the configurable voice trigger (default Left Ctrl double-tap), global hotkeys (Ctrl+Alt+Space chat, Ctrl+Alt+D dashboard, Ctrl+Alt+S Screen Sight, Ctrl+Alt+G Guide Mode, Ctrl+Alt+M output mute, Ctrl+Shift+D sign-out), tray, and foreground handling (`win_focus.rs`: on Windows because it denies `SetForegroundWindow` while another app owns focus, on macOS because `set_focus` activates the whole app and would pull focus off whatever the user was typing in). Force foreground ONLY for the Setup `Panel` or the explicit chat summon path that uses `raise_for_hotkey`. Never force it for the resting notch/`Bar`: the notch is always-on-top, so it shows without stealing focus - see the 2026-07-16 "fail to dismiss" lesson.
 - React owns all visual content and copy (`src/dashboard/`, `src/overlay/`, `src/dictation/`), Firebase auth (`src/state/AuthProvider.tsx`), standard per-turn screen capture (`useTurnScreenCapture`), continuous change-filtered Guide capture (`useGuideMode`), and the LiveKit call.
 - The overlay drag surface is one continuous drag region (`data-tauri-drag-region="deep"` on `GlassSurface`) - real inputs/buttons/links block dragging on themselves automatically (Tauri's own rule), nothing else needs to opt in or out individually. Don't add a narrower `data-tauri-drag-region` (bare, no value) on an inner element unless you mean to shadow/restrict the outer region - a bare attribute closer to the click target short-circuits the walk and blocks the deep region from ever being reached. Clickable overlay elements must be real `<button>`s, inputs, or links, not `<div role="button">`.
 
 ## Platform support
 
-Windows is the shipping target. macOS builds and runs, but is NOT at parity, and the gap is
-specific rather than general. Check here before assuming a feature exists on both.
+Windows is the shipping target. macOS now runs the same feature set, including dictation and
+Meeting Notes. What differs is HOW a few subsystems are implemented, not whether they exist.
+Check here before assuming anything about either.
 
 **Cross-platform (one implementation, no gates):** hotkeys, tray, overlay geometry and docking,
 screenshots (`xcap`), Guide Mode (slower, no DXGI fast path), updater, autostart, deep links,
 plain notifications, atomic writes, dashboard data pages, at-rest encryption, the encrypted
 stores built on it (chat cache, interview sessions, saved images, screenshot store), the
-dictation ASR socket, and dictation's vocabulary/consent/credential/usage/polish modules.
+dictation ASR socket, dictation's vocabulary/consent/credential/usage/polish/history modules,
+the meeting engine, segment queue and evidence store, and the whole capture broker above its
+device layer.
 
-**Windows-only, genuinely:** `dictation/audio.rs` (WASAPI), `dictation/insert.rs` (SendInput),
-`dictation/hud.rs`, `meeting/audio.rs` (WASAPI loopback), `meeting/detect.rs`, `uia/` (UI
-Automation), `audio_ducking.rs`, `toast.rs`, three of four `system_control.rs` verbs, and the
-`voice_toggle_key.rs` double-tap hook. macOS gets a stub that errors or reports unavailable.
+**Modules with a platform SEAM (both sides real, seam inside the owning file):**
+`crypto.rs` (`keywrap`), `audio_capture.rs` (`backend`: WASAPI vs a Core Audio process tap),
+`dictation/audio.rs` (`backend`: WASAPI vs AVAudioEngine), `dictation/insert.rs` (`backend`:
+SendInput vs CGEvent), `dictation/hud.rs` (`sync_activation`, `target_center`),
+`meeting/session.rs` (`platform`: WTS vs distributed notifications), `meeting/detect.rs`
+(`scan`: EnumWindows vs NSWorkspace + AX), `meeting/runtime_lease.rs` (named mutex vs flock),
+`uia/` (UIA walker vs an AX focus probe), `overlay.rs`, `win_focus.rs`, `window_util.rs`.
+
+**Windows-only, genuinely:** `audio_ducking.rs`, `toast.rs`, `dictation/import_traces.rs`,
+three of four `system_control.rs` verbs, and `interview.rs`. Everything else has a real macOS
+implementation. `interview.rs` is the only one still gated wholesale, and only because nobody
+has un-gated it: it depends on the now-portable audio broker, and doing so is what would let
+`lib.rs`'s `cfg_attr(not(windows), allow(dead_code, ...))` disappear entirely.
+
+**Shared macOS files exist only where several callers need them:** `macos_window.rs` (AppKit
+windows), `macos_ax.rs` (Accessibility reads), `macos_audio.rs` (capture and format
+conversion), `macos_input.rs` (keycode table, Secure Input). Anything used by ONE module stays
+in that module, the way `keywrap` does.
 
 **The rule that keeps this honest:** a module belongs behind `#[cfg(windows)]` ONLY if it
 actually calls a Win32 API. Several modules were gated for merely sitting downstream of one
 (the whole `asr/` tree and `screenshot_store.rs` contain zero Win32 calls), which made them
 vanish on macOS for no reason and left `usePolishCredential.ts` retrying an unregistered command
-forever. Before adding a gate, grep the file for `windows::` and gate the caller instead.
+forever. `meeting/audio.rs`, `meeting/queue.rs` and `dictation/polish.rs` were the same mistake
+a second time. Before adding a gate, grep the file for `windows::` and gate the caller instead.
+
+**Porting a Windows module means MOVING it, not rewriting it.** Every Windows body in the seams
+above went into its `backend`/`platform` module verbatim - same calls, same order, same error
+strings - so that the Windows half of the diff is provably a relocation. The one place shared
+code replaced an inline Windows body (`audio_capture::capture_thread`) preserves even the
+per-drain `Glitch` event COUNT for that reason. Hold to this: only the `windows-latest` CI leg
+can prove it, since the Windows tree cannot be cross-compiled from a Mac (`ring`'s build script
+needs the Windows SDK).
+
+**macOS needs four TCC grants, none of them an entitlement.** Microphone; Accessibility (text
+insertion via CGEvent, and the focus probe); Input Monitoring (the dictation chord's event tap);
+and System Audio Recording for Meeting Notes. The last one has NO request API - its prompt only
+fires when `AudioDeviceStart` runs on the tap-backed aggregate device, so the whole pipeline is
+built before macOS asks, and a refusal surfaces as a capture failure rather than a stall. The
+process-tap API exists from 14.2 but its TCC category only behaves correctly from 14.4, which
+is why `bundle.macOS.minimumSystemVersion` is 14.4.
+
+**A CGEventTap can be switched off underneath you.** macOS disables a tap whose callback is too
+slow (`kCGEventTapDisabledByTimeout`) or during certain user input, silently - dictation just
+stops responding with nothing in any log. `voice_toggle_key.rs`'s callback re-enables on both
+event types, and that branch is not optional. The tap is listen-only because the Windows hook it
+mirrors always calls `CallNextHookEx` and never suppresses; since macOS has no `LLKHF_INJECTED`,
+the insert path stamps `kCGEventSourceUserData` with a marker the tap drops.
 
 **At-rest encryption has exactly one platform seam.** `crypto.rs` is AES-256-GCM everywhere;
 only key WRAPPING differs (DPAPI on Windows, a login-Keychain master key on macOS), and that

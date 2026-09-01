@@ -15,6 +15,18 @@
     <string>Aura needs your microphone so you can talk to Buddy and use dictation. Audio is streamed only while you are speaking to Aura.</string>
 
     <!--
+      System audio recording, for Meeting Notes. This is a REAL key, not a
+      defensive one: the Core Audio process-tap API refuses to prompt without
+      it, and the prompt only fires when AudioDeviceStart runs on the
+      tap-backed aggregate device - there is no requestAuthorization to call
+      earlier. That is also why bundle.macOS.minimumSystemVersion is 14.4
+      rather than the 14.2 the API first shipped in: the TCC category behind
+      this string only behaves correctly from 14.4.
+    -->
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>Aura records the audio of meetings you choose to capture, so Buddy can write your notes. Recording only ever starts on a meeting you armed yourself.</string>
+
+    <!--
       Screen recording is granted through TCC, not through an entitlement, and
       Apple does not document a usage-description key for it. This string is
       included defensively: it is harmless if unused, and several capture
