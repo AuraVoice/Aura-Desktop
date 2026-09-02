@@ -206,11 +206,17 @@ pub async fn start_interview_hacker(
     // Recognition bias for this session, resolved on the desktop from the brief,
     // job description, and resume. The provider truncates to its own cap, so this
     // only drops blanks and bounds what a malformed caller can hand us.
+    #[cfg(windows)]
+    let keyterm_cap = asr::deepgram::MAX_KEYTERMS;
+    // The asr module is Windows-only until the macOS audio port; this mirrors
+    // its MAX_KEYTERMS and only bounds a list the stubbed path never uses.
+    #[cfg(not(windows))]
+    let keyterm_cap = 50;
     let keyterms: Vec<String> = keyterms
         .unwrap_or_default()
         .into_iter()
         .filter(|term| !term.trim().is_empty())
-        .take(asr::deepgram::MAX_KEYTERMS)
+        .take(keyterm_cap)
         .collect();
     let cancel_generation = app.state::<InterviewHandle>().1.load(Ordering::Relaxed);
     let ticket = crate::security::authorize(

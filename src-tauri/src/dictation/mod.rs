@@ -1576,6 +1576,52 @@ pub mod polish_commands {
     }
 }
 
+/// Same four commands, resolvable by `generate_handler!` on targets where the
+/// polish worker does not exist. Settings read as disabled, writes and the
+/// credential push report NOT_SUPPORTED / no-op, matching the other stubbed
+/// dictation commands above.
+#[cfg(not(windows))]
+pub mod polish_commands {
+    use serde::Serialize;
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    pub struct PolishSettingsView {
+        pub enabled: bool,
+    }
+
+    #[tauri::command]
+    pub async fn dictation_polish_settings(
+        _app: tauri::AppHandle,
+    ) -> Result<PolishSettingsView, String> {
+        Ok(PolishSettingsView { enabled: false })
+    }
+
+    #[tauri::command]
+    pub async fn dictation_set_polish_settings(
+        _app: tauri::AppHandle,
+        enabled: bool,
+    ) -> Result<PolishSettingsView, String> {
+        let _ = enabled;
+        Err(super::NOT_SUPPORTED.to_string())
+    }
+
+    #[tauri::command]
+    pub async fn dictation_set_polish_credential(
+        _app: tauri::AppHandle,
+        id_token: String,
+        ttl_seconds: u32,
+    ) -> Result<(), String> {
+        let _ = (id_token, ttl_seconds);
+        Ok(())
+    }
+
+    #[tauri::command]
+    pub async fn dictation_clear_polish_credential(_app: tauri::AppHandle) -> Result<(), String> {
+        Ok(())
+    }
+}
+
 /// Records one confirmed correction. It only starts being applied once the same
 /// pair has been confirmed three times.
 #[tauri::command]
