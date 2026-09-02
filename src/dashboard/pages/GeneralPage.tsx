@@ -10,6 +10,7 @@ import {
 import { logError } from "../../lib/log";
 import { chordKeysOf, useDictationStatus } from "../../lib/dictationStatus";
 import { dictationChord as chordCopy } from "../../lib/copy";
+import { osName } from "../../lib/platformKeys";
 import { resetHotkeyBindings } from "../../lib/hotkeys";
 import { useHotkeyBindings } from "../../state/useHotkeyBindings";
 import { ShortcutEditorDialog } from "../../overlay/ShortcutEditorDialog";
@@ -213,12 +214,12 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
         <>
           <SettingsSection
             title="App settings"
-            description="These preferences apply only to this Windows device."
+            description={`These preferences apply only to this ${osName()} device.`}
           >
             <div className="db-panel db-settings-panel">
               <ToggleRow
-                label="Open Aura when Windows starts"
-                description="Open the Aura dashboard automatically after you sign in to Windows."
+                label={`Open Aura when ${osName()} starts`}
+                description={`Open the Aura dashboard automatically after you sign in to ${osName()}.`}
                 checked={launchAtStartup}
                 onChange={(value) => void updateLaunchAtStartup(value)}
               />
@@ -420,7 +421,7 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
             <div className="db-panel db-settings-panel">
               <ToggleRow
                 label="Detailed notification previews"
-                description="Show meeting titles and message details in Windows notifications."
+                description={`Show meeting titles and message details in ${osName()} notifications.`}
                 checked={settings.sensitiveNotificationPreviews}
                 onChange={(value) => void update("sensitiveNotificationPreviews", value)}
               />

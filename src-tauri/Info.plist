@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged into the bundled Info.plist by Tauri on macOS builds. Without the
+     microphone usage string, TCC kills the process on the first getUserMedia
+     call instead of rejecting the promise. -->
+<plist version="1.0">
+<dict>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Aura uses your microphone so you can talk to Buddy and dictate text.</string>
+</dict>
+</plist>

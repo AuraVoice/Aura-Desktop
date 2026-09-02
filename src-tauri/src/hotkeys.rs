@@ -21,7 +21,28 @@ const VOICE_LABEL: &str = "Start or end voice";
 /// Voice accelerator values that mean "no global shortcut, use the low-level
 /// double-tap hook instead". Kept here because both `set_voice_binding` and
 /// `initialize` have to route them away from `Shortcut::from_str`.
+/// macOS also allows Option taps (the Claude Desktop convention); Windows must
+/// not, because a lone Alt tap drops the focused window into keyboard menu
+/// mode - see voice_toggle_key.rs.
+#[cfg(not(target_os = "macos"))]
 pub const DOUBLE_TAP_SENTINELS: [&str; 4] = ["ControlLeft", "ControlRight", "ShiftLeft", "ShiftRight"];
+#[cfg(target_os = "macos")]
+pub const DOUBLE_TAP_SENTINELS: [&str; 6] =
+    ["ControlLeft", "ControlRight", "ShiftLeft", "ShiftRight", "AltLeft", "AltRight"];
+
+/// The OS name used in "someone else owns that shortcut" errors.
+#[cfg(not(target_os = "macos"))]
+const OS_NAME: &str = "Windows";
+#[cfg(target_os = "macos")]
+const OS_NAME: &str = "macOS";
+
+/// Option+Space on macOS: the AI-assistant convention (ChatGPT, Gemini and
+/// Copilot all summon with it). The Windows default cannot carry over there
+/// because Control+Alt+Space is macOS's "select next input source" shortcut.
+#[cfg(not(target_os = "macos"))]
+const CHAT_DEFAULT_ACCELERATOR: &str = "Control+Alt+Space";
+#[cfg(target_os = "macos")]
+const CHAT_DEFAULT_ACCELERATOR: &str = "Alt+Space";
 
 struct HotkeySpec {
     id: &'static str,
@@ -30,7 +51,7 @@ struct HotkeySpec {
 }
 
 const SPECS: [HotkeySpec; 6] = [
-    HotkeySpec { id: "chat", label: "Toggle text chat", default_accelerator: "Control+Alt+Space" },
+    HotkeySpec { id: "chat", label: "Toggle text chat", default_accelerator: CHAT_DEFAULT_ACCELERATOR },
     HotkeySpec { id: "dashboard", label: "Toggle your dashboard", default_accelerator: "Control+Alt+KeyD" },
     HotkeySpec { id: "screenSight", label: "Toggle Screen Sight", default_accelerator: "Control+Alt+KeyS" },
     HotkeySpec { id: "guide", label: "Toggle Guide Mode", default_accelerator: "Control+Alt+KeyG" },
@@ -101,10 +122,11 @@ pub fn guide_mode_shortcut() -> Shortcut { shortcut_for_default("guide") }
 
 fn keys_for(shortcut: Shortcut) -> Vec<String> {
     let mut keys = Vec::new();
+    let (alt_label, super_label) = if cfg!(target_os = "macos") { ("Option", "Cmd") } else { ("Alt", "Win") };
     if shortcut.mods.contains(Modifiers::CONTROL) { keys.push("Ctrl".to_string()); }
-    if shortcut.mods.contains(Modifiers::ALT) { keys.push("Alt".to_string()); }
+    if shortcut.mods.contains(Modifiers::ALT) { keys.push(alt_label.to_string()); }
     if shortcut.mods.contains(Modifiers::SHIFT) { keys.push("Shift".to_string()); }
-    if shortcut.mods.contains(Modifiers::SUPER) { keys.push("Win".to_string()); }
+    if shortcut.mods.contains(Modifiers::SUPER) { keys.push(super_label.to_string()); }
     let raw = shortcut.key.to_string();
     let key = raw.strip_prefix("Key")
         .or_else(|| raw.strip_prefix("Digit"))
@@ -159,6 +181,7 @@ const MODIFIER_CODES: [Code; 8] = [
 /// want and we only refuse combinations Windows will never hand us, or that
 /// would leave them unable to type. Anything merely risky (no modifier, a
 /// single modifier, AltGr overlap) is warned about in the UI and allowed.
+#[cfg(not(target_os = "macos"))]
 fn validate_shortcut(shortcut: Shortcut) -> Result<(), String> {
     if shortcut.mods.contains(Modifiers::SUPER) {
         return Err("Windows-key shortcuts are reserved for Windows. Use Ctrl, Alt, and Shift instead.".to_string());
@@ -182,6 +205,41 @@ fn validate_shortcut(shortcut: Shortcut) -> Result<(), String> {
     }
     if shortcut.key == Code::F4 && shortcut.mods.contains(Modifiers::ALT) {
         return Err("Alt+F4 is reserved for closing windows.".to_string());
+    }
+    Ok(())
+}
+
+/// The macOS counterpart. Cmd is allowed (it is the natural shortcut modifier
+/// there); refused combinations are the ones macOS itself owns system-wide:
+/// Spotlight, input-source switching, the Character Viewer, app switching,
+/// Force Quit, screen lock, and the screenshot family.
+#[cfg(target_os = "macos")]
+fn validate_shortcut(shortcut: Shortcut) -> Result<(), String> {
+    if MODIFIER_CODES.contains(&shortcut.key) {
+        return Err("Hold the modifiers, then press one other key.".to_string());
+    }
+    if shortcut.mods.is_empty() && BARE_KEY_BLOCKLIST.contains(&shortcut.key) {
+        return Err("Pick a key you do not need for normal typing.".to_string());
+    }
+    let cmd = shortcut.mods.contains(Modifiers::SUPER);
+    let ctrl = shortcut.mods.contains(Modifiers::CONTROL);
+    let shift = shortcut.mods.contains(Modifiers::SHIFT);
+    if shortcut.key == Code::Space && (cmd || ctrl) {
+        return Err("That Space shortcut is reserved by macOS for Spotlight, input sources, and the Character Viewer.".to_string());
+    }
+    if shortcut.key == Code::Tab && cmd {
+        return Err("Cmd+Tab is reserved for switching apps.".to_string());
+    }
+    if shortcut.key == Code::Escape && cmd {
+        return Err("That Escape shortcut is reserved by macOS for Force Quit.".to_string());
+    }
+    if shortcut.key == Code::KeyQ && cmd && ctrl {
+        return Err("Ctrl+Cmd+Q is reserved for locking the screen.".to_string());
+    }
+    if cmd && shift
+        && matches!(shortcut.key, Code::Digit3 | Code::Digit4 | Code::Digit5 | Code::Digit6)
+    {
+        return Err("That shortcut is reserved by macOS for screenshots.".to_string());
     }
     Ok(())
 }
@@ -221,6 +279,13 @@ pub fn initialize(app: &AppHandle) {
                 let mut candidates = runtime.bindings.clone();
                 for spec in &SPECS {
                     let Some(accelerator) = saved.get(spec.id) else { continue };
+                    // A hotkeys.json restored from a Windows machine can carry the
+                    // old chat default, which is macOS's input-source switcher.
+                    // Treat it as unset so the mac default applies; a shortcut the
+                    // user deliberately picked never matches this string.
+                    if cfg!(target_os = "macos") && spec.id == "chat" && accelerator == "Control+Alt+Space" {
+                        continue;
+                    }
                     let Ok(shortcut) = Shortcut::from_str(accelerator) else { continue };
                     if validate_shortcut(shortcut).is_ok() { candidates.insert(spec.id.to_string(), shortcut); }
                 }
@@ -342,7 +407,7 @@ pub fn set_voice_binding(
                 crate::voice_toggle_key::use_default_toggle_key();
                 log::error!("hotkeys: custom voice shortcut rollback failed; restored Left Ctrl double-tap in memory");
             }
-            return Err(format!("That shortcut is already in use by Windows or another app: {e}"));
+            return Err(format!("That shortcut is already in use by {OS_NAME} or another app: {e}"));
         }
         runtime.registered.insert("voice".to_string());
     }
@@ -414,13 +479,13 @@ pub fn set_hotkey_binding(
                     runtime.registered.insert(id.clone());
                 }
             }
-            return Err(format!("That shortcut is already in use by Windows or another app: {e}"));
+            return Err(format!("That shortcut is already in use by {OS_NAME} or another app: {e}"));
         }
         runtime.registered.insert(id.clone());
     } else {
         // Trial registration is the only reliable way to detect a conflict.
         app.global_shortcut().register(candidate)
-            .map_err(|e| format!("That shortcut is already in use by Windows or another app: {e}"))?;
+            .map_err(|e| format!("That shortcut is already in use by {OS_NAME} or another app: {e}"))?;
         let _ = app.global_shortcut().unregister(candidate);
     }
     runtime.bindings.insert(id.clone(), candidate);
@@ -511,7 +576,7 @@ pub fn begin_hotkey_test(
                 runtime.testing.insert(owner, previous_action);
             }
             cleanup_test_registrations(&app, &mut runtime);
-            return Err(format!("That shortcut is already in use by Windows or another app: {err}"));
+            return Err(format!("That shortcut is already in use by {OS_NAME} or another app: {err}"));
         }
         runtime.test_registered.insert("chat".to_string());
     }

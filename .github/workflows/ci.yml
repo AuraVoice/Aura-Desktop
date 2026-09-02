@@ -43,3 +43,16 @@ jobs:
 
       - run: cargo audit
         working-directory: src-tauri
+
+  # Keeps the macOS port compiling from a Windows dev machine: the tauri
+  # dependency tree needs a mac toolchain to even type-check, so this job is
+  # the only continuous verification until real mac hardware is in the loop.
+  rust-macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - run: cargo check
+        working-directory: src-tauri

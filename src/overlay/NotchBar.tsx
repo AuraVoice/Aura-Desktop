@@ -1,5 +1,6 @@
 import { useRef } from "react";
 import type { PointerEventHandler } from "react";
+import { altLabel } from "../lib/platformKeys";
 import { GlassSurface } from "./GlassSurface";
 import type { VoiceBarState } from "./useVoiceBar";
 import type { NotchEdge } from "./notchEdge";
@@ -74,7 +75,7 @@ export function NotchBar({
               <span
                 className="notch-mute-indicator"
                 aria-label="Voice muted"
-                title="Voice muted. Ctrl+Alt+M"
+                title={`Voice muted. Ctrl+${altLabel()}+M`}
               >
                 <svg viewBox="0 0 24 24" aria-hidden="true">
                   <path d="M4 9.5h4L13 5v14l-5-4.5H4z" />

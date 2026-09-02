@@ -8,6 +8,7 @@ import {
   type HotkeyBinding,
   type VoiceToggleKeyStatus,
 } from "../lib/hotkeys";
+import { osName } from "../lib/platformKeys";
 import { ShortcutEditorDialog } from "./ShortcutEditorDialog";
 import { trackEvent } from "../lib/analytics";
 import { trackOnboardingStepCompleted } from "../lib/acquisitionAnalytics";
@@ -33,6 +34,8 @@ const LABEL_CODES: Record<string, string[]> = {
   "Right Ctrl": ["ControlRight"],
   "Left Shift": ["ShiftLeft"],
   "Right Shift": ["ShiftRight"],
+  "Left Option": ["AltLeft"],
+  "Right Option": ["AltRight"],
 };
 
 function isDisplayedKeyHeld(key: string, heldCodes: Set<string>): boolean {
@@ -68,6 +71,32 @@ export function HotkeyTourStep({ keyLabel, onContinue }: HotkeyTourStepProps) {
   const currentAccelerator = screen === "voice" ? voice.accelerator : chat?.accelerator ?? "";
   const isDoubleTap = screen === "voice" && voice.gesture === "doubleTap";
 
+  // Clicking a key tile demonstrates the shortcut the same way pressing it
+  // does: both funnel into this one pass path so analytics, the success beat,
+  // and the screen advance stay identical. `method` records which one it was.
+  // Read through a ref inside the listener effect so the effect's dependencies
+  // (and its begin/end_hotkey_test arming lifecycle) stay untouched.
+  const markPassed = (method: "key" | "click") => {
+    if (!currentTestId) return;
+    trackEvent("desktop_hotkey_test_passed", {
+      hotkey_id: currentTestId,
+      screen,
+      method,
+    });
+    void recordDesktopOnboardingEvent(
+      "desktop_hotkey_test_passed",
+      {
+        hotkey_id: currentTestId,
+        screen,
+        method,
+      },
+      `hotkey_test_passed_${currentTestId}`,
+    );
+    setPassed(true);
+  };
+  const markPassedRef = useRef(markPassed);
+  markPassedRef.current = markPassed;
+
   useEffect(() => {
     Promise.all([loadHotkeyBindings(), loadVoiceToggleKey()])
       .then(([nextBindings, nextVoice]) => {
@@ -91,19 +120,7 @@ export function HotkeyTourStep({ keyLabel, onContinue }: HotkeyTourStepProps) {
       try {
         const stopListening = await listen<string>(HOTKEY_TEST_PRESSED, (event) => {
           if (event.payload !== currentTestId) return;
-          trackEvent("desktop_hotkey_test_passed", {
-            hotkey_id: currentTestId,
-            screen,
-          });
-          void recordDesktopOnboardingEvent(
-            "desktop_hotkey_test_passed",
-            {
-              hotkey_id: currentTestId,
-              screen,
-            },
-            `hotkey_test_passed_${currentTestId}`,
-          );
-          setPassed(true);
+          markPassedRef.current("key");
         });
         if (cancelled) {
           stopListening();
@@ -165,9 +182,9 @@ export function HotkeyTourStep({ keyLabel, onContinue }: HotkeyTourStepProps) {
   const shortcutLabel = currentKeys.join(" + ");
   const gestureCopy = screen === "voice"
     ? isDoubleTap
-      ? `Double-tap ${voice.keyLabel} anywhere in Windows to start talking to Buddy. Double-tap ${voice.keyLabel} again when you're done.`
-      : `Press ${shortcutLabel} anywhere in Windows to start talking to Buddy. Press ${shortcutLabel} again when you're done.`
-    : `Press ${shortcutLabel} anywhere in Windows to open text chat with Buddy.`;
+      ? `Double-tap ${voice.keyLabel} anywhere in ${osName()} to start talking to Buddy. Double-tap ${voice.keyLabel} again when you're done.`
+      : `Press ${shortcutLabel} anywhere in ${osName()} to start talking to Buddy. Press ${shortcutLabel} again when you're done.`
+    : `Press ${shortcutLabel} anywhere in ${osName()} to open text chat with Buddy.`;
   const heading = screen === "voice" ? "Talk to Buddy" : "Type to Buddy";
   const currentAvailable = (screen === "voice" ? voice.available : Boolean(chat)) && !testError;
 
@@ -209,10 +226,19 @@ export function HotkeyTourStep({ keyLabel, onContinue }: HotkeyTourStepProps) {
                 {currentKeys.map((key, keyIndex) => (
                   <span key={`${key}:${keyIndex}`} className="hotkey-test-stage-group">
                     {keyIndex > 0 && <span className="hotkey-test-stage-plus">+</span>}
-                    <kbd className={passed || (!isDoubleTap && isDisplayedKeyHeld(key, heldCodes)) ? "active" : ""}>
-                      <strong>{key}</strong>
-                      {isDoubleTap && <small>twice</small>}
-                    </kbd>
+                    <button
+                      type="button"
+                      className="hotkey-test-stage-keybtn"
+                      aria-label={`Click to try ${shortcutLabel}`}
+                      onClick={() => {
+                        if (!passed) markPassed("click");
+                      }}
+                    >
+                      <kbd className={passed || (!isDoubleTap && isDisplayedKeyHeld(key, heldCodes)) ? "active" : ""}>
+                        <strong>{key}</strong>
+                        {isDoubleTap && <small>twice</small>}
+                      </kbd>
+                    </button>
                   </span>
                 ))}
               </div>
@@ -276,7 +302,7 @@ export function HotkeyTourStep({ keyLabel, onContinue }: HotkeyTourStepProps) {
         <>
           <h2 className="hotkey-test-question">Your other shortcuts</h2>
           <p className="hotkey-test-purpose">
-            These work anywhere in Windows while Aura is running. Change any of them now or later in Settings.
+            These work anywhere in {osName()} while Aura is running. Change any of them now or later in Settings.
           </p>
 
           <div className="hotkey-test-card">
