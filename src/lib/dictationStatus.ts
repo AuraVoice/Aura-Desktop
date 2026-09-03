@@ -7,6 +7,10 @@ export interface DictationStatus {
   available: boolean;
   chordLabel: string;
   reason?: string;
+  /** Set when `reason` is an OS grant the UI can act on (macOS only today).
+   * "inputMonitoring": the keystroke grant is missing. "relaunch": it was
+   * granted after launch and only a restart picks it up. */
+  blocker?: "inputMonitoring" | "relaunch";
 }
 
 export function loadDictationStatus(): Promise<DictationStatus> {

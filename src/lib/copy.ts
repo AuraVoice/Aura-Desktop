@@ -79,6 +79,11 @@ export const dictationChord = {
   /** The window between mount and the first status reply. */
   statusChecking: "Checking listener...",
   statusReady: "Ready",
+  /** macOS only: the Input Monitoring grant the chord's event tap needs. The
+   * grant is read once at launch, so every path ends in a restart. */
+  allowInputMonitoring: "Allow in System Settings",
+  restart: "Restart Aura",
+  restartNote: "Turn on Aura under Input Monitoring, then restart Aura to finish.",
 } as const;
 
 export const onboarding = {

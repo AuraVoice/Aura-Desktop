@@ -311,6 +311,20 @@ pub fn voice_toggle_key_request_permission() -> DoubleTapPermission {
     double_tap_permission(platform::request_permission())
 }
 
+/// The Input Monitoring grant, for the dictation module: the event tap that
+/// hears the chord is gated behind it. Silent check, no prompt.
+#[cfg(target_os = "macos")]
+pub fn input_monitoring_granted() -> bool {
+    platform::permission_granted()
+}
+
+/// Raises the Input Monitoring prompt for dictation. Same relaunch caveat as
+/// `voice_toggle_key_request_permission`.
+#[cfg(target_os = "macos")]
+pub fn request_input_monitoring() -> bool {
+    platform::request_permission()
+}
+
 pub fn start(app: AppHandle) -> VoiceToggleKeyHandle {
     // Defaults to true so a store that will not open keeps the old behavior of
     // installing the listener rather than silently leaving the user with no
@@ -327,20 +341,19 @@ pub fn start(app: AppHandle) -> VoiceToggleKeyHandle {
         VOICE_TOGGLE_VK.store(vk, Ordering::Relaxed);
         double_tap = vk != 0;
     }
-    // Today the macOS CGEventTap serves exactly one feature: seeing a bare
-    // modifier tapped twice, which no registered shortcut can express. Creating
-    // it costs the user an Input Monitoring grant AND a relaunch, while a real
-    // chord goes through Carbon RegisterEventHotKey, which is not TCC-gated. So
-    // when a chord is the configured trigger the tap must not be built and its
-    // permission must not be demanded.
-    //
-    // Windows is excluded because its hook ALSO feeds the dictation chord, so it
-    // runs either way. macOS will need the same once the dictation chord is
-    // wired there - see MACOS_TAP_DRIVES_DICTATION, which is the one switch to
-    // flip - because the chord's default trigger is now a chord, so the tap
-    // would otherwise be absent exactly when dictation started needing it.
+    // The macOS CGEventTap feeds the dictation chord as well as the double-tap
+    // gesture, exactly like the Windows hook, so it is built whenever Input
+    // Monitoring already allows it. What differs is WHO gets asked for that
+    // grant: it costs a system prompt about reading keystrokes plus a relaunch,
+    // so a fresh install never sees it at launch. It is requested here only for
+    // something the user already opted into (a double-tap trigger, or dictation
+    // itself), and otherwise at the moment dictation is turned on (see
+    // dictation_set_consent). A registered chord trigger needs no grant at all.
     #[cfg(target_os = "macos")]
-    if !double_tap && !platform::MACOS_TAP_DRIVES_DICTATION {
+    if !platform::permission_granted() {
+        if double_tap || crate::dictation::consent_accepted(&app) {
+            platform::request_permission();
+        }
         return platform::idle();
     }
     let _ = double_tap;
@@ -832,6 +845,7 @@ mod platform {
     use tokio::sync::mpsc as tokio_mpsc;
 
     use crate::dictation::chord::{ChordState, DICTATION_CHORD};
+    use crate::macos_input::{keycode_for_vk, vk_for_keycode, INJECTED_EVENT_MARKER};
 
     use super::{
         configured_key_label, is_voice_toggle_vk, observe_physical_key_event, TapState,
@@ -859,36 +873,6 @@ mod platform {
     /// with a hook parked on vk 0 (the "custom shortcut, double-tap disabled"
     /// state), where vk 0 would read as the toggle key on every press.
     const VK_UNMAPPED: u32 = 0xFF;
-
-    /// HIToolbox virtual keycodes -> the canonical Win32 VK codes the portable
-    /// core and the dictation chord table speak.
-    fn vk_for_keycode(keycode: u16) -> Option<u32> {
-        match keycode {
-            0x3B => Some(0xA2), // kVK_Control -> VK_LCONTROL
-            0x3E => Some(0xA3), // kVK_RightControl -> VK_RCONTROL
-            0x38 => Some(0xA0), // kVK_Shift -> VK_LSHIFT
-            0x3C => Some(0xA1), // kVK_RightShift -> VK_RSHIFT
-            0x3A => Some(0xA4), // kVK_Option -> VK_LMENU
-            0x3D => Some(0xA5), // kVK_RightOption -> VK_RMENU
-            0x37 => Some(0x5B), // kVK_Command -> VK_LWIN
-            0x36 => Some(0x5C), // kVK_RightCommand -> VK_RWIN
-            _ => None,
-        }
-    }
-
-    fn keycode_for_vk(vk: u32) -> Option<u16> {
-        match vk {
-            0xA2 => Some(0x3B),
-            0xA3 => Some(0x3E),
-            0xA0 => Some(0x38),
-            0xA1 => Some(0x3C),
-            0xA4 => Some(0x3A),
-            0xA5 => Some(0x3D),
-            0x5B => Some(0x37),
-            0x5C => Some(0x36),
-            _ => None,
-        }
-    }
 
     thread_local! {
         static EVENT_SENDER: RefCell<Option<tokio_mpsc::UnboundedSender<()>>> = const { RefCell::new(None) };
@@ -933,11 +917,17 @@ mod platform {
             }
             _ => return,
         };
+        // macOS has no LLKHF_INJECTED. The insert path stamps every event it
+        // posts with INJECTED_EVENT_MARKER (see macos_input.rs), and this is
+        // the other half of that contract: a synthetic keyup from the insert
+        // must not read as the user releasing the chord mid-insert.
+        let is_injected =
+            event.get_integer_value_field(EventField::EVENT_SOURCE_USER_DATA) == INJECTED_EVENT_MARKER;
         // Same stale-held-key reconcile as the Windows hook: a keyup swallowed
         // by secure input mode (password fields call EnableSecureEventInput
         // and this tap goes silent) must not leave a chord key latched down.
-        if is_down && DICTATION_CHORD.is_chord_key(vk) {
-            let (cleared, _stale_signal) = CHORD_STATE.with(|state| {
+        if is_down && !is_injected && DICTATION_CHORD.is_chord_key(vk) {
+            let (cleared, stale_signal) = CHORD_STATE.with(|state| {
                 state.borrow_mut().reconcile(|probe_vk| {
                     probe_vk == vk
                         || keycode_for_vk(probe_vk)
@@ -948,25 +938,37 @@ mod platform {
             if cleared {
                 log::info!("dictation.chord: cleared stale held key state");
             }
+            if let Some(signal) = stale_signal {
+                crate::dictation::signal(signal);
+            }
         }
-        // Chord signals are computed for their `engaged` flag only: the
-        // dictation worker is not wired up on macOS yet, so signals go
-        // nowhere, but an engaged chord must still suppress the voice toggle.
-        // Wiring it means calling crate::dictation::signal here AND setting
-        // MACOS_TAP_DRIVES_DICTATION, or the tap will simply not exist whenever
-        // the voice trigger is a chord, which is the default.
-        let outcome = CHORD_STATE.with(|state| state.borrow_mut().observe(vk, is_down, is_up));
-        let dictation_engaged = DICTATION_CHORD.suppresses_voice_toggle() && outcome.engaged;
+        // From here down this is the Windows keyboard_hook, step for step:
+        // observe, forward the chord signal, the Escape hatch, then the
+        // voice-toggle classifier with the chord's engaged flag.
+        let chord_outcome = if is_injected {
+            None
+        } else {
+            Some(CHORD_STATE.with(|state| state.borrow_mut().observe(vk, is_down, is_up)))
+        };
+        if let Some(signal) = chord_outcome.as_ref().and_then(|outcome| outcome.signal) {
+            crate::dictation::signal(signal);
+        }
+        // Escape is the escape hatch for held dictation text. Gated on the
+        // flag so an ordinary Escape is one relaxed atomic load and nothing
+        // else. VK_ESCAPE comes from the shared macos_input table.
+        if is_down && !is_injected && vk == 0x1B && crate::dictation::is_holding_text() {
+            crate::dictation::signal(crate::dictation::chord::ChordSignal::CancelPending);
+        }
+        let dictation_engaged = DICTATION_CHORD.suppresses_voice_toggle()
+            && chord_outcome.is_some_and(|outcome| outcome.engaged);
         let is_toggle_key = is_voice_toggle_vk(vk);
-        // is_injected is false until the macOS dictation insert path exists;
-        // when Phase 4 posts CGEvents it must tag them so this can filter them.
         let should_emit = TAP_STATE.with(|state| {
             observe_physical_key_event(
                 &mut state.borrow_mut(),
                 is_toggle_key,
                 is_down,
                 is_up,
-                false,
+                is_injected,
                 dictation_engaged,
             )
         });
@@ -1124,13 +1126,6 @@ mod platform {
             listener_thread: None,
         }
     }
-
-    /// Whether this tap is load-bearing for anything besides the double-tap
-    /// gesture. False while the macOS dictation chord is unwired (this module
-    /// computes its signals but sends them nowhere). Set it to true in the same
-    /// change that starts calling `crate::dictation::signal` below, so the tap
-    /// keeps being installed even when the voice trigger is a chord.
-    pub const MACOS_TAP_DRIVES_DICTATION: bool = false;
 
     pub fn permission_granted() -> bool {
         unsafe { IOHIDCheckAccess(IOHID_REQUEST_TYPE_LISTEN_EVENT) == IOHID_ACCESS_TYPE_GRANTED }

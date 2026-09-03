@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { ShieldCheck } from "lucide-react";
+import { relaunch } from "@tauri-apps/plugin-process";
 import { logError } from "../../../lib/log";
+import { requestDoubleTapPermission } from "../../../lib/hotkeys";
 import {
   loadDictationConsent,
   setDictationConsent,
@@ -90,6 +92,7 @@ export function DictationSettingsRail({
   const [polish, setPolish] = useState<PolishSettings | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [permissionAsked, setPermissionAsked] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -171,6 +174,40 @@ export function DictationSettingsRail({
             row is a line of furniture that says nothing on every normal day. */}
         {dictationStatus !== null && !dictationStatus.available && (
           <p className="db-trace-note">{dictationStatus.reason}</p>
+        )}
+        {/* macOS: the chord's event tap needs Input Monitoring, and the grant
+            is read once at launch, so both paths end in a restart. The request
+            below is the same IOHIDRequestAccess the double-tap trigger uses. */}
+        {dictationStatus?.blocker === "inputMonitoring" && (
+          <div className="db-trace-actions">
+            <button
+              type="button"
+              className="db-trace-action"
+              onClick={() => {
+                setPermissionAsked(true);
+                void requestDoubleTapPermission().catch((err) =>
+                  logError("DictationSettingsRail: input monitoring", err),
+                );
+              }}
+            >
+              {chordCopy.allowInputMonitoring}
+            </button>
+            {permissionAsked && (
+              <>
+                <p className="db-trace-note">{chordCopy.restartNote}</p>
+                <button type="button" className="db-trace-action" onClick={() => void relaunch()}>
+                  {chordCopy.restart}
+                </button>
+              </>
+            )}
+          </div>
+        )}
+        {dictationStatus?.blocker === "relaunch" && (
+          <div className="db-trace-actions">
+            <button type="button" className="db-trace-action" onClick={() => void relaunch()}>
+              {chordCopy.restart}
+            </button>
+          </div>
         )}
       </RailSection>
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { platform } from "@tauri-apps/plugin-os";
-import { AudioLines, Check, Mic, Monitor, MousePointer2 } from "lucide-react";
+import { AudioLines, Check, Keyboard, Mic, Monitor, MousePointer2 } from "lucide-react";
 import {
   DEFAULT_GENERAL_SETTINGS,
   IMPROVEMENT_CONSENT_VERSION,
@@ -185,6 +185,17 @@ export function PrivacySetupStep({
               <span className="privacy-row-copy">
                 <strong>Accessibility</strong>
                 <small>macOS asks when Aura first needs to control text or use system-wide input.</small>
+              </span>
+              <span className="privacy-status-badge">Asked when needed</span>
+            </div>
+          )}
+
+          {isMac && (
+            <div className="privacy-feature-row">
+              <span className="privacy-row-icon"><Keyboard size={20} aria-hidden="true" /></span>
+              <span className="privacy-row-copy">
+                <strong>Input Monitoring</strong>
+                <small>Lets Aura hear the dictation keys in any app. Asked when you turn dictation on.</small>
               </span>
               <span className="privacy-status-badge">Asked when needed</span>
             </div>

@@ -85,6 +85,13 @@ pub struct DictationStatus {
     /// switch to the cloud recognizer, which accepts key term prompting; the
     /// on-device decoder this replaced could not.
     pub biasing_available: bool,
+    /// The one thing standing in the way when `reason` names an OS grant the
+    /// UI can act on, so it can offer the right button instead of parsing
+    /// prose. `"inputMonitoring"`: the macOS keystroke grant is missing.
+    /// `"relaunch"`: the grant landed after launch and only a restart picks
+    /// it up. Absent for every other reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blocker: Option<&'static str>,
 }
 
 impl DictationStatus {
@@ -94,12 +101,30 @@ impl DictationStatus {
             chord_label: DICTATION_CHORD.label(),
             reason: Some(reason.into()),
             biasing_available: false,
+            blocker: None,
         }
     }
 }
 
 #[cfg(any(windows, target_os = "macos"))]
 pub use platform::{is_holding_text, signal, start, DictationHandle};
+
+/// Whether the user has turned dictation on. Read by `voice_toggle_key::start`
+/// on macOS to decide if the Input Monitoring prompt is owed at launch: the
+/// event tap serves dictation, so the grant is only demanded of someone who
+/// asked for dictation.
+#[cfg(target_os = "macos")]
+pub(crate) fn consent_accepted(app: &tauri::AppHandle) -> bool {
+    consent::is_accepted(app)
+}
+
+#[cfg(target_os = "macos")]
+const INPUT_MONITORING_REASON: &str =
+    "Aura needs Input Monitoring to hear the dictation keys. Allow it under Privacy & Security > Input Monitoring, then restart Aura.";
+
+#[cfg(target_os = "macos")]
+const RELAUNCH_REASON: &str =
+    "Input Monitoring is allowed. Restart Aura so it can start listening for the dictation keys.";
 
 #[cfg(any(windows, target_os = "macos"))]
 mod platform {
@@ -636,6 +661,7 @@ mod platform {
                 // Key term prompting is a real biasing mechanism, unlike the
                 // on-device decoder this replaced.
                 biasing_available: true,
+                blocker: None,
             }
         };
         set_status(status, next);
@@ -1278,6 +1304,32 @@ static LAST_EMITTED_STATUS: std::sync::OnceLock<std::sync::Mutex<Option<Dictatio
 
 #[cfg(any(windows, target_os = "macos"))]
 fn with_listener_health(app: &tauri::AppHandle, mut status: DictationStatus) -> DictationStatus {
+    // macOS gates the event tap behind Input Monitoring, and the grant only
+    // takes effect after a relaunch. Both are checked SILENTLY here (no
+    // prompt) and named outright, because the generic "listener unavailable,
+    // restart" text below would send the user to the wrong fix. The listener
+    // handle's own reason describes the double-tap voice trigger, which is not
+    // what a Mac user staring at the dictation page needs to hear about.
+    #[cfg(target_os = "macos")]
+    {
+        if !crate::voice_toggle_key::input_monitoring_granted() {
+            status.available = false;
+            status.reason = Some(INPUT_MONITORING_REASON.to_string());
+            status.biasing_available = false;
+            status.blocker = Some("inputMonitoring");
+            return status;
+        }
+        let listener_down = app
+            .try_state::<crate::voice_toggle_key::VoiceToggleKeyHandle>()
+            .is_some_and(|listener| !listener.status().available);
+        if listener_down {
+            status.available = false;
+            status.reason = Some(RELAUNCH_REASON.to_string());
+            status.biasing_available = false;
+            status.blocker = Some("relaunch");
+            return status;
+        }
+    }
     if let Some(listener) = app.try_state::<crate::voice_toggle_key::VoiceToggleKeyHandle>() {
         let listener_status = listener.status();
         if !listener_status.available {
@@ -1382,6 +1434,15 @@ pub async fn dictation_set_consent(
     {
         log::info!("dictation: consent answered accepted={accepted}");
         let accepted = consent::set_accepted(&app, accepted)?;
+        // Turning dictation on is the moment the keystroke grant is owed on
+        // macOS: the event tap that hears the chord is gated behind Input
+        // Monitoring. This fires the one-time system prompt (or just lists
+        // Aura in that pane), and the refresh below publishes the blocker so
+        // Settings can say the grant still needs a relaunch to land.
+        #[cfg(target_os = "macos")]
+        if accepted && !crate::voice_toggle_key::input_monitoring_granted() {
+            crate::voice_toggle_key::request_input_monitoring();
+        }
         state.refresh(&app);
         // Take the prompt off screen the moment it is answered, rather than
         // leaving the user looking at a question they have already resolved.
