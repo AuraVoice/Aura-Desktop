@@ -321,6 +321,8 @@ dependencies = [
  "aes-gcm",
  "base64 0.22.1",
  "block2",
+ "core-foundation 0.10.1",
+ "core-graphics",
  "flacenc",
  "futures-util",
  "getrandom 0.3.4",

@@ -1,7 +1,7 @@
 import { getFirestore, doc, setDoc } from "firebase/firestore";
 import { app as firebaseApp, auth } from "./firebase";
 import packageJson from "../../package.json";
-import { platformTag } from "./platform";
+import { platformTag } from "./platformKeys";
 
 /**
  * "This transcription was wrong" feedback from the Dictation history page.
@@ -57,7 +57,7 @@ export async function sendDictationFeedback(input: DictationFeedbackInput): Prom
     created_at: new Date(nowMs).toISOString(),
     app_version: packageJson.version,
     // The Flutter writer only ever emits ios/android, so these values are new.
-    platform: platformTag,
+    platform: platformTag(),
     source: "dictation_history",
     transcript: input.transcript,
     // Spread rather than a bare field: Firestore rejects undefined values.

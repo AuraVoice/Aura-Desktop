@@ -64,35 +64,19 @@ impl DictationChord {
     }
 
     /// Rendered verbatim in the HUD and any other user-facing copy. Nothing
-    /// anywhere may hardcode a chord string.
-    ///
-    /// The keys are the same physical ones on both platforms - `vk_sets` above
-    /// does not branch - but their NAMES are not, so this is the one place in
-    /// the module that knows which OS it is on. macOS users read Control and
-    /// Command as symbols, and the Windows key's counterpart on an Apple
-    /// keyboard is Command. `src/lib/dictationStatus.ts` carries the same
-    /// strings as its pre-reply fallback; keep the two in agreement.
-    #[cfg(not(target_os = "macos"))]
+    /// anywhere may hardcode a chord string. The VK codes are the same on
+    /// every platform (the macOS tap maps kVK_Command to VK_LWIN/VK_RWIN), so
+    /// only the words change: what Windows calls Win/Alt, a Mac keyboard
+    /// prints as Cmd/Option.
     pub fn label(self) -> &'static str {
+        let mac = cfg!(target_os = "macos");
         match self {
-            DictationChord::CtrlWin => "Ctrl + Win",
+            DictationChord::CtrlWin => if mac { "Ctrl + Cmd" } else { "Ctrl + Win" },
             DictationChord::CtrlShift => "Ctrl + Shift",
-            DictationChord::CtrlAlt => "Ctrl + Alt",
-            DictationChord::WinShift => "Win + Shift",
-            DictationChord::WinAlt => "Win + Alt",
+            DictationChord::CtrlAlt => if mac { "Ctrl + Option" } else { "Ctrl + Alt" },
+            DictationChord::WinShift => if mac { "Cmd + Shift" } else { "Win + Shift" },
+            DictationChord::WinAlt => if mac { "Cmd + Option" } else { "Win + Alt" },
             DictationChord::RightCtrlOnly => "Right Ctrl",
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    pub fn label(self) -> &'static str {
-        match self {
-            DictationChord::CtrlWin => "\u{2303} + \u{2318}",
-            DictationChord::CtrlShift => "\u{2303} + \u{21e7}",
-            DictationChord::CtrlAlt => "\u{2303} + \u{2325}",
-            DictationChord::WinShift => "\u{2318} + \u{21e7}",
-            DictationChord::WinAlt => "\u{2318} + \u{2325}",
-            DictationChord::RightCtrlOnly => "Right \u{2303}",
         }
     }
 
@@ -127,7 +111,7 @@ impl DictationChord {
             .any(|vk| crate::voice_toggle_key::is_voice_toggle_vk(*vk))
     }
 
-    fn is_chord_key(self, vk: u32) -> bool {
+    pub fn is_chord_key(self, vk: u32) -> bool {
         let (anchor, partner) = self.vk_sets();
         anchor.contains(&vk) || partner.contains(&vk)
     }
@@ -225,6 +209,49 @@ impl ChordState {
             None
         };
         ChordOutcome { signal, engaged }
+    }
+
+    /// Clears held-key bits the OS says are no longer down. A low-level hook
+    /// misses key-ups delivered on the secure desktop (Win+L, UAC prompts,
+    /// fast user switch), which otherwise leaves a chord key "held" forever
+    /// and turns every bare anchor press into a full chord - arming dictation
+    /// AND suppressing the voice-toggle tap classifier on every press. The
+    /// caller passes the platform's key-state probe so this module stays
+    /// target-independent, and skips the key of the event it is currently
+    /// processing (observe() handles that one right after). Never reconciles
+    /// while armed: an armed hold is actively being spoken into and its keys
+    /// really are down. Returns true when any stale bit was cleared, plus
+    /// Cancel when the clearing abandoned a prewarm.
+    pub fn reconcile(
+        &mut self,
+        key_actually_down: impl Fn(u32) -> bool,
+    ) -> (bool, Option<ChordSignal>) {
+        if self.armed {
+            return (false, None);
+        }
+        let (anchor, partner) = DICTATION_CHORD.vk_sets();
+        let mut cleared = false;
+        for (keys, held) in [
+            (anchor, &mut self.anchor_held),
+            (partner, &mut self.partner_held),
+        ] {
+            for (index, vk) in keys.iter().enumerate() {
+                let mask = 1u8 << index;
+                if *held & mask != 0 && !key_actually_down(*vk) {
+                    *held &= !mask;
+                    cleared = true;
+                }
+            }
+        }
+        if !cleared {
+            return (false, None);
+        }
+        let any_held = self.anchor_held != 0 || self.partner_held != 0;
+        if !any_held && self.prewarmed {
+            self.prewarmed = false;
+            return (true, Some(ChordSignal::Cancel));
+        }
+        (true, None)
     }
 
     fn engaged(&self) -> bool {

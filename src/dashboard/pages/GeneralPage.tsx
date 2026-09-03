@@ -10,10 +10,10 @@ import {
 import { logError } from "../../lib/log";
 import { chordKeysOf, useDictationStatus } from "../../lib/dictationStatus";
 import { dictationChord as chordCopy } from "../../lib/copy";
+import { osName } from "../../lib/platformKeys";
 import { resetHotkeyBindings } from "../../lib/hotkeys";
 import { useHotkeyBindings } from "../../state/useHotkeyBindings";
 import { ShortcutEditorDialog } from "../../overlay/ShortcutEditorDialog";
-import { deviceNoun, isMac, osName, trayNoun } from "../../lib/platform";
 import {
   SettingsPageLayout,
   SettingsSection,
@@ -214,18 +214,18 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
         <>
           <SettingsSection
             title="App settings"
-            description={`These preferences apply only to this ${deviceNoun}.`}
+            description={`These preferences apply only to this ${osName()} device.`}
           >
             <div className="db-panel db-settings-panel">
               <ToggleRow
-                label={isMac ? "Open Aura at login" : "Open Aura when Windows starts"}
-                description={`Open the Aura dashboard automatically after you sign in to your ${deviceNoun}.`}
+                label={`Open Aura when ${osName()} starts`}
+                description={`Open the Aura dashboard automatically after you sign in to ${osName()}.`}
                 checked={launchAtStartup}
                 onChange={(value) => void updateLaunchAtStartup(value)}
               />
               <ToggleRow
-                label={isMac ? "Show Aura in the Dock" : "Show Aura in the taskbar"}
-                description={`Give this window a ${isMac ? "Dock icon" : "taskbar button"}. Aura stays reachable from the ${trayNoun} either way.`}
+                label="Show Aura in the taskbar"
+                description="Give this window a taskbar button. Aura stays reachable from the tray either way."
                 checked={settings.showInTaskbar}
                 onChange={(value) => void updateTaskbarVisibility(value)}
               />
@@ -421,7 +421,7 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
             <div className="db-panel db-settings-panel">
               <ToggleRow
                 label="Detailed notification previews"
-                description={`Show meeting titles and message details in ${osName} notifications.`}
+                description={`Show meeting titles and message details in ${osName()} notifications.`}
                 checked={settings.sensitiveNotificationPreviews}
                 onChange={(value) => void update("sensitiveNotificationPreviews", value)}
               />

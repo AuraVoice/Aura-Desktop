@@ -8,12 +8,20 @@ const DOUBLE_TAP_MS: u32 = 400;
 
 // Win32 virtual key codes for the double-tappable keys, spelled out so this
 // predicate stays usable from targets that do not link the windows crate.
-// Alt is deliberately absent: a lone Alt tap drops the focused window into
-// Windows keyboard menu mode, the same failure as the 2026-07-16 notch lesson.
+// The VK numbering is the canonical key identity on every platform; the macOS
+// listener translates CGKeyCodes into these at the tap boundary.
+// Alt is deliberately absent ON WINDOWS: a lone Alt tap drops the focused
+// window into Windows keyboard menu mode, the same failure as the 2026-07-16
+// notch lesson. macOS has no menu-mode hazard, so Option taps are allowed
+// there (the Claude Desktop convention).
 const VK_LCONTROL_CODE: u32 = 0xA2;
 const VK_RCONTROL_CODE: u32 = 0xA3;
 const VK_LSHIFT_CODE: u32 = 0xA0;
 const VK_RSHIFT_CODE: u32 = 0xA1;
+#[cfg(target_os = "macos")]
+const VK_LMENU_CODE: u32 = 0xA4;
+#[cfg(target_os = "macos")]
+const VK_RMENU_CODE: u32 = 0xA5;
 const VOICE_KEY_STORE: &str = "hotkeys.json";
 const VOICE_KEY_SETTING: &str = "voiceToggleKey";
 static VOICE_TOGGLE_VK: AtomicU32 = AtomicU32::new(VK_LCONTROL_CODE);
@@ -25,6 +33,10 @@ pub fn configured_key_label() -> &'static str {
         VK_LCONTROL_CODE => "Left Ctrl",
         VK_LSHIFT_CODE => "Left Shift",
         VK_RSHIFT_CODE => "Right Shift",
+        #[cfg(target_os = "macos")]
+        VK_LMENU_CODE => "Left Option",
+        #[cfg(target_os = "macos")]
+        VK_RMENU_CODE => "Right Option",
         _ => "custom shortcut",
     }
 }
@@ -36,6 +48,10 @@ fn configured_key_accelerator() -> &'static str {
         VK_RCONTROL_CODE => "ControlRight",
         VK_LSHIFT_CODE => "ShiftLeft",
         VK_RSHIFT_CODE => "ShiftRight",
+        #[cfg(target_os = "macos")]
+        VK_LMENU_CODE => "AltLeft",
+        #[cfg(target_os = "macos")]
+        VK_RMENU_CODE => "AltRight",
         _ => "ControlLeft",
     }
 }
@@ -48,6 +64,12 @@ fn vk_for_sentinel(accelerator: &str) -> Option<u32> {
         "ControlRight" => Some(VK_RCONTROL_CODE),
         "ShiftLeft" => Some(VK_LSHIFT_CODE),
         "ShiftRight" => Some(VK_RSHIFT_CODE),
+        // Option taps are macOS only; a hotkeys.json carried over to Windows
+        // with these values falls through to None and the Left Ctrl default.
+        #[cfg(target_os = "macos")]
+        "AltLeft" => Some(VK_LMENU_CODE),
+        #[cfg(target_os = "macos")]
+        "AltRight" => Some(VK_RMENU_CODE),
         _ => None,
     }
 }
@@ -95,6 +117,113 @@ impl TapClassifier {
     }
 }
 
+/// Per-hold state for the toggle key, shared by the per-OS listeners. Lives
+/// outside the platform modules because the Windows hook and the macOS event
+/// tap feed it the same (is_toggle_key, down, up) stream.
+#[derive(Default)]
+struct TapState {
+    toggle_key_held: bool,
+    candidate: bool,
+    /// Set for the rest of the current hold once the dictation chord was
+    /// engaged during it. Needed because the plain chord-cancel branch
+    /// below only sees a partner key going down DURING the hold: with
+    /// Ctrl+Win, pressing Win first and Ctrl second leaves the cancel
+    /// branch untouched, so the Ctrl keyup would emit a toggle and two
+    /// dictations inside DOUBLE_TAP_MS would open a cloud voice call.
+    suppressed: bool,
+}
+
+impl TapState {
+    fn observe(
+        &mut self,
+        is_toggle_key: bool,
+        is_down: bool,
+        is_up: bool,
+        dictation_engaged: bool,
+    ) -> bool {
+        if is_toggle_key && is_down {
+            if !self.toggle_key_held {
+                self.toggle_key_held = true;
+                self.candidate = true;
+                // A fresh hold starts clean, so a suppression flag left
+                // behind by a keyup this hook never saw (lock screen, fast
+                // user switch) cannot swallow the next legitimate tap.
+                self.suppressed = false;
+            }
+            self.suppressed |= dictation_engaged;
+            return false;
+        }
+        self.suppressed |= dictation_engaged;
+        if is_down && self.toggle_key_held {
+            self.candidate = false;
+            return false;
+        }
+        if is_toggle_key && is_up {
+            let should_emit = self.toggle_key_held && self.candidate && !self.suppressed;
+            self.toggle_key_held = false;
+            self.candidate = false;
+            self.suppressed = false;
+            return should_emit;
+        }
+        false
+    }
+}
+
+fn observe_physical_key_event(
+    state: &mut TapState,
+    is_toggle_key: bool,
+    is_down: bool,
+    is_up: bool,
+    is_injected: bool,
+    dictation_engaged: bool,
+) -> bool {
+    if is_injected {
+        return false;
+    }
+    state.observe(is_toggle_key, is_down, is_up, dictation_engaged)
+}
+
+/// Consumes raw toggle-key tap events from the OS listener and turns pairs
+/// inside DOUBLE_TAP_MS into voice toggles, honoring the onboarding tour's
+/// test interception. Shared by the per-OS listeners.
+fn spawn_tap_classifier(
+    app: AppHandle,
+    mut event_rx: tokio::sync::mpsc::UnboundedReceiver<()>,
+) {
+    tauri::async_runtime::spawn(async move {
+        let started_at = std::time::Instant::now();
+        let mut classifier = TapClassifier::new(DOUBLE_TAP_MS);
+        while event_rx.recv().await.is_some() {
+            let now_ms = started_at.elapsed().as_millis() as u32;
+            let previous_tap_ms = classifier.last_tap_ms;
+            let interval_ms =
+                previous_tap_ms.map(|last_tap_ms| now_ms.wrapping_sub(last_tap_ms));
+            if classifier.classify(now_ms) != Tap::Double {
+                if cfg!(debug_assertions) {
+                    if let Some(interval_ms) = interval_ms {
+                        log::info!(
+                            "voice_toggle_key: tap interval={interval_ms}ms exceeded threshold={DOUBLE_TAP_MS}ms; latest tap starts a new pair"
+                        );
+                    } else {
+                        log::info!(
+                            "voice_toggle_key: first tap registered; waiting threshold={DOUBLE_TAP_MS}ms"
+                        );
+                    }
+                }
+                continue;
+            }
+            let interval_ms = interval_ms.unwrap_or(0);
+            log::info!(
+                "voice_toggle_key: emitting toggle interval={interval_ms}ms"
+            );
+            if crate::hotkeys::intercept_voice_test(&app) {
+                continue;
+            }
+            emit_toggle(&app);
+        }
+    });
+}
+
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VoiceToggleKeyStatus {
@@ -114,27 +243,10 @@ pub struct VoiceToggleKeyHandle {
     #[cfg(target_os = "windows")]
     hook_thread: Option<std::thread::JoinHandle<()>>,
     #[cfg(target_os = "macos")]
-    run_loop: Option<RunLoopHandle>,
+    run_loop_ptr: usize,
     #[cfg(target_os = "macos")]
-    tap_thread: Option<std::thread::JoinHandle<()>>,
+    listener_thread: Option<std::thread::JoinHandle<()>>,
 }
-
-/// The listener thread's run loop, so `Drop` can ask it to return from
-/// `CFRunLoopRun`.
-///
-/// `CFRunLoop` is thread-safe for exactly this call - `CFRunLoopStop` is
-/// documented as callable from any thread - but `CFRetained` is conservatively
-/// not `Send`, so the promise is made here rather than by ignoring it at the
-/// call site. This mirrors the Windows side's rule that only a raw thread id
-/// crosses threads, never a live handle: nothing else is ever done with this
-/// value.
-#[cfg(target_os = "macos")]
-struct RunLoopHandle(objc2_core_foundation::CFRetained<objc2_core_foundation::CFRunLoop>);
-
-#[cfg(target_os = "macos")]
-unsafe impl Send for RunLoopHandle {}
-#[cfg(target_os = "macos")]
-unsafe impl Sync for RunLoopHandle {}
 
 impl VoiceToggleKeyHandle {
     pub fn status(&self) -> VoiceToggleKeyStatus {
@@ -258,123 +370,16 @@ impl Drop for VoiceToggleKeyHandle {
     }
 }
 
-/// The per-hold state behind the isolated-tap gesture.
-///
-/// Lives at file level rather than inside a platform module because both the
-/// Windows low-level hook and the macOS event tap drive exactly this state
-/// machine; only the way key events reach it differs. Its tests below run on
-/// both platforms for the same reason.
-#[derive(Default)]
-struct TapState {
-    toggle_key_held: bool,
-    candidate: bool,
-    /// Set for the rest of the current hold once the dictation chord was
-    /// engaged during it. Needed because the plain chord-cancel branch
-    /// below only sees a partner key going down DURING the hold: with
-    /// Ctrl+Win, pressing Win first and Ctrl second leaves the cancel
-    /// branch untouched, so the Ctrl keyup would emit a toggle and two
-    /// dictations inside DOUBLE_TAP_MS would open a cloud voice call.
-    suppressed: bool,
-}
-
-impl TapState {
-    fn observe(
-        &mut self,
-        is_toggle_key: bool,
-        is_down: bool,
-        is_up: bool,
-        dictation_engaged: bool,
-    ) -> bool {
-        if is_toggle_key && is_down {
-            if !self.toggle_key_held {
-                self.toggle_key_held = true;
-                self.candidate = true;
-                // A fresh hold starts clean, so a suppression flag left
-                // behind by a keyup this hook never saw (lock screen, fast
-                // user switch) cannot swallow the next legitimate tap.
-                self.suppressed = false;
-            }
-            self.suppressed |= dictation_engaged;
-            return false;
-        }
-        self.suppressed |= dictation_engaged;
-        if is_down && self.toggle_key_held {
-            self.candidate = false;
-            return false;
-        }
-        if is_toggle_key && is_up {
-            let should_emit = self.toggle_key_held && self.candidate && !self.suppressed;
-            self.toggle_key_held = false;
-            self.candidate = false;
-            self.suppressed = false;
-            return should_emit;
-        }
-        false
-    }
-}
-
-fn observe_physical_key_event(
-    state: &mut TapState,
-    is_toggle_key: bool,
-    is_down: bool,
-    is_up: bool,
-    is_injected: bool,
-    dictation_engaged: bool,
-) -> bool {
-    if is_injected {
-        return false;
-    }
-    state.observe(is_toggle_key, is_down, is_up, dictation_engaged)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{observe_physical_key_event, TapState};
-
-    #[test]
-    fn isolated_tap_emits_once_and_repeat_does_not_rearm() {
-        let mut state = TapState::default();
-        assert!(!state.observe(true, true, false, false));
-        assert!(!state.observe(true, true, false, false));
-        assert!(state.observe(true, false, true, false));
-        assert!(!state.observe(true, false, true, false));
-    }
-
-    #[test]
-    fn chord_cancels_until_toggle_key_is_released() {
-        let mut state = TapState::default();
-        assert!(!state.observe(true, true, false, false));
-        assert!(!state.observe(false, true, false, false));
-        assert!(!state.observe(true, true, false, false));
-        assert!(!state.observe(true, false, true, false));
-    }
-
-    #[test]
-    fn injected_focus_key_does_not_cancel_physical_ctrl_tap() {
-        let mut state = TapState::default();
-        assert!(!observe_physical_key_event(
-            &mut state, true, true, false, false, false,
-        ));
-        assert!(!observe_physical_key_event(
-            &mut state, false, true, false, true, false,
-        ));
-        assert!(observe_physical_key_event(
-            &mut state, true, false, true, false, false,
-        ));
-    }
-}
-
-/// The tap owns a `CFRunLoopRun`, so stopping that loop is what asks the thread
-/// to disable the tap and exit. Never tear the tap down from inside its own
-/// callback, for the same reason the Windows side never unhooks from inside the
-/// hook procedure.
 #[cfg(target_os = "macos")]
 impl Drop for VoiceToggleKeyHandle {
     fn drop(&mut self) {
-        if let Some(run_loop) = self.run_loop.take() {
-            run_loop.0.stop();
+        // The listener thread sits in CFRunLoop::run_current; CFRunLoopStop is
+        // one of the documented thread-safe CF calls, and the run loop pointer
+        // stays valid until the join below returns.
+        if self.run_loop_ptr != 0 {
+            platform::stop_run_loop(self.run_loop_ptr);
         }
-        if let Some(thread) = self.tap_thread.take() {
+        if let Some(thread) = self.listener_thread.take() {
             let _ = thread.join();
         }
     }
@@ -392,7 +397,7 @@ mod platform {
     use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::System::Threading::GetCurrentThreadId;
-    use windows::Win32::UI::Input::KeyboardAndMouse::VK_ESCAPE;
+    use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_ESCAPE};
     use windows::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, DispatchMessageW, GetMessageW, PeekMessageW, SetWindowsHookExW,
         TranslateMessage, UnhookWindowsHookEx, HC_ACTION, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MSG,
@@ -402,8 +407,8 @@ mod platform {
     use crate::dictation::chord::{ChordState, DICTATION_CHORD};
 
     use super::{
-        configured_key_label, is_voice_toggle_vk, observe_physical_key_event, Tap, TapClassifier,
-        TapState, VoiceToggleKeyHandle, VoiceToggleKeyStatus, DOUBLE_TAP_MS,
+        configured_key_label, is_voice_toggle_vk, observe_physical_key_event, TapState,
+        VoiceToggleKeyHandle, VoiceToggleKeyStatus,
     };
 
     thread_local! {
@@ -411,7 +416,6 @@ mod platform {
         static TAP_STATE: RefCell<TapState> = RefCell::new(TapState::default());
         static CHORD_STATE: RefCell<ChordState> = RefCell::new(ChordState::default());
     }
-
 
     unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         if code == HC_ACTION as i32 {
@@ -430,6 +434,28 @@ mod platform {
             // or after this one. Injected events are excluded here as well, or
             // the Win guard's own synthetic VK_LWIN keyup would read as the
             // user releasing the chord mid-insert.
+            // Before a chord key going down can complete the chord, drop any
+            // held-key bits the OS says are stale. A key-up delivered on the
+            // secure desktop (Win+L, UAC) never reaches this hook, and the
+            // leftover bit would turn every bare Ctrl press into a full
+            // Ctrl+Win chord: dictation arms AND the voice-toggle double-tap
+            // is suppressed on every press until restart.
+            if is_down && !is_injected && DICTATION_CHORD.is_chord_key(event.vkCode) {
+                let (cleared, stale_signal) = CHORD_STATE.with(|state| {
+                    state.borrow_mut().reconcile(|vk| {
+                        // The event's own key is being pressed right now;
+                        // observe() below owns it. High bit = currently down.
+                        vk == event.vkCode
+                            || (unsafe { GetAsyncKeyState(vk as i32) } as u16 & 0x8000) != 0
+                    })
+                });
+                if cleared {
+                    log::info!("dictation.chord: cleared stale held key state");
+                }
+                if let Some(signal) = stale_signal {
+                    crate::dictation::signal(signal);
+                }
+            }
             let chord_outcome = if is_injected {
                 None
             } else {
@@ -486,7 +512,7 @@ mod platform {
     }
 
     pub fn start(app: AppHandle) -> VoiceToggleKeyHandle {
-        let (event_tx, mut event_rx) = tokio_mpsc::unbounded_channel::<()>();
+        let (event_tx, event_rx) = tokio_mpsc::unbounded_channel::<()>();
         let (startup_tx, startup_rx) = mpsc::sync_channel::<Result<u32, String>>(1);
 
         let hook_thread = std::thread::Builder::new()
@@ -575,38 +601,7 @@ mod platform {
                     "voice_toggle_key: {} listener installed",
                     configured_key_label()
                 );
-                tauri::async_runtime::spawn(async move {
-                    let started_at = std::time::Instant::now();
-                    let mut classifier = TapClassifier::new(DOUBLE_TAP_MS);
-                    while event_rx.recv().await.is_some() {
-                        let now_ms = started_at.elapsed().as_millis() as u32;
-                        let previous_tap_ms = classifier.last_tap_ms;
-                        let interval_ms =
-                            previous_tap_ms.map(|last_tap_ms| now_ms.wrapping_sub(last_tap_ms));
-                        if classifier.classify(now_ms) != Tap::Double {
-                            if cfg!(debug_assertions) {
-                                if let Some(interval_ms) = interval_ms {
-                                    info!(
-                                        "voice_toggle_key: tap interval={interval_ms}ms exceeded threshold={DOUBLE_TAP_MS}ms; latest tap starts a new pair"
-                                    );
-                                } else {
-                                    info!(
-                                        "voice_toggle_key: first tap registered; waiting threshold={DOUBLE_TAP_MS}ms"
-                                    );
-                                }
-                            }
-                            continue;
-                        }
-                        let interval_ms = interval_ms.unwrap_or(0);
-                        info!(
-                            "voice_toggle_key: emitting toggle interval={interval_ms}ms"
-                        );
-                        if crate::hotkeys::intercept_voice_test(&app) {
-                            continue;
-                        }
-                        super::emit_toggle(&app);
-                    }
-                });
+                super::spawn_tap_classifier(app, event_rx);
                 VoiceToggleKeyHandle {
                     status: VoiceToggleKeyStatus {
                         available: true,
@@ -666,6 +661,42 @@ mod platform {
         }
     }
 
+    #[cfg(test)]
+    mod tests {
+        use super::{observe_physical_key_event, TapState};
+
+        #[test]
+        fn isolated_tap_emits_once_and_repeat_does_not_rearm() {
+            let mut state = TapState::default();
+            assert!(!state.observe(true, true, false, false));
+            assert!(!state.observe(true, true, false, false));
+            assert!(state.observe(true, false, true, false));
+            assert!(!state.observe(true, false, true, false));
+        }
+
+        #[test]
+        fn chord_cancels_until_toggle_key_is_released() {
+            let mut state = TapState::default();
+            assert!(!state.observe(true, true, false, false));
+            assert!(!state.observe(false, true, false, false));
+            assert!(!state.observe(true, true, false, false));
+            assert!(!state.observe(true, false, true, false));
+        }
+
+        #[test]
+        fn injected_focus_key_does_not_cancel_physical_ctrl_tap() {
+            let mut state = TapState::default();
+            assert!(!observe_physical_key_event(
+                &mut state, true, true, false, false, false,
+            ));
+            assert!(!observe_physical_key_event(
+                &mut state, false, true, false, true, false,
+            ));
+            assert!(observe_physical_key_event(
+                &mut state, true, false, true, false, false,
+            ));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -705,160 +736,155 @@ mod tap_classifier_tests {
     }
 }
 
-/// The CGEventTap listener: macOS's WH_KEYBOARD_LL.
-///
-/// Deliberately the same shape as the Windows hook above - one dedicated thread
-/// owning a run loop, torn down from `Drop`, feeding the SAME `TapState` and
-/// `ChordState` - because the gesture logic is identical and only the delivery
-/// mechanism differs. Three things ARE genuinely different:
-///
-/// 1. **Listen-only.** The Windows hook always calls `CallNextHookEx` and never
-///    suppresses anything, so nothing is being intercepted here either.
-///    `ListenOnly` says that to the OS explicitly, and it is what makes this
-///    need the Input Monitoring grant rather than the heavier one.
-/// 2. **A tap can be switched off underneath us.** macOS disables a tap whose
-///    callback is too slow (`TapDisabledByTimeout`) or during certain user
-///    input (`TapDisabledByUserInput`), and it does so silently - dictation
-///    would simply stop responding with nothing in any log. Re-enabling on
-///    those two event types is not optional.
-/// 3. **There is no LLKHF_INJECTED.** The insert path stamps every event it
-///    posts with `INJECTED_EVENT_MARKER` instead, and this drops them, so the
-///    modifier release during an insert cannot read as the user letting go of
-///    the chord.
 #[cfg(target_os = "macos")]
 mod platform {
-    use std::cell::RefCell;
+    use std::cell::{Cell, RefCell};
     use std::sync::mpsc;
 
-    use log::{error, info, warn};
-    use objc2_core_foundation::{kCFRunLoopCommonModes, CFMachPort, CFRetained, CFRunLoop};
-    use objc2_core_graphics::{
-        CGEvent, CGEventField, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
-        CGEventTapProxy, CGEventType,
+    use core_foundation::base::TCFType;
+    use core_foundation::mach_port::CFMachPortRef;
+    use core_foundation::runloop::{kCFRunLoopCommonModes, CFRunLoop, CFRunLoopRef};
+    use core_graphics::event::{
+        CGEventTap, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventType,
+        CallbackResult, EventField,
     };
+    use log::{error, info};
     use tauri::AppHandle;
     use tokio::sync::mpsc as tokio_mpsc;
 
     use crate::dictation::chord::{ChordState, DICTATION_CHORD};
-    use crate::macos_input::{vk_for_keycode, INJECTED_EVENT_MARKER};
 
     use super::{
-        configured_key_label, is_voice_toggle_vk, observe_physical_key_event, RunLoopHandle, Tap,
-        TapClassifier, TapState, VoiceToggleKeyHandle, VoiceToggleKeyStatus, DOUBLE_TAP_MS,
+        configured_key_label, is_voice_toggle_vk, observe_physical_key_event, TapState,
+        VoiceToggleKeyHandle, VoiceToggleKeyStatus,
     };
+
+    // Input Monitoring TCC (IOKit/IOHIDLib.h): a listen-only keyboard event
+    // tap delivers nothing without this permission on macOS 10.15+.
+    const IOHID_REQUEST_TYPE_LISTEN_EVENT: u32 = 1;
+    const IOHID_ACCESS_TYPE_GRANTED: u32 = 0;
+    #[link(name = "IOKit", kind = "framework")]
+    extern "C" {
+        fn IOHIDCheckAccess(request_type: u32) -> u32;
+        fn IOHIDRequestAccess(request_type: u32) -> bool;
+    }
+
+    // Not wrapped by the core-graphics crate.
+    const HID_SYSTEM_STATE: i32 = 1; // kCGEventSourceStateHIDSystemState
+    extern "C" {
+        fn CGEventSourceKeyState(state_id: i32, key: u16) -> bool;
+        fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
+    }
+
+    /// Unmapped keys use a reserved nonzero value so they can never collide
+    /// with a hook parked on vk 0 (the "custom shortcut, double-tap disabled"
+    /// state), where vk 0 would read as the toggle key on every press.
+    const VK_UNMAPPED: u32 = 0xFF;
+
+    /// HIToolbox virtual keycodes -> the canonical Win32 VK codes the portable
+    /// core and the dictation chord table speak.
+    fn vk_for_keycode(keycode: u16) -> Option<u32> {
+        match keycode {
+            0x3B => Some(0xA2), // kVK_Control -> VK_LCONTROL
+            0x3E => Some(0xA3), // kVK_RightControl -> VK_RCONTROL
+            0x38 => Some(0xA0), // kVK_Shift -> VK_LSHIFT
+            0x3C => Some(0xA1), // kVK_RightShift -> VK_RSHIFT
+            0x3A => Some(0xA4), // kVK_Option -> VK_LMENU
+            0x3D => Some(0xA5), // kVK_RightOption -> VK_RMENU
+            0x37 => Some(0x5B), // kVK_Command -> VK_LWIN
+            0x36 => Some(0x5C), // kVK_RightCommand -> VK_RWIN
+            _ => None,
+        }
+    }
+
+    fn keycode_for_vk(vk: u32) -> Option<u16> {
+        match vk {
+            0xA2 => Some(0x3B),
+            0xA3 => Some(0x3E),
+            0xA0 => Some(0x38),
+            0xA1 => Some(0x3C),
+            0xA4 => Some(0x3A),
+            0xA5 => Some(0x3D),
+            0x5B => Some(0x37),
+            0x5C => Some(0x36),
+            _ => None,
+        }
+    }
 
     thread_local! {
         static EVENT_SENDER: RefCell<Option<tokio_mpsc::UnboundedSender<()>>> = const { RefCell::new(None) };
         static TAP_STATE: RefCell<TapState> = RefCell::new(TapState::default());
         static CHORD_STATE: RefCell<ChordState> = RefCell::new(ChordState::default());
-        // Which modifiers were down at the previous flagsChanged. A flagsChanged
-        // event says WHICH key changed but not whether it went down or up, so
-        // that is derived by diffing against this.
-        static MODIFIERS_DOWN: RefCell<Vec<u16>> = const { RefCell::new(Vec::new()) };
+        static TAP_PORT: Cell<Option<CFMachPortRef>> = const { Cell::new(None) };
     }
 
-    // The tap's own port, kept so the callback can re-enable it after macOS
-    // disables it. Only ever touched on the tap thread.
-    thread_local! {
-        static TAP_PORT: RefCell<Option<CFRetained<CFMachPort>>> = const { RefCell::new(None) };
+    pub(super) fn stop_run_loop(ptr: usize) {
+        let run_loop = unsafe { CFRunLoop::wrap_under_get_rule(ptr as CFRunLoopRef) };
+        run_loop.stop();
     }
 
-    fn mask_for(event_type: CGEventType) -> u64 {
-        1u64 << event_type.0
-    }
-
-    unsafe extern "C-unwind" fn tap_callback(
-        _proxy: CGEventTapProxy,
-        event_type: CGEventType,
-        event: std::ptr::NonNull<CGEvent>,
-        _user_info: *mut std::ffi::c_void,
-    ) -> *mut CGEvent {
-        // macOS turned the tap off. Turning it back on here is the whole
-        // recovery path; without it the tap stays dead for the rest of the
-        // process and dictation silently stops responding.
-        if event_type == CGEventType::TapDisabledByTimeout
-            || event_type == CGEventType::TapDisabledByUserInput
-        {
-            warn!("voice_toggle_key: event tap was disabled by the system, re-enabling");
-            TAP_PORT.with(|port| {
-                if let Some(port) = port.borrow().as_ref() {
-                    CGEvent::tap_enable(port, true);
-                }
+    /// The macOS twin of the Windows keyboard_hook: the same portable state
+    /// machines, fed from a listen-only CGEventTap. No key data is logged,
+    /// persisted, or sent outside this process.
+    fn handle_event(event_type: CGEventType, event: &core_graphics::event::CGEvent) {
+        match event_type {
+            CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput => {
+                // The OS disables a tap it decides is too slow; re-enable it
+                // or the voice trigger silently dies for the session.
+                TAP_PORT.with(|port| {
+                    if let Some(port) = port.get() {
+                        unsafe { CGEventTapEnable(port, true) };
+                    }
+                });
+                return;
+            }
+            _ => {}
+        }
+        let keycode = event.get_integer_value_field(EventField::KEYBOARD_EVENT_KEYCODE) as u16;
+        let (vk, is_down, is_up) = match event_type {
+            CGEventType::KeyDown => (vk_for_keycode(keycode).unwrap_or(VK_UNMAPPED), true, false),
+            CGEventType::KeyUp => (vk_for_keycode(keycode).unwrap_or(VK_UNMAPPED), false, true),
+            // Modifier presses arrive as flagsChanged with no down/up bit; the
+            // combined hardware state right after the event says which edge
+            // this was, and stays distinct for left/right keys.
+            CGEventType::FlagsChanged => {
+                let Some(vk) = vk_for_keycode(keycode) else { return };
+                let down = unsafe { CGEventSourceKeyState(HID_SYSTEM_STATE, keycode) };
+                (vk, down, !down)
+            }
+            _ => return,
+        };
+        // Same stale-held-key reconcile as the Windows hook: a keyup swallowed
+        // by secure input mode (password fields call EnableSecureEventInput
+        // and this tap goes silent) must not leave a chord key latched down.
+        if is_down && DICTATION_CHORD.is_chord_key(vk) {
+            let (cleared, _stale_signal) = CHORD_STATE.with(|state| {
+                state.borrow_mut().reconcile(|probe_vk| {
+                    probe_vk == vk
+                        || keycode_for_vk(probe_vk)
+                            .map(|keycode| unsafe { CGEventSourceKeyState(HID_SYSTEM_STATE, keycode) })
+                            .unwrap_or(false)
+                })
             });
-            return event.as_ptr();
+            if cleared {
+                log::info!("dictation.chord: cleared stale held key state");
+            }
         }
-
-        let event_ref = unsafe { event.as_ref() };
-        let keycode = CGEvent::integer_value_field(
-            Some(event_ref),
-            CGEventField::KeyboardEventKeycode,
-        ) as u16;
-        // Our own posted keystrokes carry the marker. Excluded for the same
-        // reason the Windows hook excludes LLKHF_INJECTED: the modifier release
-        // during an insert would otherwise read as the user letting go.
-        let is_injected = CGEvent::integer_value_field(
-            Some(event_ref),
-            CGEventField::EventSourceUserData,
-        ) == INJECTED_EVENT_MARKER;
-
-        // A flagsChanged event names the key that changed but not its
-        // direction, so track which modifiers are currently down and diff.
-        let (is_down, is_up) = match event_type {
-            CGEventType::KeyDown => (true, false),
-            CGEventType::KeyUp => (false, true),
-            CGEventType::FlagsChanged => MODIFIERS_DOWN.with(|held| {
-                let mut held = held.borrow_mut();
-                match held.iter().position(|candidate| *candidate == keycode) {
-                    Some(index) => {
-                        held.remove(index);
-                        (false, true)
-                    }
-                    None => {
-                        held.push(keycode);
-                        (true, false)
-                    }
-                }
-            }),
-            _ => (false, false),
-        };
-        if !is_down && !is_up {
-            return event.as_ptr();
-        }
-
-        let Some(vk) = vk_for_keycode(keycode) else {
-            // An ordinary character key. It is neither a chord key nor the
-            // voice trigger, so nothing below can care about it.
-            return event.as_ptr();
-        };
-
-        let chord_outcome = if is_injected {
-            None
-        } else {
-            Some(CHORD_STATE.with(|state| state.borrow_mut().observe(vk, is_down, is_up)))
-        };
-        if let Some(signal) = chord_outcome.as_ref().and_then(|outcome| outcome.signal) {
-            crate::dictation::signal(signal);
-        }
-        // Escape is the escape hatch for held dictation text. Gated on the flag
-        // so an ordinary Escape (every dialog, every editor, all day) is one
-        // relaxed atomic load here and nothing else.
-        const VK_ESCAPE: u32 = 0x1B;
-        if is_down && !is_injected && vk == VK_ESCAPE && crate::dictation::is_holding_text() {
-            crate::dictation::signal(crate::dictation::chord::ChordSignal::CancelPending);
-        }
-        // Only a chord that actually contains the voice toggle key needs the
-        // classifier suppressed.
-        let dictation_engaged = DICTATION_CHORD.suppresses_voice_toggle()
-            && chord_outcome.is_some_and(|outcome| outcome.engaged);
+        // Chord signals are computed for their `engaged` flag only: the
+        // dictation worker is not wired up on macOS yet, so signals go
+        // nowhere, but an engaged chord must still suppress the voice toggle.
+        let outcome = CHORD_STATE.with(|state| state.borrow_mut().observe(vk, is_down, is_up));
+        let dictation_engaged = DICTATION_CHORD.suppresses_voice_toggle() && outcome.engaged;
         let is_toggle_key = is_voice_toggle_vk(vk);
-
+        // is_injected is false until the macOS dictation insert path exists;
+        // when Phase 4 posts CGEvents it must tag them so this can filter them.
         let should_emit = TAP_STATE.with(|state| {
             observe_physical_key_event(
                 &mut state.borrow_mut(),
                 is_toggle_key,
                 is_down,
                 is_up,
-                is_injected,
+                false,
                 dictation_engaged,
             )
         });
@@ -869,72 +895,69 @@ mod platform {
                 }
             });
         }
-
-        // The event always continues to the system and other apps, whether it
-        // became a voice toggle or part of a normal shortcut.
-        event.as_ptr()
     }
 
     pub fn start(app: AppHandle) -> VoiceToggleKeyHandle {
-        let (event_tx, mut event_rx) = tokio_mpsc::unbounded_channel::<()>();
-        // RunLoopHandle rather than the bare CFRetained: this value crosses
-        // from the tap thread back to the caller, and the handle is where the
-        // "stopping a run loop from another thread is allowed" promise lives.
-        let (startup_tx, startup_rx) = mpsc::sync_channel::<Result<RunLoopHandle, String>>(1);
+        let access = unsafe { IOHIDCheckAccess(IOHID_REQUEST_TYPE_LISTEN_EVENT) };
+        if access != IOHID_ACCESS_TYPE_GRANTED {
+            // Fires the one-time system prompt (or just lists Aura in the
+            // Input Monitoring pane); the grant only applies after relaunch.
+            unsafe { IOHIDRequestAccess(IOHID_REQUEST_TYPE_LISTEN_EVENT) };
+            error!("voice_toggle_key: input monitoring not granted");
+            return unavailable(
+                "Grant Aura Input Monitoring in System Settings > Privacy & Security, then relaunch Aura."
+                    .to_string(),
+            );
+        }
 
-        let tap_thread = std::thread::Builder::new()
+        let (event_tx, event_rx) = tokio_mpsc::unbounded_channel::<()>();
+        let (startup_tx, startup_rx) = mpsc::sync_channel::<Result<usize, String>>(1);
+
+        let listener_thread = std::thread::Builder::new()
             .name("aura-voice-toggle-key".to_string())
             .spawn(move || {
                 EVENT_SENDER.with(|sender| *sender.borrow_mut() = Some(event_tx));
-
-                let mask = mask_for(CGEventType::KeyDown)
-                    | mask_for(CGEventType::KeyUp)
-                    | mask_for(CGEventType::FlagsChanged);
-                let port = unsafe {
-                    CGEvent::tap_create(
-                        CGEventTapLocation::SessionEventTap,
-                        CGEventTapPlacement::HeadInsertEventTap,
-                        CGEventTapOptions::ListenOnly,
-                        mask,
-                        Some(tap_callback),
-                        std::ptr::null_mut(),
-                    )
-                };
-                let Some(port) = port else {
-                    // The only realistic cause is a missing Input Monitoring
-                    // grant, so say that rather than a bare null.
-                    let _ = startup_tx.send(Err(
-                        "Aura needs Input Monitoring access to watch for the voice trigger."
-                            .to_string(),
-                    ));
-                    EVENT_SENDER.with(|sender| sender.borrow_mut().take());
-                    return;
-                };
-
-                let source = CFMachPort::new_run_loop_source(None, Some(&port), 0);
-                let Some(run_loop) = CFRunLoop::current() else {
-                    let _ = startup_tx.send(Err("no run loop on the listener thread".to_string()));
-                    EVENT_SENDER.with(|sender| sender.borrow_mut().take());
-                    return;
-                };
-                run_loop.add_source(source.as_deref(), unsafe { kCFRunLoopCommonModes });
-                CGEvent::tap_enable(&port, true);
-                TAP_PORT.with(|slot| *slot.borrow_mut() = Some(port));
-
-                // Publish the run loop only once the tap is live, so Drop can
-                // never stop a loop that has not started.
-                let _ = startup_tx.send(Ok(RunLoopHandle(run_loop)));
-                CFRunLoop::run();
-
-                TAP_PORT.with(|slot| {
-                    if let Some(port) = slot.borrow_mut().take() {
-                        CGEvent::tap_enable(&port, false);
+                let tap = CGEventTap::new(
+                    CGEventTapLocation::Session,
+                    CGEventTapPlacement::HeadInsertEventTap,
+                    CGEventTapOptions::ListenOnly,
+                    vec![CGEventType::KeyDown, CGEventType::KeyUp, CGEventType::FlagsChanged],
+                    |_proxy, event_type, event| {
+                        handle_event(event_type, event);
+                        // Listen-only taps cannot alter events anyway.
+                        CallbackResult::Keep
+                    },
+                );
+                let tap = match tap {
+                    Ok(tap) => tap,
+                    Err(()) => {
+                        let _ = startup_tx.send(Err("event tap could not be created".to_string()));
+                        EVENT_SENDER.with(|sender| sender.borrow_mut().take());
+                        return;
                     }
-                });
+                };
+                let source = match tap.mach_port().create_runloop_source(0) {
+                    Ok(source) => source,
+                    Err(()) => {
+                        let _ = startup_tx
+                            .send(Err("event tap run loop source could not be created".to_string()));
+                        EVENT_SENDER.with(|sender| sender.borrow_mut().take());
+                        return;
+                    }
+                };
+                TAP_PORT.with(|port| port.set(Some(tap.mach_port().as_concrete_TypeRef())));
+                let run_loop = CFRunLoop::get_current();
+                unsafe {
+                    run_loop.add_source(&source, kCFRunLoopCommonModes);
+                }
+                tap.enable();
+                let _ = startup_tx.send(Ok(run_loop.as_concrete_TypeRef() as usize));
+                CFRunLoop::run_current();
+                TAP_PORT.with(|port| port.set(None));
                 EVENT_SENDER.with(|sender| sender.borrow_mut().take());
             });
 
-        let tap_thread = match tap_thread {
+        let listener_thread = match listener_thread {
             Ok(thread) => thread,
             Err(err) => {
                 let reason = format!("listener thread could not start: {err}");
@@ -944,26 +967,12 @@ mod platform {
         };
 
         match startup_rx.recv() {
-            Ok(Ok(handle)) => {
+            Ok(Ok(run_loop_ptr)) => {
                 info!(
                     "voice_toggle_key: {} listener installed",
                     configured_key_label()
                 );
-                tauri::async_runtime::spawn(async move {
-                    let started_at = std::time::Instant::now();
-                    let mut classifier = TapClassifier::new(DOUBLE_TAP_MS);
-                    while event_rx.recv().await.is_some() {
-                        let now_ms = started_at.elapsed().as_millis() as u32;
-                        if classifier.classify(now_ms) != Tap::Double {
-                            continue;
-                        }
-                        info!("voice_toggle_key: emitting toggle");
-                        if crate::hotkeys::intercept_voice_test(&app) {
-                            continue;
-                        }
-                        super::emit_toggle(&app);
-                    }
-                });
+                super::spawn_tap_classifier(app, event_rx);
                 VoiceToggleKeyHandle {
                     status: VoiceToggleKeyStatus {
                         available: true,
@@ -973,18 +982,19 @@ mod platform {
                         gesture: String::new(),
                         reason: None,
                     },
-                    run_loop: Some(handle),
-                    tap_thread: Some(tap_thread),
+                    run_loop_ptr,
+                    listener_thread: Some(listener_thread),
                 }
             }
             Ok(Err(reason)) => {
                 report_failure(&reason);
-                let _ = tap_thread.join();
+                let _ = listener_thread.join();
                 unavailable(reason)
             }
             Err(err) => {
                 let reason = format!("listener startup channel closed: {err}");
                 report_failure(&reason);
+                let _ = listener_thread.join();
                 unavailable(reason)
             }
         }
@@ -1000,8 +1010,8 @@ mod platform {
                 gesture: String::new(),
                 reason: Some(reason),
             },
-            run_loop: None,
-            tap_thread: None,
+            run_loop_ptr: 0,
+            listener_thread: None,
         }
     }
 
@@ -1016,8 +1026,6 @@ mod platform {
     }
 }
 
-/// Everything else keeps the previous behaviour: no listener, and a status that
-/// says so.
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 mod platform {
     use tauri::AppHandle;
@@ -1032,7 +1040,7 @@ mod platform {
                 accelerator: String::new(),
                 keys: Vec::new(),
                 gesture: String::new(),
-                reason: Some("Voice key toggling is not available on this platform.".to_string()),
+                reason: Some("Voice key toggling is available on Windows and macOS only.".to_string()),
             },
         }
     }

@@ -1,4 +1,4 @@
-import { deviceNoun, primaryModifierLabel, trayNoun } from "./platform";
+import { deviceNoun, primaryModifierLabel, trayNoun } from "./platformKeys";
 /** Verbatim UI copy ported from the Flutter app's desktop screens/widgets. Don't paraphrase - these strings are already product-tuned. */
 
 export const overlayStorePath = "overlay-window.json";
@@ -41,11 +41,11 @@ export const dictationConsent = {
    * is 396px wide and Settings is a full page: one string for both meant the
    * shorter surface set the ceiling for how much either could say. */
   hudBody:
-    `Hold the keys and Aura types what you say. Your speech goes to our transcription service while you hold them, and a copy stays encrypted on this ${deviceNoun} so you can find it again on the Dictation page. Cloud sharing is separate and stays off until you allow it.`,
-  body: `While you hold the keys, your speech is sent to our transcription provider and turned into text. Each finished dictation is then kept encrypted on this ${deviceNoun} so you can find and replay it. Cloud sharing is separate and starts off.`,
+    `Hold the keys and Aura types what you say. Your speech goes to our transcription service while you hold them, and a copy stays encrypted on this ${deviceNoun()} so you can find it again on the Dictation page. Cloud sharing is separate and stays off until you allow it.`,
+  body: `While you hold the keys, your speech is sent to our transcription provider and turned into text. Each finished dictation is then kept encrypted on this ${deviceNoun()} so you can find and replay it. Cloud sharing is separate and starts off.`,
   /** Shown in Settings under the toggle, where there is room for the rest. */
   detail:
-    `Your saved dictation words go with each request so they are recognised correctly. Finished dictations stay encrypted on this ${deviceNoun} for up to 90 days and are erased when you sign out. Cloud sharing is a separate opt-in under Settings > General > Privacy and stays off until you turn it on. Dictation needs you signed in and online.`,
+    `Your saved dictation words go with each request so they are recognised correctly. Finished dictations stay encrypted on this ${deviceNoun()} for up to 90 days and are erased when you sign out. Cloud sharing is a separate opt-in under Settings > General > Privacy and stays off until you turn it on. Dictation needs you signed in and online.`,
   accept: "Turn on",
   decline: "Not now",
   settingsHeading: "Online dictation",
@@ -84,9 +84,9 @@ export const dictationChord = {
 export const onboarding = {
   welcome: {
     headingAccent: "Meet Buddy",
-    headingTail: `, your AI companion on this ${deviceNoun}.`,
+    headingTail: `, your AI companion on this ${deviceNoun()}.`,
     body: "Talk things through, get help, and complete tasks without leaving the screen you're on.",
-    trayHint: `Buddy lives in your ${trayNoun}. Double-tap ${primaryModifierLabel} anytime to start talking.`,
+    trayHint: `Buddy lives in your ${trayNoun()}. Double-tap ${primaryModifierLabel()} anytime to start talking.`,
     button: "Get set up",
     skipLink: "Already have Aura? Link now",
     googleSignupLink: "New here? Sign up with Google",
@@ -137,7 +137,7 @@ export const role = {
 // The live "talk to Buddy" demo step, shown right after sign-in.
 export const agentDemo = {
   heading: "Say hi to Buddy",
-  body: `Double-tap ${primaryModifierLabel}, or hit the button, and just start talking. End it whenever you're ready.`,
+  body: `Double-tap ${primaryModifierLabel()}, or hit the button, and just start talking. End it whenever you're ready.`,
   start: "Start talking",
   finish: "Finish",
   skip: "Skip for now",
@@ -148,21 +148,21 @@ export const agentDemo = {
   thinking: "Buddy is thinking",
   buddyTalking: "Buddy is talking",
   timeWarning: "You can keep talking. This intro will end in",
-  timeEnded: `Nice talking with you. Your intro session has ended. You can talk to Buddy anytime with ${primaryModifierLabel}.`,
+  timeEnded: `Nice talking with you. Your intro session has ended. You can talk to Buddy anytime with ${primaryModifierLabel()}.`,
   continue: "Continue",
   errorHint: "Couldn't start the call. Check your mic, or skip for now.",
 } as const;
 
 export const signIn = {
   pairingPrompt: "On your phone:",
-  pairingPath: `Aura -> Settings -> Link this ${deviceNoun}`,
+  pairingPath: `Aura -> Settings -> Link this ${deviceNoun()}`,
   emailPrompt: "Sign in to bring Buddy to your desktop",
   emailHint: "you@email.com",
   passwordHint: "Password",
   pairingCodeHint: "XXXX-XXXX",
   submitEmailIdle: "Sign in",
   submitEmailBusy: "Signing in...",
-  submitPairingIdle: `Link this ${deviceNoun}`,
+  submitPairingIdle: `Link this ${deviceNoun()}`,
   submitPairingBusy: "Linking...",
   switchToPairing: "Link with your phone instead",
   switchToEmail: "Use email & password instead",
@@ -200,7 +200,7 @@ export const update = {
   dismiss: "Dismiss",
   restartIdle: "Update and restart",
   restartBusy: "Restarting...",
-  laterHint: `The update will remain available from the Aura ${trayNoun} menu.`,
+  laterHint: `The update will remain available from the Aura ${trayNoun()} menu.`,
   restarting: "Installing the update. Buddy will be right back.",
   deferred: "Buddy is in a call. Try again after it ends.",
   failed: "The update couldn't install. Buddy will retry in the background.",

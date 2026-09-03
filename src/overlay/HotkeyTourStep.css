@@ -75,6 +75,22 @@
 .hotkey-test-stage-group { display: flex; align-items: center; gap: 14px; }
 .hotkey-test-stage-plus { margin: 0 8px; color: #8b929c; font-size: 18px; }
 
+/* The key tile is a real button (clicking it demonstrates the shortcut), but
+   the kbd inside keeps all the visuals; this wrapper only resets button
+   chrome and carries the focus ring. */
+.hotkey-test-stage-keybtn {
+  padding: 0;
+  border: 0;
+  border-radius: 14px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.hotkey-test-stage-keybtn:focus-visible {
+  outline: 2px solid #2f9f91;
+  outline-offset: 3px;
+}
+
 .hotkey-test-stage kbd {
   display: flex;
   flex-direction: column;

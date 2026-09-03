@@ -19,7 +19,7 @@
 //! `macos_audio::Resampler`). Everything downstream sees the same format either
 //! way, which is the point of putting the seam here.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex, OnceLock};

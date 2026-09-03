@@ -20,6 +20,7 @@ import {
   type InterviewBrief,
 } from "../../lib/interviewBrief";
 import { listenForInterviewBrief, loadInterviewBrief } from "../../lib/interviewBriefMemory";
+import { osName } from "../../lib/platformKeys";
 import {
   listenForInterviewResume,
   loadInterviewResume,
@@ -1414,7 +1415,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       } else if (status.reason === "device_unavailable" || status.reason?.endsWith("_device_unavailable")) {
         if (metricsRef.current) metricsRef.current.errors += 1;
         trackEvent("interview_companion_error", { code: status.reason ?? "device_unavailable", stage: "capture" });
-        setMessage(`Aura cannot access the ${status.reason?.startsWith("candidate_") ? "microphone" : "call audio device"}. Check it in Windows; Aura will retry safely.`);
+        setMessage(`Aura cannot access the ${status.reason?.startsWith("candidate_") ? "microphone" : "call audio device"}. Check it in ${osName()}; Aura will retry safely.`);
         setErrorDetail(`Error code: ${status.reason ?? "device_unavailable"}. ${status.phase === "error" ? "Automatic retries were exhausted." : "Automatic retry is in progress."}`);
       } else if (status.reason === "reconnected" || status.reason === "device_recovered") {
         if (metricsRef.current) metricsRef.current.reconnects += 1;

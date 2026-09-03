@@ -6,7 +6,7 @@ import { HotkeyHint } from "./HotkeyHint";
 import { OnboardingFlow } from "./OnboardingFlow";
 import iconUrl from "../assets/icons/Aura-Icon.png";
 import "./SetupPanel.css";
-import { defaultVoiceKeyLabel } from "../lib/platform";
+import { defaultVoiceKeyLabel } from "../lib/platformKeys";
 
 export function SetupPanel() {
   const [version, setVersion] = useState("");
@@ -29,7 +29,7 @@ export function SetupPanel() {
         <span className="setup-panel-title">{barCopy.title}</span>
         <span className="setup-panel-spacer" />
         <HotkeyHint
-          keys={voice?.gesture === "press" ? voice.keys : [`${voice?.keyLabel || defaultVoiceKeyLabel} twice`]}
+          keys={voice?.gesture === "press" ? voice.keys : [`${voice?.keyLabel || defaultVoiceKeyLabel()} twice`]}
           action="summon Buddy or end voice"
         />
       </div>

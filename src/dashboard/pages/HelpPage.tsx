@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { sendFeedback } from "../../lib/feedback";
 import { logError } from "../../lib/log";
-import { osName } from "../../lib/platform";
+import { osName } from "../../lib/platformKeys";
 import {
   SettingsPageLayout,
   SettingsSection,
@@ -46,7 +46,7 @@ export function HelpPage() {
         <div className="db-panel db-settings-info-list">
           <div>
             <strong>Device details</strong>
-            <p>Aura version and your {osName} version.</p>
+            <p>Aura version and your {osName()} version.</p>
           </div>
           <div>
             <strong>Recent diagnostics</strong>

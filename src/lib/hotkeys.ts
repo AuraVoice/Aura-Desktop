@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { isMac, modifierLabel, osName } from "./platform";
+import { altLabel, isMac, osName, superLabel } from "./platformKeys";
 
 export interface HotkeyBinding {
   id: string;
@@ -19,13 +19,21 @@ export interface VoiceToggleKeyStatus {
 }
 
 /** Keys the voice trigger can be double-tapped on. Mirrors DOUBLE_TAP_SENTINELS
- * in src-tauri/src/hotkeys.rs. Alt is absent on purpose: a lone Alt tap drops
- * the focused window into Windows keyboard menu mode. */
+ * in src-tauri/src/hotkeys.rs. Alt is absent on Windows on purpose: a lone Alt
+ * tap drops the focused window into Windows keyboard menu mode. macOS has no
+ * menu-mode hazard, so Option taps are offered there (the Claude Desktop
+ * convention). */
 export const DOUBLE_TAP_PRESETS: { accelerator: string; label: string }[] = [
   { accelerator: "ControlLeft", label: "Left Ctrl" },
   { accelerator: "ControlRight", label: "Right Ctrl" },
   { accelerator: "ShiftRight", label: "Right Shift" },
   { accelerator: "ShiftLeft", label: "Left Shift" },
+  ...(isMac()
+    ? [
+        { accelerator: "AltLeft", label: "Left Option" },
+        { accelerator: "AltRight", label: "Right Option" },
+      ]
+    : []),
 ];
 
 export function isDoubleTapAccelerator(accelerator: string): boolean {
@@ -69,7 +77,7 @@ const BARE_KEY_BLOCKLIST = [
 export type ShortcutCapture =
   /** Only modifiers held so far, keep listening. */
   | { kind: "pending" }
-  /** Windows will never deliver this combination. */
+  /** The OS will never deliver this combination. */
   | { kind: "rejected"; reason: string }
   /** Usable. `warning` is advisory only and never blocks saving. */
   | { kind: "ok"; accelerator: string; keys: string[]; warning?: string };
@@ -84,7 +92,7 @@ function displayKey(code: string): string {
 }
 
 /** Deliberately a blocklist, not an allowlist: the user binds whatever they
- * want and we refuse only what Windows reserves outright. Everything merely
+ * want and we refuse only what the OS reserves outright. Everything merely
  * risky comes back as `ok` carrying a `warning`. Rust re-checks all of this in
  * validate_shortcut; this exists so the message appears before Save, not after. */
 export function captureShortcut(event: KeyboardEvent): ShortcutCapture {
@@ -95,38 +103,54 @@ export function captureShortcut(event: KeyboardEvent): ShortcutCapture {
   if (event.altKey) modifiers.push("Alt");
   if (event.shiftKey) modifiers.push("Shift");
 
-  if (event.metaKey) {
-    // The Windows key belongs to the shell; Command is the primary modifier on
-    // macOS and Tauri registers it through the same "Super" accelerator part.
-    if (!isMac) {
+  if (isMac()) {
+    // Cmd is the natural shortcut modifier on macOS; refuse only what the
+    // system owns globally. Mirrors the macOS validate_shortcut in hotkeys.rs.
+    if (event.metaKey) modifiers.push("Super");
+    if (event.code === "Space" && (event.metaKey || event.ctrlKey)) {
+      return { kind: "rejected", reason: "That Space shortcut is reserved by macOS for Spotlight, input sources, and the Character Viewer." };
+    }
+    if (event.code === "Tab" && event.metaKey) {
+      return { kind: "rejected", reason: "Cmd+Tab is reserved for switching apps." };
+    }
+    if (event.code === "Escape" && event.metaKey) {
+      return { kind: "rejected", reason: "That Escape shortcut is reserved by macOS for Force Quit." };
+    }
+    if (event.code === "KeyQ" && event.metaKey && event.ctrlKey) {
+      return { kind: "rejected", reason: "Ctrl+Cmd+Q is reserved for locking the screen." };
+    }
+    if (["Digit3", "Digit4", "Digit5", "Digit6"].includes(event.code) && event.metaKey && event.shiftKey) {
+      return { kind: "rejected", reason: "That shortcut is reserved by macOS for screenshots." };
+    }
+  } else {
+    if (event.metaKey) {
       return { kind: "rejected", reason: "Windows-key shortcuts are reserved for Windows. Use Ctrl, Alt, and Shift instead." };
     }
-    modifiers.push("Super");
-  }
-  if (event.code === "F12" && !isMac) {
-    return { kind: "rejected", reason: "F12 is reserved by Windows for debuggers." };
+    if (event.code === "F12") {
+      return { kind: "rejected", reason: "F12 is reserved by Windows for debuggers." };
+    }
+    if (event.code === "Tab" && event.altKey) {
+      return { kind: "rejected", reason: "Alt+Tab is reserved for switching windows." };
+    }
+    if (event.code === "Escape" && (event.altKey || event.ctrlKey)) {
+      return { kind: "rejected", reason: "That Escape shortcut is reserved by Windows." };
+    }
+    if (event.code === "F4" && event.altKey) {
+      return { kind: "rejected", reason: "Alt+F4 is reserved for closing windows." };
+    }
   }
   if (modifiers.length === 0 && BARE_KEY_BLOCKLIST.includes(event.code)) {
     return { kind: "rejected", reason: "Pick a key you do not need for normal typing." };
-  }
-  if (event.code === "Tab" && (isMac ? event.metaKey : event.altKey)) {
-    return { kind: "rejected", reason: isMac ? "Cmd+Tab is reserved for switching apps." : "Alt+Tab is reserved for switching windows." };
-  }
-  if (event.code === "Escape" && (event.altKey || event.ctrlKey || event.metaKey)) {
-    return { kind: "rejected", reason: `That Escape shortcut is reserved by ${osName}.` };
-  }
-  if (isMac ? event.code === "KeyQ" && event.metaKey : event.code === "F4" && event.altKey) {
-    return { kind: "rejected", reason: isMac ? "Cmd+Q is reserved for quitting apps." : "Alt+F4 is reserved for closing windows." };
   }
 
   const key = displayKey(event.code);
   const isTypingKey = /^Key[A-Z]$/.test(event.code) || /^Digit[0-9]$/.test(event.code) || event.code === "Space";
   let warning: string | undefined;
   if (modifiers.length === 0) {
-    warning = `This captures ${key} everywhere in ${osName}, including while you type. You will not be able to use it in other apps.`;
+    warning = `This captures ${key} everywhere in ${osName()}, including while you type. You will not be able to use it in other apps.`;
   } else if (modifiers.length === 1 && isTypingKey) {
     warning = "Single-modifier shortcuts often collide with whatever app you are in.";
-  } else if (event.ctrlKey && event.altKey && !event.shiftKey && /^Key[A-Z]$/.test(event.code)) {
+  } else if (!isMac() && event.ctrlKey && event.altKey && !event.shiftKey && /^Key[A-Z]$/.test(event.code)) {
     warning = "On some international keyboards this is AltGr and may interfere with typing.";
   }
 
@@ -138,11 +162,18 @@ export function captureShortcut(event: KeyboardEvent): ShortcutCapture {
   };
 }
 
+function modifierLabel(modifier: string): string {
+  if (modifier === "Control") return "Ctrl";
+  if (modifier === "Alt") return altLabel();
+  if (modifier === "Super") return superLabel();
+  return modifier;
+}
+
 export function keysFromAccelerator(accelerator: string): string[] {
   return accelerator.split("+").map((part) => {
-    if (part === "Control" || part === "Alt" || part === "Shift" || part === "Super") {
-      return modifierLabel(part);
-    }
+    if (part === "Control") return "Ctrl";
+    if (part === "Alt") return altLabel();
+    if (part === "Super") return superLabel();
     return displayKey(part);
   });
 }

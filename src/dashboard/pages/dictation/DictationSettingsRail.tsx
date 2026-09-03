@@ -17,7 +17,7 @@ import {
 import { dictationConsent as consentCopy, dictationChord as chordCopy } from "../../../lib/copy";
 import { chordKeysOf, useDictationStatus } from "../../../lib/dictationStatus";
 import { bytes as formatBytes } from "../../format";
-import { deviceNoun } from "../../../lib/platform";
+import { deviceNoun } from "../../../lib/platformKeys";
 
 /**
  * The right-hand column of the Dictation page: everything that used to be the
@@ -206,7 +206,7 @@ export function DictationSettingsRail({
       <RailSection title="Dictation history">
         <ToggleRow
           label="Save dictation history"
-          description={`Keeps each finished dictation and its audio encrypted on this ${deviceNoun} so you can replay it here. Off keeps nothing, anywhere.`}
+          description={`Keeps each finished dictation and its audio encrypted on this ${deviceNoun()} so you can replay it here. Off keeps nothing, anywhere.`}
           checked={historySettings?.enabled ?? true}
           disabled={busy === "history" || !uid}
           onChange={(value) => void updateHistory(value)}

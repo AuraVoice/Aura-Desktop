@@ -107,6 +107,14 @@ webpki-roots = "1"
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework = "3"
 
+# The voice-toggle/dictation key listener (voice_toggle_key.rs) runs a
+# listen-only CGEventTap on its own CFRunLoop thread, and gates itself on the
+# Input Monitoring TCC permission via IOHIDCheckAccess. These are the older
+# core-* bindings rather than the objc2 generation below; that file is their
+# only consumer, and it keeps the Alt/Option sentinels hotkeys.rs advertises.
+core-graphics = "0.25"
+core-foundation = "0.10"
+
 # AppKit bindings for macos_window.rs: the overlay and the accessory windows
 # are non-activating NSPanels there, which is macOS's only way to show a
 # clickable always-on-top surface without stealing focus from the app the user
