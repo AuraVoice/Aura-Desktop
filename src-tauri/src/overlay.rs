@@ -184,6 +184,12 @@ pub struct OverlayState {
     // frontend pushes it - a fresh process must not flash a bar before the
     // preference is known.
     always_show_bar: bool,
+    // True while the dictation HUD is mid-hold and has taken the notch edge.
+    // Not a presentation of its own either: `presentation` stays Bar so chat
+    // state and the React mirror are untouched, and this only decides whether
+    // that Bar is actually drawn. The HUD and the notch are never both on
+    // screen; see `set_dictation_hold`.
+    dictation_hold: bool,
 }
 
 impl Default for OverlayState {
@@ -203,6 +209,7 @@ impl Default for OverlayState {
             pre_pointing: None,
             pointing_generation: 0,
             always_show_bar: false,
+            dictation_hold: false,
         }
     }
 }
@@ -218,6 +225,7 @@ struct AppliedBounds {
     slot_height: Option<f64>,
     centered_slot: bool,
     notch_edge: NotchEdge,
+    dictation_hold: bool,
 }
 
 impl OverlayState {
@@ -229,7 +237,15 @@ impl OverlayState {
             slot_height: self.slot_height,
             centered_slot: self.centered_slot,
             notch_edge: self.notch_edge,
+            dictation_hold: self.dictation_hold,
         }
+    }
+
+    /// Whether the real window should be hidden right now: either nothing is
+    /// presented, or the Bar has lent its edge to the dictation HUD.
+    fn effectively_hidden(&self) -> bool {
+        self.presentation == OverlayPresentation::Hidden
+            || (self.dictation_hold && self.presentation == OverlayPresentation::Bar)
     }
 }
 
@@ -779,7 +795,7 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
 
     let started_at = Instant::now();
 
-    if state.presentation == OverlayPresentation::Hidden {
+    if state.effectively_hidden() {
         let from = (
             state.applied.map(|a| a.presentation),
             state.applied.map(|a| a.variant),
@@ -789,8 +805,9 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
         let slot_height = state.slot_height;
         let centered_slot = state.centered_slot;
         let notch_edge = state.notch_edge;
+        let dictation_hold = state.dictation_hold;
         drop(state);
-        info!("overlay::apply: hiding (from {from:?})");
+        info!("overlay::apply: hiding (from {from:?}, dictation_hold={dictation_hold})");
         window
             .hide()
             .map_err(|e| format!("failed to hide window: {e}"))?;
@@ -802,6 +819,7 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
                 slot_height,
                 centered_slot,
                 notch_edge,
+                dictation_hold,
             });
         }
         crate::dictation::set_overlay_visible(app, false);
@@ -818,10 +836,10 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
     let slot_height = state.slot_height;
     let centered_slot = state.centered_slot;
     let notch_edge = state.notch_edge;
-    // Bar surfaces, including text chat, can coexist with dictation: hud.rs
-    // detects a Bar on the same display and offsets the HUD. Suppress only the
-    // larger overlay presentations that cannot share that edge safely.
-    let suppresses_hud = presentation != OverlayPresentation::Bar;
+    let dictation_hold = state.dictation_hold;
+    // Every visible presentation, the Bar included, hides the dictation HUD.
+    // The HUD only ever gets the edge by asking through set_dictation_hold,
+    // which routes back here as the hidden branch above.
     // A "fresh show" is a real presentation/variant transition (summon from
     // hidden, setup<->bar). A slot-height-only change (opening/closing the kebab
     // menu or a card) or an edge re-dock is NOT one - it must not re-steal OS
@@ -890,10 +908,11 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
             slot_height,
             centered_slot,
             notch_edge,
+            dictation_hold,
         });
     }
     emit_overlay_changed(app);
-    crate::dictation::set_overlay_visible(app, suppresses_hud);
+    crate::dictation::set_overlay_visible(app, true);
     crate::dictation::refresh_hud_placement(app);
     info!(
         "overlay::apply: presentation={presentation:?} variant={panel_variant:?} applied in {:?}",
@@ -910,11 +929,11 @@ pub fn apply(app: &AppHandle) {
 
 fn set_presentation(app: &AppHandle, presentation: OverlayPresentation) {
     if let Some(handle) = state_handle(app) {
-        handle
-            .0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .presentation = presentation;
+        let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        state.presentation = presentation;
+        // An explicit presentation change is the user asking for the overlay,
+        // which outranks a dictation hold that borrowed the edge.
+        state.dictation_hold = false;
     }
     apply(app);
 }
@@ -1086,6 +1105,8 @@ pub fn summon_bar(app: &AppHandle) -> Result<(), String> {
             return Err("cannot show voice notch while pointing or moving".to_string());
         }
         state.presentation = OverlayPresentation::Bar;
+        // Same as set_presentation: a summon outranks a dictation hold.
+        state.dictation_hold = false;
     }
     // No force_foreground here: the notch is summon-on-demand and always-on-top,
     // so it appears without stealing focus. Forcing foreground would inject the
@@ -1266,19 +1287,46 @@ pub fn set_voice_active(app: &AppHandle, active: bool) {
     let Some(handle) = state_handle(app) else {
         return;
     };
-    let pinned_bar = {
-        let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
-        state.voice_active = active;
-        state.always_show_bar && state.presentation == OverlayPresentation::Bar
+    handle
+        .0
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .voice_active = active;
+}
+
+/// The dictation HUD asking for, or handing back, the notch edge. While the
+/// hold is live a presented Bar is hidden and the HUD draws in its place; when
+/// it ends the Bar comes back exactly as it was, chat slot included, because
+/// `presentation` never changed. A live voice call keeps the notch (it carries
+/// the call), so the request is refused and the HUD stays suppressed. Both
+/// directions land in `apply_result`, the one place either window is shown or
+/// hidden.
+pub(crate) fn set_dictation_hold(app: &AppHandle, active: bool) {
+    let Some(handle) = state_handle(app) else {
+        return;
     };
-    // A pinned bar does not change presentation when a call starts or ends, so
-    // apply_result's `unchanged` early-out never re-evaluates HUD suppression
-    // for it. Push it from here for that case only: the HUD is allowed while
-    // the pinned bar is resting, suppressed while it carries a live call.
-    // Every other presentation is still driven solely by apply_result.
-    if pinned_bar {
-        crate::dictation::set_overlay_visible(app, active);
+    {
+        let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        if state.dictation_hold == active {
+            return;
+        }
+        if active && state.voice_active {
+            return;
+        }
+        state.dictation_hold = active;
     }
+    apply(app);
+}
+
+/// Whether the Bar is actually drawn right now, as opposed to merely being the
+/// current presentation while a dictation hold has borrowed its edge.
+pub(crate) fn bar_on_screen(app: &AppHandle) -> bool {
+    state_handle(app)
+        .map(|h| {
+            let state = h.0.lock().unwrap_or_else(|e| e.into_inner());
+            state.presentation == OverlayPresentation::Bar && !state.dictation_hold
+        })
+        .unwrap_or(false)
 }
 
 pub fn set_panel_variant(app: &AppHandle, variant: PanelVariant) {

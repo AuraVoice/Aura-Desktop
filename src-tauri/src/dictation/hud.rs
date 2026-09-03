@@ -68,12 +68,15 @@ static LAST_TARGET: AtomicIsize = AtomicIsize::new(0);
 static IDLE_HOVERED: AtomicBool = AtomicBool::new(false);
 
 /// True while the Buddy agent overlay is visible. The overlay and this HUD are
-/// separate always-on-top windows that can otherwise both draw on screen at
-/// once and collide. `overlay::apply_result` is the sole place any overlay
-/// presentation change actually reaches the real window, and it is the sole
-/// caller of `set_overlay_suppressed` - that single choke point is what makes
-/// "at most one of the two is visible" a guarantee rather than two toggles
-/// that merely happen to be called together.
+/// separate always-on-top windows that are never both on screen: at rest the
+/// notch wins and this pill stays hidden; for the length of a hold the HUD
+/// takes the edge and the notch is hidden instead. Both directions run through
+/// `overlay::apply_result`, the sole place any overlay change reaches the real
+/// window and the sole caller of `set_overlay_suppressed`. This side asks for
+/// the edge with `overlay::set_dictation_hold` and never touches the notch
+/// itself - that single choke point is what makes "at most one of the two is
+/// visible" a guarantee rather than two toggles that merely happen to be
+/// called together.
 static SUPPRESSED_BY_OVERLAY: AtomicBool = AtomicBool::new(false);
 
 /// What the HUD is currently telling the user. Every caption is derived from
@@ -352,7 +355,10 @@ fn voice_notch_shares_display(
     full_size: LogicalSize<f64>,
     scale: f64,
 ) -> bool {
-    if !matches!(overlay::snapshot(app).presentation, OverlayPresentation::Bar) {
+    // Asks the overlay whether a Bar is actually drawn, not merely presented:
+    // during a hold the Bar has lent this HUD its edge and is hidden, so there
+    // is nothing to step aside from.
+    if !overlay::bar_on_screen(app) {
         return false;
     }
     let Some(main) = overlay::main_window(app) else {
@@ -419,6 +425,9 @@ fn place_window(app: &AppHandle, window: &tauri::WebviewWindow, target: isize, p
 /// silently create one.
 pub fn show(app: &AppHandle, target: isize) {
     LAST_TARGET.store(target, Ordering::Relaxed);
+    // Take the edge from the notch first: the overlay's hidden branch is what
+    // lifts the suppression the guarded show() below checks.
+    overlay::set_dictation_hold(app, true);
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
         if let Err(e) = build_window(&handle) {
@@ -441,6 +450,7 @@ pub fn show(app: &AppHandle, target: isize) {
 /// of Arm.
 pub fn show_idle(app: &AppHandle) {
     IDLE_HOVERED.store(false, Ordering::Relaxed);
+    overlay::set_dictation_hold(app, false);
     let mut update = HudUpdate::new(HudPhase::Idle);
     update.edge = overlay::snapshot(app).notch_edge.as_stored();
     *LAST_UPDATE.lock().unwrap_or_else(|e| e.into_inner()) = Some(update.clone());
@@ -499,6 +509,7 @@ pub fn refresh_placement(app: &AppHandle) {
 }
 
 pub fn hide(app: &AppHandle) {
+    overlay::set_dictation_hold(app, false);
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
         if let Some(window) = handle.get_webview_window(DICTATION_WINDOW) {
@@ -516,6 +527,10 @@ pub fn publish(app: &AppHandle, mut update: HudUpdate) {
     let phase = update.phase;
     let has_caption = !update.text.is_empty();
     *LAST_UPDATE.lock().unwrap_or_else(|e| e.into_inner()) = Some(update.clone());
+    // After LAST_UPDATE is written: lifting the suppression places and shows
+    // this window from `last_update()`, so it must already say this phase.
+    // Any phase but Idle takes the edge from the notch; Idle hands it back.
+    overlay::set_dictation_hold(app, phase != HudPhase::Idle);
     if let Some(window) = app.get_webview_window(DICTATION_WINDOW) {
         let _ = window.emit(crate::events::DICTATION_UPDATE, update);
     }
@@ -536,12 +551,14 @@ pub fn publish(app: &AppHandle, mut update: HudUpdate) {
     });
 }
 
-/// Called from `overlay::apply_result` on every real presentation
-/// transition. Hides the pill the instant the Buddy overlay becomes visible,
-/// and restores it to whatever `LAST_UPDATE` says it should be showing the
-/// instant the overlay goes back to Hidden - not forced on, since dictation
-/// may not be running at all. No-ops if the HUD window was never built (the
-/// user never armed dictation), so summoning the overlay never creates one.
+/// Called from `overlay::apply_result` on every real window transition,
+/// including the ones this module triggers through `set_dictation_hold`.
+/// Hides the pill the instant the Buddy overlay becomes visible, and restores
+/// it to whatever `LAST_UPDATE` says it should be showing the instant the
+/// overlay's window goes away, whether because it was dismissed or because a
+/// hold borrowed its edge - not forced on, since dictation may not be running
+/// at all. No-ops if the HUD window was never built (the user never armed
+/// dictation), so summoning the overlay never creates one.
 pub fn set_overlay_suppressed(app: &AppHandle, suppressed: bool) {
     SUPPRESSED_BY_OVERLAY.store(suppressed, Ordering::Relaxed);
     let handle = app.clone();
