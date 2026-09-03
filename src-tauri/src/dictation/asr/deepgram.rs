@@ -32,7 +32,6 @@
 //! no code path may ever format the request, the URL, or a tungstenite error
 //! that might quote them.
 
-#![cfg(windows)]
 
 use std::collections::BTreeSet;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};

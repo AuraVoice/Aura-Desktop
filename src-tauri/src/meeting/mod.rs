@@ -1,14 +1,17 @@
 //! Meeting-notes capture - the Rust half of MEETING_NOTES_PLAN.md.
 //!
-//! Rust owns detection (detect.rs), WASAPI capture + FLAC encode (audio.rs),
+//! Rust owns detection (detect.rs), capture + FLAC encode (audio.rs),
 //! encryption at rest (crypto.rs), and the durable segment queue (queue.rs).
 //! JS owns every HTTP call (claim, segment upload, complete, polling) because
 //! auth tokens never cross into Rust - see useMeetingCapture.ts for the
 //! orchestrating state machine. Segment bytes cross to JS over the same
 //! binary IPC pattern screenshot.rs established.
 //!
-//! Everything platform-specific is `#[cfg(windows)]`; on other platforms the
-//! commands answer with an error string so a macOS build still compiles.
+//! Nothing in this module is platform-gated any more. The only per-OS code on
+//! the capture path is the device layer in `audio_capture.rs` (WASAPI vs a
+//! Core Audio process tap), the lock watcher in session.rs, the runtime lease,
+//! and detect.rs's window scan - each of which carries its own seam. Everything
+//! here is the same code on both.
 
 mod evidence_store;
 pub mod queue;
@@ -16,13 +19,12 @@ mod runtime_lease;
 
 pub use runtime_lease::MeetingRuntimeLease;
 
-#[cfg(windows)]
 pub(crate) mod audio;
-#[cfg(windows)]
+// Segment/row encryption. Cross-platform: the cipher is shared and only the
+// key wrapping is per-OS (crate::crypto). chat_cache and interview_store
+// depend on this on every platform, so it must not be gated.
 pub(crate) mod crypto;
-#[cfg(windows)]
 pub mod detect;
-#[cfg(windows)]
 mod session;
 
 use std::sync::{Arc, Condvar, Mutex};
@@ -46,24 +48,19 @@ pub struct ActiveCapture {
     pub event_id: String,
     pub started_at_ms: i64,
     pub paused: bool,
-    #[cfg(windows)]
     stop: std::sync::mpsc::Sender<String>,
-    #[cfg(windows)]
     finalization: FinalizationSignal,
 }
 
-#[cfg(windows)]
 #[derive(Default)]
 struct FinalizationState {
     result: Mutex<Option<Result<(), String>>>,
     condition: Condvar,
 }
 
-#[cfg(windows)]
 #[derive(Clone, Default)]
 pub(crate) struct FinalizationSignal(Arc<FinalizationState>);
 
-#[cfg(windows)]
 impl FinalizationSignal {
     fn finish(&self, result: Result<(), String>) {
         let mut state = self.0.result.lock().unwrap_or_else(|error| error.into_inner());
@@ -93,8 +90,8 @@ impl FinalizationSignal {
 pub struct MeetingCaptureHandle(pub Mutex<Option<ActiveCapture>>);
 
 /// event_id -> cancel flag for each live join-detection thread (detect.rs).
-/// Defined here (not in the cfg(windows) detect module) so lib.rs can manage
-/// it unconditionally.
+/// Defined here rather than in detect.rs so lib.rs can manage it without
+/// reaching into that module's internals.
 #[derive(Default)]
 pub struct JoinWatchHandle(
     pub Mutex<std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>>,
@@ -183,7 +180,6 @@ pub async fn meeting_runtime_status(app: AppHandle) -> Result<MeetingRuntimeStat
 /// engine's stop sender under the lock, drops the lock, then sends - same
 /// discipline as stop_meeting_capture.
 pub fn request_stop(app: &AppHandle, reason: &str) {
-    #[cfg(windows)]
     {
         let Some(handle) = app.try_state::<MeetingCaptureHandle>() else {
             return;
@@ -196,10 +192,6 @@ pub fn request_stop(app: &AppHandle, reason: &str) {
             info!("meeting: native stop requested ({reason})");
             let _ = stop.send(reason.to_string());
         }
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = (app, reason);
     }
 }
 
@@ -321,7 +313,6 @@ pub async fn start_meeting_capture(
     let owner_uid = ticket.uid().to_string();
     queue::validate_meeting_id(&meeting_id)?;
     queue::validate_capture_run_id(&capture_run_id)?;
-    #[cfg(windows)]
     {
         let handle = app.state::<MeetingCaptureHandle>();
         {
@@ -447,18 +438,6 @@ pub async fn start_meeting_capture(
         }
         Ok(())
     }
-    #[cfg(not(windows))]
-    {
-        let _ = (
-            app,
-            meeting_id,
-            capture_run_id,
-            capture_fence,
-            event_id,
-            ticket,
-        );
-        Err("meeting capture is Windows-only".to_string())
-    }
 }
 
 /// Asks the engine to stop; the engine flushes, completes the manifest entry,
@@ -466,7 +445,6 @@ pub async fn start_meeting_capture(
 #[tauri::command]
 pub async fn stop_meeting_capture(app: AppHandle, reason: String) -> Result<(), String> {
     require_runtime_owner(&app)?;
-    #[cfg(windows)]
     {
         let handle = app.state::<MeetingCaptureHandle>();
         let active = {
@@ -486,11 +464,6 @@ pub async fn stop_meeting_capture(app: AppHandle, reason: String) -> Result<(), 
             }
             None => Ok(()), // already stopped - a double click is not an error
         }
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = (app, reason);
-        Ok(())
     }
 }
 
@@ -565,7 +538,6 @@ pub async fn read_segment(
     seq: u32,
 ) -> Result<tauri::ipc::Response, String> {
     require_runtime_owner(&app)?;
-    #[cfg(windows)]
     {
         let ticket = crate::security::authorize(&app, crate::security::Operation::ReadSegment)?;
         let owner_uid = ticket.uid().to_string();
@@ -580,11 +552,6 @@ pub async fn read_segment(
         // sign-out (or account switch) mid-decrypt drops the plaintext.
         crate::security::recheck(&app, crate::security::Operation::ReadSegment, &ticket)?;
         result
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = (app, meeting_id, capture_run_id, seq);
-        Err("meeting capture is Windows-only".to_string())
     }
 }
 
@@ -894,8 +861,10 @@ pub async fn delete_local_recording(
     result
 }
 
-/// Arms Zoom/Teams join detection for one meeting's time window. Windows-only
-/// under the hood; a no-op elsewhere so the command surface stays uniform.
+/// Arms Zoom/Teams join detection for one meeting's time window. On macOS the
+/// window titles it matches on come from the accessibility tree, so a missing
+/// Accessibility grant means detection quietly never fires rather than firing
+/// wrongly.
 #[tauri::command]
 pub fn start_join_watch(
     app: AppHandle,
@@ -905,7 +874,6 @@ pub fn start_join_watch(
 ) -> Result<(), String> {
     require_runtime_owner(&app)?;
     let ticket = crate::security::authorize(&app, crate::security::Operation::StartJoinWatch)?;
-    #[cfg(windows)]
     {
         detect::start_join_watch(
             app.clone(),
@@ -924,20 +892,12 @@ pub fn start_join_watch(
         }
         Ok(())
     }
-    #[cfg(not(windows))]
-    {
-        let _ = (app, event_id, window_start_ms, window_end_ms, ticket);
-        Ok(())
-    }
 }
 
 #[tauri::command]
 pub fn stop_join_watch(app: AppHandle, event_id: String) -> Result<(), String> {
     require_runtime_owner(&app)?;
-    #[cfg(windows)]
     detect::stop_join_watch(app, event_id);
-    #[cfg(not(windows))]
-    let _ = (app, event_id);
     Ok(())
 }
 
@@ -976,7 +936,6 @@ pub fn debug_force_join(app: AppHandle, event_id: String) -> Result<(), String> 
 
 /// One closed segment's place on the capture timeline, grouped so
 /// `record_segment` and `close_segment` pass it as a unit.
-#[cfg(windows)]
 pub(crate) struct SegmentSpan {
     pub(crate) seq: u32,
     pub(crate) start_ms: i64,
@@ -986,7 +945,6 @@ pub(crate) struct SegmentSpan {
 
 /// Called by the engine thread for every closed segment: encrypt, write,
 /// record in the manifest, tell JS there's something to upload.
-#[cfg(windows)]
 pub(crate) fn record_segment(
     app: &AppHandle,
     run: &queue::CaptureRunRef,
@@ -1055,7 +1013,6 @@ pub(crate) fn record_segment(
 
 /// Engine's pause/resume notifications (session lock). Keeps the managed
 /// state's `paused` mirror fresh for `capture_status`.
-#[cfg(windows)]
 pub(crate) fn notify_paused(app: &AppHandle, paused: bool) {
     let handle = app.state::<MeetingCaptureHandle>();
     let payload = {
@@ -1085,7 +1042,6 @@ pub(crate) fn notify_paused(app: &AppHandle, paused: bool) {
 
 /// Engine finished (any reason): complete the manifest entry, clear state,
 /// announce. The one funnel every stop path exits through.
-#[cfg(windows)]
 pub(crate) fn finalize_capture(
     app: &AppHandle,
     run: &queue::CaptureRunRef,

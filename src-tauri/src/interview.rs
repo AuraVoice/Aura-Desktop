@@ -207,17 +207,18 @@ pub async fn start_interview_hacker(
     // job description, and resume. The provider truncates to its own cap, so this
     // only drops blanks and bounds what a malformed caller can hand us.
     #[cfg(windows)]
-    let keyterm_cap = asr::deepgram::MAX_KEYTERMS;
-    // The asr module is Windows-only until the macOS audio port; this mirrors
-    // its MAX_KEYTERMS and only bounds a list the stubbed path never uses.
-    #[cfg(not(windows))]
-    let keyterm_cap = 50;
     let keyterms: Vec<String> = keyterms
         .unwrap_or_default()
         .into_iter()
         .filter(|term| !term.trim().is_empty())
-        .take(keyterm_cap)
+        .take(asr::deepgram::MAX_KEYTERMS)
         .collect();
+    // No ASR session exists to bias on non-Windows, so there is nothing to cap.
+    #[cfg(not(windows))]
+    let _keyterms: Vec<String> = {
+        let _ = keyterms;
+        Vec::new()
+    };
     let cancel_generation = app.state::<InterviewHandle>().1.load(Ordering::Relaxed);
     let ticket = crate::security::authorize(
         &app,
@@ -235,10 +236,20 @@ pub async fn start_interview_hacker(
         &ticket,
     )?;
     let Some((app_name, _)) = detected else {
+        // Off Windows there is no call detection at all, so `detected` is
+        // always None and the "open a call first" line would be a lie to
+        // someone already sitting in a Zoom call. Give the real reason.
+        #[cfg(not(windows))]
+        return Err("Interview Companion currently requires Windows.".to_string());
+        #[cfg(windows)]
         return Err("Open a supported Zoom, Teams, or Google Meet call first.".to_string());
     };
+    // Only the Windows tail below consumes these.
+    #[cfg(not(windows))]
+    let _ = &app_name;
 
     let handle = app.state::<InterviewHandle>();
+    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut state = handle.0.lock().unwrap_or_else(|error| error.into_inner());
     if handle.1.load(Ordering::Relaxed) != cancel_generation {
         return Err("Interview Companion start was cancelled.".to_string());

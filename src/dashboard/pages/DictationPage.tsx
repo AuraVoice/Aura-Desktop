@@ -24,6 +24,7 @@ import { useDashboardUser } from "../useDashboardUser";
 import { DictationFeedbackDialog } from "./dictation/DictationFeedbackDialog";
 import { DictationRow, type PlaybackState } from "./dictation/DictationRow";
 import { DictationSettingsRail } from "./dictation/DictationSettingsRail";
+import { deviceNoun } from "../../lib/platformKeys";
 
 /** Debounce on the search box, so a fast typist does not re-group the list on
  * every keystroke. Short enough that the filter still feels immediate. */
@@ -296,7 +297,7 @@ export function DictationPage() {
             <EmptyState
               Icon={Mic}
               heading="Sign in to see your dictations"
-              copy="Your dictation history is stored on this PC under your account."
+              copy={`Your dictation history is stored on this ${deviceNoun()} under your account.`}
             />
           ) : groups.length === 0 && !loading ? (
             <EmptyState
@@ -374,7 +375,7 @@ export function DictationPage() {
       {confirmDelete && (
         <ConfirmDialog
           title="Delete this transcript?"
-          body="The transcript and its audio are removed from this PC. This cannot be undone."
+          body={`The transcript and its audio are removed from this ${deviceNoun()}. This cannot be undone.`}
           confirmLabel="Delete"
           onCancel={() => setConfirmDelete(null)}
           onConfirm={() => void remove(confirmDelete)}
@@ -384,7 +385,7 @@ export function DictationPage() {
       {confirmClear && (
         <ConfirmDialog
           title="Clear your dictation history?"
-          body="Every stored transcript and audio clip is removed from this PC. This cannot be undone."
+          body={`Every stored transcript and audio clip is removed from this ${deviceNoun()}. This cannot be undone.`}
           confirmLabel="Clear everything"
           onCancel={() => setConfirmClear(false)}
           onConfirm={() => void clearAll()}

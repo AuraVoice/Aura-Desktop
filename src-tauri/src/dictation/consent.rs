@@ -13,7 +13,6 @@
 //! Revocable from Settings > Dictation. Revoking takes effect on the next
 //! chord press; there is nothing to tear down because a hold owns its socket.
 
-#![cfg(windows)]
 
 use log::{error, info};
 use tauri::AppHandle;

@@ -320,18 +320,30 @@ version = "0.12.0"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
+ "block2",
  "core-foundation 0.10.1",
  "core-graphics",
  "flacenc",
  "futures-util",
  "getrandom 0.3.4",
  "image",
+ "libc",
  "log",
+ "objc2",
+ "objc2-app-kit",
+ "objc2-application-services",
+ "objc2-avf-audio",
+ "objc2-core-audio",
+ "objc2-core-audio-types",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation",
  "regex",
  "reqwest 0.13.4",
  "rphonetic",
  "rusqlite",
  "rustls",
+ "security-framework",
  "sentry",
  "serde",
  "serde_json",
@@ -3290,6 +3302,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-application-services"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69282c2b5bc58fba07cb9de2113619532eb551e98efe3d8d695509ef45fbd53b"
+dependencies = [
+ "bitflags 2.13.0",
+ "libc",
+ "objc2-core-foundation",
+]
+
+[[package]]
 name = "objc2-av-foundation"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3317,7 +3340,9 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13a380031deed8e99db00065c45937da434ca987c034e13b87e4441f9e4090be"
 dependencies = [
+ "block2",
  "objc2",
+ "objc2-core-audio-types",
  "objc2-foundation",
 ]
 
@@ -3338,10 +3363,12 @@ version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1eebcea8b0dbff5f7c8504f3107c68fc061a3eb44932051c8cf8a68d969c3b2"
 dependencies = [
+ "block2",
  "dispatch2",
  "objc2",
  "objc2-core-audio-types",
  "objc2-core-foundation",
+ "objc2-foundation",
 ]
 
 [[package]]

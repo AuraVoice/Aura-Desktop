@@ -18,6 +18,10 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+# macos-private-api unlocks WebviewWindowBuilder::transparent on macOS, which
+# the whole overlay/HUD design depends on. It is a no-op on Windows. Note the
+# trade: an app built with it cannot be distributed through the Mac App Store,
+# only Developer ID + notarization, which is how this app ships anyway.
 tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
@@ -53,18 +57,26 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 # Local dictation's post-decode correction pass (dictation/vocab.rs): phonetic
 # aliases via double-metaphone. Pure Rust, no C deps.
 rphonetic = "3"
-# FLAC container encode for meeting capture (pure Rust, no C deps - the
-# deliberate codec choice over Opus, which would add a cmake/libopus build step
-# and an Ogg muxing layer; see MEETING_NOTES_PLAN.md), and AES-256-GCM for
-# sealed data at rest (aes-gcm's default features include getrandom, so
-# key/nonce generation needs no separate rand dependency).
-flacenc = "0.5"
-aes-gcm = "0.10"
+
 # Server-side download of screen-save images for the encrypted local cache
 # (saved_images.rs). Rust-side, not a webview fetch, because GCS signed URLs
 # send no CORS header - the browser can render them in an <img> but cannot read
-# their bytes. rustls-tls keeps it off any native OpenSSL.
+# their bytes. rustls-tls keeps it off any native OpenSSL. Windows-only: the
+# cache commands no-op on other platforms; site_icons.rs uses it on all.
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+
+# At-rest encryption for every local store (crypto.rs). The cipher is
+# cross-platform; only the key WRAPPING differs (DPAPI on Windows, Keychain on
+# macOS). aes-gcm's default features include getrandom, so key/nonce generation
+# needs no separate rand dependency.
+aes-gcm = "0.10"
+
+# FLAC container encode for Meeting Notes segments and dictation history clips
+# (meeting/audio.rs::encode_flac). Pure Rust, no C deps - the deliberate codec
+# choice over Opus, which would add a cmake/libopus build step and an Ogg muxing
+# layer. Unconditional because both callers are.
+flacenc = "0.5"
+
 # Dictation's cloud speech recognition (dictation/asr/deepgram.rs): one
 # WebSocket per hold to Deepgram's streaming endpoint. rustls, never native
 # OpenSSL, and deliberately the same rustls 0.23 / tokio-rustls 0.26 pair
@@ -88,6 +100,147 @@ base64 = "0.22"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = "1"
 
+# macOS key wrapping. crypto.rs holds the per-feature key files exactly where
+# Windows does and wraps them with one master key kept in the login Keychain,
+# which is the closest analogue to DPAPI's "useless on another machine or user
+# account" property.
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"
+
+# The voice-toggle/dictation key listener (voice_toggle_key.rs) runs a
+# listen-only CGEventTap on its own CFRunLoop thread, and gates itself on the
+# Input Monitoring TCC permission via IOHIDCheckAccess. These are the older
+# core-* bindings rather than the objc2 generation below; that file is their
+# only consumer, and it keeps the Alt/Option sentinels hotkeys.rs advertises.
+core-graphics = "0.25"
+core-foundation = "0.10"
+
+# AppKit bindings for macos_window.rs: the overlay and the accessory windows
+# are non-activating NSPanels there, which is macOS's only way to show a
+# clickable always-on-top surface without stealing focus from the app the user
+# is actually working in (Windows gets that from WS_EX_NOACTIVATE). Also
+# NSScreen.visibleFrame, the analogue of GetMonitorInfoW's rcWork, and
+# NSWindow.sharingType, the analogue of WDA_EXCLUDEFROMCAPTURE.
+#
+# tao already pulls both crates at these exact versions, so this adds no new
+# resolution and no second objc2 generation. The feature lists mirror tao's
+# own (default-features = false plus a named set); NSPanel is the only header
+# here that tao does not already turn on.
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = [
+    "std",
+    "objc2-core-foundation",
+    "NSAlert",
+    "NSApplication",
+    "NSButton",
+    "NSControl",
+    "NSPanel",
+    "NSResponder",
+    "NSRunningApplication",
+    "NSScreen",
+    "NSView",
+    "NSWindow",
+    "NSWorkspace",
+] }
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "block2",
+    "NSArray",
+    "NSDictionary",
+    "NSDistributedNotificationCenter",
+    "NSEnumerator",
+    "NSGeometry",
+    "NSNotification",
+    "NSObjCRuntime",
+    "NSOperation",
+    "NSString",
+    "NSValue",
+] }
+
+# Accessibility (macos_ax.rs). This is the macOS answer to two separate Windows
+# APIs: UI Automation's focused-element probe, which dictation asks before
+# typing so it never fires a sentence of letters at a list view, and the window
+# geometry/title reads meeting join detection needs. Note the AX attribute
+# NAMES are CFSTR() macros in Apple's headers rather than exported symbols, so
+# this crate cannot generate them and macos_ax.rs spells them out.
+objc2-application-services = { version = "0.3", default-features = false, features = [
+    "std",
+    "libc",
+    "HIServices",
+    "AXError",
+    "AXUIElement",
+    "AXValue",
+    "AXValueConstants",
+] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "CFArray",
+    "CFBase",
+    "CFCGTypes",
+    "CFDictionary",
+    "CFMachPort",
+    "CFRunLoop",
+    "CFString",
+] }
+libc = "0.2"
+
+# Microphone capture and format conversion (macos_audio.rs). The converter is
+# the piece with no Windows counterpart: WASAPI shared mode with autoconvert
+# does the resample and downmix in the audio engine, which is why there is no
+# resampler crate in this tree, and Core Audio has no equivalent. AVAudioConverter
+# is deliberately preferred over hand-rolled DSP - a subtly wrong resampler does
+# not crash, it quietly degrades every transcript. block2 is only for the tap
+# and converter callbacks.
+objc2-avf-audio = { version = "0.3", default-features = false, features = [
+    "std",
+    "AVAudioBuffer",
+    "AVAudioConverter",
+    "AVAudioEngine",
+    "AVAudioFormat",
+    "AVAudioIONode",
+    "AVAudioNode",
+    "AVAudioTime",
+    "AVAudioTypes",
+    "block2",
+    "objc2-core-audio-types",
+] }
+block2 = "0.6"
+
+# Meeting Notes system audio (macos_audio.rs): the Core Audio process-tap API,
+# macOS 14.4+, which is the only analogue of WASAPI render loopback that does
+# not require installing a virtual audio device. objc2-core-audio-types carries
+# the AudioBufferList / AudioStreamBasicDescription structs its IO block hands
+# over. Both already resolve in this tree via tauri.
+objc2-core-audio = { version = "0.3", default-features = false, features = [
+    "std",
+    "objc2",
+    "objc2-foundation",
+    "block2",
+    "AudioHardware",
+    "objc2-core-audio-types",
+    "dispatch2",
+] }
+objc2-core-audio-types = { version = "0.3", default-features = false, features = [
+    "std",
+    "objc2",
+    "CoreAudioBaseTypes",
+] }
+
+# Synthetic keystrokes and the chord tap (dictation/insert.rs,
+# voice_toggle_key.rs). CGEvent is the SendInput analogue and CGEventTap the
+# WH_KEYBOARD_LL one; both need the Accessibility / Input Monitoring TCC grants
+# rather than any entitlement, which is why entitlements.plist says nothing
+# about them.
+objc2-core-graphics = { version = "0.3", default-features = false, features = [
+    "std",
+    "libc",
+    "CGError",
+    "CGEvent",
+    "CGEventSource",
+    "CGEventTypes",
+    "CGRemoteOperation",
+] }
+
 # Win32 bindings - win_focus.rs and the meeting/ module use this, Windows
 # only. Scoping it to a target-specific dependency table (rather than
 # [dependencies]) keeps it out of a macOS/Linux build entirely, since the
@@ -97,6 +250,7 @@ webpki-roots = "1"
 # is PID -> exe name; Security_Cryptography is DPAPI key wrapping (its
 # LocalAlloc'd output is freed with Foundation's LocalFree); RemoteDesktop is
 # the lock/unlock session notifications.
+
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.61", features = [
     "Win32_Foundation",
@@ -126,21 +280,16 @@ windows = { version = "0.61", features = [
     # is the same mechanism the Windows volume mixer uses for per-app mute.
     "Win32_Media_Audio",
 ] }
-# Meeting capture: WASAPI loopback+mic. No resampler crate: both streams are
-# opened in shared mode with autoconvert, so the Windows audio engine itself
-# delivers 16 kHz mono f32 regardless of the device's native format.
+# The Windows half of audio_capture.rs's device layer: loopback + mic. No
+# resampler crate is needed alongside it, because both streams are opened in
+# shared mode with autoconvert, so the Windows audio engine itself delivers
+# 16 kHz mono f32 regardless of the device's native format. The macOS backend
+# has to do that conversion itself; see objc2-avf-audio above.
 wasapi = "0.23"
 # Actionable Windows toasts (toast.rs): the notification plugin cannot route a
 # toast click on Windows (its action API is mobile-only), this crate can via
 # the in-process Activated handler.
 tauri-winrt-notification = "0.7"
-
-# macOS bindings - the voice-toggle/dictation key listener (voice_toggle_key.rs)
-# runs a listen-only CGEventTap on its own CFRunLoop thread, and gates itself on
-# the Input Monitoring TCC permission via IOHIDCheckAccess.
-[target.'cfg(target_os = "macos")'.dependencies]
-core-graphics = "0.25"
-core-foundation = "0.10"
 
 [profile.release]
 # Silent integer wrap in shipped builds is worse than a loud panic for code

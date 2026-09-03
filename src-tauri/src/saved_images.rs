@@ -6,25 +6,20 @@
 //! module pulls the bytes through Rust - the browser can render a cross-origin
 //! signed URL in an <img> but cannot read its bytes (GCS sends no CORS header),
 //! so a webview `fetch` is a dead end - encrypts them with the same
-//! AES-256-GCM + DPAPI key the capture pipeline uses, and hands decrypted bytes
-//! back over the binary IPC pattern `meeting::read_segment` established.
+//! AES-256-GCM key the capture pipeline uses, and hands decrypted bytes back
+//! over the binary IPC pattern `meeting::read_segment` established.
 //!
-//! Everything platform-specific is `#[cfg(windows)]` (the crypto module is
-//! Windows-only); on other platforms the commands answer with an error so a
-//! macOS build still compiles.
+//! Cross-platform: the cipher is shared and only key wrapping is per-OS
+//! (crate::crypto), so this cache behaves identically on Windows and macOS.
 
 use tauri::AppHandle;
 
-#[cfg(windows)]
 use crate::meeting::crypto;
-#[cfg(windows)]
 use std::path::PathBuf;
-#[cfg(windows)]
 use tauri::Manager;
 
 /// Per-install cache directory, a sibling of the capture stores under the
 /// app-local data dir.
-#[cfg(windows)]
 fn images_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(app
         .path()
@@ -36,7 +31,6 @@ fn images_dir(app: &AppHandle) -> Result<PathBuf, String> {
 /// On-disk filename for a save. The backend `item_id` is hex-encoded so an
 /// arbitrary id (which may contain `/` or other path-unsafe characters) can
 /// never escape the cache directory.
-#[cfg(windows)]
 fn enc_filename(item_id: &str) -> String {
     use std::fmt::Write;
     let mut name = String::with_capacity(item_id.len() * 2 + 4);
@@ -52,7 +46,6 @@ fn enc_filename(item_id: &str) -> String {
 /// page never re-fetches. Returns whether a local copy exists afterwards.
 #[tauri::command]
 pub async fn cache_saved_image(app: AppHandle, item_id: String, url: String) -> Result<bool, String> {
-    #[cfg(windows)]
     {
         let dir = images_dir(&app)?;
         let path = dir.join(enc_filename(&item_id));
@@ -83,18 +76,12 @@ pub async fn cache_saved_image(app: AppHandle, item_id: String, url: String) -> 
         .await
         .map_err(|e| e.to_string())?
     }
-    #[cfg(not(windows))]
-    {
-        let _ = (app, item_id, url);
-        Err("saved-image cache is Windows-only".to_string())
-    }
 }
 
 /// Decrypts one cached image and returns its raw bytes over binary IPC (JS
 /// wraps them in a Blob). Errors if the item was never cached.
 #[tauri::command]
 pub async fn read_saved_image(app: AppHandle, item_id: String) -> Result<tauri::ipc::Response, String> {
-    #[cfg(windows)]
     {
         let blocking_app = app.clone();
         tauri::async_runtime::spawn_blocking(move || {
@@ -107,11 +94,6 @@ pub async fn read_saved_image(app: AppHandle, item_id: String) -> Result<tauri::
         .await
         .map_err(|e| e.to_string())?
     }
-    #[cfg(not(windows))]
-    {
-        let _ = (app, item_id);
-        Err("saved-image cache is Windows-only".to_string())
-    }
 }
 
 /// Evicts every cached image whose id is not in `keep_ids`, mirroring the cache
@@ -119,7 +101,6 @@ pub async fn read_saved_image(app: AppHandle, item_id: String) -> Result<tauri::
 /// Returns the number of files removed.
 #[tauri::command]
 pub async fn prune_saved_images(app: AppHandle, keep_ids: Vec<String>) -> Result<usize, String> {
-    #[cfg(windows)]
     {
         let blocking_app = app.clone();
         tauri::async_runtime::spawn_blocking(move || {
@@ -149,10 +130,5 @@ pub async fn prune_saved_images(app: AppHandle, keep_ids: Vec<String>) -> Result
         })
         .await
         .map_err(|e| e.to_string())?
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = (app, keep_ids);
-        Ok(0)
     }
 }

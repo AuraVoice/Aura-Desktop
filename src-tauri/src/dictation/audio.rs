@@ -1,135 +1,220 @@
-//! WASAPI capture for dictation: default capture device, shared mode,
-//! 16 kHz mono f32 via autoconvert, event driven.
+//! Microphone capture for dictation: default device, 16 kHz mono f32, pulled
+//! by the dictation worker.
 //!
-//! Reuses meeting/audio.rs's format strategy (the Windows audio engine does the
-//! resample and downmix, so there is no resampler dependency here either) but
-//! NOT its `ChannelState::pump`. That pump silence-fills any wall-clock deficit
-//! so two channels of a 60-minute meeting stay aligned; here it would inject
-//! zeros into the middle of a word while the decoder is mid-utterance. There is
-//! only one channel, and its only consumer is a streaming recognizer that does
-//! its own timing, so raw packets are handed straight through. The recognizer
-//! is now the cloud provider in `asr/`, which changes nothing here: the format
-//! and the packet cadence are the same, and `to_i16` below is the only extra
-//! step between this file and the socket.
+//! The `Capture` type is the platform seam and the ONLY thing in this file that
+//! differs between them; everything below it (`to_i16`, `is_silence`, `level`,
+//! `MAX_HOLD`) is arithmetic over `f32` samples and is shared. Its contract is
+//! a pull loop, not a callback:
+//!
+//! ```text
+//! open() -> discard_pending() -> drain() ... drain() -> stop()
+//! ```
+//!
+//! `drain` blocks for at most ~20ms and an empty result is normal and expected:
+//! that bound is what lets the worker re-check its signal channel promptly on a
+//! muted or silent device, so the shape is load-bearing rather than incidental.
 //!
 //! The client opens only once the FULL chord is down, never on the first key.
-//! An earlier revision opened it on the first key to hide the 50-300ms WASAPI
+//! An earlier revision opened it on the first key to hide the 50-300ms device
 //! cold start, but the keyboard hook cannot see mouse input, so Ctrl-click and
-//! Ctrl-drag were indistinguishable from a deliberate hold and quietly put
-//! Windows' microphone indicator up during ordinary work. The cold start is
-//! covered well enough by the 200-400ms a human takes before their first
-//! phoneme after completing the chord. Model loading then proceeds in parallel
-//! with capture on a separate thread.
-//!
-//! Overlap with meeting capture is expected and accepted: meeting/audio.rs
-//! opens the same default capture device, and shared mode lets both clients
-//! run, so dictating while a meeting is armed puts those words through the
-//! dictation recognizer AND into that meeting's encrypted segment. That is a
-//! stated decision,
-//! not an accident: refusing to dictate during a meeting would be a worse
-//! surprise than the duplicate, and the meeting copy is already encrypted at
-//! rest under the user's own key.
+//! Ctrl-drag were indistinguishable from a deliberate hold and quietly put the
+//! OS microphone indicator up during ordinary work. The cold start is covered
+//! well enough by the 200-400ms a human takes before their first phoneme after
+//! completing the chord. That reasoning is why `open` lives at the chord
+//! boundary in mod.rs and applies equally to macOS's orange dot.
 
-#![cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
+pub use backend::Capture;
 
-use std::collections::VecDeque;
 use std::time::Duration;
 
-use wasapi::{DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat};
+/// WASAPI capture: shared mode, 16 kHz mono f32 via autoconvert, event driven.
+///
+/// Reuses meeting/audio.rs's format strategy (the Windows audio engine does the
+/// resample and downmix, so there is no resampler dependency here either) but
+/// NOT its `ChannelState::pump`. That pump silence-fills any wall-clock deficit
+/// so two channels of a 60-minute meeting stay aligned; here it would inject
+/// zeros into the middle of a word while the decoder is mid-utterance. There is
+/// only one channel, and its only consumer is a streaming recognizer that does
+/// its own timing, so raw packets are handed straight through. The recognizer
+/// is now the cloud provider in `asr/`, which changes nothing here: the format
+/// and the packet cadence are the same, and `to_i16` below is the only extra
+/// step between this file and the socket.
+///
+/// Overlap with meeting capture is expected and accepted: the shared broker
+/// opens the same default capture device, and shared mode lets both clients
+/// run, so dictating while a meeting is armed puts those words through the
+/// dictation recognizer AND into that meeting's encrypted segment. That is a
+/// stated decision,
+/// not an accident: refusing to dictate during a meeting would be a worse
+/// surprise than the duplicate, and the meeting copy is already encrypted at
+/// rest under the user's own key.
+#[cfg(windows)]
+mod backend {
+    use std::collections::VecDeque;
 
-use super::asr::SAMPLE_RATE;
+    use wasapi::{DeviceEnumerator, Direction, SampleType, StreamMode, WaveFormat};
 
-/// 30ms device buffer. Small enough that a release feels immediate, large
-/// enough that a descheduled worker thread does not drop packets.
-const BUFFER_DURATION_HNS: i64 = 300_000;
-/// Cap on one wait, so the worker checks its signal channel promptly even when
-/// the device delivers nothing (muted mic, no input).
-const EVENT_WAIT_MS: u32 = 20;
+    use crate::dictation::asr::SAMPLE_RATE;
 
-/// One capture client. Owned by the worker for a single hold.
-pub struct Capture {
-    client: wasapi::AudioClient,
-    capture: wasapi::AudioCaptureClient,
-    event: wasapi::Handle,
-    raw: VecDeque<u8>,
-    stopped: bool,
-}
+    /// 30ms device buffer. Small enough that a release feels immediate, large
+    /// enough that a descheduled worker thread does not drop packets.
+    const BUFFER_DURATION_HNS: i64 = 300_000;
+    /// Cap on one wait, so the worker checks its signal channel promptly even when
+    /// the device delivers nothing (muted mic, no input).
+    const EVENT_WAIT_MS: u32 = 20;
 
-impl Capture {
-    /// Opens and starts the default capture device. COM must already be
-    /// initialized on this thread.
-    pub fn open() -> Result<Self, String> {
-        let enumerator = DeviceEnumerator::new().map_err(|e| e.to_string())?;
-        let device = enumerator
-            .get_default_device(&Direction::Capture)
-            .map_err(|e| e.to_string())?;
-        let mut client = device.get_iaudioclient().map_err(|e| e.to_string())?;
-        let format = WaveFormat::new(32, 32, &SampleType::Float, SAMPLE_RATE as usize, 1, None);
-        let mode = StreamMode::EventsShared {
-            autoconvert: true,
-            buffer_duration_hns: BUFFER_DURATION_HNS,
-        };
-        client
-            .initialize_client(&format, &Direction::Capture, &mode)
-            .map_err(|e| e.to_string())?;
-        let event = client.set_get_eventhandle().map_err(|e| e.to_string())?;
-        let capture = client.get_audiocaptureclient().map_err(|e| e.to_string())?;
-        client.start_stream().map_err(|e| e.to_string())?;
-        Ok(Self {
-            client,
-            capture,
-            event,
-            raw: VecDeque::new(),
-            stopped: false,
-        })
+    /// One capture client. Owned by the worker for a single hold.
+    pub struct Capture {
+        client: wasapi::AudioClient,
+        capture: wasapi::AudioCaptureClient,
+        event: wasapi::Handle,
+        raw: VecDeque<u8>,
+        stopped: bool,
     }
 
-    pub fn stop(&mut self) {
-        if !self.stopped {
-            let _ = self.client.stop_stream();
-            self.stopped = true;
+    impl Capture {
+        /// Opens and starts the default capture device. COM must already be
+        /// initialized on this thread.
+        pub fn open() -> Result<Self, String> {
+            let enumerator = DeviceEnumerator::new().map_err(|e| e.to_string())?;
+            let device = enumerator
+                .get_default_device(&Direction::Capture)
+                .map_err(|e| e.to_string())?;
+            let mut client = device.get_iaudioclient().map_err(|e| e.to_string())?;
+            let format = WaveFormat::new(32, 32, &SampleType::Float, SAMPLE_RATE as usize, 1, None);
+            let mode = StreamMode::EventsShared {
+                autoconvert: true,
+                buffer_duration_hns: BUFFER_DURATION_HNS,
+            };
+            client
+                .initialize_client(&format, &Direction::Capture, &mode)
+                .map_err(|e| e.to_string())?;
+            let event = client.set_get_eventhandle().map_err(|e| e.to_string())?;
+            let capture = client.get_audiocaptureclient().map_err(|e| e.to_string())?;
+            client.start_stream().map_err(|e| e.to_string())?;
+            Ok(Self {
+                client,
+                capture,
+                event,
+                raw: VecDeque::new(),
+                stopped: false,
+            })
+        }
+
+        pub fn stop(&mut self) {
+            if !self.stopped {
+                let _ = self.client.stop_stream();
+                self.stopped = true;
+            }
+        }
+
+        /// Throws away everything captured so far. Called when the chord completes,
+        /// so the prewarm window's audio (the user reaching for the second key) is
+        /// not prefixed onto the utterance.
+        pub fn discard_pending(&mut self) -> Result<(), String> {
+            self.raw.clear();
+            let mut scratch = VecDeque::new();
+            self.capture
+                .read_from_device_to_deque(&mut scratch)
+                .map_err(|e| format!("microphone read failed: {e}"))?;
+            Ok(())
+        }
+
+        /// Waits briefly for the device, then returns whatever whole f32 frames are
+        /// available. An empty result is normal and simply means the worker should
+        /// loop again and re-check its signal channel.
+        pub fn drain(&mut self) -> Result<Vec<f32>, String> {
+            let _ = self.event.wait_for_event(EVENT_WAIT_MS);
+            self.capture
+                .read_from_device_to_deque(&mut self.raw)
+                .map_err(|e| format!("microphone read failed: {e}"))?;
+            let full = self.raw.len() / 4;
+            let mut samples = Vec::with_capacity(full);
+            for _ in 0..full {
+                let bytes = [
+                    self.raw.pop_front().unwrap_or(0),
+                    self.raw.pop_front().unwrap_or(0),
+                    self.raw.pop_front().unwrap_or(0),
+                    self.raw.pop_front().unwrap_or(0),
+                ];
+                samples.push(f32::from_le_bytes(bytes));
+            }
+            Ok(samples)
         }
     }
 
-    /// Throws away everything captured so far. Called when the chord completes,
-    /// so the prewarm window's audio (the user reaching for the second key) is
-    /// not prefixed onto the utterance.
-    pub fn discard_pending(&mut self) -> Result<(), String> {
-        self.raw.clear();
-        let mut scratch = VecDeque::new();
-        self.capture
-            .read_from_device_to_deque(&mut scratch)
-            .map_err(|e| format!("microphone read failed: {e}"))?;
-        Ok(())
-    }
-
-    /// Waits briefly for the device, then returns whatever whole f32 frames are
-    /// available. An empty result is normal and simply means the worker should
-    /// loop again and re-check its signal channel.
-    pub fn drain(&mut self) -> Result<Vec<f32>, String> {
-        let _ = self.event.wait_for_event(EVENT_WAIT_MS);
-        self.capture
-            .read_from_device_to_deque(&mut self.raw)
-            .map_err(|e| format!("microphone read failed: {e}"))?;
-        let full = self.raw.len() / 4;
-        let mut samples = Vec::with_capacity(full);
-        for _ in 0..full {
-            let bytes = [
-                self.raw.pop_front().unwrap_or(0),
-                self.raw.pop_front().unwrap_or(0),
-                self.raw.pop_front().unwrap_or(0),
-                self.raw.pop_front().unwrap_or(0),
-            ];
-            samples.push(f32::from_le_bytes(bytes));
+    impl Drop for Capture {
+        fn drop(&mut self) {
+            self.stop();
         }
-        Ok(samples)
     }
 }
 
-impl Drop for Capture {
-    fn drop(&mut self) {
-        self.stop();
+/// AVAudioEngine capture. Same four-call contract as the WASAPI backend above,
+/// with two differences that are properties of the platform rather than choices:
+///
+/// - The resample and downmix to 16 kHz mono happen HERE, inside the tap block,
+///   because Core Audio has no analogue of shared-mode autoconvert. See
+///   `macos_audio::Resampler`.
+/// - AVFoundation pushes buffers from a real-time thread, so `MicCapture` parks
+///   them in a ring and `drain` waits on it. The 20ms bound is the same one the
+///   WASAPI event wait uses, for the same reason.
+#[cfg(target_os = "macos")]
+mod backend {
+    use std::time::Duration;
+
+    use crate::macos_audio::MicCapture;
+
+    /// Cap on one wait, so the worker checks its signal channel promptly even
+    /// when the device delivers nothing (muted mic, no input).
+    const DRAIN_WAIT: Duration = Duration::from_millis(20);
+
+    /// One capture session. Owned by the worker for a single hold.
+    pub struct Capture {
+        mic: MicCapture,
     }
+
+    impl Capture {
+        /// Opens and starts the default input device. This is the call that
+        /// lights the macOS microphone indicator, which is why mod.rs makes it
+        /// only after the full chord is down.
+        pub fn open() -> Result<Self, String> {
+            Ok(Self {
+                mic: MicCapture::open()?,
+            })
+        }
+
+        pub fn stop(&mut self) {
+            self.mic.stop();
+        }
+
+        /// Throws away everything captured so far. Called when the chord
+        /// completes, so the prewarm window's audio (the user reaching for the
+        /// second key) is not prefixed onto the utterance.
+        pub fn discard_pending(&mut self) -> Result<(), String> {
+            self.mic.discard_pending();
+            Ok(())
+        }
+
+        /// Waits briefly for the device, then returns whatever whole f32 frames
+        /// are available. An empty result is normal and simply means the worker
+        /// should loop again and re-check its signal channel.
+        ///
+        /// A ring overrun is logged rather than returned as an error: the audio
+        /// is already gone, and failing the hold would throw away the words
+        /// that DID arrive on either side of the gap.
+        pub fn drain(&mut self) -> Result<Vec<f32>, String> {
+            let (samples, overran) = self.mic.drain(DRAIN_WAIT);
+            if overran {
+                log::warn!("dictation.audio: microphone ring overran, some audio was dropped");
+            }
+            Ok(samples)
+        }
+    }
+
+    // MicCapture stops itself on drop, so the outer type needs no Drop of its
+    // own; leaving one here would just stop it twice.
 }
 
 /// WASAPI hands us f32 because that is what the shared-mode engine mixes in;

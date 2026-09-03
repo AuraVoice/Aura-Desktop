@@ -1,10 +1,8 @@
-//! Segments-at-rest encryption for meeting captures. The AES-GCM + DPAPI
-//! mechanism lives in crate::crypto; this module owns what is genuinely
-//! meeting-specific: the key file location under the captures directory and
-//! the "meeting" label in key errors. Segment layout: 12-byte random nonce ||
-//! ciphertext+tag.
-
-#![cfg(windows)]
+//! Segments-at-rest encryption for meeting captures. The AES-GCM mechanism and
+//! its per-OS key wrapping live in crate::crypto; this module owns what is
+//! genuinely meeting-specific: the key file location under the captures
+//! directory and the "meeting" label in key errors. Segment layout: 12-byte
+//! random nonce || ciphertext+tag.
 
 use tauri::{AppHandle, Manager};
 
@@ -22,8 +20,8 @@ fn key_path(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     Ok(dir.join(KEY_FILE))
 }
 
-/// Loads the segment key, minting and DPAPI-wrapping a fresh one on first
-/// use. A wrapped blob that no longer unwraps fails closed. Replacing it would
+/// Loads the segment key, minting and wrapping a fresh one on first use. A
+/// wrapped blob that no longer unwraps fails closed. Replacing it would
 /// make every retained recording permanently unreadable while making new
 /// captures appear healthy.
 pub fn load_or_create_key(app: &AppHandle) -> Result<[u8; 32], String> {

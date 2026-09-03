@@ -264,6 +264,31 @@ pub(crate) fn process_stem_for_window(hwnd_raw: isize) -> Option<String> {
     process_stem_for_pid(pid)
 }
 
+/// The macOS twin. `insert::foreground_window` hands back a pid rather than a
+/// window handle there (macOS has no cheap process-agnostic window identity),
+/// so this takes it straight to the running application.
+///
+/// The value is a stable per-app key for dictation's contextual biasing, and a
+/// bundle identifier is a better one than Windows' exe stem: it does not change
+/// when an app is renamed, and it cannot collide between two vendors shipping
+/// the same executable name. Falls back to the localized name only when an app
+/// has no bundle id at all, which is rare and means a bare Unix process.
+#[cfg(target_os = "macos")]
+pub(crate) fn process_stem_for_window(pid_raw: isize) -> Option<String> {
+    use objc2_app_kit::NSRunningApplication;
+
+    if pid_raw <= 0 {
+        return None;
+    }
+    let app = NSRunningApplication::runningApplicationWithProcessIdentifier(pid_raw as i32)?;
+    let identifier = app
+        .bundleIdentifier()
+        .map(|value| value.to_string())
+        .or_else(|| app.localizedName().map(|value| value.to_string()))?;
+    let identifier = identifier.trim().to_lowercase();
+    (!identifier.is_empty()).then_some(identifier)
+}
+
 /// PID -> lowercase exe file stem for UI Automation elements that do not own
 /// a native HWND, which is normal for browser and Electron child controls.
 #[cfg(target_os = "windows")]

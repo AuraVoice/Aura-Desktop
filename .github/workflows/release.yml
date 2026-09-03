@@ -12,7 +12,7 @@ on:
         default: false
 
 jobs:
-  release:
+  windows:
     environment: production
     permissions:
       contents: write
@@ -250,9 +250,295 @@ jobs:
             Write-Host "Verified updater signature: $updaterSignaturePath"
           }
 
-      - name: Publish verified release
+  # Same tag, one job later. `needs: windows` is deliberate, not a cost
+  # saving: tauri-action builds latest.json by downloading the copy already on
+  # the draft and merging its own platforms in, with no lock. Two jobs
+  # finishing together each overwrite the other's keys, and the publish job
+  # would then flip a release that silently strands one OS. Serial costs about
+  # twelve minutes of wall time and removes the race outright.
+  macos:
+    needs: windows
+    environment: production
+    permissions:
+      contents: write
+    runs-on: macos-latest
+    # notarytool --wait usually returns in two to five minutes and occasionally
+    # sits for twenty. The default 360 would let a stuck notary burn six hours.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify release tag matches app versions
         if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
+        run: |
+          $tagVersion = "${{ github.ref_name }}" -replace '^v', ''
+          $packageVersion = (Get-Content -Raw package.json | ConvertFrom-Json).version
+          $tauriVersion = (Get-Content -Raw src-tauri/tauri.conf.json | ConvertFrom-Json).version
+          $cargoVersion = (Select-String -Path src-tauri/Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          $versions = [ordered]@{
+            "package.json" = $packageVersion
+            "src-tauri/tauri.conf.json" = $tauriVersion
+            "src-tauri/Cargo.toml" = $cargoVersion
+          }
+          $mismatches = @($versions.GetEnumerator() | Where-Object { $_.Value -ne $tagVersion })
+          if ($mismatches.Count -gt 0) {
+            $details = ($versions.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ", "
+            throw "Release tag ${{ github.ref_name }} does not match app versions: $details"
+          }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      # Both targets: the bundle is universal so Aura-Web needs one Mac
+      # download and the browser never has to guess Intel vs Apple silicon.
+      # GitHub has no Intel runners any more, so x86_64 is a cross-compile.
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - run: npm ci
+
+      - name: Validate updater signing key
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          : "${TAURI_SIGNING_PRIVATE_KEY:?TAURI_SIGNING_PRIVATE_KEY is missing from the production environment.}"
+          : "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:?TAURI_SIGNING_PRIVATE_KEY_PASSWORD is missing from the production environment.}"
+
+          probe="$RUNNER_TEMP/aura-updater-key-probe.txt"
+          echo "Aura updater signing key validation" > "$probe"
+          npm run tauri signer sign -- "$probe"
+
+          # Same reason as the Windows job: a valid key is not necessarily THIS
+          # build's key, and the pubkey is compiled into every installed client.
+          node scripts/verify-updater-key.mjs "$probe.sig"
+
+      # Tauri reads the notarization key from a path, so the secret's body is
+      # written out once here. KEYCHAIN_PASSWORD only guards the throwaway
+      # keychain Tauri creates and deletes during the build, so it is generated
+      # per run rather than stored as a secret.
+      - name: Write the App Store Connect API key
+        shell: bash
+        env:
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+        run: |
+          set -euo pipefail
+          : "${APPLE_API_KEY_P8:?APPLE_API_KEY_P8 is missing from the production environment.}"
+          keyPath="$RUNNER_TEMP/AuthKey.p8"
+          printf '%s\n' "$APPLE_API_KEY_P8" > "$keyPath"
+          chmod 600 "$keyPath"
+          echo "APPLE_API_KEY_PATH=$keyPath" >> "$GITHUB_ENV"
+          echo "KEYCHAIN_PASSWORD=$(uuidgen)" >> "$GITHUB_ENV"
+
+      # The Apple twin of the Azure smoke test. Tauri imports the certificate
+      # and calls notarytool only after the twenty minute build, and reports a
+      # bad certificate or key as a one line failure at the end of it. This
+      # does the same import into its own throwaway keychain, signs a copy of
+      # /bin/ls, and asks the notary service for history, which proves the
+      # certificate, its password, the key, the key id and the issuer in about
+      # fifteen seconds. Unlike the Azure assertion nothing here expires
+      # mid-build, so there is no refresh choke point to protect.
+      - name: Smoke test Apple signing and notarization credentials
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_API_KEY APPLE_API_ISSUER; do
+            if [ -z "${!name:-}" ]; then
+              echo "$name is missing from the production environment."
+              exit 1
+            fi
+          done
+
+          keychain="$RUNNER_TEMP/aura-smoke.keychain-db"
+          keychainPassword="$(uuidgen)"
+          p12="$RUNNER_TEMP/aura-smoke.p12"
+          originalSearchList="$(security list-keychains -d user | tr -d '"' | tr '\n' ' ')"
+          cleanup() {
+            security list-keychains -d user -s $originalSearchList || true
+            security delete-keychain "$keychain" 2>/dev/null || true
+            rm -f "$p12"
+          }
+          trap cleanup EXIT
+
+          printf '%s' "$APPLE_CERTIFICATE" | base64 --decode > "$p12"
+          security create-keychain -p "$keychainPassword" "$keychain"
+          security unlock-keychain -p "$keychainPassword" "$keychain"
+          security import "$p12" -k "$keychain" -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign > /dev/null
+          # Same two steps Tauri's own import does: on the search list so
+          # codesign can build the chain, and partition-listed so it can use
+          # the key without a UI prompt the runner can never answer.
+          security list-keychains -d user -s "$keychain" $originalSearchList
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychainPassword" "$keychain" > /dev/null
+
+          identities="$(security find-identity -v -p codesigning "$keychain" | grep -c 'Developer ID Application' || true)"
+          if [ "$identities" != "1" ]; then
+            security find-identity -v -p codesigning "$keychain" || true
+            echo "Expected exactly one 'Developer ID Application' identity in APPLE_CERTIFICATE, found $identities."
+            echo "An 'Apple Development' or 'Mac Developer' certificate signs without complaint here and is refused by Gatekeeper on every user's Mac."
+            exit 1
+          fi
+          identity="$(security find-identity -v -p codesigning "$keychain" | grep 'Developer ID Application' | head -1 | sed -E 's/.*"(.+)".*/\1/')"
+          echo "Signing identity: $identity"
+
+          sample="$RUNNER_TEMP/signing-smoke-test"
+          cp /bin/ls "$sample"
+          codesign --force --options runtime --timestamp --keychain "$keychain" -s "$identity" "$sample"
+          codesign --verify --strict --verbose=2 "$sample"
+
+          xcrun notarytool history --key-id "$APPLE_API_KEY" --key "$APPLE_API_KEY_PATH" --issuer "$APPLE_API_ISSUER" > /dev/null
+          echo "Apple signing and notarization credentials work. The bundler should now succeed."
+
+      # Off by default, same contract as the Windows dry run: a plain dispatch
+      # stops at the smoke test above, full_build rehearses bundling, signing,
+      # notarization and stapling without publishing anything.
+      - name: Build and sign without publishing (dry run)
+        if: github.event_name == 'workflow_dispatch' && inputs.full_build
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: npm run tauri build -- --target universal-apple-darwin
+
+      # BEFORE PUBLIC LAUNCH: APPLE_CERTIFICATE is the individual membership's
+      # Developer ID today. Replacing it with the company's changes the Team
+      # ID, and macOS keys every TCC grant and the keychain master key's ACL
+      # on that identity. Every beta install will re-prompt for Microphone,
+      # Accessibility, Input Monitoring and Screen Recording, plus one keychain
+      # "Always Allow", on its first launch after that update. Ship that
+      # release with a note that says so; nothing in the code can avoid it.
+      - uses: tauri-apps/tauri-action@v0
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Aura Desktop v__VERSION__"
+          releaseDraft: true
+          prerelease: false
+          args: --target universal-apple-darwin
+
+      # The .app is checked twice on purpose: once where the bundler left it
+      # and once after extracting the updater's tar.gz, because the archive is
+      # what every installed Mac will actually run after an update. A ticket
+      # stapled to one and missing from the other is exactly the kind of
+      # failure that only shows up on a user's machine.
+      - name: Verify release artifacts
+        if: startsWith(github.ref, 'refs/tags/') || inputs.full_build
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$PWD/src-tauri/target/universal-apple-darwin/release/bundle"
+
+          app="$(ls -d "$bundle"/macos/*.app 2>/dev/null | head -1 || true)"
+          if [ -z "$app" ]; then
+            echo "No .app bundle was generated under $bundle/macos."
+            exit 1
+          fi
+          codesign --verify --deep --strict --verbose=2 "$app"
+          assessment="$(spctl --assess --type execute --verbose=2 "$app" 2>&1 || true)"
+          echo "$assessment"
+          if ! grep -q "source=Notarized Developer ID" <<< "$assessment"; then
+            echo "Gatekeeper does not see a notarized Developer ID app. Users on Sequoia and later get no Open button, only System Settings."
+            exit 1
+          fi
+          xcrun stapler validate "$app"
+
+          executable="$(/usr/libexec/PlistBuddy -c 'Print CFBundleExecutable' "$app/Contents/Info.plist")"
+          archs="$(lipo -archs "$app/Contents/MacOS/$executable")"
+          echo "Architectures: $archs"
+          for arch in x86_64 arm64; do
+            if ! grep -qw "$arch" <<< "$archs"; then
+              echo "The bundle is missing the $arch slice, so it is not the universal build latest.json promises to both darwin-* keys."
+              exit 1
+            fi
+          done
+
+          tarball="$(ls "$bundle"/macos/*.app.tar.gz 2>/dev/null | head -1 || true)"
+          if [ -z "$tarball" ]; then
+            echo "No updater archive was generated under $bundle/macos."
+            exit 1
+          fi
+          if [ ! -f "$tarball.sig" ]; then
+            echo "Tauri updater signature was not generated for $tarball."
+            exit 1
+          fi
+          extract="$RUNNER_TEMP/updater-payload"
+          rm -rf "$extract"
+          mkdir -p "$extract"
+          tar -xzf "$tarball" -C "$extract"
+          xcrun stapler validate "$extract"/*.app
+
+          dmg="$(ls "$bundle"/dmg/*.dmg 2>/dev/null | head -1 || true)"
+          if [ -z "$dmg" ]; then
+            echo "No DMG was generated under $bundle/dmg."
+            exit 1
+          fi
+          codesign --verify --verbose=2 "$dmg"
+
+          echo "Verified notarized app: $app"
+          echo "Verified updater archive and signature: $tarball"
+          echo "Verified signed disk image: $dmg"
+
+  # The single flip from draft to public, after BOTH platforms verified. It
+  # re-reads latest.json from the release rather than trusting either job's
+  # view of it, because a missing key here means every installed client on
+  # that OS stops updating with nothing in CI to say so.
+  publish:
+    needs: [windows, macos]
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify latest.json covers every platform
+        shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release edit "${{ github.ref_name }}" --draft=false --latest
+        run: |
+          set -euo pipefail
+          gh release download "${{ github.ref_name }}" --repo "${{ github.repository }}" --pattern latest.json --dir "$RUNNER_TEMP" --clobber
+          node -e '
+            const fs = require("node:fs");
+            const json = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            const want = ["windows-x86_64", "darwin-aarch64", "darwin-x86_64"];
+            const have = Object.keys(json.platforms ?? {});
+            const missing = want.filter((key) => !have.includes(key));
+            if (missing.length > 0) {
+              console.error(`latest.json is missing ${missing.join(", ")}; it has ${have.join(", ") || "nothing"}.`);
+              process.exit(1);
+            }
+            for (const key of want) {
+              const entry = json.platforms[key];
+              if (!entry.url || !entry.signature) {
+                console.error(`latest.json entry ${key} lacks a url or signature.`);
+                process.exit(1);
+              }
+            }
+            console.log(`latest.json ${json.version}: ${have.join(", ")}`);
+          ' "$RUNNER_TEMP/latest.json"
+
+      - name: Publish verified release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${{ github.ref_name }}" --repo "${{ github.repository }}" --draft=false --latest

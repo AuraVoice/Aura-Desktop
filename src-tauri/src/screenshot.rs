@@ -152,7 +152,6 @@ pub async fn capture_cursor_display_with_geometry(
     // disk. Only the incidental per-turn capture below trades that for latency.
     let persistence_app = app.clone();
     let mut frame = tauri::async_runtime::spawn_blocking(move || {
-        #[cfg(windows)]
         crate::screenshot_store::save_capture(&persistence_app, "explicit", &frame.jpeg_bytes)?;
         Ok::<CapturedFrame, String>(frame)
     })

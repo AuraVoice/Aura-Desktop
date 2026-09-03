@@ -21,8 +21,6 @@
 //! exits is lost (`drain_for_shutdown` gives it a brief chance, not a
 //! guarantee). Retention is unchanged at 180 days either way.
 
-#![cfg(windows)]
-
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};

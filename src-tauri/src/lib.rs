@@ -1,11 +1,25 @@
+// What still needs this, now that dictation, meeting capture and the overlay
+// have real macOS implementations, is almost entirely `interview.rs`: it is
+// the last module gated wholesale on `cfg(windows)`, and its continuous-ASR
+// machinery (providers, sessions, the socket loop) is therefore dead code off
+// Windows. The rest is small and genuine: `chord.rs`'s Win-key and menu-mode
+// guards describe hazards that only exist on Windows, and `audio_ducking.rs`
+// and `toast.rs` are stubs.
+//
+// Only the two structural lints are silenced, and only off Windows. Do NOT
+// widen this list: macOS is a shipping target, so `unused_variables`,
+// `unused_mut` and `unreachable_code` are real signal in new macOS code and
+// must keep failing `clippy -- -D warnings` on the macos CI leg. Un-gating
+// interview.rs (it depends only on the now-portable audio broker) is what
+// would let this attribute go entirely.
+#![cfg_attr(not(windows), allow(dead_code, unused_imports))]
+
 mod audio_ducking;
-#[cfg(windows)]
 mod audio_capture;
 mod auth_cache;
 mod autostart;
 mod chat_cache;
 mod connector_oauth;
-#[cfg(windows)]
 mod crypto;
 mod dashboard;
 mod dictation;
@@ -17,12 +31,21 @@ mod hotkeys;
 mod interview;
 mod interview_store;
 mod logging;
+#[cfg(target_os = "macos")]
+mod macos_audio;
+#[cfg(target_os = "macos")]
+mod macos_ax;
+#[cfg(target_os = "macos")]
+mod macos_input;
+#[cfg(target_os = "macos")]
+mod macos_install;
+#[cfg(target_os = "macos")]
+mod macos_window;
 mod meeting;
 mod overlay;
 mod redact;
 mod saved_images;
 mod screenshot;
-#[cfg(windows)]
 mod screenshot_store;
 mod sealed_store;
 mod security;
@@ -449,6 +472,13 @@ pub fn run() {
         ])
         .setup(|app| {
             logging::install_panic_hook();
+
+            // First, and before anything is started: it can exit the process
+            // to relaunch from /Applications, and nothing below should have
+            // a thread, a hook or a window up when that happens.
+            #[cfg(target_os = "macos")]
+            macos_install::ensure_in_applications();
+
             app.manage(connector_oauth::ConnectorOAuthState::default());
 
             if let Ok(Some(urls)) = app.deep_link().get_current() {
@@ -465,23 +495,28 @@ pub fn run() {
             // the hook thread to unhook when the process exits.
             // Started BEFORE the keyboard listener so the hook's first chord
             // edge already has a worker to signal. Owns the "aura-dictation"
-            // thread: WASAPI capture, the wait on the transcription socket,
-            // and the SendInput burst all live there, never on the message
-            // pump.
+            // thread: microphone capture, the wait on the transcription
+            // socket, and the synthetic-keystroke burst all live there, never
+            // on the thread that pumps the native window's events.
             app.manage(dictation::start(app.handle().clone()));
 
             // Optional AI transcript cleanup. Also cheap when unused: one
             // small JSON read and, only if a key was ever saved, one decrypt.
-            #[cfg(windows)]
+            // polish.rs contains no Win32 at all, so gating this was the
+            // "downstream of a Windows module" mistake CLAUDE.md warns about:
+            // it left usePolishCredential.ts retrying an unregistered command
+            // forever on macOS.
             app.manage(dictation::polish::start(app.handle().clone()));
 
             // Owns the COM apartment for UI Automation. Started once here so
-            // the first turn does not pay for CoCreateInstance, and so
-            // dictation's insert path has a worker to ask before it types.
+            // the first turn does not pay for CoCreateInstance. A placeholder
+            // on macOS, where the focus probe reads the accessibility tree
+            // directly and needs no apartment thread (uia/focus_ax.rs).
             app.manage(uia::UiaWorker::start());
 
             app.manage(voice_toggle_key::start(app.handle().clone()));
-            #[cfg(windows)]
+            // After the listener, so the first status the UI sees already
+            // reflects whether the key hook / event tap actually came up.
             dictation::emit_status_changed(app.handle());
 
             // tauri.conf.json's `skipTaskbar: true` keeps this off the Windows
@@ -518,6 +553,17 @@ pub fn run() {
             tray::build(app.handle())?;
 
             if let Some(window) = app.get_webview_window("main") {
+                // The overlay is the one window Tauri builds from
+                // tauri.conf.json rather than through window_util's builder, so
+                // this is the only place holding its handle early enough to
+                // convert it before the first overlay::apply(). Without the
+                // conversion, clicking the notch activates Aura and pulls
+                // foreground off whatever the user was working in.
+                #[cfg(target_os = "macos")]
+                {
+                    macos_window::make_non_activating_panel(&window);
+                    macos_window::refresh_screen_cache(&window);
+                }
                 overlay::exclude_main_window_from_capture(&window)?;
                 let moved_handle = handle.clone();
                 window.on_window_event(move |event| {
@@ -580,11 +626,9 @@ pub fn run() {
             // v0.3.0 briefly persisted every spoken-turn frame as plaintext.
             // Turn frames are memory-only now, so remove that legacy directory.
             screenshot::startup_maintenance(app.handle());
-            #[cfg(windows)]
             screenshot_store::startup_maintenance(app.handle());
             // Owns the one background thread that encrypts and writes per-turn
             // captures, so the voice response never waits on disk.
-            #[cfg(windows)]
             app.manage(screenshot_store::PersistenceQueue::start(app.handle()));
             let updater_handle = app.handle().clone();
             tauri::async_runtime::spawn(updater::run_update_loop(updater_handle));
@@ -604,7 +648,6 @@ pub fn run() {
             // the process goes away. Best effort by design: a frame still in the
             // queue at exit is lost, which is the durability trade the queue
             // makes so a spoken turn never blocks on encryption.
-            #[cfg(windows)]
             if matches!(event, tauri::RunEvent::Exit) {
                 if let Some(queue) = app.try_state::<screenshot_store::PersistenceQueue>() {
                     queue.drain_for_shutdown();

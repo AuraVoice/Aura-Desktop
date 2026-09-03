@@ -40,3 +40,34 @@ export function superLabel(): string {
 export function altLabel(): string {
   return isMac() ? "Option" : "Alt";
 }
+
+/** The value backend and analytics expect. Lowercase, matching the mobile
+ * clients' convention for the same header. */
+export function platformTag(): string {
+  return isMac() ? "macos" : "windows";
+}
+
+/** What a user calls the machine this app is installed on. "PC" reads as
+ * Windows-specific to a Mac user. */
+export function deviceNoun(): string {
+  return isMac() ? "Mac" : "PC";
+}
+
+/** Where the app rests when it has no window open. */
+export function trayNoun(): string {
+  return isMac() ? "menu bar" : "system tray";
+}
+
+/** The modifier a user reaches for by default. macOS reserves Cmd for app
+ * shortcuts, so the cross-app global bindings stay on Control there too, which
+ * is free on both platforms. */
+export function primaryModifierLabel(): string {
+  return "Ctrl";
+}
+
+/** The voice-trigger key's default label, used only until Rust replies with
+ * the configured one. Both platforms have this physical key; only the
+ * conventional spelling differs. */
+export function defaultVoiceKeyLabel(): string {
+  return isMac() ? "Left Control" : "Left Ctrl";
+}

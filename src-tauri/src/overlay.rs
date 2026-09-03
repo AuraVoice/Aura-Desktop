@@ -259,10 +259,32 @@ pub fn exclude_main_window_from_capture(window: &WebviewWindow) -> Result<(), St
         .map_err(|e| format!("SetWindowDisplayAffinity failed: {e}"))
 }
 
-#[cfg(not(target_os = "windows"))]
+/// `sharingType = .none` is macOS's WDA_EXCLUDEFROMCAPTURE: the window keeps
+/// rendering for the user but is omitted from screen captures and screen
+/// sharing, so Screen Sight and Guide Mode never photograph the overlay that
+/// triggered them.
+#[cfg(target_os = "macos")]
+pub fn exclude_main_window_from_capture(window: &WebviewWindow) -> Result<(), String> {
+    crate::macos_window::set_shares_screen_content(window, false);
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub fn exclude_main_window_from_capture(_window: &WebviewWindow) -> Result<(), String> {
     Ok(())
 }
+
+/// Re-applies whatever native window style the platform needs after a Tauri
+/// window operation has had a chance to clobber it. A no-op on Windows, where
+/// the overlay's always-on-top and transparency all come from the builder and
+/// nothing is set out of band on this window.
+#[cfg(target_os = "macos")]
+fn reassert_native_window_style(window: &WebviewWindow) {
+    crate::macos_window::reassert_panel_style(window);
+}
+
+#[cfg(not(target_os = "macos"))]
+fn reassert_native_window_style(_window: &WebviewWindow) {}
 
 fn state_handle(app: &AppHandle) -> Option<tauri::State<'_, OverlayStateHandle>> {
     app.try_state::<OverlayStateHandle>()
@@ -466,14 +488,66 @@ pub(crate) fn work_area_within(
     )
 }
 
-#[cfg(not(target_os = "windows"))]
+/// Same contract as the Windows version: resolve the monitor once, then take
+/// its work area. The refresh call is what keeps the screen snapshot behind
+/// `work_area_within` current; it is a no-op hop when a display arrangement
+/// has not changed.
+#[cfg(target_os = "macos")]
+fn active_display_work_area(
+    window: &WebviewWindow,
+) -> (LogicalPosition<f64>, LogicalSize<f64>) {
+    crate::macos_window::refresh_screen_cache(window);
+    let (full_pos, full_size, scale) = match monitor_under_cursor(window) {
+        Some(m) => {
+            let scale = m.scale_factor();
+            (
+                m.position().to_logical::<f64>(scale),
+                m.size().to_logical::<f64>(scale),
+                scale,
+            )
+        }
+        None => (
+            LogicalPosition::new(0.0, 0.0),
+            LogicalSize::new(1920.0, 1080.0),
+            1.0,
+        ),
+    };
+    work_area_within(full_pos, full_size, scale)
+}
+
+/// NSScreen.visibleFrame is the rcWork analogue: full bounds minus the menu bar
+/// and the Dock. Without it a Top-docked notch sits under the menu bar and a
+/// Bottom-docked one under the Dock. `scale` is unused because AppKit already
+/// reports both rectangles in points, which are the logical pixels this
+/// function speaks.
+#[cfg(target_os = "macos")]
+pub(crate) fn work_area_within(
+    full_pos: LogicalPosition<f64>,
+    full_size: LogicalSize<f64>,
+    _scale: f64,
+) -> (LogicalPosition<f64>, LogicalSize<f64>) {
+    let Some((left, top, right, bottom)) =
+        crate::macos_window::work_area_insets(full_pos, full_size)
+    else {
+        return (full_pos, full_size);
+    };
+    (
+        LogicalPosition::new(full_pos.x + left, full_pos.y + top),
+        LogicalSize::new(
+            (full_size.width - left - right).max(0.0),
+            (full_size.height - top - bottom).max(0.0),
+        ),
+    )
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 fn active_display_work_area(
     window: &WebviewWindow,
 ) -> (LogicalPosition<f64>, LogicalSize<f64>) {
     active_display_bounds(window)
 }
 
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub(crate) fn work_area_within(
     full_pos: LogicalPosition<f64>,
     full_size: LogicalSize<f64>,
@@ -786,6 +860,11 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
         .applying_bounds = false;
 
     result.map_err(|e| format!("failed to resize/reposition/show window: {e}"))?;
+    // AFTER the chain above, never before it: each of show() and
+    // set_ignore_cursor_events() goes through tao, which rewrites the native
+    // window style from its own cached flags and drops anything set out of
+    // band. Same hazard dictation/hud.rs documents for GWL_EXSTYLE.
+    reassert_native_window_style(&window);
     // apply() is the sole path back to a normal presentation. The chained
     // result above includes restoring cursor input after a pointing takeover,
     // so the applied cache is written only once every window operation worked.
@@ -900,6 +979,7 @@ pub fn begin_notch_move(app: &AppHandle) -> Result<(), String> {
         apply(app);
         return Err(format!("failed to take over display for notch move: {e}"));
     }
+    reassert_native_window_style(&window);
 
     {
         // Record the takeover in the applied snapshot (the other fields are
@@ -1357,6 +1437,7 @@ pub fn point_at(app: &AppHandle, target_x: f64, target_y: f64, monitor: MonitorR
         apply(app);
         return;
     }
+    reassert_native_window_style(&window);
 
     {
         // Same shape as the MovingNotch takeover marker above: record the

@@ -1,27 +1,26 @@
 //! App-wide at-rest encryption: AES-256-GCM with per-feature keys wrapped by
-//! Windows DPAPI (current-user scope).
+//! the OS account keystore.
 //!
-//! DPAPI is the right wrapper here because it keys off the Windows user
-//! account itself: a wrapped key file is useless copied to another machine or
-//! user profile, with zero password/keychain UX. The unwrapped key never
-//! touches disk. Payload layout: 12-byte random nonce || ciphertext+tag.
+//! The CIPHER is cross-platform. Only the key WRAPPING is per-OS, and that is
+//! the whole platform seam of this module (`keywrap` below):
+//!
+//! - Windows wraps with DPAPI (current-user scope).
+//! - macOS wraps with AES-GCM under a master key held in the login Keychain.
+//!
+//! Both give the same property, which is why the wrapped blob is safe to leave
+//! on disk: it is useless copied to another machine or user account, with no
+//! password UX. The unwrapped key never touches disk. Payload layout is
+//! 12-byte random nonce || ciphertext+tag.
 //!
 //! This module owns the mechanism only. Each feature owns its OWN key file
 //! and location (meeting/crypto.rs, dictation/vocab.rs) so that, for example,
 //! deleting the meeting captures directory cannot silently brick the
-//! dictation vocabulary.
-
-#![cfg(windows)]
+//! dictation vocabulary. That layout is identical on both platforms.
 
 use std::path::Path;
 
 use aes_gcm::aead::{Aead, KeyInit, OsRng, Payload};
 use aes_gcm::{AeadCore, Aes256Gcm, Key, Nonce};
-use windows::core::PCWSTR;
-use windows::Win32::Foundation::{LocalFree, HLOCAL};
-use windows::Win32::Security::Cryptography::{
-    CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
-};
 
 pub const NONCE_LEN: usize = 12;
 
@@ -35,7 +34,7 @@ pub const NONCE_LEN: usize = 12;
 /// the parent directory.
 pub fn load_or_create_key_at(path: &Path, label: &str) -> Result<[u8; 32], String> {
     if let Ok(wrapped) = std::fs::read(path) {
-        let key_bytes = dpapi_unprotect(&wrapped)
+        let key_bytes = keywrap::unwrap(&wrapped)
             .map_err(|e| format!("stored {label} key could not be unwrapped: {e}"))?;
         if key_bytes.len() != 32 {
             return Err(format!("stored {label} key has an invalid length"));
@@ -46,7 +45,7 @@ pub fn load_or_create_key_at(path: &Path, label: &str) -> Result<[u8; 32], Strin
     }
 
     let key = Aes256Gcm::generate_key(OsRng);
-    let wrapped = dpapi_protect(key.as_slice())?;
+    let wrapped = keywrap::wrap(key.as_slice())?;
     crate::fsx::write_atomic(path, &wrapped, crate::fsx::Durability::WriteThrough)?;
     let mut out = [0u8; 32];
     out.copy_from_slice(key.as_slice());
@@ -115,48 +114,144 @@ pub fn decrypt_with_aad(key: &[u8; 32], data: &[u8], aad: &[u8]) -> Result<Vec<u
         .map_err(|e| format!("decrypt failed: {e}"))
 }
 
-fn dpapi_protect(data: &[u8]) -> Result<Vec<u8>, String> {
-    let input = CRYPT_INTEGER_BLOB {
-        cbData: data.len() as u32,
-        pbData: data.as_ptr() as *mut u8,
+/// The one platform seam in this module: wrapping a freshly minted key so it
+/// can rest on disk, and unwrapping it again. Everything above is shared.
+///
+/// Both implementations MUST fail closed. Returning "no key here" for anything
+/// other than a genuinely absent key makes `load_or_create_key_at` mint a
+/// replacement, which leaves every already-sealed row permanently unreadable
+/// while new writes look perfectly healthy.
+#[cfg(windows)]
+mod keywrap {
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::{LocalFree, HLOCAL};
+    use windows::Win32::Security::Cryptography::{
+        CryptProtectData, CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
     };
-    let mut output = CRYPT_INTEGER_BLOB::default();
-    unsafe {
-        CryptProtectData(
-            &input,
-            PCWSTR::null(),
-            None,
-            None,
-            None,
-            CRYPTPROTECT_UI_FORBIDDEN,
-            &mut output,
-        )
-        .map_err(|e| format!("CryptProtectData failed: {e}"))?;
-        let bytes = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
-        let _ = LocalFree(Some(HLOCAL(output.pbData as *mut core::ffi::c_void)));
-        Ok(bytes)
+
+    pub fn wrap(data: &[u8]) -> Result<Vec<u8>, String> {
+        let input = CRYPT_INTEGER_BLOB {
+            cbData: data.len() as u32,
+            pbData: data.as_ptr() as *mut u8,
+        };
+        let mut output = CRYPT_INTEGER_BLOB::default();
+        unsafe {
+            CryptProtectData(
+                &input,
+                PCWSTR::null(),
+                None,
+                None,
+                None,
+                CRYPTPROTECT_UI_FORBIDDEN,
+                &mut output,
+            )
+            .map_err(|e| format!("CryptProtectData failed: {e}"))?;
+            let bytes = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
+            let _ = LocalFree(Some(HLOCAL(output.pbData as *mut core::ffi::c_void)));
+            Ok(bytes)
+        }
+    }
+
+    pub fn unwrap(data: &[u8]) -> Result<Vec<u8>, String> {
+        let input = CRYPT_INTEGER_BLOB {
+            cbData: data.len() as u32,
+            pbData: data.as_ptr() as *mut u8,
+        };
+        let mut output = CRYPT_INTEGER_BLOB::default();
+        unsafe {
+            CryptUnprotectData(
+                &input,
+                None,
+                None,
+                None,
+                None,
+                CRYPTPROTECT_UI_FORBIDDEN,
+                &mut output,
+            )
+            .map_err(|e| format!("CryptUnprotectData failed: {e}"))?;
+            let bytes = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
+            let _ = LocalFree(Some(HLOCAL(output.pbData as *mut core::ffi::c_void)));
+            Ok(bytes)
+        }
     }
 }
 
-fn dpapi_unprotect(data: &[u8]) -> Result<Vec<u8>, String> {
-    let input = CRYPT_INTEGER_BLOB {
-        cbData: data.len() as u32,
-        pbData: data.as_ptr() as *mut u8,
-    };
-    let mut output = CRYPT_INTEGER_BLOB::default();
-    unsafe {
-        CryptUnprotectData(
-            &input,
-            None,
-            None,
-            None,
-            None,
-            CRYPTPROTECT_UI_FORBIDDEN,
-            &mut output,
-        )
-        .map_err(|e| format!("CryptUnprotectData failed: {e}"))?;
-        let bytes = std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec();
-        let _ = LocalFree(Some(HLOCAL(output.pbData as *mut core::ffi::c_void)));
-        Ok(bytes)
+/// macOS has no DPAPI. The equivalent account-scoped secret store is the login
+/// Keychain, so one master key lives there and wraps the per-feature key files
+/// with the same AES-GCM used everywhere else. The key files stay exactly where
+/// Windows puts them, which keeps the "each feature owns its own key file"
+/// invariant identical across platforms.
+///
+/// The keychain item's access control is bound to the signing identity that
+/// created it. BEFORE PUBLIC LAUNCH: replacing the individual Developer ID
+/// with the company's changes the Team ID, so every beta install sees one
+/// "Aura Desktop wants to use your confidential information" prompt on its
+/// first launch after that update. "Always Allow" resolves it for good; Deny
+/// leaves every encrypted store unavailable by design (see `master_key`), and
+/// must never be answered by minting a replacement.
+#[cfg(target_os = "macos")]
+mod keywrap {
+    use security_framework::passwords::{get_generic_password, set_generic_password};
+
+    const SERVICE: &str = "com.aura.desktop";
+    const ACCOUNT: &str = "at-rest-master-key";
+
+    /// The ONLY status that may mint a new master key. Every other failure
+    /// (locked keychain, denied ACL, user cancelled) means the key probably
+    /// still exists and we must not replace it. See `keywrap`'s doc comment.
+    const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
+
+    fn master_key() -> Result<[u8; 32], String> {
+        match get_generic_password(SERVICE, ACCOUNT) {
+            Ok(bytes) => to_key(&bytes),
+            Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => mint(),
+            Err(error) => Err(format!(
+                "keychain is unavailable, refusing to mint a replacement key: {error}"
+            )),
+        }
+    }
+
+    fn mint() -> Result<[u8; 32], String> {
+        use aes_gcm::aead::{KeyInit, OsRng};
+        let fresh = aes_gcm::Aes256Gcm::generate_key(OsRng);
+        set_generic_password(SERVICE, ACCOUNT, fresh.as_slice())
+            .map_err(|e| format!("could not store the master key in the keychain: {e}"))?;
+        // Read back rather than trusting what we just wrote: if a second
+        // process minted concurrently, the keychain holds one winner and both
+        // processes must agree on it before anything gets wrapped.
+        let stored = get_generic_password(SERVICE, ACCOUNT)
+            .map_err(|e| format!("could not read back the master key: {e}"))?;
+        to_key(&stored)
+    }
+
+    fn to_key(bytes: &[u8]) -> Result<[u8; 32], String> {
+        if bytes.len() != 32 {
+            return Err("keychain master key has an invalid length".to_string());
+        }
+        let mut key = [0u8; 32];
+        key.copy_from_slice(bytes);
+        Ok(key)
+    }
+
+    pub fn wrap(data: &[u8]) -> Result<Vec<u8>, String> {
+        super::encrypt(&master_key()?, data)
+    }
+
+    pub fn unwrap(data: &[u8]) -> Result<Vec<u8>, String> {
+        super::decrypt(&master_key()?, data)
+    }
+}
+
+/// No other desktop target ships, and guessing at a key store would be worse
+/// than refusing. Failing here disables the encrypted stores rather than
+/// writing anything in the clear.
+#[cfg(not(any(windows, target_os = "macos")))]
+mod keywrap {
+    pub fn wrap(_data: &[u8]) -> Result<Vec<u8>, String> {
+        Err("at-rest key wrapping is not supported on this platform".to_string())
+    }
+
+    pub fn unwrap(_data: &[u8]) -> Result<Vec<u8>, String> {
+        Err("at-rest key wrapping is not supported on this platform".to_string())
     }
 }

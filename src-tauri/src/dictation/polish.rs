@@ -25,7 +25,6 @@
 //! durations and character counts only. Never the transcript, the reply, a
 //! request body, or a raw error string that could carry one.
 
-#![cfg(windows)]
 
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};

@@ -5,6 +5,7 @@ import packageJson from "../../package.json";
 import { auth } from "./firebase";
 import { getOrCreateDesktopInstallId } from "./desktopInstallId";
 import { logError } from "./log";
+import { platformTag } from "./platformKeys";
 import { pairingCodeLength, pairingErrorCopy } from "./pairingCopy";
 import { rawPairingCode } from "./pairingCodeFormat";
 import { webAuthCopy } from "./webAuthCopy";
@@ -16,7 +17,7 @@ export const API_BASE_URL = "https://juno-backend-620715294422.us-central1.run.a
  * comes from package.json, the same source sentry.ts already uses for its
  * release tag, so all three (installer, Sentry, these headers) agree. */
 const PLATFORM_HEADERS = {
-  "X-Aura-Platform": "windows",
+  "X-Aura-Platform": platformTag(),
   "X-Aura-App-Version": packageJson.version,
 } as const;
 

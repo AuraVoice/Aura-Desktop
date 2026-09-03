@@ -1,6 +1,6 @@
 # Aura Desktop
 
-Tauri v2 + React 19 + TypeScript Windows companion app, a from-scratch rewrite of the sibling Flutter app (`../Aura`, "Buddy") for better UI performance and maintainability. The desktop client talks to the same backend (`juno-backend` on Cloud Run) and Firebase project (`juno-2ea45`) as the Flutter app.
+Tauri v2 + React 19 + TypeScript desktop companion app, a from-scratch rewrite of the sibling Flutter app (`../Aura`, "Buddy") for better UI performance and maintainability. Windows ships today; macOS is a work in progress (see "Platform support" below). The desktop client talks to the same backend (`juno-backend` on Cloud Run) and Firebase project (`juno-2ea45`) as the Flutter app.
 
 This file is working instructions for Claude Code in this repo. For the full architecture - diagrams, the IPC surface, session flows - see [`README.md`](./README.md). For the incident log behind the rules below, see [`lessons-learnt.txt`](./lessons-learnt.txt).
 
@@ -16,10 +16,86 @@ The runtime has three Tauri webview windows:
 
 - `main` is the borderless, transparent, always-on-top companion overlay. It resizes/repositions itself between `hidden`, `panel`, `bar`, `companion`, `pointing`, and `movingnotch`; `panel` carries the `setup` or `companion` variant. See `src-tauri/src/overlay.rs` for the native state machine and `src/overlay/OverlayRoot.tsx` for the matching React root.
 - `dashboard` is the opaque, resizable app window built on demand by `src-tauri/src/dashboard.rs`, routed by `src/main.tsx` into `src/dashboard/DashboardApp`.
-- `dictation` is the separate transparent HUD built by `src-tauri/src/dictation/hud.rs`, routed by `src/main.tsx` into `src/dictation/DictationHud`. It shares the overlay notch edge, stays off the taskbar, and must not steal focus from the target app except for the consent prompt.
-- Rust owns window geometry, the configurable voice trigger (default Left Ctrl double-tap), global hotkeys (Ctrl+Alt+Space chat, Ctrl+Alt+D dashboard, Ctrl+Alt+S Screen Sight, Ctrl+Alt+G Guide Mode, Ctrl+Alt+M output mute, Ctrl+Shift+D sign-out), tray, and foreground handling (`win_focus.rs`, needed because Windows denies `SetForegroundWindow` while another app owns focus). Force foreground ONLY for the Setup `Panel` or the explicit chat summon path that uses `raise_for_hotkey`. Never force it for the resting notch/`Bar`: the notch is always-on-top, so it shows without stealing focus - see the 2026-07-16 "fail to dismiss" lesson.
+- `dictation` is the separate transparent HUD built by `src-tauri/src/dictation/hud.rs`, routed by `src/main.tsx` into `src/dictation/DictationHud`. It shares the overlay notch edge, stays out of the taskbar and Dock, and must not steal focus from the target app except for the consent prompt (a `WS_EX_NOACTIVATE` window on Windows, a non-activating `NSPanel` on macOS).
+- Rust owns window geometry, the configurable voice trigger (default Left Ctrl double-tap), global hotkeys (Ctrl+Alt+Space chat, Ctrl+Alt+D dashboard, Ctrl+Alt+S Screen Sight, Ctrl+Alt+G Guide Mode, Ctrl+Alt+M output mute, Ctrl+Shift+D sign-out), tray, and foreground handling (`win_focus.rs`: on Windows because it denies `SetForegroundWindow` while another app owns focus, on macOS because `set_focus` activates the whole app and would pull focus off whatever the user was typing in). Force foreground ONLY for the Setup `Panel` or the explicit chat summon path that uses `raise_for_hotkey`. Never force it for the resting notch/`Bar`: the notch is always-on-top, so it shows without stealing focus - see the 2026-07-16 "fail to dismiss" lesson.
 - React owns all visual content and copy (`src/dashboard/`, `src/overlay/`, `src/dictation/`), Firebase auth (`src/state/AuthProvider.tsx`), standard per-turn screen capture (`useTurnScreenCapture`), continuous change-filtered Guide capture (`useGuideMode`), and the LiveKit call.
 - The overlay drag surface is one continuous drag region (`data-tauri-drag-region="deep"` on `GlassSurface`) - real inputs/buttons/links block dragging on themselves automatically (Tauri's own rule), nothing else needs to opt in or out individually. Don't add a narrower `data-tauri-drag-region` (bare, no value) on an inner element unless you mean to shadow/restrict the outer region - a bare attribute closer to the click target short-circuits the walk and blocks the deep region from ever being reached. Clickable overlay elements must be real `<button>`s, inputs, or links, not `<div role="button">`.
+
+## Platform support
+
+Windows is the shipping target. macOS now runs the same feature set, including dictation and
+Meeting Notes. What differs is HOW a few subsystems are implemented, not whether they exist.
+Check here before assuming anything about either.
+
+**Cross-platform (one implementation, no gates):** hotkeys, tray, overlay geometry and docking,
+screenshots (`xcap`), Guide Mode (slower, no DXGI fast path), updater, autostart, deep links,
+plain notifications, atomic writes, dashboard data pages, at-rest encryption, the encrypted
+stores built on it (chat cache, interview sessions, saved images, screenshot store), the
+dictation ASR socket, dictation's vocabulary/consent/credential/usage/polish/history modules,
+the meeting engine, segment queue and evidence store, and the whole capture broker above its
+device layer.
+
+**Modules with a platform SEAM (both sides real, seam inside the owning file):**
+`crypto.rs` (`keywrap`), `audio_capture.rs` (`backend`: WASAPI vs a Core Audio process tap),
+`dictation/audio.rs` (`backend`: WASAPI vs AVAudioEngine), `dictation/insert.rs` (`backend`:
+SendInput vs CGEvent), `dictation/hud.rs` (`sync_activation`, `target_center`),
+`meeting/session.rs` (`platform`: WTS vs distributed notifications), `meeting/detect.rs`
+(`scan`: EnumWindows vs NSWorkspace + AX), `meeting/runtime_lease.rs` (named mutex vs flock),
+`uia/` (UIA walker vs an AX focus probe), `overlay.rs`, `win_focus.rs`, `window_util.rs`.
+
+**Windows-only, genuinely:** `audio_ducking.rs`, `toast.rs`, `dictation/import_traces.rs`,
+three of four `system_control.rs` verbs, and `interview.rs`. Everything else has a real macOS
+implementation. `interview.rs` is the only one still gated wholesale, and only because nobody
+has un-gated it: it depends on the now-portable audio broker, and doing so is what would let
+`lib.rs`'s `cfg_attr(not(windows), allow(dead_code, ...))` disappear entirely.
+
+**Shared macOS files exist only where several callers need them:** `macos_window.rs` (AppKit
+windows), `macos_ax.rs` (Accessibility reads), `macos_audio.rs` (capture and format
+conversion), `macos_input.rs` (keycode table, Secure Input). Anything used by ONE module stays
+in that module, the way `keywrap` does.
+
+**The rule that keeps this honest:** a module belongs behind `#[cfg(windows)]` ONLY if it
+actually calls a Win32 API. Several modules were gated for merely sitting downstream of one
+(the whole `asr/` tree and `screenshot_store.rs` contain zero Win32 calls), which made them
+vanish on macOS for no reason and left `usePolishCredential.ts` retrying an unregistered command
+forever. `meeting/audio.rs`, `meeting/queue.rs` and `dictation/polish.rs` were the same mistake
+a second time. Before adding a gate, grep the file for `windows::` and gate the caller instead.
+
+**Porting a Windows module means MOVING it, not rewriting it.** Every Windows body in the seams
+above went into its `backend`/`platform` module verbatim - same calls, same order, same error
+strings - so that the Windows half of the diff is provably a relocation. The one place shared
+code replaced an inline Windows body (`audio_capture::capture_thread`) preserves even the
+per-drain `Glitch` event COUNT for that reason. Hold to this: only the `windows-latest` CI leg
+can prove it, since the Windows tree cannot be cross-compiled from a Mac (`ring`'s build script
+needs the Windows SDK).
+
+**macOS needs four TCC grants, none of them an entitlement.** Microphone; Accessibility (text
+insertion via CGEvent, and the focus probe); Input Monitoring (the dictation chord's event tap);
+and System Audio Recording for Meeting Notes. The last one has NO request API - its prompt only
+fires when `AudioDeviceStart` runs on the tap-backed aggregate device, so the whole pipeline is
+built before macOS asks, and a refusal surfaces as a capture failure rather than a stall. The
+process-tap API exists from 14.2 but its TCC category only behaves correctly from 14.4, which
+is why `bundle.macOS.minimumSystemVersion` is 14.4.
+
+**A CGEventTap can be switched off underneath you.** macOS disables a tap whose callback is too
+slow (`kCGEventTapDisabledByTimeout`) or during certain user input, silently - dictation just
+stops responding with nothing in any log. `voice_toggle_key.rs`'s callback re-enables on both
+event types, and that branch is not optional. The tap is listen-only because the Windows hook it
+mirrors always calls `CallNextHookEx` and never suppresses; since macOS has no `LLKHF_INJECTED`,
+the insert path stamps `kCGEventSourceUserData` with a marker the tap drops.
+
+**At-rest encryption has exactly one platform seam.** `crypto.rs` is AES-256-GCM everywhere;
+only key WRAPPING differs (DPAPI on Windows, a login-Keychain master key on macOS), and that
+lives in its `keywrap` submodule. Per-feature key files stay in the same place on both, so
+deleting the meeting captures directory still cannot brick the dictation vocabulary. Both
+implementations MUST fail closed: on macOS only `errSecItemNotFound` may mint a new key.
+Treating a locked or denied keychain as "no key" silently mints a replacement and makes every
+already-sealed row permanently unreadable while new writes look healthy.
+
+**User-visible strings never hardcode a platform.** `src/lib/platform.ts` is the only place that
+knows which OS this is: key labels (Ctrl/Win vs the macOS symbols), `deviceNoun`, `trayNoun`,
+`osName`, the backend and analytics platform tags, and the System Settings deep links. Adding a
+platform-varying string means adding it there, not branching at the call site.
 
 ## Optimistic "applied" caches
 
@@ -116,30 +192,47 @@ Fast, silent checks - fine to run directly, no need to ask:
 
 | Command | Does |
 |---|---|
-| `cd src-tauri && cargo check` | Rust compiles, no binary produced. If `cargo` isn't on PATH in the shell, use `& "$env:USERPROFILE\.cargo\bin\cargo.exe"`. Use PowerShell, not Bash - Git Bash's `link.exe` shadows MSVC's. |
+| `cd src-tauri && cargo check` | Rust compiles, no binary produced. CI runs this and `cargo clippy -- -D warnings` on BOTH windows-latest and macos-14, so the non-Windows halves cannot rot. If `cargo` isn't on PATH in the shell, use `& "$env:USERPROFILE\.cargo\bin\cargo.exe"`. Use PowerShell, not Bash - Git Bash's `link.exe` shadows MSVC's. |
 | `npx tsc --noEmit` | TypeScript type-checks |
 
 ### Releasing
 
-Releases are cut by tag. `.github/workflows/release.yml` builds, signs every artifact with Azure Artifact Signing, and publishes a GitHub Release carrying the updater `.sig` files. `workflow_dispatch` is a three minute preflight (credential + tooling only, no build); add `-f full_build=true` to also rehearse bundling.
+Releases are cut by tag. `.github/workflows/release.yml` runs a Windows job (Azure Artifact Signing), then a macOS job (Developer ID + notarization), then one publish job that flips the draft GitHub Release carrying both installers and the updater `.sig` files. `workflow_dispatch` is a three minute preflight (both credential smoke tests, no build); add `-f full_build=true` to also rehearse bundling on both.
 
 ```
 tag vX.Y.Z pushed
   │
-  ├─ version guard        3 files must agree with the tag        fails in ~20s
-  ├─ npm ci
-  ├─ updater key check    signs a probe, then verify-updater-key.mjs
-  │                       confirms the pubkey in tauri.conf.json matches
-  ├─ install client tools MSI + dlib/signtool discovery, ~30s, NO Azure needed
-  ├─ azure/login          OIDC assertion, alive for exactly 5 MINUTES
-  ├─ smoke test  ◄────────signs a throwaway PE ~20s later. Proves credential,
-  │                       RBAC, cert profile, dlib and signtool in 10 seconds,
-  │                       AND caches an access token good for ~1 hour
-  ├─ tauri-action         ~12 min build, then every signature calls
-  │                       scripts/sign-windows-artifact.ps1, which mints a
-  │                       FRESH OIDC assertion per batch (150s stamp)
-  ├─ verify artifacts     Authenticode on the NSIS exe and the MSI, .sig present
-  └─ publish              flips the draft to latest
+  ├─ job windows (windows-latest)
+  │    ├─ version guard        3 files must agree with the tag        fails in ~20s
+  │    ├─ npm ci
+  │    ├─ updater key check    signs a probe, then verify-updater-key.mjs
+  │    │                       confirms the pubkey in tauri.conf.json matches
+  │    ├─ install client tools MSI + dlib/signtool discovery, ~30s, NO Azure needed
+  │    ├─ azure/login          OIDC assertion, alive for exactly 5 MINUTES
+  │    ├─ smoke test  ◄────────signs a throwaway PE ~20s later. Proves credential,
+  │    │                       RBAC, cert profile, dlib and signtool in 10 seconds,
+  │    │                       AND caches an access token good for ~1 hour
+  │    ├─ tauri-action         ~12 min build, then every signature calls
+  │    │                       scripts/sign-windows-artifact.ps1, which mints a
+  │    │                       FRESH OIDC assertion per batch (150s stamp)
+  │    └─ verify artifacts     Authenticode on the NSIS exe and the MSI, .sig present
+  │
+  ├─ job macos (macos-latest, needs windows: tauri-action's latest.json merge is a
+  │            download-then-upload with no lock, so the two jobs must not overlap)
+  │    ├─ version guard, npm ci, updater key check    same as above
+  │    ├─ Apple smoke test     imports the .p12 into a throwaway keychain, signs a
+  │    │                       copy of /bin/ls, runs `notarytool history`. Proves the
+  │    │                       cert is a Developer ID Application one and the API key
+  │    │                       works, in ~15s instead of after the build
+  │    ├─ tauri-action         --target universal-apple-darwin. Tauri itself signs,
+  │    │                       notarizes (notarytool --wait, 2 to 20 min) and staples
+  │    └─ verify artifacts     codesign/spctl/stapler on the .app AND on the .app
+  │                            inside the updater tar.gz, lipo shows both slices,
+  │                            DMG signed
+  │
+  └─ job publish (needs both)
+       ├─ latest.json must carry windows-x86_64, darwin-aarch64 AND darwin-x86_64
+       └─ flips the draft to latest
 ```
 
 To ship:
@@ -158,6 +251,12 @@ To ship:
 Do not "simplify" this by arranging build steps around the five minute window. That was tried (split compile, second sign-in, separate cache warm) and it works only until the next step gets slower. The refresh belongs at the choke point.
 
 Signing config lives in the Entra app registration (federated credential subject `repo:AuraVoice/Aura-Desktop:environment:production`, audience `api://AzureADTokenExchange`) and the `production` GitHub environment, which holds `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. There is no `AZURE_CLIENT_SECRET` and the workflow does not want one. When signing breaks, query the live resource with `az` rather than reading the portal or the config that is supposed to describe it.
+
+**macOS signing is five secrets and no script.** How to obtain each, the run order, and the company-certificate switch are written up in [`MACOS_RELEASE_CHECKLIST.md`](./MACOS_RELEASE_CHECKLIST.md); read it before the first Mac tag. The same `production` environment holds `APPLE_CERTIFICATE` (base64 of the Developer ID Application `.p12`), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_API_KEY` (App Store Connect Team key ID), `APPLE_API_ISSUER`, and `APPLE_API_KEY_P8` (the `.p8` body; the job writes it to disk and sets `APPLE_API_KEY_PATH`). `KEYCHAIN_PASSWORD` is generated per run because it only guards a keychain the runner deletes. There is no `APPLE_ID`/`APPLE_PASSWORD` and the workflow does not want them: an app-specific password rides on a human account Apple can lock at any time. Individual keys cannot notarize; the key must be a Team key, Developer role is enough. Tauri does the import, `codesign --options runtime`, `notarytool submit --wait` and `stapler staple` itself from those env vars; a missing notarization credential is a build failure, never a silent skip.
+
+**BEFORE PUBLIC LAUNCH: the certificate is the individual membership's.** Replacing it with the company's Developer ID changes the Team ID, and macOS keys every TCC grant and the login-keychain master key's ACL on that identity. Every beta install will re-prompt for Microphone, Accessibility, Input Monitoring and Screen Recording, plus one keychain "Always Allow", on its first launch after that update. Ship that release with a note that says so; nothing in the code can avoid it. The updater itself is unaffected: it trusts the minisign key, not the Apple one. The same release is the moment to test dropping the unproven JIT entitlements (see `entitlements.plist`).
+
+**Local Mac builds.** `tauri dev` runs an unsigned binary, and every rebuild is a new identity to TCC: Accessibility, Input Monitoring and Screen Recording grants vanish each time, and Sequoia refuses screen capture to ad-hoc binaries entirely. To test permissions or capture, build the real bundle with `APPLE_SIGNING_IDENTITY="Developer ID Application: <name> (<team>)" npm run tauri build -- --target universal-apple-darwin` and run the `.app` from /Applications. A locally built bundle carries no quarantine flag, so it launches without notarization.
 
 ### Adding a new Tauri command
 

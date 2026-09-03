@@ -3,7 +3,6 @@
 //! This provider is continuous-only. Dictation remains Deepgram-primary and
 //! cannot reach this implementation through `asr::provider()`.
 
-#![cfg(windows)]
 
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};

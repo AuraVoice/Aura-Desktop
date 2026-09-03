@@ -59,33 +59,33 @@ use crate::util::now_ms;
 // key, and the sample/FLAC path are all Windows-only, and every entry point
 // checks `ENCRYPTION_AVAILABLE` before it reaches one of these.
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 use crate::sealed_store::{seal, unseal};
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn seal(_key: &[u8; 32], _plaintext: &str, _aad: &str) -> Result<Vec<u8>, String> {
     Err(UNAVAILABLE.to_string())
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn unseal(_key: &[u8; 32], _sealed: &[u8], _aad: &str) -> Result<String, String> {
     Err(UNAVAILABLE.to_string())
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 use super::vocab::{dictation_dir, load_or_create_key};
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn dictation_dir(_app: &AppHandle) -> Result<PathBuf, String> {
     Err(UNAVAILABLE.to_string())
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn load_or_create_key(_app: &AppHandle) -> Result<[u8; 32], String> {
     Err(UNAVAILABLE.to_string())
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 const UNAVAILABLE: &str = "dictation history is unavailable on this platform";
 
 const DATABASE_FILE: &str = "history.sqlite3";
@@ -227,7 +227,7 @@ fn open(app: &AppHandle) -> Result<Connection, String> {
 
 /// The connection, for `import_traces.rs`. Exposed rather than duplicated so
 /// the migration cannot drift from the schema or the busy timeout.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 pub(super) fn open_for_import(app: &AppHandle) -> Result<Connection, String> {
     open(app)
 }
@@ -236,7 +236,7 @@ pub(super) fn open_for_import(app: &AppHandle) -> Result<Connection, String> {
 /// is: same AAD grammar, same clip layout, same FLAC encode. `pcm` is None when
 /// the old clip was missing or unreadable, which lands the row as text only -
 /// the same `has_audio: false` state eviction produces.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn insert_imported(
     app: &AppHandle,
@@ -477,7 +477,7 @@ fn record(
 
 /// Encodes to FLAC, seals, and writes atomically. Returns the encrypted size,
 /// which is what the audio budget is measured in.
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn store_clip(
     _app: &AppHandle,
     _key: &[u8; 32],
@@ -488,7 +488,7 @@ fn store_clip(
     Err(UNAVAILABLE.to_string())
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn store_clip(
     app: &AppHandle,
     key: &[u8; 32],
@@ -507,7 +507,7 @@ fn store_clip(
 /// here as f32 through `store_clip`; the trace import arrives with i16-derived
 /// samples it decoded from the old WAV. Both must produce byte-identical
 /// on-disk shape, so neither gets its own copy of this.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn store_pcm(
     app: &AppHandle,
     key: &[u8; 32],
@@ -630,12 +630,12 @@ pub async fn dictation_history_audio(
     .map_err(|e| e.to_string())?
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn read_clip(_app: &AppHandle, _uid: &str, _id: &str) -> Result<Vec<u8>, String> {
     Err(UNAVAILABLE.to_string())
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn read_clip(app: &AppHandle, uid: &str, id: &str) -> Result<Vec<u8>, String> {
     let key = load_or_create_key(app)?;
     let conn = open(app)?;

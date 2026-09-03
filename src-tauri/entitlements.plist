@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+      Hardened runtime is required for notarization and is enabled in
+      tauri.conf.json. These entitlements re-open the specific holes the app
+      genuinely needs. Nothing here is optional decoration.
+
+      The three JIT/memory keys are the ones WKWebView-hosting apps commonly
+      declare. They have NOT been proven necessary here: WKWebView runs its
+      JIT inside Apple's own WebContent XPC process, and Tauri's signing docs
+      require no entitlements for notarization; the "crashes after
+      notarization" story comes from Electron, whose V8 runs in-process.
+      BEFORE PUBLIC LAUNCH: run the release workflow's full_build dry run with
+      allow-dyld-environment-variables and allow-unsigned-executable-memory
+      removed, launch the notarized bundle on a clean Mac, and keep only what
+      that launch actually needs. Each key left in is a hole in the hardened
+      runtime.
+    -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+
+    <!--
+      Microphone. Pairs with NSMicrophoneUsageDescription in Info.plist: the
+      entitlement grants the capability, the plist string is what the user
+      actually reads in the prompt. Both are required.
+    -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+
+    <!--
+      NOT declared here, deliberately:
+
+      - Screen recording has NO code-signing entitlement. It is purely TCC
+        gated: the user enables the binary under System Settings > Privacy &
+        Security > Screen & System Audio Recording. Note macOS Sequoia refuses
+        ScreenCaptureKit to ad-hoc or unsigned binaries no matter what that
+        pane says, so a real Developer ID signature is a hard requirement for
+        Screen Sight and Guide Mode to work at all.
+      - Accessibility (synthetic keystrokes) and Input Monitoring (the event
+        tap) are likewise TCC grants, not entitlements.
+      - com.apple.developer.persistent-content-capture, which would suppress
+        Sequoia's recurring screen-recording re-prompt, is restricted by Apple
+        to VNC apps and will not be granted here.
+      - App Sandbox is absent on purpose. A global event tap, system-audio
+        capture and cross-app accessibility are incompatible with it, which is
+        also why this ships Developer ID direct rather than Mac App Store.
+    -->
+</dict>
+</plist>

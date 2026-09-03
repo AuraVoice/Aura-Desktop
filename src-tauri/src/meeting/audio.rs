@@ -1,30 +1,28 @@
-//! The WASAPI capture engine: mic + render-loopback -> 16 kHz 2-channel FLAC
-//! segments on disk (encrypted by mod.rs's record_segment).
+//! The capture engine: mic + system audio -> 16 kHz 2-channel FLAC segments on
+//! disk (encrypted by mod.rs's record_segment).
 //!
 //! The shared audio-capture broker owns the default mic and render-loopback
 //! devices. This engine is its lossless Meeting Notes consumer: it aligns both
 //! labeled streams by wall clock, encodes segments, and watches the stop
 //! channel / session lock / 4h cap on a dedicated std::thread.
 //!
-//! Format strategy: both clients are initialized shared-mode with
-//! autoconvert, requesting 16 kHz mono f32 directly - the Windows audio
-//! engine does the resample/downmix, so there is no resampler dependency and
-//! no format matrix to test. Channel 0 = mic ("You"), channel 1 = loopback
-//! ("Others"); the backend transcribes them separately (multichannel), which
-//! is the whole reason the streams are never mixed together.
+//! Format strategy: the broker hands both sources over as 16 kHz mono f32
+//! already, so there is no format matrix here. Channel 0 = mic ("You"),
+//! channel 1 = system audio ("Others"); the backend transcribes them
+//! separately (multichannel), which is the whole reason the streams are never
+//! mixed together.
 //!
-//! Loopback silence: WASAPI loopback delivers packets only while something
-//! renders. Each stream therefore tracks expected-frames-by-wall-clock and
-//! silence-fills any deficit past a small guard, so the two channels stay
-//! aligned through render-silence, and a segment is always exactly as long
-//! as the wall time it spans.
+//! System-audio silence: neither WASAPI loopback nor a Core Audio process tap
+//! delivers packets while nothing is playing. Each stream therefore tracks
+//! expected-frames-by-wall-clock and silence-fills any deficit past a small
+//! guard, so the two channels stay aligned through playback silence, and a
+//! segment is always exactly as long as the wall time it spans.
 //!
 //! Default-device changes: each capture thread re-checks the default device
 //! id every ~2s and tears down/re-opens on change (headset plugged in,
 //! Bluetooth switch). A re-open that keeps failing marks the current segment
 //! incomplete and ultimately fails the capture - flagged, never silent.
 
-#![cfg(windows)]
 
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};

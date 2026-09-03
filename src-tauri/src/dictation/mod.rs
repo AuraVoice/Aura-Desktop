@@ -1,6 +1,7 @@
 //! Hold-to-talk dictation.
 //!
-//! Hold the chord (`chord::DICTATION_CHORD`, "Ctrl + Win" by default), speak,
+//! Hold the chord (`chord::DICTATION_CHORD`; Ctrl + Win on Windows, the same
+//! two physical keys as Control + Command on macOS), speak,
 //! release, and the words are typed into whatever application had focus before
 //! the keys went down. Still completely separate from the screen-aware voice
 //! buddy: no LiveKit, no OpenAI, no voice bar, no overlay presentation, no
@@ -50,26 +51,17 @@
 
 pub mod chord;
 
-#[cfg(windows)]
 pub(crate) mod asr;
-#[cfg(windows)]
 mod audio;
-#[cfg(windows)]
 mod consent;
-#[cfg(windows)]
 mod credential;
 #[cfg(windows)]
 pub mod import_traces;
 pub mod history;
-#[cfg(windows)]
 mod hud;
-#[cfg(windows)]
 mod insert;
-#[cfg(windows)]
 mod usage;
-#[cfg(windows)]
 mod vocab;
-#[cfg(windows)]
 pub mod polish;
 
 use serde::{Deserialize, Serialize};
@@ -106,10 +98,10 @@ impl DictationStatus {
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 pub use platform::{is_holding_text, signal, start, DictationHandle};
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 mod platform {
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};
@@ -150,9 +142,9 @@ mod platform {
     /// survive a slow link, short enough that a wedged socket does not leave
     /// the user staring at a HUD.
     const FINAL_TIMEOUT: Duration = Duration::from_millis(2500);
-    /// Budget for draining the packet WASAPI still holds when the chord comes
-    /// up. Without it a user who releases the instant they stop speaking loses
-    /// the last word.
+    /// Budget for draining the packet the audio device still holds when the
+    /// chord comes up. Without it a user who releases the instant they stop
+    /// speaking loses the last word.
     const TAIL_DRAIN: Duration = Duration::from_millis(80);
     /// How often the microphone level is pushed at the HUD's waveform. The
     /// device delivers every 20 to 30ms, which is more than the canvas can use:
@@ -171,6 +163,12 @@ mod platform {
     const SIGN_IN_REASON: &str = "Sign in to use dictation.";
     const UNAVAILABLE_REASON: &str = "Dictation credential unavailable. Try again shortly.";
     const UNAVAILABLE_HUD: &str = "Dictation credential unavailable. Nothing was typed.";
+    /// Shown once the user has been prompted for Accessibility and has not
+    /// granted it yet. Names the pane rather than the API, since that is what
+    /// they have to go and find.
+    #[cfg(target_os = "macos")]
+    const ACCESSIBILITY_HUD: &str =
+        "Allow Aura under Privacy & Security > Accessibility to type what you say.";
 
     enum Message {
         Chord(ChordSignal),
@@ -303,6 +301,9 @@ mod platform {
         rx: Receiver<Message>,
         status: Arc<Mutex<DictationStatus>>,
     ) {
+        // WASAPI is COM, and every call below happens on this thread. macOS
+        // has no apartment to join, so this is the whole of the difference.
+        #[cfg(windows)]
         if wasapi::initialize_mta().is_err() {
             set_status(&status, DictationStatus::unavailable("COM init failed"));
             return;
@@ -661,6 +662,29 @@ mod platform {
         // module does can change what "the app the user was in" means.
         let target = insert::foreground_window();
         let app_key = crate::system_control::process_stem_for_window(target);
+
+        // Preflight 0 (macOS): the Accessibility grant. Without it CGEvent
+        // cannot post keystrokes and the focus probe reads nothing, so the
+        // hold would capture and transcribe and then have nowhere to put the
+        // words. Prompting HERE rather than at launch means the system dialog
+        // appears the first time the user actually reaches for dictation,
+        // instead of ambushing everyone who never uses it.
+        #[cfg(target_os = "macos")]
+        if !crate::macos_ax::is_trusted(true) {
+            let shutting_down = drain_until_release(rx);
+            hud::show(app, target);
+            info!("dictation: phase=preflight blocked=accessibility_not_granted");
+            hold_failure(
+                app,
+                generation,
+                failed,
+                Vec::new(),
+                "permission",
+                ACCESSIBILITY_HUD,
+            );
+            refresh_status(app, status);
+            return shutting_down;
+        }
 
         // Preflight 1: consent. No microphone is opened, no HUD "listening"
         // state is entered, and no byte of audio exists at this point.
@@ -1174,10 +1198,10 @@ mod platform {
     }
 }
 
-#[cfg(not(windows))]
-pub use stub::{signal, start, DictationHandle};
+#[cfg(not(any(windows, target_os = "macos")))]
+pub use stub::{is_holding_text, signal, start, DictationHandle};
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 mod stub {
     use tauri::AppHandle;
 
@@ -1200,9 +1224,15 @@ mod stub {
 
     pub fn signal(_chord_signal: ChordSignal) {}
 
+    pub fn is_holding_text() -> bool {
+        false
+    }
+
     pub fn start(_app: AppHandle) -> DictationHandle {
         DictationHandle {
-            status: DictationStatus::unavailable("Dictation is available on Windows only."),
+            status: DictationStatus::unavailable(
+                "Dictation is available on Windows and macOS only.",
+            ),
         }
     }
 }
@@ -1213,17 +1243,17 @@ pub fn dictation_status(
     state: tauri::State<'_, DictationHandle>,
 ) -> DictationStatus {
     state.refresh(&app);
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     {
         with_listener_health(&app, state.status())
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         state.status()
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 const LISTENER_UNAVAILABLE_REASON: &str =
     "Keyboard listener unavailable. Restart Aura. If this continues, another security tool may be blocking keyboard access.";
 
@@ -1232,7 +1262,7 @@ const LISTENER_UNAVAILABLE_REASON: &str =
 /// and sent to Sentry, but the UI flattened all of them into one sentence, so
 /// the one question a support report needs to answer - WHICH step failed -
 /// was the only thing the user could not see.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn listener_unavailable_reason(detail: Option<String>) -> String {
     match detail {
         Some(detail) if !detail.trim().is_empty() => {
@@ -1242,11 +1272,11 @@ fn listener_unavailable_reason(detail: Option<String>) -> String {
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 static LAST_EMITTED_STATUS: std::sync::OnceLock<std::sync::Mutex<Option<DictationStatus>>> =
     std::sync::OnceLock::new();
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 fn with_listener_health(app: &tauri::AppHandle, mut status: DictationStatus) -> DictationStatus {
     if let Some(listener) = app.try_state::<crate::voice_toggle_key::VoiceToggleKeyHandle>() {
         let listener_status = listener.status();
@@ -1256,10 +1286,24 @@ fn with_listener_health(app: &tauri::AppHandle, mut status: DictationStatus) -> 
             status.biasing_available = false;
         }
     }
+    // The Accessibility grant, checked SILENTLY here. This runs on every status
+    // poll, including the Dictation settings page's, and the prompting form
+    // belongs to the first hold instead (see run_utterance's preflight 0) - a
+    // status read must never put a system dialog on screen.
+    #[cfg(target_os = "macos")]
+    if status.available && !crate::macos_ax::is_trusted(false) {
+        status.available = false;
+        status.reason = Some(
+            "Aura needs Accessibility access to type what you say. Allow it under \
+             Privacy & Security > Accessibility."
+                .to_string(),
+        );
+        status.biasing_available = false;
+    }
     status
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 pub fn emit_status_changed(app: &tauri::AppHandle) {
     let Some(handle) = app.try_state::<DictationHandle>() else { return };
     let next = with_listener_health(app, handle.status());
@@ -1283,7 +1327,7 @@ pub struct DictationUsageEntry {
 pub async fn dictation_usage_entries(
     app: tauri::AppHandle,
 ) -> Result<Vec<DictationUsageEntry>, String> {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     {
         let Some(uid) = crate::security::current_uid(&app) else {
             return Ok(Vec::new());
@@ -1292,7 +1336,7 @@ pub async fn dictation_usage_entries(
             .await
             .map_err(|error| format!("dictation usage task failed: {error}"))?
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = app;
         Ok(Vec::new())
@@ -1309,13 +1353,13 @@ pub struct ConsentState {
 
 #[tauri::command]
 pub async fn dictation_consent_state(app: tauri::AppHandle) -> Result<ConsentState, String> {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     {
         Ok(ConsentState {
             accepted: consent::is_accepted(&app),
         })
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = app;
         Ok(ConsentState { accepted: false })
@@ -1334,7 +1378,7 @@ pub async fn dictation_set_consent(
     state: tauri::State<'_, DictationHandle>,
     accepted: bool,
 ) -> Result<ConsentState, String> {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     {
         log::info!("dictation: consent answered accepted={accepted}");
         let accepted = consent::set_accepted(&app, accepted)?;
@@ -1344,7 +1388,7 @@ pub async fn dictation_set_consent(
         hud::publish(&app, hud::HudUpdate::new(hud::HudPhase::Idle));
         Ok(ConsentState { accepted })
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (app, state, accepted);
         Err(NOT_SUPPORTED.to_string())
@@ -1363,7 +1407,7 @@ pub async fn dictation_set_credential(
     access_token: String,
     ttl_seconds: u64,
 ) -> Result<(), String> {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     {
         if access_token.trim().is_empty() {
             return Err("the dictation credential is empty".to_string());
@@ -1372,7 +1416,7 @@ pub async fn dictation_set_credential(
         state.refresh(&app);
         Ok(())
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (app, state, access_token, ttl_seconds);
         Err(NOT_SUPPORTED.to_string())
@@ -1386,13 +1430,13 @@ pub async fn dictation_clear_credential(
     app: tauri::AppHandle,
     state: tauri::State<'_, DictationHandle>,
 ) -> Result<(), String> {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     {
         credential::clear();
         state.refresh(&app);
         Ok(())
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (app, state);
         Ok(())
@@ -1402,51 +1446,51 @@ pub async fn dictation_clear_credential(
 /// The HUD's current state. The persistent window calls this once on mount so
 /// it does not depend on winning a race with its first event. A couple of cheap
 /// synchronous reads behind one mutex, so this one stays non-async.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 #[tauri::command]
 pub fn dictation_hud_state() -> hud::HudUpdate {
     hud::last_update()
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 #[tauri::command]
 pub fn dictation_set_hud_hovered(app: tauri::AppHandle, hovered: bool) {
     hud::set_hovered(&app, hovered);
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 pub(crate) fn show_hud(app: &tauri::AppHandle) {
     hud::show_idle(app);
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 pub(crate) fn refresh_hud_placement(app: &tauri::AppHandle) {
     hud::refresh_placement(app);
 }
 
 /// Mutual exclusivity with the Buddy agent overlay: called from
 /// `overlay::apply_result` on every real presentation transition.
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "macos"))]
 pub(crate) fn set_overlay_visible(app: &tauri::AppHandle, visible: bool) {
     hud::set_overlay_suppressed(app, visible);
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub(crate) fn show_hud(_app: &tauri::AppHandle) {}
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub(crate) fn refresh_hud_placement(_app: &tauri::AppHandle) {}
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 pub(crate) fn set_overlay_visible(_app: &tauri::AppHandle, _visible: bool) {}
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 #[tauri::command]
 pub fn dictation_hud_state() -> DictationStatus {
     DictationStatus::unavailable(NOT_SUPPORTED)
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 #[tauri::command]
 pub fn dictation_set_hud_hovered(_hovered: bool) {}
 
@@ -1459,12 +1503,12 @@ pub struct VocabularyView {
     pub apps: std::collections::HashMap<String, Vec<String>>,
 }
 
-#[cfg(not(windows))]
-const NOT_SUPPORTED: &str = "Dictation is available on Windows only.";
+#[cfg(not(any(windows, target_os = "macos")))]
+const NOT_SUPPORTED: &str = "Dictation is available on Windows and macOS only.";
 
 #[tauri::command]
 pub async fn dictation_vocabulary(app: tauri::AppHandle) -> Result<VocabularyView, String> {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     {
         let store = vocab::load_vocab(&app)?;
         Ok(VocabularyView {
@@ -1472,7 +1516,7 @@ pub async fn dictation_vocabulary(app: tauri::AppHandle) -> Result<VocabularyVie
             apps: store.apps,
         })
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = app;
         Err(NOT_SUPPORTED.to_string())
@@ -1487,11 +1531,11 @@ pub async fn dictation_add_vocabulary(
     app_key: Option<String>,
     phrases: Vec<String>,
 ) -> Result<usize, String> {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     {
         vocab::add_phrases(&app, app_key.as_deref(), &phrases)
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (app, app_key, phrases);
         Err(NOT_SUPPORTED.to_string())
@@ -1504,7 +1548,6 @@ pub async fn dictation_add_vocabulary(
 /// `#[tauri::command]` generates companion items alongside each function that
 /// `generate_handler!` resolves by module path, so a plain `pub use` of the
 /// functions alone leaves those behind.
-#[cfg(windows)]
 pub mod polish_commands {
     use serde::Serialize;
 
@@ -1576,52 +1619,6 @@ pub mod polish_commands {
     }
 }
 
-/// Same four commands, resolvable by `generate_handler!` on targets where the
-/// polish worker does not exist. Settings read as disabled, writes and the
-/// credential push report NOT_SUPPORTED / no-op, matching the other stubbed
-/// dictation commands above.
-#[cfg(not(windows))]
-pub mod polish_commands {
-    use serde::Serialize;
-
-    #[derive(Serialize)]
-    #[serde(rename_all = "camelCase")]
-    pub struct PolishSettingsView {
-        pub enabled: bool,
-    }
-
-    #[tauri::command]
-    pub async fn dictation_polish_settings(
-        _app: tauri::AppHandle,
-    ) -> Result<PolishSettingsView, String> {
-        Ok(PolishSettingsView { enabled: false })
-    }
-
-    #[tauri::command]
-    pub async fn dictation_set_polish_settings(
-        _app: tauri::AppHandle,
-        enabled: bool,
-    ) -> Result<PolishSettingsView, String> {
-        let _ = enabled;
-        Err(super::NOT_SUPPORTED.to_string())
-    }
-
-    #[tauri::command]
-    pub async fn dictation_set_polish_credential(
-        _app: tauri::AppHandle,
-        id_token: String,
-        ttl_seconds: u32,
-    ) -> Result<(), String> {
-        let _ = (id_token, ttl_seconds);
-        Ok(())
-    }
-
-    #[tauri::command]
-    pub async fn dictation_clear_polish_credential(_app: tauri::AppHandle) -> Result<(), String> {
-        Ok(())
-    }
-}
-
 /// Records one confirmed correction. It only starts being applied once the same
 /// pair has been confirmed three times.
 #[tauri::command]
@@ -1630,11 +1627,11 @@ pub async fn dictation_record_correction(
     heard: String,
     replacement: String,
 ) -> Result<u32, String> {
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "macos"))]
     {
         vocab::record_correction(&app, &heard, &replacement)
     }
-    #[cfg(not(windows))]
+    #[cfg(not(any(windows, target_os = "macos")))]
     {
         let _ = (app, heard, replacement);
         Err(NOT_SUPPORTED.to_string())

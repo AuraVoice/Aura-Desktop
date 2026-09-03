@@ -173,6 +173,10 @@ pub fn read_segment(
     read_and_verify(app, &stored)
 }
 
+// Off Windows the `plain` binding below is initialised by a diverging block, so
+// it is never read and everything after it is unreachable. Both go away once
+// the segment cipher is cross-platform; keep the scope to this one function.
+#[cfg_attr(not(windows), allow(unused_variables, unreachable_code))]
 fn read_and_verify(app: &AppHandle, stored: &StoredSegment) -> Result<Vec<u8>, String> {
     if !stored.local_present {
         return Err("segment retention window has expired".to_string());
@@ -185,7 +189,6 @@ fn read_and_verify(app: &AppHandle, stored: &StoredSegment) -> Result<Vec<u8>, S
     if format!("{:x}", Sha256::digest(&encrypted)) != stored.metadata.encrypted_sha256 {
         return Err("encrypted segment integrity check failed".to_string());
     }
-    #[cfg(windows)]
     let plain = {
         let key = super::crypto::load_or_create_key(app)?;
         if stored.metadata.encryption_version >= 2 {
@@ -193,11 +196,6 @@ fn read_and_verify(app: &AppHandle, stored: &StoredSegment) -> Result<Vec<u8>, S
         } else {
             super::crypto::decrypt(&key, &encrypted)?
         }
-    };
-    #[cfg(not(windows))]
-    let plain: Vec<u8> = {
-        let _ = app;
-        return Err("meeting capture is Windows-only".to_string());
     };
     if plain.len() as u64 != stored.metadata.byte_length {
         return Err("plaintext segment length check failed".to_string());
@@ -217,7 +215,6 @@ pub fn interrupt_orphaned_captures(
 
 pub fn reconcile(app: &AppHandle) -> Result<ReconciliationReport, String> {
     let store = store(app)?;
-    #[cfg(windows)]
     {
         let key = super::crypto::load_or_create_key(app)?;
         store.reconcile(|metadata, encrypted| {
@@ -227,11 +224,6 @@ pub fn reconcile(app: &AppHandle) -> Result<ReconciliationReport, String> {
                 super::crypto::decrypt(&key, encrypted)
             }
         })
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = store;
-        Ok(ReconciliationReport::default())
     }
 }
 
@@ -274,7 +266,6 @@ pub fn export_bundle(
         .map_err(|error| error.to_string())?
         .join("Aura Recordings");
     let store = store(app)?;
-    #[cfg(windows)]
     {
         let key = super::crypto::load_or_create_key(app)?;
         store.export_bundle(
@@ -295,35 +286,13 @@ pub fn export_bundle(
             },
         )
     }
-    #[cfg(not(windows))]
-    {
-        let _ = (
-            owner_uid,
-            meeting_id,
-            capture_run_id,
-            include_audio,
-            sanitized_log_lines,
-            destination_root,
-            store,
-        );
-        Err("meeting export is Windows-only".to_string())
-    }
 }
 
 pub fn installation_id(app: &AppHandle) -> Result<String, String> {
-    #[cfg(windows)]
     {
         let key = super::crypto::load_or_create_key(app)?;
         let digest = format!("{:x}", Sha256::digest(key));
         Ok(format!("install_{}", &digest[..32]))
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = app;
-        Ok(format!(
-            "install_{}",
-            super::evidence_store::random_hex(16)?
-        ))
     }
 }
 
