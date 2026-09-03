@@ -25,7 +25,7 @@ const QUIT: &str = "quit";
 /// user has to actually click.
 pub struct UpdateMenuItem(pub MenuItem<Wry>);
 
-/// Handle to the "Start with Windows" checkbox, so `sync_autostart_item`
+/// Handle to the "start at login" checkbox, so `sync_autostart_item`
 /// (called from autostart.rs after every enable/disable attempt) can keep the
 /// check mark matched to the real registry state without rebuilding the menu.
 pub struct AutostartMenuItem(pub CheckMenuItem<Wry>);
@@ -74,7 +74,9 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     let autostart_item = CheckMenuItem::with_id(
         app,
         AUTOSTART,
-        "Start with Windows",
+        // The plugin launches Aura at login on both platforms
+        // (MacosLauncher::LaunchAgent), so only the word for it differs.
+        if cfg!(target_os = "macos") { "Open at Login" } else { "Start with Windows" },
         true,
         autostart::is_enabled(app),
         None::<&str>,

@@ -44,6 +44,30 @@ const CHAT_DEFAULT_ACCELERATOR: &str = "Control+Alt+Space";
 #[cfg(target_os = "macos")]
 const CHAT_DEFAULT_ACCELERATOR: &str = "Alt+Space";
 
+/// The voice trigger a fresh install starts on.
+///
+/// Windows keeps the Left Ctrl double-tap. macOS deliberately does NOT: a
+/// double-tapped bare modifier cannot be expressed as a registered shortcut, so
+/// it needs the CGEventTap in voice_toggle_key.rs, and that tap needs the Input
+/// Monitoring TCC grant plus a relaunch before it delivers anything. Shipping it
+/// as the default meant every new Mac user's headline feature was dead until
+/// they found a System Settings pane nothing had pointed them at.
+///
+/// A real chord costs nothing: tauri-plugin-global-shortcut registers it through
+/// Carbon RegisterEventHotKey, which is not TCC-gated at all. Control+Alt+KeyV
+/// matches the existing Control+Alt+<letter> family (D/S/G/M) and collides with
+/// no macOS system binding. Double-tap stays available as an opt-in that asks
+/// for the permission at the moment the user picks it.
+#[cfg(not(target_os = "macos"))]
+pub const VOICE_DEFAULT_ACCELERATOR: &str = "ControlLeft";
+#[cfg(target_os = "macos")]
+pub const VOICE_DEFAULT_ACCELERATOR: &str = "Control+Alt+KeyV";
+
+/// The sentinel that matches what `voice_toggle_key::use_default_toggle_key`
+/// parks the hook on. The two must stay in step: the stored string is what the
+/// next launch reads back to recompute the same VK.
+const DOUBLE_TAP_FALLBACK: &str = "ControlLeft";
+
 struct HotkeySpec {
     id: &'static str,
     label: &'static str,
@@ -295,25 +319,32 @@ pub fn initialize(app: &AppHandle) {
                 if unique { runtime.bindings = candidates; }
             }
         }
-        if let Some(accelerator) = store.get(VOICE_KEY_SETTING).and_then(|value| value.as_str().map(str::to_string)) {
-            if !DOUBLE_TAP_SENTINELS.contains(&accelerator.as_str()) {
-                if let Ok(shortcut) = Shortcut::from_str(&accelerator) {
-                    if validate_shortcut(shortcut).is_ok()
-                        && !runtime.bindings.values().any(|binding| binding == &shortcut)
-                    {
-                        runtime.voice_binding = Some(shortcut);
-                    } else {
+        // No saved value means a fresh install, which takes this platform's
+        // default rather than falling through to the double-tap hook.
+        let accelerator = store
+            .get(VOICE_KEY_SETTING)
+            .and_then(|value| value.as_str().map(str::to_string))
+            .unwrap_or_else(|| VOICE_DEFAULT_ACCELERATOR.to_string());
+        if !DOUBLE_TAP_SENTINELS.contains(&accelerator.as_str()) {
+            let usable = Shortcut::from_str(&accelerator).ok().filter(|shortcut| {
+                validate_shortcut(*shortcut).is_ok()
+                    && !runtime.bindings.values().any(|binding| binding == shortcut)
+            });
+            match usable {
+                Some(shortcut) => runtime.voice_binding = Some(shortcut),
+                None => {
+                    // Repair to this platform's default, not a hardcoded
+                    // "ControlLeft": on macOS that literal would drop the user
+                    // back onto the permission-gated double-tap, which is
+                    // exactly what the default moved away from.
+                    if DOUBLE_TAP_SENTINELS.contains(&VOICE_DEFAULT_ACCELERATOR) {
                         crate::voice_toggle_key::use_default_toggle_key();
-                        store.set(VOICE_KEY_SETTING, serde_json::json!("ControlLeft"));
-                        if let Err(e) = store.save() {
-                            log::error!("hotkeys: failed to repair invalid saved voice shortcut: {e}");
-                        }
+                    } else if let Ok(fallback) = Shortcut::from_str(VOICE_DEFAULT_ACCELERATOR) {
+                        runtime.voice_binding = Some(fallback);
                     }
-                } else {
-                    crate::voice_toggle_key::use_default_toggle_key();
-                    store.set(VOICE_KEY_SETTING, serde_json::json!("ControlLeft"));
+                    store.set(VOICE_KEY_SETTING, serde_json::json!(VOICE_DEFAULT_ACCELERATOR));
                     if let Err(e) = store.save() {
-                        log::error!("hotkeys: failed to repair malformed saved voice shortcut: {e}");
+                        log::error!("hotkeys: failed to repair unusable saved voice shortcut: {e}");
                     }
                 }
             }
@@ -343,7 +374,7 @@ pub fn initialize(app: &AppHandle) {
                 runtime.voice_binding = None;
                 crate::voice_toggle_key::use_default_toggle_key();
                 if let Ok(store) = app.store(HOTKEY_STORE) {
-                    store.set(VOICE_KEY_SETTING, serde_json::json!("ControlLeft"));
+                    store.set(VOICE_KEY_SETTING, serde_json::json!(DOUBLE_TAP_FALLBACK));
                     if let Err(e) = store.save() {
                         log::error!("hotkeys: failed to persist voice shortcut fallback: {e}");
                     }

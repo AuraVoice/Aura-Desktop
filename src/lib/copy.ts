@@ -1,4 +1,4 @@
-import { deviceNoun, primaryModifierLabel, trayNoun } from "./platformKeys";
+import { deviceNoun, trayNoun } from "./platformKeys";
 /** Verbatim UI copy ported from the Flutter app's desktop screens/widgets. Don't paraphrase - these strings are already product-tuned. */
 
 export const overlayStorePath = "overlay-window.json";
@@ -86,7 +86,12 @@ export const onboarding = {
     headingAccent: "Meet Buddy",
     headingTail: `, your AI companion on this ${deviceNoun()}.`,
     body: "Talk things through, get help, and complete tasks without leaving the screen you're on.",
-    trayHint: `Buddy lives in your ${trayNoun()}. Double-tap ${primaryModifierLabel()} anytime to start talking.`,
+    // Takes the live trigger phrase (voiceTriggerPhrase in lib/hotkeys.ts)
+    // rather than primaryModifierLabel(): the trigger is user-configurable, and
+    // the macOS default is now a chord, so neither the verb "Double-tap" nor a
+    // bare modifier name can be baked in here.
+    trayHint: (trigger: string) =>
+      `Buddy lives in your ${trayNoun()}. ${trigger} anytime to start talking.`,
     button: "Get set up",
     skipLink: "Already have Aura? Link now",
     googleSignupLink: "New here? Sign up with Google",
@@ -137,7 +142,8 @@ export const role = {
 // The live "talk to Buddy" demo step, shown right after sign-in.
 export const agentDemo = {
   heading: "Say hi to Buddy",
-  body: `Double-tap ${primaryModifierLabel()}, or hit the button, and just start talking. End it whenever you're ready.`,
+  body: (trigger: string) =>
+    `${trigger}, or hit the button, and just start talking. End it whenever you're ready.`,
   start: "Start talking",
   finish: "Finish",
   skip: "Skip for now",
@@ -148,7 +154,8 @@ export const agentDemo = {
   thinking: "Buddy is thinking",
   buddyTalking: "Buddy is talking",
   timeWarning: "You can keep talking. This intro will end in",
-  timeEnded: `Nice talking with you. Your intro session has ended. You can talk to Buddy anytime with ${primaryModifierLabel()}.`,
+  timeEnded: (trigger: string) =>
+    `Nice talking with you. Your intro session has ended. You can talk to Buddy anytime: ${trigger.toLowerCase()}.`,
   continue: "Continue",
   errorHint: "Couldn't start the call. Check your mic, or skip for now.",
 } as const;

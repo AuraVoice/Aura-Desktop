@@ -3671,6 +3671,19 @@
      space-between would otherwise strand the keys in the middle. */
   margin-left: auto;
 }
+/* A shortcut the OS refused, or a chord for a feature this platform does not
+   have. Keycaps read as "press me", so the ones that cannot be pressed are
+   dimmed and the reason sits beside them rather than only in a log. */
+.db-shortcut-keys-inert {
+  opacity: 0.45;
+}
+.db-shortcut-unavailable {
+  flex-shrink: 0;
+  margin-left: 10px;
+  color: #a54640;
+  font-size: 12px;
+  font-weight: 500;
+}
 .db-shortcut-change {
   flex-shrink: 0;
   padding: 7px 13px;

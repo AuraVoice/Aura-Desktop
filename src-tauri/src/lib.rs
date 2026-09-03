@@ -407,6 +407,8 @@ pub fn run() {
             meeting::debug_force_join,
             voice_toggle_key::voice_toggle_key_status,
             voice_toggle_key::set_voice_toggle_key,
+            voice_toggle_key::voice_toggle_key_permission,
+            voice_toggle_key::voice_toggle_key_request_permission,
             hotkeys::hotkey_bindings,
             hotkeys::set_hotkey_binding,
             hotkeys::reset_hotkey_bindings,
@@ -635,8 +637,8 @@ pub fn run() {
 
             info!("Aura Desktop is ready and running in the tray.");
             info!(
-                "Double-tap {} to start voice, or left-click the Aura tray icon to show the bar.",
-                voice_toggle_key::configured_key_label()
+                "{} to start voice, or left-click the Aura tray icon to show the bar.",
+                voice_toggle_key::trigger_hint(&app.state::<hotkeys::HotkeyState>())
             );
 
             Ok(())

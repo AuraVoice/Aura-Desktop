@@ -60,6 +60,34 @@ export function updateVoiceToggleKey(keyCode: string): Promise<VoiceToggleKeySta
   return invoke<VoiceToggleKeyStatus>("set_voice_toggle_key", { keyCode });
 }
 
+/** How to tell the user to fire the voice trigger, matching whichever gesture
+ * it is actually on: "Double-tap Left Ctrl" or "Press Ctrl + Option + V".
+ * Copy must never hardcode a key - the trigger is configurable, and the macOS
+ * default is a chord rather than the Windows double-tap. Falls back to a
+ * key-free phrase while the status is still loading. */
+export function voiceTriggerPhrase(voice: VoiceToggleKeyStatus | null): string {
+  if (!voice || voice.keys.length === 0) return "Use your voice shortcut";
+  const label = voice.gesture === "doubleTap" ? voice.keyLabel : voice.keys.join(" + ");
+  return voice.gesture === "doubleTap" ? `Double-tap ${label}` : `Press ${label}`;
+}
+
+/** What the double-tap gesture needs from the OS. Mirrors DoubleTapPermission
+ * in src-tauri/src/voice_toggle_key.rs. A registered chord needs nothing, so
+ * this only ever matters once the user chooses a double-tap preset. */
+export interface DoubleTapPermission {
+  granted: boolean;
+  required: boolean;
+  needsRelaunch: boolean;
+}
+
+export function loadDoubleTapPermission(): Promise<DoubleTapPermission> {
+  return invoke<DoubleTapPermission>("voice_toggle_key_permission");
+}
+
+export function requestDoubleTapPermission(): Promise<DoubleTapPermission> {
+  return invoke<DoubleTapPermission>("voice_toggle_key_request_permission");
+}
+
 const MODIFIER_CODES = [
   "ControlLeft", "ControlRight",
   "AltLeft", "AltRight",

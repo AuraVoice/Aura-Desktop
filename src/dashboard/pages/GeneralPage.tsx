@@ -302,6 +302,11 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
                     {voiceHotkey.keys.map((key, index) => <kbd key={`${key}:${index}`}>{key}</kbd>)}
                     {voiceHotkey.gesture === "doubleTap" && <kbd>twice</kbd>}
                   </span>
+                  {!voiceHotkey.available && (
+                    <span className="db-shortcut-unavailable">
+                      {voiceHotkey.reason ?? "This voice trigger is unavailable."}
+                    </span>
+                  )}
                   <button
                     type="button"
                     className="db-shortcut-change"
@@ -317,6 +322,11 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
                   <span className="db-shortcut-keys">
                     {binding.keys.map((key, index) => <kbd key={`${key}:${index}`}>{key}</kbd>)}
                   </span>
+                  {!binding.registered && (
+                    <span className="db-shortcut-unavailable">
+                      Another app is holding this one.
+                    </span>
+                  )}
                   <button
                     type="button"
                     className="db-shortcut-change"
@@ -356,7 +366,7 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
             <div className="db-panel db-shortcut-list">
               <div className="db-shortcut-row">
                 <span>{chordCopy.rowLabel}</span>
-                <span className="db-shortcut-keys">
+                <span className={`db-shortcut-keys${dictationStatus?.available === false ? " db-shortcut-keys-inert" : ""}`}>
                   {chordKeysOf(dictationStatus).map((key) => (
                     <kbd key={key}>{key}</kbd>
                   ))}

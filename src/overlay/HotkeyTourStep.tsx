@@ -259,9 +259,13 @@ export function HotkeyTourStep({ keyLabel, onContinue }: HotkeyTourStepProps) {
                 ? screen === "voice"
                   ? "That's it. Buddy is listening whenever you do that."
                   : "That's it. Text chat is one shortcut away."
-                : !testReady
-                  ? "Getting shortcut ready..."
-                  : isDoubleTap ? "Double-tap it now" : "Press it now"}
+                : !currentAvailable
+                  // The unavailable message below says why and what to do instead.
+                  // Asking for a press that cannot register would contradict it.
+                  ? ""
+                  : !testReady
+                    ? "Getting shortcut ready..."
+                    : isDoubleTap ? "Double-tap it now" : "Press it now"}
             </p>
 
             {!currentAvailable && (

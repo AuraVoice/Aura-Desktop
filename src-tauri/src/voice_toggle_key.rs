@@ -41,6 +41,17 @@ pub fn configured_key_label() -> &'static str {
     }
 }
 
+/// How to describe the voice trigger in a whole sentence. The double-tap
+/// gesture and a registered chord need different verbs, so nothing may assume
+/// "Double-tap " + `configured_key_label()`: with a chord that reads
+/// "Double-tap custom shortcut", which is neither the gesture nor the keys.
+pub fn trigger_hint(hotkeys: &crate::hotkeys::HotkeyState) -> String {
+    match crate::hotkeys::voice_binding(hotkeys) {
+        Some((_, keys, _)) => format!("Press {}", keys.join(" + ")),
+        None => format!("Double-tap {}", configured_key_label()),
+    }
+}
+
 /// The accelerator sentinel matching the key the hook is currently watching.
 /// Inverse of `vk_for_sentinel`.
 fn configured_key_accelerator() -> &'static str {
@@ -264,17 +275,75 @@ pub fn voice_toggle_key_status(
     status
 }
 
+/// What the double-tap gesture needs from the OS before it can work, so the
+/// settings UI can ask at the moment the user picks it rather than at launch.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DoubleTapPermission {
+    /// False only where a grant is actually required and missing.
+    pub granted: bool,
+    /// True when the platform gates the listener behind a TCC-style grant, so
+    /// the UI knows whether to explain anything at all.
+    pub required: bool,
+    /// True when a granted permission only takes effect after the app restarts.
+    pub needs_relaunch: bool,
+}
+
+fn double_tap_permission(granted: bool) -> DoubleTapPermission {
+    DoubleTapPermission {
+        granted,
+        required: cfg!(target_os = "macos"),
+        needs_relaunch: cfg!(target_os = "macos") && !granted,
+    }
+}
+
+#[tauri::command]
+pub fn voice_toggle_key_permission() -> DoubleTapPermission {
+    double_tap_permission(platform::permission_granted())
+}
+
+/// Raises the OS prompt for the double-tap listener. On macOS the returned
+/// `granted` stays false for the rest of this process even once the user flips
+/// the switch, because the grant is read at launch - `needs_relaunch` is how the
+/// UI knows to say so instead of waiting for a change that cannot arrive.
+#[tauri::command]
+pub fn voice_toggle_key_request_permission() -> DoubleTapPermission {
+    double_tap_permission(platform::request_permission())
+}
+
 pub fn start(app: AppHandle) -> VoiceToggleKeyHandle {
+    // Defaults to true so a store that will not open keeps the old behavior of
+    // installing the listener rather than silently leaving the user with no
+    // trigger at all.
+    let mut double_tap = true;
     if let Ok(store) = app.store(VOICE_KEY_STORE) {
         let saved = store.get(VOICE_KEY_SETTING).and_then(|value| value.as_str().map(str::to_string));
         // A custom modifier+key shortcut parks the hook on vk 0, which no key
         // ever reports, so the double-tap path can never fire alongside it.
         let vk = match saved.as_deref() {
-            None => VK_LCONTROL_CODE,
+            None => vk_for_sentinel(crate::hotkeys::VOICE_DEFAULT_ACCELERATOR).unwrap_or(0),
             Some(accelerator) => vk_for_sentinel(accelerator).unwrap_or(0),
         };
         VOICE_TOGGLE_VK.store(vk, Ordering::Relaxed);
+        double_tap = vk != 0;
     }
+    // Today the macOS CGEventTap serves exactly one feature: seeing a bare
+    // modifier tapped twice, which no registered shortcut can express. Creating
+    // it costs the user an Input Monitoring grant AND a relaunch, while a real
+    // chord goes through Carbon RegisterEventHotKey, which is not TCC-gated. So
+    // when a chord is the configured trigger the tap must not be built and its
+    // permission must not be demanded.
+    //
+    // Windows is excluded because its hook ALSO feeds the dictation chord, so it
+    // runs either way. macOS will need the same once the dictation chord is
+    // wired there - see MACOS_TAP_DRIVES_DICTATION, which is the one switch to
+    // flip - because the chord's default trigger is now a chord, so the tap
+    // would otherwise be absent exactly when dictation started needing it.
+    #[cfg(target_os = "macos")]
+    if !double_tap && !platform::MACOS_TAP_DRIVES_DICTATION {
+        return platform::idle();
+    }
+    let _ = double_tap;
     platform::start(app)
 }
 
@@ -308,7 +377,7 @@ fn apply_current_binding(status: &mut VoiceToggleKeyStatus, hotkeys: &crate::hot
         status.keys = keys;
         status.gesture = "press".to_string();
         if !registered {
-            status.reason = Some("That shortcut is currently held by Windows or another app.".to_string());
+            status.reason = Some("That shortcut is currently held by another app.".to_string());
         }
     } else {
         let label = configured_key_label().to_string();
@@ -509,6 +578,16 @@ mod platform {
         // The configured Ctrl event always continues to Windows and other apps,
         // whether it became a voice toggle or part of a normal shortcut.
         unsafe { CallNextHookEx(None, code, wparam, lparam) }
+    }
+
+    /// A low-level keyboard hook needs no grant on Windows, so there is never
+    /// anything to ask for.
+    pub fn permission_granted() -> bool {
+        true
+    }
+
+    pub fn request_permission() -> bool {
+        true
     }
 
     pub fn start(app: AppHandle) -> VoiceToggleKeyHandle {
@@ -873,6 +952,9 @@ mod platform {
         // Chord signals are computed for their `engaged` flag only: the
         // dictation worker is not wired up on macOS yet, so signals go
         // nowhere, but an engaged chord must still suppress the voice toggle.
+        // Wiring it means calling crate::dictation::signal here AND setting
+        // MACOS_TAP_DRIVES_DICTATION, or the tap will simply not exist whenever
+        // the voice trigger is a chord, which is the default.
         let outcome = CHORD_STATE.with(|state| state.borrow_mut().observe(vk, is_down, is_up));
         let dictation_engaged = DICTATION_CHORD.suppresses_voice_toggle() && outcome.engaged;
         let is_toggle_key = is_voice_toggle_vk(vk);
@@ -1015,6 +1097,55 @@ mod platform {
         }
     }
 
+    /// No listener, and deliberately no Input Monitoring request: the trigger is
+    /// a registered chord, so the tap would sit there costing a permission
+    /// prompt and delivering nothing.
+    ///
+    /// The status below is what a caller sees ONLY in double-tap mode, because
+    /// `apply_current_binding` replaces every field of it whenever a chord is
+    /// bound. So it must describe the one way this handle and double-tap mode
+    /// can coexist: the chord failed to register, `initialize` fell back to the
+    /// hook, and no hook was ever installed. Claiming `available: true` there
+    /// would report a working trigger that cannot fire.
+    pub fn idle() -> VoiceToggleKeyHandle {
+        VoiceToggleKeyHandle {
+            status: VoiceToggleKeyStatus {
+                available: false,
+                key_label: configured_key_label().to_string(),
+                accelerator: String::new(),
+                keys: Vec::new(),
+                gesture: String::new(),
+                reason: Some(
+                    "Double-tap needs Input Monitoring. Pick a key combination instead, or allow Aura in System Settings and restart it."
+                        .to_string(),
+                ),
+            },
+            run_loop_ptr: 0,
+            listener_thread: None,
+        }
+    }
+
+    /// Whether this tap is load-bearing for anything besides the double-tap
+    /// gesture. False while the macOS dictation chord is unwired (this module
+    /// computes its signals but sends them nowhere). Set it to true in the same
+    /// change that starts calling `crate::dictation::signal` below, so the tap
+    /// keeps being installed even when the voice trigger is a chord.
+    pub const MACOS_TAP_DRIVES_DICTATION: bool = false;
+
+    pub fn permission_granted() -> bool {
+        unsafe { IOHIDCheckAccess(IOHID_REQUEST_TYPE_LISTEN_EVENT) == IOHID_ACCESS_TYPE_GRANTED }
+    }
+
+    /// Fires the one-time system prompt, or just lists Aura in the Input
+    /// Monitoring pane if it has already been answered once. The return value is
+    /// the state as of right now, which stays `false` for the rest of this
+    /// process even after the user flips the switch: the grant is read at
+    /// launch, so it takes a relaunch to land. Callers surface that instead of
+    /// polling for a change that cannot arrive.
+    pub fn request_permission() -> bool {
+        unsafe { IOHIDRequestAccess(IOHID_REQUEST_TYPE_LISTEN_EVENT) }
+    }
+
     fn report_failure(reason: &str) {
         error!("voice_toggle_key: listener unavailable: {reason}");
         if !cfg!(debug_assertions) {
@@ -1043,5 +1174,14 @@ mod platform {
                 reason: Some("Voice key toggling is available on Windows and macOS only.".to_string()),
             },
         }
+    }
+
+    /// There is no listener to permit, so nothing can grant it either.
+    pub fn permission_granted() -> bool {
+        false
+    }
+
+    pub fn request_permission() -> bool {
+        false
     }
 }

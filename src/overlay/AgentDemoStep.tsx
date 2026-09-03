@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { agentDemo as copy } from "../lib/copy";
+import { loadVoiceToggleKey, voiceTriggerPhrase, type VoiceToggleKeyStatus } from "../lib/hotkeys";
 import { trackEvent } from "../lib/analytics";
 import { recordDesktopOnboardingEvent } from "../lib/profile";
 import { outputMuted } from "../lib/outputMode";
@@ -31,6 +32,18 @@ export function AgentDemoStep({ voice, onFinish }: AgentDemoStepProps) {
   const [graceSeconds, setGraceSeconds] = useState(30);
   const [inGracePeriod, setInGracePeriod] = useState(false);
   const [expired, setExpired] = useState(false);
+  // The prompt has to name whichever trigger is actually configured: the macOS
+  // default is a chord, Windows double-taps a modifier, and either can be
+  // rebound. Until it resolves, voiceTriggerPhrase renders a key-free fallback.
+  const [voiceTrigger, setVoiceTrigger] = useState<VoiceToggleKeyStatus | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    void loadVoiceToggleKey()
+      .then((status) => { if (!cancelled) setVoiceTrigger(status); })
+      .catch(() => { if (!cancelled) setVoiceTrigger(null); });
+    return () => { cancelled = true; };
+  }, []);
+  const triggerPhrase = voiceTriggerPhrase(voiceTrigger);
   const isRealtimeLive = voice.realtimeActivity !== null;
   const isLive = isRealtimeLive || LIVE_STATUSES.has(voice.status);
   const isError = voice.status === "error";
@@ -141,14 +154,14 @@ export function AgentDemoStep({ voice, onFinish }: AgentDemoStepProps) {
             ? copy.listening
       : isConnecting
         ? copy.connecting
-        : copy.body;
+        : copy.body(triggerPhrase);
 
   if (expired) {
     return (
       <div className="onboarding-step agent-demo-step">
         <h2 className="onboarding-heading">{copy.heading}</h2>
         <p className="agent-demo-status" aria-live="polite">
-          {copy.timeEnded}
+          {copy.timeEnded(triggerPhrase)}
         </p>
         <button type="button" className="onboarding-primary-button" onClick={onFinish}>
           {copy.continue}

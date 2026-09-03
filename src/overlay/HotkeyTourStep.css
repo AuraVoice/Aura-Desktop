@@ -137,6 +137,8 @@
 }
 
 .hotkey-test-prompt.passed { color: #2f8f6f; font-weight: 600; }
+/* Nothing to prompt when the shortcut cannot register, so do not leave a gap. */
+.hotkey-test-prompt:empty { margin: 0; }
 .hotkey-test-unavailable { margin: 12px 0 0; color: #a54640; font-size: 14px; text-align: center; }
 
 .hotkey-list {

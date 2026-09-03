@@ -1,8 +1,11 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   captureShortcut,
   findConflict,
   isDoubleTapAccelerator,
+  loadDoubleTapPermission,
+  requestDoubleTapPermission,
+  type DoubleTapPermission,
   updateHotkeyBinding,
   updateVoiceToggleKey,
   DOUBLE_TAP_PRESETS,
@@ -46,8 +49,22 @@ export function ShortcutEditorDialog({
   const [candidate, setCandidate] = useState<Candidate | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // Only the double-tap gesture needs an OS grant: it watches raw keystrokes,
+  // which macOS gates behind Input Monitoring. A chord is registered through
+  // Carbon and needs nothing, so this is fetched but only ever shown once a
+  // double-tap preset is the pending pick.
+  const [tapPermission, setTapPermission] = useState<DoubleTapPermission | null>(null);
+  const [permissionAsked, setPermissionAsked] = useState(false);
 
   const isVoice = id === "voice";
+  useEffect(() => {
+    if (!isVoice) return;
+    let cancelled = false;
+    void loadDoubleTapPermission()
+      .then((next) => { if (!cancelled) setTapPermission(next); })
+      .catch(() => { if (!cancelled) setTapPermission(null); });
+    return () => { cancelled = true; };
+  }, [isVoice]);
   const conflict = candidate && !candidate.doubleTap
     ? findConflict(candidate.accelerator, bindings, voice, id)
     : null;
@@ -153,6 +170,33 @@ export function ShortcutEditorDialog({
                 </button>
               ))}
             </div>
+            {candidate?.doubleTap && tapPermission?.required && !tapPermission.granted && (
+              <div className="shortcut-editor-permission">
+                <p>
+                  Double-tap has to watch your keystrokes, so macOS needs to allow it.
+                  A key combination works straight away instead.
+                </p>
+                <button
+                  type="button"
+                  className="shortcut-editor-permission-button"
+                  onClick={() => {
+                    setPermissionAsked(true);
+                    void requestDoubleTapPermission()
+                      .then(setTapPermission)
+                      .catch(() => undefined);
+                  }}
+                >
+                  {permissionAsked ? "Open System Settings again" : "Allow in System Settings"}
+                </button>
+                {permissionAsked && (
+                  // macOS reads this grant once at launch, so it cannot take
+                  // effect in the running process however long we wait.
+                  <p className="shortcut-editor-permission-note">
+                    Turn on Aura under Input Monitoring, then restart Aura to finish.
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         )}
 
