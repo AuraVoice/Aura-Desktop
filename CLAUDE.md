@@ -99,7 +99,7 @@ implementations MUST fail closed: on macOS only `errSecItemNotFound` may mint a 
 Treating a locked or denied keychain as "no key" silently mints a replacement and makes every
 already-sealed row permanently unreadable while new writes look healthy.
 
-**User-visible strings never hardcode a platform.** `src/lib/platform.ts` is the only place that
+**User-visible strings never hardcode a platform.** `src/lib/platformKeys.ts` is the only place that
 knows which OS this is: key labels (Ctrl/Win vs the macOS symbols), `deviceNoun`, `trayNoun`,
 `osName`, the backend and analytics platform tags, and the System Settings deep links. Adding a
 platform-varying string means adding it there, not branching at the call site.
@@ -264,6 +264,13 @@ Signing config lives in the Entra app registration (federated credential subject
 **BEFORE PUBLIC LAUNCH: the certificate is the individual membership's.** Replacing it with the company's Developer ID changes the Team ID, and macOS keys every TCC grant and the login-keychain master key's ACL on that identity. Every beta install will re-prompt for Microphone, Accessibility, Input Monitoring and Screen Recording, plus one keychain "Always Allow", on its first launch after that update. Ship that release with a note that says so; nothing in the code can avoid it. The updater itself is unaffected: it trusts the minisign key, not the Apple one. The same release is the moment to test dropping the unproven JIT entitlements (see `entitlements.plist`).
 
 **Local Mac builds.** `tauri dev` runs an unsigned binary, and every rebuild is a new identity to TCC: Accessibility, Input Monitoring and Screen Recording grants vanish each time, and Sequoia refuses screen capture to ad-hoc binaries entirely. To test permissions or capture, build the real bundle with `APPLE_SIGNING_IDENTITY="Developer ID Application: <name> (<team>)" npm run tauri build -- --target universal-apple-darwin` and run the `.app` from /Applications. A locally built bundle carries no quarantine flag, so it launches without notarization.
+
+The same new-identity rule hits the keychain master key: the item's access list names the binary that created it, so every dev rebuild gets the "aura-desktop wants to use your confidential information" dialog, and it asks for the LOGIN KEYCHAIN password, which is only the Mac password if the two never drifted apart. Nothing in the code can fix that for unsigned builds. On a dev Mac, create the item once with every application trusted, and no rebuild will ever prompt again (a signed release build creates its own item and is never prompted, except once after the Team ID changes):
+
+```
+security delete-generic-password -s com.aura.desktop -a at-rest-master-key   # only if one exists; every key file sealed under it must go too
+security add-generic-password -s com.aura.desktop -a at-rest-master-key -X "$(openssl rand -hex 32)" -A
+```
 
 ### Adding a new Tauri command
 
