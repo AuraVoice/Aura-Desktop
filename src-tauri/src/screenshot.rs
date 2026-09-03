@@ -99,13 +99,42 @@ impl ScreenFrameGeometry {
     }
 }
 
-/// The cursor position in physical screen pixels, read via the main window.
+/// The cursor position in whatever space `xcap`'s `Monitor::from_point` wants,
+/// which is NOT the same space on both platforms. Win32's `MonitorFromPoint`
+/// takes physical pixels; CoreGraphics' `CGGetDisplaysWithPoint` takes points.
+/// Handing one the other's numbers is silent: the lookup simply matches no
+/// display and every capture fails with "Monitor not found".
+#[cfg(not(target_os = "macos"))]
 pub(crate) fn cursor_point(app: &AppHandle) -> Result<(i32, i32), String> {
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "main window not found".to_string())?;
     let cursor = window.cursor_position().map_err(|e| e.to_string())?;
     Ok((cursor.x as i32, cursor.y as i32))
+}
+
+/// Read straight from CoreGraphics rather than through Tauri.
+///
+/// `window.cursor_position()` is wrong here twice over. tao reads
+/// `NSEvent.mouseLocation` (Cocoa, bottom-left origin, points), flips it to
+/// top-left correctly, and then multiplies by the primary display's backing
+/// scale to satisfy the Windows-shaped "physical pixels" contract. On a Retina
+/// Mac that hands `CGGetDisplaysWithPoint` a point twice as far right and down
+/// as the real cursor, so it lands outside the display unless the pointer
+/// happens to be in the top-left quadrant. It also flips against the MAIN
+/// display's height only, so the Y is wrong on any second display that is not
+/// vertically aligned with the primary.
+///
+/// `CGEvent::location` is already in the exact global display space
+/// `Monitor::from_point` looks up in: top-left origin, points, all displays.
+/// No conversion, and nothing to get wrong on a multi-monitor arrangement.
+#[cfg(target_os = "macos")]
+pub(crate) fn cursor_point(_app: &AppHandle) -> Result<(i32, i32), String> {
+    use objc2_core_graphics::CGEvent;
+
+    let event = CGEvent::new(None).ok_or_else(|| "could not read the cursor position".to_string())?;
+    let point = CGEvent::location(Some(&event));
+    Ok((point.x as i32, point.y as i32))
 }
 
 /// The shared middle of every screen-capture command: cursor -> blocking
@@ -259,16 +288,20 @@ fn chat_state(app: &AppHandle) -> Option<tauri::State<'_, ChatCaptureHandle>> {
     app.try_state::<ChatCaptureHandle>()
 }
 
-/// Captures the given monitor point into the pending buffer. Every failure is
-/// non-fatal and leaves the buffer empty: chat still works without a picture,
-/// and the frontend shows no chip rather than a broken one.
-async fn capture_into_pending(app: AppHandle, point: (i32, i32)) {
+/// Captures the given monitor point into the pending buffer.
+///
+/// A failure still leaves the buffer empty rather than breaking chat, so a
+/// message always goes out with or without a picture. What changed is that the
+/// reason is now RETURNED as well as logged: arming the eye and silently
+/// getting nothing looked identical to a working capture, so a broken capture
+/// path went unnoticed until someone read the log.
+async fn capture_into_pending(app: AppHandle, point: (i32, i32)) -> Result<(), String> {
     let ticket = match crate::security::authorize(&app, crate::security::Operation::CaptureChatScreen)
     {
         Ok(ticket) => ticket,
         Err(e) => {
             info!("screenshot: chat capture not authorized ({e})");
-            return;
+            return Err(e);
         }
     };
 
@@ -277,11 +310,11 @@ async fn capture_into_pending(app: AppHandle, point: (i32, i32)) {
         Ok(Ok(frame)) => frame,
         Ok(Err(e)) => {
             warn!("screenshot: chat capture failed: {e}");
-            return;
+            return Err(e);
         }
         Err(e) => {
             warn!("screenshot: chat capture thread failed: {e}");
-            return;
+            return Err(e.to_string());
         }
     };
     // A sign-out that landed during the capture drops the frame, exactly as the
@@ -290,7 +323,7 @@ async fn capture_into_pending(app: AppHandle, point: (i32, i32)) {
     if let Err(e) = crate::security::recheck(&app, crate::security::Operation::CaptureChatScreen, &ticket)
     {
         info!("screenshot: chat capture dropped after capture ({e})");
-        return;
+        return Err(e);
     }
 
     if let Some(handle) = chat_state(&app) {
@@ -303,6 +336,7 @@ async fn capture_into_pending(app: AppHandle, point: (i32, i32)) {
         });
         state.source_point = Some(point);
     }
+    Ok(())
 }
 
 /// Called from `overlay::summon_chat` while the user's own app is still the
@@ -365,8 +399,7 @@ pub async fn refresh_chat_capture(app: AppHandle) -> Result<(), String> {
         Some(point) => point,
         None => cursor_point(&app)?,
     };
-    capture_into_pending(app, point).await;
-    Ok(())
+    capture_into_pending(app, point).await
 }
 
 #[tauri::command]
@@ -416,11 +449,35 @@ fn remove_legacy_screenshots(base_dir: &Path) -> Result<bool, String> {
     Ok(true)
 }
 
+/// Fails loudly when macOS has not granted Screen Recording.
+///
+/// Without this the denial is invisible rather than fatal: CoreGraphics does
+/// not error, it returns a frame containing only the desktop wallpaper and this
+/// app's own windows. The capture "succeeds" and the wrong image is what
+/// reaches the model. Preflight only, never request - the prompt is one-shot
+/// per app identity and macOS ignores every later call, so asking here would
+/// burn it silently in the background instead of at a moment the user can
+/// connect to what they just clicked.
+#[cfg(target_os = "macos")]
+fn screen_capture_permitted() -> Result<(), String> {
+    if objc2_core_graphics::CGPreflightScreenCaptureAccess() {
+        return Ok(());
+    }
+    Err("Screen Recording is off for Aura. Turn it on in System Settings > Privacy & Security > Screen Recording, then restart Aura.".to_string())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn screen_capture_permitted() -> Result<(), String> {
+    Ok(())
+}
+
 /// Returns a raw IPC response: the `GEOMETRY_HEADER_LEN`-byte geometry header
 /// followed directly by the JPEG bytes, so the frontend reads it as an
 /// `ArrayBuffer` with no base64 encode/decode round trip.
 fn capture_frame(cursor_x: i32, cursor_y: i32) -> Result<CapturedFrame, String> {
     let mut stages = CaptureStages::default();
+
+    screen_capture_permitted()?;
 
     let capture_started = Instant::now();
     let monitor = Monitor::from_point(cursor_x, cursor_y).map_err(|e| e.to_string())?;
@@ -443,12 +500,20 @@ fn capture_frame(cursor_x: i32, cursor_y: i32) -> Result<CapturedFrame, String> 
     // screenFrame.ts (screenPointFor) and the backend's ScreenFrame._scaled
     // both convert a model coordinate from jpeg space into monitor space by
     // ratio, so shrinking the image needs no change on either side.
+    // xcap reports monitor bounds in the platform's own space: physical pixels
+    // on Windows, but POINTS on macOS, where CGDisplayBounds is what it reads.
+    // The field names and the note above promise physical pixels, and
+    // screenFrame.ts's screenPointFor maps model coordinates through them, so
+    // the macOS values are scaled up here rather than leaving pointing 2x out
+    // on every Retina display.
+    let scale_factor = monitor.scale_factor().map_err(|e| e.to_string())?;
+    let to_px = if cfg!(target_os = "macos") { scale_factor } else { 1.0 };
     let geometry = ScreenFrameGeometry {
-        monitor_left_px: monitor.x().map_err(|e| e.to_string())?,
-        monitor_top_px: monitor.y().map_err(|e| e.to_string())?,
-        monitor_width_px: monitor.width().map_err(|e| e.to_string())?,
-        monitor_height_px: monitor.height().map_err(|e| e.to_string())?,
-        scale_factor: monitor.scale_factor().map_err(|e| e.to_string())?,
+        monitor_left_px: (monitor.x().map_err(|e| e.to_string())? as f32 * to_px) as i32,
+        monitor_top_px: (monitor.y().map_err(|e| e.to_string())? as f32 * to_px) as i32,
+        monitor_width_px: (monitor.width().map_err(|e| e.to_string())? as f32 * to_px) as u32,
+        monitor_height_px: (monitor.height().map_err(|e| e.to_string())? as f32 * to_px) as u32,
+        scale_factor,
         jpeg_width_px,
         jpeg_height_px,
     };

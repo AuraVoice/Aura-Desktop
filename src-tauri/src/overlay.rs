@@ -861,9 +861,12 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
 
     result.map_err(|e| format!("failed to resize/reposition/show window: {e}"))?;
     // AFTER the chain above, never before it: each of show() and
-    // set_ignore_cursor_events() goes through tao, which rewrites the native
-    // window style from its own cached flags and drops anything set out of
-    // band. Same hazard dictation/hud.rs documents for GWL_EXSTYLE.
+    // Re-assert the native style after the window ops above. On Windows that is
+    // the GWL_EXSTYLE hazard dictation/hud.rs documents, where tao rewrites the
+    // style from its own cached flags. macOS is quieter than it looks:
+    // set_ignore_cursor_events is only setIgnoresMouseEvents there and does not
+    // touch the style mask, so the re-assert is cheap and macos_window skips the
+    // write when the mask is already right.
     reassert_native_window_style(&window);
     // apply() is the sole path back to a normal presentation. The chained
     // result above includes restoring cursor input after a pointing takeover,

@@ -676,9 +676,11 @@ export function ChatSlot({
 
   const screenToggleTitle = lane === "live"
     ? "Ask out loud and Aura already sees your screen"
-    : screen.armed
-      ? "Screen is attached to your next message"
-      : "Attach your screen to the next message";
+    : screen.error
+      ? screen.error
+      : screen.armed
+        ? "Screen is attached to your next message"
+        : "Attach your screen to the next message";
 
   function sendMessage() {
     if (!trimmedMessage || trimmedMessage.length > maxMessageLength || sending || limitReached) return;
@@ -905,6 +907,9 @@ export function ChatSlot({
               </span>
             )}
           </div>
+          {screen.error && (
+            <p className="chat-screen-error" role="status">{screen.error}</p>
+          )}
           <button
             type="submit"
             className="chat-slot-send"

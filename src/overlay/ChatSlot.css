@@ -929,6 +929,14 @@
   padding-right: 58px;
 }
 
+/* Why arming the screen produced no picture. Sits under the composer rather
+   than replacing the chip, because the message can still be sent without it. */
+.chat-screen-error {
+  margin: 6px 2px 0;
+  color: #a54640;
+  font: 11px/1.35 var(--font-body);
+}
+
 .chat-slot-composer textarea::-webkit-scrollbar {
   display: none;
 }

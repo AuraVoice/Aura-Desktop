@@ -21,6 +21,7 @@
     },
     "os:allow-hostname",
     "os:allow-platform",
+    "os:allow-locale",
     "log:default",
     "store:default",
     "clipboard-manager:allow-write-text",

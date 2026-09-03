@@ -26,11 +26,12 @@
 
 #![cfg(target_os = "macos")]
 
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use log::{error, warn};
-use objc2::runtime::{AnyClass, AnyObject};
-use objc2::{ClassType, MainThreadMarker};
+use objc2::rc::Retained;
+use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
+use objc2::{sel, ClassType, MainThreadMarker};
 use objc2_app_kit::{
     NSPanel, NSStatusWindowLevel, NSWindow, NSWindowCollectionBehavior, NSWindowSharingType,
     NSWindowStyleMask,
@@ -93,14 +94,16 @@ where
 /// The class swap is what makes the style mask mean anything - AppKit ignores
 /// `NonactivatingPanel` on a window whose class is not an NSPanel. It is safe
 /// because NSPanel declares no instance variables of its own over NSWindow, so
-/// the two have identical instance sizes; that equality is checked here rather
-/// than left to `set_class`'s debug assertion, so a future AppKit that broke it
-/// would degrade to an ordinary window with a log line instead of panicking in
-/// a debug build.
+/// the two have identical instance sizes; that equality is checked in
+/// `ensure_panel_class` rather than left to `set_class`'s debug assertion, so a
+/// future AppKit that broke it would degrade to an ordinary window with a log
+/// line instead of panicking in a debug build.
 ///
-/// A non-activating panel can still become the KEY window, so the Setup panel's
-/// sign-in fields keep receiving keystrokes. It just does not activate the
-/// application to get them.
+/// The window is swapped to `AuraOverlayPanel`, NOT to a bare `NSPanel`. A
+/// borderless panel answers NO to `canBecomeKeyWindow`, so a bare swap leaves
+/// every text field in the overlay showing a caret and receiving nothing; see
+/// `aura_panel_class`. With the subclass it can take key input, and still does
+/// not activate the application to get it.
 pub fn make_non_activating_panel(window: &WebviewWindow) {
     with_ns_window(window, "make_non_activating_panel", |ns_window, _mtm| {
         if !ensure_panel_class(ns_window) {
@@ -127,15 +130,71 @@ pub fn reassert_panel_style(window: &WebviewWindow) {
     });
 }
 
-/// Swaps the object's class to NSPanel if it is not already one. Returns
-/// whether the window can be treated as a panel afterwards.
+/// The class the overlay is actually swapped to: an `NSPanel` subclass that
+/// forces `canBecomeKeyWindow`.
+///
+/// Swapping to a BARE `NSPanel` looks right and silently breaks all keyboard
+/// input. tao does not hand us a plain `NSWindow`; it hands us its own
+/// `TaoWindow` subclass, which overrides `canBecomeKeyWindow`/
+/// `canBecomeMainWindow` to return its `focusable` flag. `set_class` throws
+/// that override away, and `NSPanel`'s inherited implementation answers the
+/// title-bar/resize-bar test, which a `decorations: false` window fails. The
+/// result is `canBecomeKeyWindow == NO`, `makeKeyWindow` a no-op, and a chat
+/// composer that shows a caret and receives nothing. `NonactivatingPanel` does
+/// not help: it governs whether taking keys ACTIVATES the app, not whether the
+/// window may become key at all.
+///
+/// `canBecomeMainWindow` stays NO deliberately. Key without main is what lets
+/// the notch take keystrokes while the app the user was working in keeps its
+/// foreground, which is the whole point of the non-activating panel.
+fn aura_panel_class() -> Option<&'static AnyClass> {
+    static CLASS: OnceLock<Option<&'static AnyClass>> = OnceLock::new();
+    *CLASS.get_or_init(|| {
+        // Raw-pointer receivers rather than references: `MethodImplementation`
+        // needs a higher-ranked signature, and `&AnyObject` pins one lifetime.
+        extern "C" fn yes(_this: *const AnyObject, _cmd: Sel) -> Bool {
+            Bool::YES
+        }
+        extern "C" fn no(_this: *const AnyObject, _cmd: Sel) -> Bool {
+            Bool::NO
+        }
+        // Already registered means a previous call won; reuse it rather than
+        // failing, since `new` returns None for a name collision too.
+        let Some(mut builder) = ClassBuilder::new(c"AuraOverlayPanel", NSPanel::class()) else {
+            return AnyClass::get(c"AuraOverlayPanel");
+        };
+        unsafe {
+            builder.add_method(
+                sel!(canBecomeKeyWindow),
+                yes as extern "C" fn(*const AnyObject, Sel) -> Bool,
+            );
+            builder.add_method(
+                sel!(canBecomeMainWindow),
+                no as extern "C" fn(*const AnyObject, Sel) -> Bool,
+            );
+        }
+        Some(builder.register())
+    })
+}
+
+/// Swaps the object's class to the panel subclass if it is not already one.
+/// Returns whether the window can be treated as a panel afterwards.
 fn ensure_panel_class(ns_window: &NSWindow) -> bool {
-    let panel_class = NSPanel::class();
+    let Some(panel_class) = aura_panel_class() else {
+        warn!("macos_window: could not register AuraOverlayPanel, leaving the window as an ordinary NSWindow");
+        return false;
+    };
     let object: &AnyObject = unsafe { &*((ns_window as *const NSWindow) as *const AnyObject) };
     let current: &AnyClass = object.class();
     if is_kind_of(current, panel_class) {
         return true;
     }
+    // The subclass adds no ivars, so this compares equal for the same reason
+    // NSWindow and NSPanel do. It stays as the guard against a future AppKit
+    // that grows NSPanel, but note what it CANNOT catch: tao's subclass packs
+    // its flag into existing padding, so TaoWindow measures the same as
+    // NSWindow and the swap that discards its overrides looks harmless here.
+    // That is why the overrides are re-declared above rather than relied upon.
     if current.instance_size() != panel_class.instance_size() {
         warn!(
             "macos_window: NSWindow and NSPanel instance sizes differ ({} vs {}), \
@@ -164,8 +223,22 @@ fn is_kind_of(mut current: &AnyClass, wanted: &AnyClass) -> bool {
 }
 
 fn apply_panel_style(ns_window: &NSWindow) {
-    let mask = ns_window.styleMask() | NSWindowStyleMask::NonactivatingPanel;
-    ns_window.setStyleMask(mask);
+    let current = ns_window.styleMask();
+    let mask = current | NSWindowStyleMask::NonactivatingPanel;
+    // Only write when it actually changed. Opening the chat runs overlay::apply
+    // three times (initial slot height, the measured height, then the resize
+    // observer), and every needless setStyleMask is a chance to disturb focus
+    // for no gain.
+    if mask != current {
+        ns_window.setStyleMask(mask);
+        // tao never calls setStyleMask bare, and its comment says why: "If we
+        // don't do this, key handling will break (at least until the window is
+        // clicked again)". Changing the mask rebuilds the frame view and drops
+        // whatever was first responder, which here is the WKWebView holding the
+        // chat composer. Restoring it is what keeps typing alive across the
+        // slot resizes above.
+        restore_first_responder(ns_window);
+    }
     // Above normal windows and full-screen apps, matching the always-on-top
     // the Windows side gets from the builder.
     ns_window.setLevel(NSStatusWindowLevel);
@@ -179,6 +252,16 @@ fn apply_panel_style(ns_window: &NSWindow) {
     // an always-on-top companion means it vanishes the moment the user clicks
     // anything else - the exact opposite of what it is for.
     ns_window.setHidesOnDeactivate(false);
+}
+
+/// Points the window's first responder back at its content view, which is the
+/// WKWebView hosting the overlay. Mirrors what tao does after every style-mask
+/// write (`platform_impl/macos/util/async.rs`).
+fn restore_first_responder(ns_window: &NSWindow) {
+    let Some(view) = ns_window.contentView() else {
+        return;
+    };
+    ns_window.makeFirstResponder(Some(&view));
 }
 
 /// The `WDA_EXCLUDEFROMCAPTURE` analogue: when `shares` is false the window's

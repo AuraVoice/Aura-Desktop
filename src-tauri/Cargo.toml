@@ -239,6 +239,10 @@ objc2-core-graphics = { version = "0.3", default-features = false, features = [
     "CGEventSource",
     "CGEventTypes",
     "CGRemoteOperation",
+    # Screen Recording TCC preflight in screenshot.rs. Without it a denied grant
+    # is invisible: CoreGraphics returns a wallpaper-only frame rather than an
+    # error, so a capture "succeeds" and ships the wrong image to the model.
+    "CGWindow",
 ] }
 
 # Win32 bindings - win_focus.rs and the meeting/ module use this, Windows

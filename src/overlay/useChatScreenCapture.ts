@@ -29,6 +29,11 @@ export interface ChatScreenState {
   /** False when capture is unavailable (Guide Mode owns the screen, or the
    * chat was opened without a frame ever being taken). */
   available: boolean;
+  /** Why the last arm produced no picture, or null. Arming used to fail
+   * silently: the eye lit up, no thumbnail appeared, and the message went out
+   * with no attachment and no warning, which is how a completely broken macOS
+   * capture path went unnoticed. */
+  error: string | null;
   toggle: () => void;
   remove: () => void;
 }
@@ -43,6 +48,7 @@ export interface ChatScreenState {
  */
 export function useChatScreenCapture(open: boolean) {
   const [armed, setArmed] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [capture, setCapture] = useState<ChatScreenCapture | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const captureRef = useRef<ChatScreenCapture | null>(null);
@@ -101,17 +107,26 @@ export function useChatScreenCapture(open: boolean) {
   const toggle = useCallback(() => {
     const next = !armedRef.current;
     setArmed(next);
+    setError(null);
     if (!next) return;
     // Re-arming asks for a fresh look rather than resurrecting whatever was
     // captured before the user turned it off.
     refreshChatCapture()
       .then(takeChatCapture)
       .then(adoptCapture)
-      .catch((err) => logError("useChatScreenCapture: refresh", err));
+      .catch((err) => {
+        logError("useChatScreenCapture: refresh", err);
+        // Disarm too: leaving the eye lit while nothing was captured is what
+        // made this look like it had worked.
+        setArmed(false);
+        armedRef.current = false;
+        setError(err instanceof Error ? err.message : String(err));
+      });
   }, [adoptCapture]);
 
   const remove = useCallback(() => {
     setArmed(false);
+    setError(null);
     adoptCapture(null);
     discardChatCapture().catch((err) => logError("useChatScreenCapture: discard", err));
   }, [adoptCapture]);
@@ -155,6 +170,7 @@ export function useChatScreenCapture(open: boolean) {
   const state: ChatScreenState = {
     armed,
     previewUrl,
+    error,
     available: capture !== null,
     toggle,
     remove,
