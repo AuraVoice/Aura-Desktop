@@ -46,6 +46,9 @@ export interface DataParticipantLike {
 export type KnownAgentEventType =
   | "element.point"
   | "screen_save.created"
+  // Backend confirmation that a voice-triggered Notion save landed. Caption
+  // only; page_url is stored but never auto-opened.
+  | "notion.saved"
   | "assistant.text.delta"
   | "assistant.text.done"
   | "text_input.accepted"
@@ -142,11 +145,15 @@ const FIELD_CAPS: Record<string, number> = {
   parent_event_id: 64,
   stage: 32,
   error_type: 120,
+  database_name: 300,
+  page_url: 2_000,
+  page_id: 64,
 };
 
 const KNOWN_TYPES: ReadonlySet<string> = new Set([
   "element.point",
   "screen_save.created",
+  "notion.saved",
   "assistant.text.delta",
   "assistant.text.done",
   "text_input.accepted",
@@ -273,6 +280,16 @@ function payloadWithinLimits(type: KnownAgentEventType, payload: Record<string, 
   }
   if (type === "guide.request") {
     return typeof payload.enable === "boolean";
+  }
+  if (type === "notion.saved") {
+    // page_url is the one field that could reach openUrl someday; only https
+    // (or absent) survives validation.
+    return (
+      typeof payload.database_name === "string" &&
+      (payload.page_url == null ||
+        (typeof payload.page_url === "string" &&
+          (payload.page_url === "" || payload.page_url.startsWith("https://"))))
+    );
   }
   if (type === "guide.failure") {
     return (

@@ -21,13 +21,30 @@ export interface GmailConnectorStatus {
   lastError: string | null;
 }
 
+export interface NotionConnectorStatus {
+  enabled: boolean;
+  canReconnect: boolean;
+  workspaceName: string | null;
+  connectedAt: string | null;
+  lastError: string | null;
+}
+
 export interface ConnectorsCatalog {
   googleCalendar: GoogleCalendarConnectorStatus;
   gmail: GmailConnectorStatus;
+  notion: NotionConnectorStatus;
 }
 
 export class ConnectorReauthorizationRequiredError extends Error {}
-export type ConnectorName = "google_calendar" | "gmail";
+export type ConnectorName = "google_calendar" | "gmail" | "notion";
+
+// Per-connector OAuth host allowlist. Never widen to "any https": that turns
+// a backend compromise into an open redirect on the user's machine.
+const TRUSTED_AUTH_HOSTS: Record<ConnectorName, string> = {
+  google_calendar: "accounts.google.com",
+  gmail: "accounts.google.com",
+  notion: "api.notion.com",
+};
 
 export interface ConnectorOAuthAuthorization {
   attemptId: string;
@@ -52,6 +69,14 @@ type RawGmailStatus = Partial<{
   enabled: unknown;
   can_reconnect: unknown;
   email_address: unknown;
+  connected_at: unknown;
+  last_error: unknown;
+}>;
+
+type RawNotionStatus = Partial<{
+  enabled: unknown;
+  can_reconnect: unknown;
+  workspace_name: unknown;
   connected_at: unknown;
   last_error: unknown;
 }>;
@@ -85,6 +110,16 @@ function parseGmailStatus(raw: RawGmailStatus): GmailConnectorStatus {
   };
 }
 
+function parseNotionStatus(raw: RawNotionStatus): NotionConnectorStatus {
+  return {
+    enabled: raw.enabled === true,
+    canReconnect: raw.can_reconnect === true,
+    workspaceName: optionalString(raw.workspace_name),
+    connectedAt: optionalString(raw.connected_at),
+    lastError: optionalString(raw.last_error),
+  };
+}
+
 export function parseConnectorsCatalog(raw: unknown): ConnectorsCatalog {
   const data = typeof raw === "object" && raw !== null
     ? raw as Record<string, unknown>
@@ -95,9 +130,13 @@ export function parseConnectorsCatalog(raw: unknown): ConnectorsCatalog {
   const gmail = typeof data.gmail === "object" && data.gmail !== null
     ? data.gmail as RawGmailStatus
     : {};
+  const notion = typeof data.notion === "object" && data.notion !== null
+    ? data.notion as RawNotionStatus
+    : {};
   return {
     googleCalendar: parseCalendarStatus(calendar),
     gmail: parseGmailStatus(gmail),
+    notion: parseNotionStatus(notion),
   };
 }
 
@@ -159,7 +198,7 @@ export async function startConnectorOAuth(
     throw new Error("Connector authorization response is malformed");
   }
   const url = new URL(data.authorization_url);
-  if (url.protocol !== "https:" || url.hostname !== "accounts.google.com") {
+  if (url.protocol !== "https:" || url.hostname !== TRUSTED_AUTH_HOSTS[connector]) {
     throw new Error("Connector authorization URL is not trusted");
   }
   return {
@@ -218,4 +257,38 @@ export async function disableGmail(): Promise<GmailConnectorStatus> {
     body: "{}",
   });
   return readGmailStatus(response, "Gmail disable");
+}
+
+async function readNotionStatus(
+  response: Response,
+  action: string,
+): Promise<NotionConnectorStatus> {
+  if (response.status === 409) {
+    const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
+    if (body?.error === "reauthorization_required") {
+      throw new ConnectorReauthorizationRequiredError("reauthorization_required");
+    }
+  }
+  if (!response.ok) {
+    throw new Error(`${action} failed (${response.status})`);
+  }
+  return parseNotionStatus((await response.json()) as RawNotionStatus);
+}
+
+export async function enableNotion(): Promise<NotionConnectorStatus> {
+  const response = await authFetch("/connectors/notion/enable", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  });
+  return readNotionStatus(response, "Notion enable");
+}
+
+export async function disableNotion(): Promise<NotionConnectorStatus> {
+  const response = await authFetch("/connectors/notion/disable", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  });
+  return readNotionStatus(response, "Notion disable");
 }

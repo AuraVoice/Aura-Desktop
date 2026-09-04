@@ -211,6 +211,20 @@ export function useScreenSight(room: Room | null, status: VoiceSessionStatus) {
       }, SAVED_CONFIRMATION_DURATION_MS);
     }
 
+    // Backend confirmation that a voice-triggered Notion save landed (see
+    // save_to_notion on the voice agent) - same brief caption path as
+    // screen_save.created.
+    function handleNotionSaved(payload: Record<string, unknown>) {
+      const databaseName = typeof payload?.database_name === "string" ? payload.database_name.trim() : "";
+      const label = databaseName ? `Saved to ${databaseName}` : "Saved to Notion";
+      if (savedConfirmationTimeoutRef.current) clearTimeout(savedConfirmationTimeoutRef.current);
+      setSavedConfirmation(label);
+      savedConfirmationTimeoutRef.current = setTimeout(() => {
+        savedConfirmationTimeoutRef.current = null;
+        setSavedConfirmation(null);
+      }, SAVED_CONFIRMATION_DURATION_MS);
+    }
+
     // Only genuinely real messages on this data channel that useScreenSight
     // cares about - session.ready/user.text.*/session.ended never arrive
     // (see useVoiceBar.ts), element.point and screen_save.created do. Every
@@ -228,6 +242,7 @@ export function useScreenSight(room: Room | null, status: VoiceSessionStatus) {
         if (verdict.kind !== "valid") return;
         if (verdict.type === "element.point") handleElementPoint(verdict.payload);
         else if (verdict.type === "screen_save.created") handleScreenSaveCreated(verdict.payload);
+        else if (verdict.type === "notion.saved") handleNotionSaved(verdict.payload);
       } catch (err) {
         logError("useScreenSight: onDataReceived", err);
       }
