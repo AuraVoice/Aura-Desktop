@@ -410,9 +410,13 @@ pub fn discard_chat_capture(app: AppHandle) {
 /// Publishes the stage timings for one capture. Failing to emit telemetry must
 /// never fail a capture, so the result is deliberately dropped.
 fn emit_capture_stages(app: &AppHandle, stages: &CaptureStages) {
+    // turn_context_id joins this line to the JS turn_context_upload event and
+    // the worker's receipt logs; without it a capture log entry could not be
+    // attributed to a turn at all.
     info!(
-        "[Capture] {{native_capture_ms:{}, resize_ms:{}, jpeg_encode_ms:{}, \
+        "[Capture] {{turn_context_id:{}, native_capture_ms:{}, resize_ms:{}, jpeg_encode_ms:{}, \
          persistence_enqueue_ms:{}, jpeg_bytes_after:{}, source_px:{}x{}, jpeg_px:{}x{}}}",
+        stages.turn_context_id,
         stages.native_capture_ms,
         stages.resize_ms,
         stages.jpeg_encode_ms,
@@ -463,7 +467,10 @@ fn screen_capture_permitted() -> Result<(), String> {
     if objc2_core_graphics::CGPreflightScreenCaptureAccess() {
         return Ok(());
     }
-    Err("Screen Recording is off for Aura. Turn it on in System Settings > Privacy & Security > Screen Recording, then restart Aura.".to_string())
+    // The "permission_denied:" prefix is a machine contract: the capture hook
+    // parses it to pick the reason it reports to the voice worker, and shows
+    // the human half after the colon. Keep the prefix stable.
+    Err("permission_denied: Screen Recording is off for Aura. Turn it on in System Settings > Privacy & Security > Screen Recording, then restart Aura.".to_string())
 }
 
 #[cfg(not(target_os = "macos"))]

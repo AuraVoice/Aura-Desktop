@@ -69,6 +69,44 @@ export async function publishOutputMode(room: Room, control: OutputModeControl):
   });
 }
 
+/** Why this turn's screen capture was skipped. Closed vocabulary shared with
+ * the worker (screen_context_control.py); anything else is normalized to
+ * capture_failed on the receiving side. */
+export type ScreenContextUnavailableReason =
+  | "screen_context_disabled"
+  | "permission_denied"
+  | "mode_conflict"
+  | "signed_out"
+  | "capture_failed";
+
+export function encodeScreenContextUnavailable(
+  reason: ScreenContextUnavailableReason,
+): Uint8Array {
+  return new TextEncoder().encode(
+    JSON.stringify({
+      type: "screen_context.unavailable",
+      reason,
+    }),
+  );
+}
+
+/**
+ * Tells the worker WHY no screen context is coming this turn. Before this
+ * signal, "setting off", "permission missing", "client crashed" and "capture
+ * in flight" were all indistinguishable silence on the worker side, so Buddy
+ * could only say a generic "I can't see your screen". Sent at most once per
+ * turn by useTurnScreenCapture.
+ */
+export async function publishScreenContextUnavailable(
+  room: Room,
+  reason: ScreenContextUnavailableReason,
+): Promise<void> {
+  await room.localParticipant.publishData(encodeScreenContextUnavailable(reason), {
+    reliable: true,
+    topic: "client_events",
+  });
+}
+
 export interface ArtifactDisplayed {
   artifactId: string;
   revision: number;

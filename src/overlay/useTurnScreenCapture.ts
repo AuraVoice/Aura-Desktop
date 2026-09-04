@@ -11,6 +11,10 @@ import {
 } from "livekit-client";
 import { validateAgentDataMessage } from "../lib/agentData";
 import { trackEvent } from "../lib/analytics";
+import {
+  publishScreenContextUnavailable,
+  type ScreenContextUnavailableReason,
+} from "../lib/clientControl";
 import { logError } from "../lib/log";
 import {
   newTurnContextId,
@@ -65,15 +69,40 @@ const PIXEL_INTENT_PATTERN =
 function wantsPixels(transcript: string): boolean {
   return PIXEL_INTENT_PATTERN.test(transcript);
 }
-export function useTurnScreenCapture(room: Room | null, guideArmed = false) {
+
+/** Maps a native capture error onto the closed unavailable-reason vocabulary.
+ * These are OUR OWN stable error strings (security.rs Denied::Display and the
+ * screenshot.rs permission prefix), not free text. */
+function reasonForCaptureError(message: string): ScreenContextUnavailableReason {
+  if (message.startsWith("permission_denied:")) return "permission_denied";
+  if (message.startsWith("denied: screen context sharing is off")) {
+    return "screen_context_disabled";
+  }
+  if (message.startsWith("denied: another screen capture mode")) return "mode_conflict";
+  if (message.startsWith("denied: no signed-in session")) return "signed_out";
+  return "capture_failed";
+}
+
+export function useTurnScreenCapture(
+  room: Room | null,
+  guideArmed = false,
+  /** The voiceScreenContext privacy setting. The room is now passed even when
+   * this is false, so a skipped capture can still tell the worker WHY. */
+  screenContextEnabled = true,
+  /** Fired when the agent asks to enable screen sharing
+   * (screen_context.request); OverlayRoot renders the consent prompt. */
+  onScreenContextRequest?: () => void,
+) {
   const [notice, setNotice] = useState<string | null>(null);
   const capturedThisTurnRef = useRef(false);
   const pixelsSentThisTurnRef = useRef(false);
+  const unavailableSentThisTurnRef = useRef(false);
   const frameCounterRef = useRef(0);
   const sentGeometryRef = useRef<Map<string, ScreenFrameGeometry>>(new Map());
   const activeRoomRef = useRef<Room | null>(room);
   const noticeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const captureStagesRef = useRef<CaptureStages | null>(null);
+  const seenNotionPagesRef = useRef<Set<string>>(new Set());
   activeRoomRef.current = room;
 
   // Rust emits its own stage timings rather than widening the 28-byte geometry
@@ -94,6 +123,21 @@ export function useTurnScreenCapture(room: Room | null, guideArmed = false) {
       unlisten?.();
     };
   }, []);
+
+  /** Tells the worker why this turn has no screen context, at most once per
+   * turn. Fail-soft: a lost signal only degrades Buddy's line back to the
+   * generic "can't see your screen". */
+  const reportUnavailable = useCallback(
+    (reason: ScreenContextUnavailableReason) => {
+      const activeRoom = activeRoomRef.current;
+      if (!activeRoom || unavailableSentThisTurnRef.current) return;
+      unavailableSentThisTurnRef.current = true;
+      publishScreenContextUnavailable(activeRoom, reason).catch((err) =>
+        logError("useTurnScreenCapture: publish unavailable", err),
+      );
+    },
+    [],
+  );
 
   const showNotice = useCallback((message: string) => {
     if (noticeTimeoutRef.current) clearTimeout(noticeTimeoutRef.current);
@@ -120,7 +164,17 @@ export function useTurnScreenCapture(room: Room | null, guideArmed = false) {
    * picture rides along as strategy "both".
    */
   const captureAndSend = useCallback(async (transcript = "") => {
-    if (!room || guideArmed) return;
+    if (!room) return;
+    if (guideArmed) {
+      // Guide Mode owns continuous capture; a save tool still needs to know
+      // this turn's one-shot leg is intentionally silent.
+      reportUnavailable("mode_conflict");
+      return;
+    }
+    if (!screenContextEnabled) {
+      reportUnavailable("screen_context_disabled");
+      return;
+    }
     const pixelIntent = wantsPixels(transcript);
     const captureRoom = room;
     const turnContextId = newTurnContextId();
@@ -177,7 +231,27 @@ export function useTurnScreenCapture(room: Room | null, guideArmed = false) {
       );
     } catch (err) {
       logError("useTurnScreenCapture: capture", err);
-      showNotice("Couldn't capture this turn.");
+      const message = err instanceof Error ? err.message : String(err ?? "");
+      const reason = reasonForCaptureError(message);
+      // The macOS permission error carries the exact actionable instruction;
+      // throwing it away for a generic line left users with nothing to do.
+      showNotice(
+        reason === "permission_denied"
+          ? message.slice("permission_denied:".length).trim()
+          : "Couldn't capture this turn.",
+      );
+      reportUnavailable(reason);
+      // Failed captures used to be invisible in telemetry; only the local log
+      // file knew. One failure event per failed turn fixes that.
+      trackEvent("turn_context_upload", {
+        turnContextId,
+        contextStrategy: "none",
+        success: false,
+        failureStage: "capture",
+        failureReason: reason,
+        fallbackReason,
+        uiAutomationMs,
+      });
       return;
     }
     const ipcReturnMs = Math.round(performance.now() - ipcStartedAt);
@@ -189,6 +263,15 @@ export function useTurnScreenCapture(room: Room | null, guideArmed = false) {
     } catch (err) {
       logError("useTurnScreenCapture: parse", err);
       showNotice("Couldn't read this turn's capture.");
+      reportUnavailable("capture_failed");
+      trackEvent("turn_context_upload", {
+        turnContextId,
+        contextStrategy: "none",
+        success: false,
+        failureStage: "parse",
+        fallbackReason,
+        uiAutomationMs,
+      });
       return;
     }
     // A capture can finish after a disconnect/retry replaced the LiveKit Room.
@@ -273,14 +356,31 @@ export function useTurnScreenCapture(room: Room | null, guideArmed = false) {
     } catch (err) {
       logError("useTurnScreenCapture: send", err);
       showNotice("Screen captured, but it couldn't be shared.");
+      // Only meaningful when the structured leg also failed to publish; the
+      // once-per-turn guard makes a redundant signal harmless either way.
+      if (strategy !== "both") reportUnavailable("capture_failed");
+      trackEvent("turn_context_upload", {
+        turnContextId,
+        contextStrategy: strategy,
+        success: false,
+        failureStage: "send",
+        fallbackReason,
+        uiAutomationMs,
+        ipcReturnMs,
+      });
     }
-  }, [room, guideArmed, showNotice]);
+  }, [room, guideArmed, screenContextEnabled, reportUnavailable, showNotice]);
 
   useEffect(() => {
     capturedThisTurnRef.current = false;
+    unavailableSentThisTurnRef.current = false;
     frameCounterRef.current = 0;
     sentGeometryRef.current.clear();
-    if (!room || guideArmed) return;
+    // Subscribed whenever a room exists, even with the setting off or Guide
+    // armed: captureAndSend gates the capture itself, and staying subscribed
+    // is what lets a skipped turn report WHY and lets notion.saved captions
+    // and enable requests land.
+    if (!room) return;
 
     function handleElementPoint(payload: Record<string, unknown>) {
       const x = payload.x;
@@ -309,6 +409,25 @@ export function useTurnScreenCapture(room: Room | null, guideArmed = false) {
       showNotice(collectionName ? `Saved to ${collectionName}` : title ? `Saved "${title}"` : "Saved");
     }
 
+    function handleNotionSaved(payload: Record<string, unknown>) {
+      // The backend publishes this only after the page and its receipt are
+      // durable, so the caption never claims a save that is not proven.
+      // De-duped by page_id: a replayed event must not re-toast.
+      const pageId = typeof payload.page_id === "string" ? payload.page_id : "";
+      if (pageId) {
+        if (seenNotionPagesRef.current.has(pageId)) return;
+        seenNotionPagesRef.current.add(pageId);
+        while (seenNotionPagesRef.current.size > 32) {
+          const oldest = seenNotionPagesRef.current.values().next().value;
+          if (oldest === undefined) break;
+          seenNotionPagesRef.current.delete(oldest);
+        }
+      }
+      const databaseName =
+        typeof payload.database_name === "string" ? payload.database_name.trim() : "";
+      showNotice(databaseName ? `Saved to ${databaseName} in Notion` : "Saved to Notion");
+    }
+
     function onDataReceived(
       payload: Uint8Array,
       participant?: RemoteParticipant,
@@ -321,6 +440,10 @@ export function useTurnScreenCapture(room: Room | null, guideArmed = false) {
         if (verdict.type === "element.point") handleElementPoint(verdict.payload);
         else if (verdict.type === "screen_save.created") {
           handleScreenSaveCreated(verdict.payload);
+        } else if (verdict.type === "notion.saved") {
+          handleNotionSaved(verdict.payload);
+        } else if (verdict.type === "screen_context.request") {
+          onScreenContextRequest?.();
         }
       } catch (err) {
         logError("useTurnScreenCapture: onDataReceived", err);
@@ -336,6 +459,7 @@ export function useTurnScreenCapture(room: Room | null, guideArmed = false) {
         if (segment.final) {
           capturedThisTurnRef.current = false;
           pixelsSentThisTurnRef.current = false;
+          unavailableSentThisTurnRef.current = false;
           continue;
         }
         if (!capturedThisTurnRef.current) {
@@ -362,9 +486,10 @@ export function useTurnScreenCapture(room: Room | null, guideArmed = false) {
       room.off(RoomEvent.TranscriptionReceived, onTranscriptionReceived);
       capturedThisTurnRef.current = false;
       pixelsSentThisTurnRef.current = false;
+      unavailableSentThisTurnRef.current = false;
       sentGeometryRef.current.clear();
     };
-  }, [room, guideArmed, captureAndSend, showNotice]);
+  }, [room, guideArmed, captureAndSend, showNotice, onScreenContextRequest]);
 
   useEffect(() => {
     return () => {

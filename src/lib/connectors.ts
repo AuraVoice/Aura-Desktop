@@ -1,4 +1,9 @@
-import { authFetch } from "./api";
+import { authFetch, authFetchWithTimeout } from "./api";
+
+/** Hard deadline on connector mutations. A hung enable used to latch
+ * useConnectors' single action slot forever, wedging every connector control
+ * on the page. */
+const CONNECTOR_ACTION_TIMEOUT_MS = 15_000;
 
 export interface GoogleCalendarConnectorStatus {
   enabled: boolean;
@@ -140,30 +145,43 @@ export function parseConnectorsCatalog(raw: unknown): ConnectorsCatalog {
   };
 }
 
-async function readCalendarStatus(
+/** One reader for every connector action response: the 409 reauthorization
+ * contract and the non-2xx throw used to be copied per connector (and the
+ * Calendar copy had drifted, checking 409 at only one of its three call
+ * sites). */
+async function readConnectorStatus<Raw, Status>(
   response: Response,
   action: string,
-): Promise<GoogleCalendarConnectorStatus> {
-  if (!response.ok) {
-    throw new Error(`${action} failed (${response.status})`);
-  }
-  return parseCalendarStatus((await response.json()) as RawCalendarStatus);
-}
-
-async function readGmailStatus(
-  response: Response,
-  action: string,
-): Promise<GmailConnectorStatus> {
+  parse: (raw: Raw) => Status,
+): Promise<Status> {
   if (response.status === 409) {
     const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
     if (body?.error === "reauthorization_required") {
       throw new ConnectorReauthorizationRequiredError("reauthorization_required");
     }
+    throw new Error(`${action} failed (409)`);
   }
   if (!response.ok) {
     throw new Error(`${action} failed (${response.status})`);
   }
-  return parseGmailStatus((await response.json()) as RawGmailStatus);
+  return parse((await response.json()) as Raw);
+}
+
+async function postConnectorAction<Raw, Status>(
+  path: string,
+  action: string,
+  parse: (raw: Raw) => Status,
+): Promise<Status> {
+  const response = await authFetchWithTimeout(
+    path,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    },
+    CONNECTOR_ACTION_TIMEOUT_MS,
+  );
+  return readConnectorStatus(response, action, parse);
 }
 
 export async function fetchConnectors(): Promise<ConnectorsCatalog> {
@@ -177,11 +195,15 @@ export async function fetchConnectors(): Promise<ConnectorsCatalog> {
 export async function startConnectorOAuth(
   connector: ConnectorName,
 ): Promise<ConnectorOAuthAuthorization> {
-  const response = await authFetch("/connectors/oauth/authorize", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ connector }),
-  });
+  const response = await authFetchWithTimeout(
+    "/connectors/oauth/authorize",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ connector }),
+    },
+    CONNECTOR_ACTION_TIMEOUT_MS,
+  );
   if (!response.ok) {
     throw new Error(`Connector authorization failed (${response.status})`);
   }
@@ -208,87 +230,36 @@ export async function startConnectorOAuth(
   };
 }
 
-export async function enableGoogleCalendar(): Promise<GoogleCalendarConnectorStatus> {
-  const response = await authFetch("/connectors/google-calendar/enable", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: "{}",
-  });
-  if (response.status === 409) {
-    const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
-    if (body?.error === "reauthorization_required") {
-      throw new ConnectorReauthorizationRequiredError("reauthorization_required");
-    }
-  }
-  return readCalendarStatus(response, "Calendar enable");
+export function enableGoogleCalendar(): Promise<GoogleCalendarConnectorStatus> {
+  return postConnectorAction(
+    "/connectors/google-calendar/enable", "Calendar enable", parseCalendarStatus,
+  );
 }
 
-export async function disableGoogleCalendar(): Promise<GoogleCalendarConnectorStatus> {
-  const response = await authFetch("/connectors/google-calendar/disable", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: "{}",
-  });
-  return readCalendarStatus(response, "Calendar disable");
+export function disableGoogleCalendar(): Promise<GoogleCalendarConnectorStatus> {
+  return postConnectorAction(
+    "/connectors/google-calendar/disable", "Calendar disable", parseCalendarStatus,
+  );
 }
 
-export async function syncGoogleCalendar(): Promise<GoogleCalendarConnectorStatus> {
-  const response = await authFetch("/connectors/google-calendar/sync", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: "{}",
-  });
-  return readCalendarStatus(response, "Calendar sync");
+export function syncGoogleCalendar(): Promise<GoogleCalendarConnectorStatus> {
+  return postConnectorAction(
+    "/connectors/google-calendar/sync", "Calendar sync", parseCalendarStatus,
+  );
 }
 
-export async function enableGmail(): Promise<GmailConnectorStatus> {
-  const response = await authFetch("/connectors/gmail/enable", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: "{}",
-  });
-  return readGmailStatus(response, "Gmail enable");
+export function enableGmail(): Promise<GmailConnectorStatus> {
+  return postConnectorAction("/connectors/gmail/enable", "Gmail enable", parseGmailStatus);
 }
 
-export async function disableGmail(): Promise<GmailConnectorStatus> {
-  const response = await authFetch("/connectors/gmail/disable", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: "{}",
-  });
-  return readGmailStatus(response, "Gmail disable");
+export function disableGmail(): Promise<GmailConnectorStatus> {
+  return postConnectorAction("/connectors/gmail/disable", "Gmail disable", parseGmailStatus);
 }
 
-async function readNotionStatus(
-  response: Response,
-  action: string,
-): Promise<NotionConnectorStatus> {
-  if (response.status === 409) {
-    const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
-    if (body?.error === "reauthorization_required") {
-      throw new ConnectorReauthorizationRequiredError("reauthorization_required");
-    }
-  }
-  if (!response.ok) {
-    throw new Error(`${action} failed (${response.status})`);
-  }
-  return parseNotionStatus((await response.json()) as RawNotionStatus);
+export function enableNotion(): Promise<NotionConnectorStatus> {
+  return postConnectorAction("/connectors/notion/enable", "Notion enable", parseNotionStatus);
 }
 
-export async function enableNotion(): Promise<NotionConnectorStatus> {
-  const response = await authFetch("/connectors/notion/enable", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: "{}",
-  });
-  return readNotionStatus(response, "Notion enable");
-}
-
-export async function disableNotion(): Promise<NotionConnectorStatus> {
-  const response = await authFetch("/connectors/notion/disable", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: "{}",
-  });
-  return readNotionStatus(response, "Notion disable");
+export function disableNotion(): Promise<NotionConnectorStatus> {
+  return postConnectorAction("/connectors/notion/disable", "Notion disable", parseNotionStatus);
 }

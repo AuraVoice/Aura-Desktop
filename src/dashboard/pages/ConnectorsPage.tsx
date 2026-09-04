@@ -325,6 +325,16 @@ function NotionConnectorRow({
             ? notion?.workspaceName ?? "Connected workspace"
             : "Say where something on your screen should go and Buddy saves it there."}
         </p>
+        {!connected && notion?.lastError && (
+          // The backend records WHY the connector went down (dead token,
+          // revoked access); hiding that left the row looking merely "off"
+          // when it actually needed a reconnect.
+          <p className="db-connector-attention">
+            {notion.canReconnect
+              ? "Notion needs to be reconnected. Turn it on to reconnect."
+              : notion.lastError}
+          </p>
+        )}
       </div>
       <div className="db-connector-row-controls">
         <ConnectorSwitch

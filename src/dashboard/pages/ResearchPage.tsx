@@ -312,7 +312,12 @@ function PendingQuestionCard({ run, busy, onAnswer }: { run: ResearchRun; busy: 
             placeholder="Or type an answer"
             disabled={busy}
             onChange={(event) => setCustomAnswer(event.target.value)}
-            onKeyDown={(event) => { if (event.key === "Enter" && customAnswer.trim()) onAnswer(customAnswer.trim()); }}
+            onKeyDown={(event) => {
+              // busy must gate here too: a held Enter can fire again before
+              // React re-renders the disabled attribute, double-POSTing the
+              // answer.
+              if (event.key === "Enter" && !busy && customAnswer.trim()) onAnswer(customAnswer.trim());
+            }}
           />
           <button type="button" className="db-research-primary" disabled={busy || !customAnswer.trim()} onClick={() => onAnswer(customAnswer.trim())}>Answer</button>
         </div>
@@ -446,15 +451,18 @@ function ResearchDetail({ runId, onBack, onChanged, onNewRequest }: { runId: str
 
   useEffect(() => {
     if (!run || !activeStates.has(run.state)) return;
+    // Backed off while the resource is erroring or serving stale data: a
+    // backend outage should not be hammered at the healthy cadence forever.
+    const intervalMs = resource.error || resource.stale ? 15_000 : 2_500;
     const tick = () => {
       if (document.visibilityState === "visible" && navigator.onLine) {
         resource.reload();
         activity.reload();
       }
     };
-    const interval = setInterval(tick, 2_500);
+    const interval = setInterval(tick, intervalMs);
     return () => clearInterval(interval);
-  }, [run?.state, resource.reload, activity.reload]);
+  }, [run?.state, resource.reload, activity.reload, resource.error, resource.stale]);
 
   const mutate = async (operation: () => Promise<unknown>) => {
     setBusy(true);

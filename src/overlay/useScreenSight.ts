@@ -24,10 +24,6 @@ import type { VoiceSessionStatus } from "./useVoiceBar";
 
 const RETAINED_FRAME_GEOMETRY_COUNT = 4;
 
-// How long the "Saved to X" confirmation stays in the bar's caption before
-// yielding back to the normal assistant caption.
-const SAVED_CONFIRMATION_DURATION_MS = 3500;
-
 function isSessionLive(status: VoiceSessionStatus): boolean {
   return status === "ready" || status === "listening" || status === "processing" || status === "speaking";
 }
@@ -45,12 +41,10 @@ function isTerminalStatus(status: VoiceSessionStatus): boolean {
  */
 export function useScreenSight(room: Room | null, status: VoiceSessionStatus) {
   const [armed, setArmed] = useState(false);
-  const [savedConfirmation, setSavedConfirmation] = useState<string | null>(null);
   const capturedThisTurnRef = useRef(false);
   const sessionReadyCapturedRef = useRef(false);
   const frameCounterRef = useRef(0);
   const sentGeometryRef = useRef<Map<string, ScreenFrameGeometry>>(new Map());
-  const savedConfirmationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const armedRef = useRef(armed);
   armedRef.current = armed;
 
@@ -196,41 +190,10 @@ export function useScreenSight(room: Room | null, status: VoiceSessionStatus) {
       }
     }
 
-    // Backend confirmation that a screen_save.created write landed (see
-    // save_screen_item on the voice agent) - surfaced as a brief caption in
-    // the bar, not tied to capture/send in any way.
-    function handleScreenSaveCreated(payload: Record<string, unknown>) {
-      const collectionName = typeof payload?.collection_name === "string" ? payload.collection_name.trim() : "";
-      const title = typeof payload?.title === "string" ? payload.title.trim() : "";
-      const label = collectionName ? `Saved to ${collectionName}` : title ? `Saved "${title}"` : "Saved";
-      if (savedConfirmationTimeoutRef.current) clearTimeout(savedConfirmationTimeoutRef.current);
-      setSavedConfirmation(label);
-      savedConfirmationTimeoutRef.current = setTimeout(() => {
-        savedConfirmationTimeoutRef.current = null;
-        setSavedConfirmation(null);
-      }, SAVED_CONFIRMATION_DURATION_MS);
-    }
-
-    // Backend confirmation that a voice-triggered Notion save landed (see
-    // save_to_notion on the voice agent) - same brief caption path as
-    // screen_save.created.
-    function handleNotionSaved(payload: Record<string, unknown>) {
-      const databaseName = typeof payload?.database_name === "string" ? payload.database_name.trim() : "";
-      const label = databaseName ? `Saved to ${databaseName}` : "Saved to Notion";
-      if (savedConfirmationTimeoutRef.current) clearTimeout(savedConfirmationTimeoutRef.current);
-      setSavedConfirmation(label);
-      savedConfirmationTimeoutRef.current = setTimeout(() => {
-        savedConfirmationTimeoutRef.current = null;
-        setSavedConfirmation(null);
-      }, SAVED_CONFIRMATION_DURATION_MS);
-    }
-
-    // Only genuinely real messages on this data channel that useScreenSight
-    // cares about - session.ready/user.text.*/session.ended never arrive
-    // (see useVoiceBar.ts), element.point and screen_save.created do. Every
-    // message is sender/topic/schema-validated first (agentData.ts): a
-    // non-agent participant cannot move the native pointer or fake a saved
-    // confirmation.
+    // Only element.point matters here. The saved captions (screen_save.created
+    // and notion.saved) are owned by useTurnScreenCapture's notice path - the
+    // caption plumbing this hook once carried returned a value nothing
+    // rendered, which shipped a "Saved to X" confirmation the user never saw.
     function onDataReceived(
       payload: Uint8Array,
       participant?: RemoteParticipant,
@@ -241,8 +204,6 @@ export function useScreenSight(room: Room | null, status: VoiceSessionStatus) {
         const verdict = validateAgentDataMessage(payload, participant, topic);
         if (verdict.kind !== "valid") return;
         if (verdict.type === "element.point") handleElementPoint(verdict.payload);
-        else if (verdict.type === "screen_save.created") handleScreenSaveCreated(verdict.payload);
-        else if (verdict.type === "notion.saved") handleNotionSaved(verdict.payload);
       } catch (err) {
         logError("useScreenSight: onDataReceived", err);
       }
@@ -273,9 +234,8 @@ export function useScreenSight(room: Room | null, status: VoiceSessionStatus) {
     return () => {
       room.off(RoomEvent.DataReceived, onDataReceived);
       room.off(RoomEvent.TranscriptionReceived, onTranscriptionReceived);
-      if (savedConfirmationTimeoutRef.current) clearTimeout(savedConfirmationTimeoutRef.current);
     };
   }, [room, captureAndSend]);
 
-  return { armed, toggleArmed, savedConfirmation };
+  return { armed, toggleArmed };
 }

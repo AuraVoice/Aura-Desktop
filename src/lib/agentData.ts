@@ -72,6 +72,10 @@ export type KnownAgentEventType =
   // authority: this only asks, and useGuideMode routes it to the native
   // arm_guide/disarm_guide command (payload.enable decides which).
   | "guide.request"
+  // Agent-requested screen-context enable. Mirrors guide.request's authority
+  // split: the desktop shows an explicit consent prompt, and only the user's
+  // own click flips the voiceScreenContext setting. Empty payload.
+  | "screen_context.request"
   // Interview Mode: show one job-description paste overlay. The desktop must
   // echo interview.material.overlay_shown only once the box is genuinely on
   // screen (see overlay/interview/), because the worker speaks a line to the
@@ -172,6 +176,7 @@ const KNOWN_TYPES: ReadonlySet<string> = new Set([
   "guide.instruction",
   "guide.failure",
   "guide.request",
+  "screen_context.request",
   "interview.material.request",
   "desktop.run",
 ] satisfies KnownAgentEventType[]);
