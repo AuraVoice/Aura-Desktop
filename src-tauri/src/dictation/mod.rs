@@ -188,6 +188,14 @@ mod platform {
     const SIGN_IN_REASON: &str = "Sign in to use dictation.";
     const UNAVAILABLE_REASON: &str = "Dictation credential unavailable. Try again shortly.";
     const UNAVAILABLE_HUD: &str = "Dictation credential unavailable. Nothing was typed.";
+    /// `InsertOutcome::Blocked` names a different OS mechanism per platform
+    /// (see insert.rs), so the sentence has to as well.
+    #[cfg(windows)]
+    const BLOCKED_HUD: &str =
+        "Windows blocked typing into that window because it runs as administrator.";
+    #[cfg(target_os = "macos")]
+    const BLOCKED_HUD: &str =
+        "Secure Keyboard Entry is on (a password field or Terminal), so nothing was typed.";
     /// Shown once the user has been prompted for Accessibility and has not
     /// granted it yet. Names the pane rather than the API, since that is what
     /// they have to go and find.
@@ -1163,9 +1171,7 @@ mod platform {
             InsertOutcome::Blocked => (
                 HudUpdate::new(HudPhase::Recovery)
                     .with_text(final_text)
-                    .with_message(
-                        "Windows blocked typing into that window because it runs as administrator.",
-                    ),
+                    .with_message(BLOCKED_HUD),
                 RECOVERY_LINGER,
             ),
         };

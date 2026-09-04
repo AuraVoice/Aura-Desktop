@@ -65,10 +65,13 @@ pub(crate) fn apply_no_activate(window: &tauri::WebviewWindow) {
 /// macOS has no window style that stops a click from activating the owning
 /// application; only an NSPanel carrying `NonactivatingPanel` does. So the
 /// equivalent of the ex-style above is a class swap plus that mask, in
-/// macos_window.rs.
+/// macos_window.rs. The accessory class also answers NO to `canBecomeKeyWindow`
+/// unless its owner grants it for a phase (`set_accessory_key_eligible`):
+/// tao's `show()` is `makeKeyAndOrderFront:`, so an always-eligible panel would
+/// take key on every show and swallow the keystrokes dictation posts.
 #[cfg(target_os = "macos")]
 pub(crate) fn apply_no_activate(window: &tauri::WebviewWindow) {
-    crate::macos_window::make_non_activating_panel(window);
+    crate::macos_window::make_non_activating_accessory_panel(window);
 }
 
 #[cfg(not(any(windows, target_os = "macos")))]

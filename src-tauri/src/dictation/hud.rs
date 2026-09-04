@@ -26,7 +26,7 @@ use std::sync::Mutex;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager};
 
-use crate::overlay::{self, NotchEdge, OverlayPresentation};
+use crate::overlay::{self, NotchEdge};
 
 pub const DICTATION_WINDOW: &str = "dictation";
 
@@ -172,8 +172,9 @@ impl HudUpdate {
 fn build_window(app: &AppHandle) -> Result<(), String> {
     // The resting surface receives hover (ignore_cursor_events false) so
     // Windows can show its native hint. WS_EX_NOACTIVATE, applied inside the
-    // shared builder, keeps it from taking focus, and the surface has no
-    // click action. Active dictation switches back to click-through.
+    // shared builder (the `AuraAccessoryPanel` class on macOS), keeps it from
+    // taking focus, and the surface has no click action. Active dictation
+    // switches back to click-through.
     crate::window_util::build_accessory_window(
         app,
         DICTATION_WINDOW,
@@ -194,10 +195,29 @@ fn build_window(app: &AppHandle) -> Result<(), String> {
 ///
 /// Kept separate from `accepts_clicks` on purpose even though both currently
 /// name interactive phases: Idle accepts the cursor so Windows can show its
-/// hover hint, and it must NOT become activatable to get that.
+/// hover hint, and it must NOT become activatable to get that. On macOS the
+/// same predicate drives the panel's `canBecomeKeyWindow` through
+/// `prepare_activation`.
 fn needs_activation(phase: HudPhase) -> bool {
     matches!(phase, HudPhase::Recovery | HudPhase::Consent)
 }
+
+/// The half of activation that has to run BEFORE `window.show()`. On macOS
+/// show is `makeKeyAndOrderFront:`, so the panel's answer to
+/// `canBecomeKeyWindow` must already be right for the phase; setting it after
+/// show would leave the HUD key for the rest of the hold, and every keystroke
+/// dictation posts would land in this webview instead of the user's field
+/// while the user's app still read as frontmost. Revoking also makes a
+/// currently-key panel resign (see `macos_window::set_accessory_key_eligible`).
+/// Windows has no pre-show half: WS_EX_NOACTIVATE is rewritten by tao's
+/// apply_diff on show, so there it can only be applied afterwards.
+#[cfg(target_os = "macos")]
+fn prepare_activation(window: &tauri::WebviewWindow, phase: HudPhase) {
+    crate::macos_window::set_accessory_key_eligible(window, needs_activation(phase));
+}
+
+#[cfg(not(target_os = "macos"))]
+fn prepare_activation(_window: &tauri::WebviewWindow, _phase: HudPhase) {}
 
 /// Adds or removes WS_EX_NOACTIVATE for the current phase, and logs the
 /// ex-style bits that actually stuck.
@@ -247,15 +267,14 @@ fn sync_activation(window: &tauri::WebviewWindow, phase: HudPhase) {
     }
 }
 
-/// macOS gets the same guarantee from a different direction. The HUD is built
-/// through `window_util::build_accessory_window`, so it is already a
-/// non-activating NSPanel and CANNOT steal focus no matter which phase it is
-/// in - there is no style to toggle. What still has to happen is the second
-/// half of the Windows function: a phase the user can click needs the panel to
-/// actually own key input, and being eligible is not the same as having it.
-///
-/// The tao style-rewrite hazard applies here too, which is why the panel style
-/// is re-asserted rather than assumed.
+/// The post-show half on macOS. Key eligibility was decided by
+/// `prepare_activation` before `window.show()`; this re-asserts the panel style
+/// tao's show may have rewritten and, for a phase with buttons, makes the panel
+/// key without activating Aura (show already did when it was allowed to; this
+/// covers the suppressed-then-restored case). The panel is NOT non-stealing by
+/// construction: it is a non-activating panel whose key eligibility is
+/// phase-gated, so a show site that skips the pre-show half steals key on
+/// show. Keep both halves paired at every show call site.
 #[cfg(target_os = "macos")]
 fn sync_activation(window: &tauri::WebviewWindow, phase: HudPhase) {
     crate::macos_window::reassert_panel_style(window);
@@ -437,6 +456,7 @@ pub fn show(app: &AppHandle, target: isize) {
         if let Some(window) = handle.get_webview_window(DICTATION_WINDOW) {
             place_window(&handle, &window, target, HudPhase::Listening, false);
             let _ = window.set_ignore_cursor_events(true);
+            prepare_activation(&window, HudPhase::Listening);
             if !SUPPRESSED_BY_OVERLAY.load(Ordering::Relaxed) {
                 let _ = window.show();
             }
@@ -463,6 +483,7 @@ pub fn show_idle(app: &AppHandle) {
         if let Some(window) = handle.get_webview_window(DICTATION_WINDOW) {
             place_window(&handle, &window, LAST_TARGET.load(Ordering::Relaxed), HudPhase::Idle, false);
             let _ = window.set_ignore_cursor_events(false);
+            prepare_activation(&window, HudPhase::Idle);
             if !SUPPRESSED_BY_OVERLAY.load(Ordering::Relaxed) {
                 let _ = window.show();
             }
@@ -540,6 +561,7 @@ pub fn publish(app: &AppHandle, mut update: HudUpdate) {
         if let Some(window) = handle.get_webview_window(DICTATION_WINDOW) {
             place_window(&handle, &window, target, phase, has_caption);
             let _ = window.set_ignore_cursor_events(!accepts_clicks(phase));
+            prepare_activation(&window, phase);
             if !SUPPRESSED_BY_OVERLAY.load(Ordering::Relaxed) {
                 let _ = window.show();
             }
@@ -573,6 +595,7 @@ pub fn set_overlay_suppressed(app: &AppHandle, suppressed: bool) {
         let update = last_update();
         place_window(&handle, &window, LAST_TARGET.load(Ordering::Relaxed), update.phase, !update.text.is_empty());
         let _ = window.set_ignore_cursor_events(!accepts_clicks(update.phase));
+        prepare_activation(&window, update.phase);
         let _ = window.show();
     });
 }
