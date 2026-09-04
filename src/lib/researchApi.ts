@@ -243,6 +243,21 @@ export function cancelResearch(runId: string): Promise<ResearchRun> {
   return request(`/research/${encodeURIComponent(runId)}/cancel`, { method: "POST" });
 }
 
+export function answerResearch(
+  runId: string,
+  questionId: string,
+  answerText: string,
+): Promise<ResearchRun> {
+  return request(`/research/${encodeURIComponent(runId)}/answer`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      question_id: questionId,
+      answer: { text: answerText, via: "dashboard" },
+    }),
+  });
+}
+
 export async function deleteResearch(runId: string): Promise<void> {
   const response = await authFetch(`/research/${encodeURIComponent(runId)}`, { method: "DELETE" });
   if (!response.ok) throw new Error(`Research deletion failed (${response.status})`);

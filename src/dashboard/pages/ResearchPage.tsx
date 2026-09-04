@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
+  answerResearch,
   cancelResearch,
   deleteResearch,
   getResearchActivity,
@@ -92,7 +93,10 @@ function SourceMark({ domain, small = false }: { domain: string; small?: boolean
 }
 
 function isLegacyParked(run: ResearchRun): boolean {
-  return run.state === "awaiting_clarification" || (
+  // awaiting_clarification is deliberately NOT legacy-parked: those runs have
+  // a live pending question and render the answer card below instead of the
+  // "restart this older request" dead end they used to fall into.
+  return (
     run.state === "queued"
     && run.currentPlanVersion > 0
     && run.admittedPlanVersion === 0
@@ -278,6 +282,52 @@ function LegacyParkedRun({ run, onRestart }: { run: ResearchRun; onRestart: (req
   );
 }
 
+function PendingQuestionCard({ run, busy, onAnswer }: { run: ResearchRun; busy: boolean; onAnswer: (answerText: string) => void }) {
+  const question = run.pendingQuestion;
+  const text = String(question.text ?? "").trim();
+  const choices = Array.isArray(question.choices) ? question.choices.filter(Boolean) : [];
+  const defaults = Array.isArray(question.default_assumptions) ? question.default_assumptions.filter(Boolean) : [];
+  const [customAnswer, setCustomAnswer] = useState("");
+  if (!text) return null;
+  return (
+    <section className="db-research-legacy db-research-question">
+      <div>
+        <span className="db-research-section-kicker">Needs your answer</span>
+        <h2>{text}</h2>
+        <p>The research is paused until you answer. Pick an option, type your own, or let Buddy proceed on the stated assumptions.</p>
+        {choices.length > 0 && (
+          <div className="db-research-plan-list">
+            {choices.map((choice, index) => (
+              <div key={choice}>
+                <span>{index + 1}</span>
+                <button type="button" className="db-research-secondary" disabled={busy} onClick={() => onAnswer(choice)}>{choice}</button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="db-research-command">
+          <input
+            type="text"
+            value={customAnswer}
+            placeholder="Or type an answer"
+            disabled={busy}
+            onChange={(event) => setCustomAnswer(event.target.value)}
+            onKeyDown={(event) => { if (event.key === "Enter" && customAnswer.trim()) onAnswer(customAnswer.trim()); }}
+          />
+          <button type="button" className="db-research-primary" disabled={busy || !customAnswer.trim()} onClick={() => onAnswer(customAnswer.trim())}>Answer</button>
+        </div>
+        {defaults.length > 0 && (
+          <div className="db-research-assumptions">
+            <strong>Or proceed assuming</strong>
+            {defaults.map((item) => <span key={item}>{item}</span>)}
+            <button type="button" className="db-research-secondary" disabled={busy} onClick={() => onAnswer(defaults.join("; "))}>Use these assumptions</button>
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function CitationButton({ number, evidence, claim, onSelect }: { number: number; evidence: ResearchEvidence; claim: string; onSelect: (value: SelectedEvidence) => void }) {
   return <button type="button" className="db-research-citation" onClick={() => onSelect({ ...evidence, claim })} aria-label={`Open source ${number}`}>{number}</button>;
 }
@@ -433,7 +483,7 @@ function ResearchDetail({ runId, onBack, onChanged, onNewRequest }: { runId: str
         <button type="button" className="db-research-back" onClick={onBack}><ArrowLeft size={17} /> All research</button>
         <div className="db-research-detail-tools">
           <RefreshIndicator refreshing={resource.refreshing || activity.refreshing} stale={resource.stale} cachedAt={resource.cachedAt} onRetry={() => { resource.reload(); activity.reload(); }} />
-          {activeStates.has(run.state) && !legacyParked && <button type="button" className="db-research-secondary" disabled={busy} onClick={() => void mutate(() => cancelResearch(run.runId))}><X size={15} /> Cancel</button>}
+          {(activeStates.has(run.state) || run.state === "awaiting_clarification") && !legacyParked && <button type="button" className="db-research-secondary" disabled={busy} onClick={() => void mutate(() => cancelResearch(run.runId))}><X size={15} /> Cancel</button>}
           <div className="db-research-more">
             <button type="button" onClick={() => setMenuOpen((open) => !open)} aria-label="More research actions" aria-expanded={menuOpen}><MoreHorizontal size={18} /></button>
             {menuOpen && <div><button type="button" onClick={() => { setMenuOpen(false); setConfirmDelete(true); }}><Trash2 size={15} /> Delete research</button></div>}
@@ -448,6 +498,9 @@ function ResearchDetail({ runId, onBack, onChanged, onNewRequest }: { runId: str
 
       {operationError && <div className="db-research-inline-error"><CircleAlert size={17} /><span>{operationError}</span><button type="button" onClick={() => setOperationError("")}>Dismiss</button></div>}
       {legacyParked && <LegacyParkedRun run={run} onRestart={onNewRequest} />}
+      {run.state === "awaiting_clarification" && (
+        <PendingQuestionCard run={run} busy={busy} onAnswer={(answerText) => void mutate(() => answerResearch(run.runId, String(run.pendingQuestion.question_id ?? ""), answerText))} />
+      )}
       {activeStates.has(run.state) && !legacyParked && <ResearchActivityView run={run} activity={activity.data ?? null} />}
       {(run.state === "ready" || run.state === "partial") && <BriefView run={run} onNewRequest={onNewRequest} />}
       {run.state === "failed" && <section className="db-research-terminal is-failed"><CircleAlert size={22} /><div><span className="db-research-section-kicker">Research stopped</span><h2>Buddy could not produce a source-backed brief</h2><p>{failureMessage(run.failureCode)}</p><button type="button" className="db-research-primary" onClick={() => onNewRequest(run.request)}>Try a revised request</button></div></section>}
