@@ -46,8 +46,9 @@ Rules that are easy to get wrong:
 3. Bump the four version files (see CLAUDE.md "To ship"), commit, push, tag. The `publish`
    job flips the draft only after both platforms verified and `latest.json` carries all
    three platform keys.
-4. Hand the `.dmg` link from the release to beta users directly. Aura-Web keeps serving the
-   `.msi` until its download page learns to pick the `.dmg`.
+4. Aura-Web serves the `.dmg` on its own from that release: `/desktop` picks it out of the
+   same GitHub response as the `.msi` and leads with it for a Mac visitor. Nothing to hand
+   out by hand, and nothing to redeploy there when a new version ships.
 5. Cut a patch release later so the beta installs prove the self-update path.
 
 ## 3. Before public launch (company certificate)
@@ -60,5 +61,5 @@ Rules that are easy to get wrong:
   on its first launch after that update. Put that in the release notes.
 - Same release: test `entitlements.plist` with `allow-dyld-environment-variables` and
   `allow-unsigned-executable-memory` removed (dry run, then launch on a clean Mac).
-- Point Aura-Web's download page at the `.dmg` for macOS visitors and update
-  `../Aura/ECOSYSTEM.md` section 6.
+- Drop the Beta badge on Aura-Web's Mac download button (`DesktopDownloadButtons.tsx`); it
+  is there to make this one round of permission re-prompts read as expected.
