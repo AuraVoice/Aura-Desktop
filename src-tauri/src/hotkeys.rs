@@ -13,6 +13,11 @@ use crate::{dashboard, guide, overlay, security};
 const HOTKEY_STORE: &str = "hotkeys.json";
 const HOTKEYS_KEY: &str = "bindings";
 const VOICE_KEY_SETTING: &str = "voiceToggleKey";
+/// A webview that dies without calling `end_hotkey_test` must not swallow the
+/// shortcut forever, so an armed test expires. The tour re-arms with the same
+/// owner every 120s (TEST_REARM_MS in HotkeyTourStep.tsx) to hold the deadline
+/// open while its screen is genuinely showing; shortening this below that
+/// interval silently disarms a screen that still says "Press it now".
 const TEST_TIMEOUT: Duration = Duration::from_secs(300);
 /// The voice trigger is not in SPECS, so it needs its own label for conflict
 /// messages. Keep in sync with the tour's "Start or end voice".

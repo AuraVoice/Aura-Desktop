@@ -62,7 +62,10 @@
   /* Centered, not space-between: with one key tile and one button, pushing them
      to opposite edges is what made the card read as mostly empty. */
   justify-content: center;
-  gap: 18px;
+  /* A three-key chord (Ctrl + Option + V) plus Change is wider than the card,
+     so let Change drop to its own line instead of spilling past the border. */
+  flex-wrap: wrap;
+  gap: 12px 18px;
   min-height: 108px;
   padding: 18px 20px;
   box-sizing: border-box;
@@ -71,7 +74,7 @@
   background: rgba(247, 249, 252, 0.86);
 }
 
-.hotkey-test-stage-keys { display: flex; align-items: center; }
+.hotkey-test-stage-keys { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; }
 .hotkey-test-stage-group { display: flex; align-items: center; gap: 14px; }
 .hotkey-test-stage-plus { margin: 0 8px; color: #8b929c; font-size: 18px; }
 
