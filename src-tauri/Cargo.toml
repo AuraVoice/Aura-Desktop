@@ -100,12 +100,12 @@ base64 = "0.22"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = "1"
 
-# macOS key wrapping. crypto.rs holds the per-feature key files exactly where
-# Windows does and wraps them with one master key kept in the login Keychain,
-# which is the closest analogue to DPAPI's "useless on another machine or user
-# account" property.
+# macOS key wrapping needs no crate of its own. crypto.rs holds the per-feature
+# key files exactly where Windows does and wraps them with a master key derived
+# from a local salt file and libc's gethostuuid, which gives DPAPI's "useless on
+# another machine or user account" property without the login Keychain's
+# identity-bound ACL prompt.
 [target.'cfg(target_os = "macos")'.dependencies]
-security-framework = "3"
 
 # The voice-toggle/dictation key listener (voice_toggle_key.rs) runs a
 # listen-only CGEventTap on its own CFRunLoop thread, and gates itself on the

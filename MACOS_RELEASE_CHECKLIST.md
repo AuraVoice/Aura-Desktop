@@ -57,8 +57,10 @@ Rules that are easy to get wrong:
   membership's Developer ID Application export; the API key must be regenerated under the
   organization team too.
 - The Team ID changes. Every beta install re-prompts for Microphone, Accessibility, Input
-  Monitoring and Screen Recording, and once for the keychain master key ("Always Allow"),
-  on its first launch after that update. Put that in the release notes.
+  Monitoring and Screen Recording on its first launch after that update. Put that in the
+  release notes. The at-rest master key no longer rides along: it is derived from a local
+  salt file plus the hardware UUID rather than held in the login Keychain, so no keychain
+  dialog appears at the switch.
 - Same release: test `entitlements.plist` with `allow-dyld-environment-variables` and
   `allow-unsigned-executable-memory` removed (dry run, then launch on a clean Mac).
 - Drop the Beta badge on Aura-Web's Mac download button (`DesktopDownloadButtons.tsx`); it

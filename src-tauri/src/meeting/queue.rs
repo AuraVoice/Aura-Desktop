@@ -12,6 +12,9 @@ pub use super::evidence_store::{
 };
 use super::evidence_store::{ExportRequest, Store, StoredSegment};
 
+/// Sits beside the captures it tags. Plaintext on purpose: see `installation_id`.
+const INSTALLATION_ID_FILE: &str = "installation-id";
+
 fn base_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let directory = app
         .path()
@@ -216,8 +219,22 @@ pub fn interrupt_orphaned_captures(
 pub fn reconcile(app: &AppHandle) -> Result<ReconciliationReport, String> {
     let store = store(app)?;
     {
-        let key = super::crypto::load_or_create_key(app)?;
+        // Resolved on the first segment that actually needs decrypting, never
+        // up front. This runs at every launch (meeting::startup_maintenance),
+        // so loading the key eagerly made an install with zero recordings pay
+        // for the key store anyway - on macOS that used to be a keychain hit
+        // before the user had done anything at all.
+        // A Cell because `reconcile` takes `Fn`, not `FnMut`.
+        let key = std::cell::Cell::new(None::<[u8; 32]>);
         store.reconcile(|metadata, encrypted| {
+            let key = match key.get() {
+                Some(key) => key,
+                None => {
+                    let loaded = super::crypto::load_or_create_key(app)?;
+                    key.set(Some(loaded));
+                    loaded
+                }
+            };
             if metadata.encryption_version >= 2 {
                 super::crypto::decrypt_with_aad(&key, encrypted, &metadata.aad())
             } else {
@@ -288,11 +305,69 @@ pub fn export_bundle(
     }
 }
 
+/// Names this installation on capture rows so a stranded capture can be matched
+/// back to the machine that made it. A device tag, not a secret.
+///
+/// It used to be a SHA-256 of the segment encryption key, which meant the
+/// overlay asking for runtime status at mount pulled a live key out of the key
+/// store purely to hash it - on macOS, a keychain round trip before the user
+/// had touched anything. The id is now its own random value, so nothing on this
+/// path touches crypto at all.
 pub fn installation_id(app: &AppHandle) -> Result<String, String> {
-    {
-        let key = super::crypto::load_or_create_key(app)?;
-        let digest = format!("{:x}", Sha256::digest(key));
-        Ok(format!("install_{}", &digest[..32]))
+    let path = base_dir(app)?.join(INSTALLATION_ID_FILE);
+    loop {
+        match std::fs::read_to_string(&path) {
+            Ok(stored) => {
+                let stored = stored.trim();
+                if is_installation_id(stored) {
+                    return Ok(stored.to_string());
+                }
+                // A truncated or hand-edited file would otherwise poison every
+                // capture row it named. Replace it: unlike a key, a device tag
+                // that has to change costs only the recovery match for captures
+                // still in flight.
+                std::fs::remove_file(&path)
+                    .map_err(|error| format!("could not replace the installation id: {error}"))?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("could not read the installation id: {error}")),
+        }
+
+        let mut bytes = [0u8; 16];
+        getrandom::fill(&mut bytes).map_err(|error| format!("system RNG failed: {error}"))?;
+        let minted = format!(
+            "install_{}",
+            bytes
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>()
+        );
+
+        // create_new on the final path so two processes racing at launch settle
+        // on one id instead of overwriting each other. Losing is not an error.
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                use std::io::Write;
+                file.write_all(minted.as_bytes())
+                    .map_err(|error| format!("could not write the installation id: {error}"))?;
+                file.sync_all()
+                    .map_err(|error| format!("could not write the installation id: {error}"))?;
+                return Ok(minted);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(format!("could not write the installation id: {error}")),
+        }
+    }
+}
+
+fn is_installation_id(value: &str) -> bool {
+    match value.strip_prefix("install_") {
+        Some(hex) => hex.len() == 32 && hex.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        None => false,
     }
 }
 

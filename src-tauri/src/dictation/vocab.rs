@@ -99,12 +99,34 @@ pub(super) fn dictation_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-/// Loads the dictation key, minting and DPAPI-wrapping a fresh one on first
-/// use. A wrapped blob that no longer unwraps fails closed rather than being
+/// Loads the dictation key, minting and wrapping a fresh one on first use. A
+/// wrapped blob that no longer unwraps fails closed rather than being
 /// replaced, so a machine/profile change surfaces as an error instead of
 /// silently discarding a vocabulary the user spent weeks building.
+///
+/// The one exception is a key file that predates the current wrapping scheme,
+/// which `crypto` discards on macOS (see `crypto::KEY_FILE_MAGIC`). History
+/// rows and clips already skip individually when they will not decrypt, but
+/// `read_store` propagates its error, so the vocabulary and corrections files
+/// would hard-fail forever on a key they can no longer be opened with. Drop
+/// them in the same breath. `crypto` owns the mechanism and must not learn
+/// feature paths, so the knowledge of WHICH files lives here.
 pub(super) fn load_or_create_key(app: &AppHandle) -> Result<[u8; 32], String> {
-    crate::crypto::load_or_create_key_at(&dictation_dir(app)?.join(KEY_FILE), "dictation")
+    let dir = dictation_dir(app)?;
+    let key_path = dir.join(KEY_FILE);
+    if crate::crypto::is_legacy_wrapped(&key_path) {
+        for file in [VOCAB_FILE, CORRECTIONS_FILE] {
+            let path = dir.join(file);
+            match std::fs::remove_file(&path) {
+                Ok(()) => log::warn!(
+                    "dictation.vocab: dropped {file}, sealed by the retired key wrapping"
+                ),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(format!("could not drop the retired {file}: {error}")),
+            }
+        }
+    }
+    crate::crypto::load_or_create_key_at(&key_path, "dictation")
 }
 
 pub(super) use crate::crypto::encrypt;
