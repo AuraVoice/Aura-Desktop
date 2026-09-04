@@ -263,8 +263,11 @@ jobs:
       contents: write
     runs-on: macos-latest
     # notarytool --wait usually returns in two to five minutes and occasionally
-    # sits for twenty. The default 360 would let a stuck notary burn six hours.
-    timeout-minutes: 90
+    # sits for twenty, but the first real run of this job sat in it for 69
+    # minutes and was killed by a 90 minute cap mid-submission, which destroys
+    # the evidence instead of reporting a failure. The build ahead of it takes
+    # about seventeen. The default 360 would let a stuck notary burn six hours.
+    timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
 
@@ -395,7 +398,14 @@ jobs:
           codesign --force --options runtime --timestamp --keychain "$keychain" -s "$identity" "$sample"
           codesign --verify --strict --verbose=2 "$sample"
 
-          xcrun notarytool history --key-id "$APPLE_API_KEY" --key "$APPLE_API_KEY_PATH" --issuer "$APPLE_API_ISSUER" > /dev/null
+          # Printed rather than discarded: Tauri swallows notarytool's output
+          # until it returns, so a build that dies inside it logs nothing after
+          # "Notarizing" and leaves no submission id. This listing is then the
+          # only place a previous run's real state shows up, and it separates a
+          # slow notary (Accepted, In Progress) from a rejected upload (Invalid)
+          # from one that never arrived at all.
+          echo "Recent notarization submissions:"
+          xcrun notarytool history --key-id "$APPLE_API_KEY" --key "$APPLE_API_KEY_PATH" --issuer "$APPLE_API_ISSUER"
           echo "Apple signing and notarization credentials work. The bundler should now succeed."
 
       # Off by default, same contract as the Windows dry run: a plain dispatch
