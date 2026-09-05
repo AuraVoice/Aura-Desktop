@@ -25,6 +25,15 @@ interface HotkeyTourStepProps {
  * short enough that it does not feel like a stall. */
 const SUCCESS_BEAT_MS = 750;
 
+/** Rust drops an armed test after 300s so a webview that died without calling
+ * end_hotkey_test cannot swallow the shortcut forever. Nothing told this screen
+ * about that: it kept saying "Press it now" while the press had gone back to
+ * summoning Buddy, which is what someone who sits on the tour for a few minutes
+ * actually hits. Re-arming well inside that window keeps the deadline fresh for
+ * as long as the step is really on screen, and a dead webview still stops
+ * refreshing and still expires. */
+const TEST_REARM_MS = 120_000;
+
 /** Display labels for the double-tap keys, which are whole labels rather than
  * the single characters the generic branch below assumes. Without these,
  * "Left Ctrl" fell through to heldCodes.has("KeyLeft Ctrl") and never matched,
@@ -42,8 +51,11 @@ function isDisplayedKeyHeld(key: string, heldCodes: Set<string>): boolean {
   const codes = LABEL_CODES[key];
   if (codes) return codes.some((code) => heldCodes.has(code));
   if (key === "Ctrl") return heldCodes.has("ControlLeft") || heldCodes.has("ControlRight");
-  if (key === "Alt") return heldCodes.has("AltLeft") || heldCodes.has("AltRight");
+  // "Option" and "Cmd" are what keys_for labels ALT and SUPER with on macOS, so
+  // matching only "Alt"/"Win" left every mac modifier tile dark.
+  if (key === "Alt" || key === "Option") return heldCodes.has("AltLeft") || heldCodes.has("AltRight");
   if (key === "Shift") return heldCodes.has("ShiftLeft") || heldCodes.has("ShiftRight");
+  if (key === "Win" || key === "Cmd") return heldCodes.has("MetaLeft") || heldCodes.has("MetaRight");
   if (key === "Space" || /^F([1-9]|1[01])$/.test(key)) return heldCodes.has(key);
   if (/^[0-9]$/.test(key)) return heldCodes.has(`Digit${key}`);
   return heldCodes.has(`Key${key}`);
@@ -116,6 +128,7 @@ export function HotkeyTourStep({ keyLabel, onContinue }: HotkeyTourStepProps) {
     setTestReady(false);
     setTestError(null);
     let unlisten: (() => void) | undefined;
+    let rearm: ReturnType<typeof setInterval> | undefined;
     void (async () => {
       try {
         const stopListening = await listen<string>(HOTKEY_TEST_PRESSED, (event) => {
@@ -129,7 +142,16 @@ export function HotkeyTourStep({ keyLabel, onContinue }: HotkeyTourStepProps) {
         unlisten = stopListening;
         await invoke("begin_hotkey_test", { id: currentTestId, owner });
         if (cancelled) await invoke("end_hotkey_test", { owner });
-        else setTestReady(true);
+        else {
+          setTestReady(true);
+          // Same owner, so this only pushes the deadline out; it never stacks up
+          // a second armed test.
+          rearm = setInterval(() => {
+            invoke("begin_hotkey_test", { id: currentTestId, owner }).catch((err) =>
+              logError("HotkeyTourStep: keep test armed", err),
+            );
+          }, TEST_REARM_MS);
+        }
       } catch (err) {
         logError("HotkeyTourStep: prepare test", err);
         if (!cancelled) {
@@ -139,6 +161,7 @@ export function HotkeyTourStep({ keyLabel, onContinue }: HotkeyTourStepProps) {
     })();
     return () => {
       cancelled = true;
+      clearInterval(rearm);
       unlisten?.();
       void invoke("end_hotkey_test", { owner });
     };

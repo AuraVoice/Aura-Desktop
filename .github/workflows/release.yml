@@ -425,11 +425,12 @@ jobs:
 
       # BEFORE PUBLIC LAUNCH: APPLE_CERTIFICATE is the individual membership's
       # Developer ID today. Replacing it with the company's changes the Team
-      # ID, and macOS keys every TCC grant and the keychain master key's ACL
-      # on that identity. Every beta install will re-prompt for Microphone,
-      # Accessibility, Input Monitoring and Screen Recording, plus one keychain
-      # "Always Allow", on its first launch after that update. Ship that
+      # ID, and macOS keys every TCC grant on that identity. Every beta install
+      # will re-prompt for Microphone, Accessibility, Input Monitoring and
+      # Screen Recording on its first launch after that update. Ship that
       # release with a note that says so; nothing in the code can avoid it.
+      # The at-rest master key no longer rides along: it is derived locally
+      # rather than held in the login Keychain, so no keychain dialog appears.
       - uses: tauri-apps/tauri-action@v0
         if: startsWith(github.ref, 'refs/tags/')
         env:

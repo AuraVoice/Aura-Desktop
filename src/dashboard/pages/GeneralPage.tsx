@@ -230,6 +230,12 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
                 onChange={(value) => void updateTaskbarVisibility(value)}
               />
               <ToggleRow
+                label="Allow screenshots in text chat"
+                description="Lets the text chat composer attach what's on screen, and lets asking for a screenshot in a message take one. Off means no text chat message can carry your screen."
+                checked={settings.chatScreenshots}
+                onChange={(value) => void update("chatScreenshots", value)}
+              />
+              <ToggleRow
                 label="Let Aura see your screen while you talk"
                 description="Send what's on screen with each thing you say during a voice call, so Aura can answer about it. Nothing is sent while you're silent or not on a call."
                 checked={settings.voiceScreenContext}

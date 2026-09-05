@@ -122,7 +122,7 @@ export function OverlayRoot() {
   const visibleChatOpen = chatEnabled && chatOpen && !showInterviewHacker;
   const chatOpenRef = useRef(visibleChatOpen);
   chatOpenRef.current = visibleChatOpen;
-  const screenCapture = useChatScreenCapture(visibleChatOpen);
+  const screenCapture = useChatScreenCapture(visibleChatOpen, generalSettings.chatScreenshots);
   const chat = useChatSession({
     enabled: chatEnabled,
     uid: user?.uid ?? null,

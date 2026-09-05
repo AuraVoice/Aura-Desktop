@@ -16,7 +16,7 @@ The runtime has three Tauri webview windows:
 
 - `main` is the borderless, transparent, always-on-top companion overlay. It resizes/repositions itself between `hidden`, `panel`, `bar`, `companion`, `pointing`, and `movingnotch`; `panel` carries the `setup` or `companion` variant. See `src-tauri/src/overlay.rs` for the native state machine and `src/overlay/OverlayRoot.tsx` for the matching React root.
 - `dashboard` is the opaque, resizable app window built on demand by `src-tauri/src/dashboard.rs`, routed by `src/main.tsx` into `src/dashboard/DashboardApp`.
-- `dictation` is the separate transparent HUD built by `src-tauri/src/dictation/hud.rs`, routed by `src/main.tsx` into `src/dictation/DictationHud`. It shares the overlay notch edge, stays out of the taskbar and Dock, and must not steal focus from the target app except for the consent prompt (a `WS_EX_NOACTIVATE` window on Windows, a non-activating `NSPanel` on macOS). It and the buddy overlay are never both on screen: at rest any visible presentation hides the HUD, and for the length of a hold the notch hides and the HUD takes its edge, then the notch returns on `Idle`. Both directions run through `overlay::apply_result` (the `dictation_hold` flag, set only via `overlay::set_dictation_hold`); a live voice call or an explicit summon keeps the notch and leaves the HUD hidden.
+- `dictation` is the separate transparent HUD built by `src-tauri/src/dictation/hud.rs`, routed by `src/main.tsx` into `src/dictation/DictationHud`. It shares the overlay notch edge, stays out of the taskbar and Dock, and must not steal focus from the target app except for the consent prompt (a `WS_EX_NOACTIVATE` window on Windows; on macOS a non-activating `NSPanel` whose `canBecomeKeyWindow` is phase-gated, because tao's `show()` is `makeKeyAndOrderFront:` and a panel that is always key-eligible takes key on every show). It and the buddy overlay are never both on screen: at rest any visible presentation hides the HUD, and for the length of a hold the notch hides and the HUD takes its edge, then the notch returns on `Idle`. Both directions run through `overlay::apply_result` (the `dictation_hold` flag, set only via `overlay::set_dictation_hold`); a live voice call or an explicit summon keeps the notch and leaves the HUD hidden.
 - Rust owns window geometry, the configurable voice trigger (default Left Ctrl double-tap on Windows, Ctrl+Alt+V on macOS, where a double-tapped bare modifier would need an Input Monitoring grant a registered chord does not), global hotkeys (Ctrl+Alt+Space chat, Ctrl+Alt+D dashboard, Ctrl+Alt+S Screen Sight, Ctrl+Alt+G Guide Mode, Ctrl+Alt+M output mute, Ctrl+Shift+D sign-out), tray, and foreground handling (`win_focus.rs`: on Windows because it denies `SetForegroundWindow` while another app owns focus, on macOS because `set_focus` activates the whole app and would pull focus off whatever the user was typing in). Force foreground ONLY for the Setup `Panel` or the explicit chat summon path that uses `raise_for_hotkey`. Never force it for the resting notch/`Bar`: the notch is always-on-top, so it shows without stealing focus - see the 2026-07-16 "fail to dismiss" lesson.
 - React owns all visual content and copy (`src/dashboard/`, `src/overlay/`, `src/dictation/`), Firebase auth (`src/state/AuthProvider.tsx`), standard per-turn screen capture (`useTurnScreenCapture`), continuous change-filtered Guide capture (`useGuideMode`), and the LiveKit call.
 - The overlay drag surface is one continuous drag region (`data-tauri-drag-region="deep"` on `GlassSurface`) - real inputs/buttons/links block dragging on themselves automatically (Tauri's own rule), nothing else needs to opt in or out individually. Don't add a narrower `data-tauri-drag-region` (bare, no value) on an inner element unless you mean to shadow/restrict the outer region - a bare attribute closer to the click target short-circuits the walk and blocks the deep region from ever being reached. Clickable overlay elements must be real `<button>`s, inputs, or links, not `<div role="button">`.
@@ -92,12 +92,28 @@ mirrors always calls `CallNextHookEx` and never suppresses; since macOS has no `
 the insert path stamps `kCGEventSourceUserData` with a marker the tap drops.
 
 **At-rest encryption has exactly one platform seam.** `crypto.rs` is AES-256-GCM everywhere;
-only key WRAPPING differs (DPAPI on Windows, a login-Keychain master key on macOS), and that
-lives in its `keywrap` submodule. Per-feature key files stay in the same place on both, so
-deleting the meeting captures directory still cannot brick the dictation vocabulary. Both
-implementations MUST fail closed: on macOS only `errSecItemNotFound` may mint a new key.
-Treating a locked or denied keychain as "no key" silently mints a replacement and makes every
-already-sealed row permanently unreadable while new writes look healthy.
+only key WRAPPING differs (DPAPI on Windows, and on macOS a master key derived as
+`SHA-256(domain ‖ master.salt ‖ gethostuuid())`), and that lives in its `keywrap` submodule.
+Per-feature key files stay in the same place on both, so deleting the meeting captures
+directory still cannot brick the dictation vocabulary. Both implementations MUST fail closed:
+on macOS only a genuinely absent `master.salt` may mint a new one. Treating an unreadable salt
+as "no key" silently mints a replacement and makes every already-sealed row permanently
+unreadable while new writes look healthy.
+
+**macOS does NOT use the login Keychain for this, and putting it back is a regression.** A
+keychain item's ACL is bound to the code identity that created it, so a `tauri dev` binary, a
+locally signed bundle and a release build are three different owners of one secret; every
+mismatch raises "Aura Desktop wants to access key com.aura.desktop in your keychain", asking
+for the LOGIN KEYCHAIN password, which most users have never knowingly set. The Team ID switch
+would do it to every install at once. Apple's prompt-free answer (the data protection keychain)
+needs an App-ID-signed binary with the restricted `keychain-access-groups` entitlement
+authorised by an embedded provisioning profile, which Tauri does not inject, and its access
+group is still Team-ID scoped. The derivation gives DPAPI's "useless on another machine"
+property with no dialog on any code path. It also means another process running as this user
+can derive the key, which is exactly what DPAPI at current-user scope already allows on
+Windows: parity, not a step down. Key files written before this carry no `KEY_FILE_MAGIC`; on
+macOS they are unrecoverable and get dropped and re-minted ONCE, and that reset is bounded by
+the magic precisely so a marked blob that will not unwrap still fails closed.
 
 **User-visible strings never hardcode a platform.** `src/lib/platformKeys.ts` is the only place that
 knows which OS this is: key labels (Ctrl/Win vs the macOS symbols), `deviceNoun`, `trayNoun`,
@@ -261,15 +277,14 @@ Signing config lives in the Entra app registration (federated credential subject
 
 **macOS signing is five secrets and no script.** How to obtain each, the run order, and the company-certificate switch are written up in [`MACOS_RELEASE_CHECKLIST.md`](./MACOS_RELEASE_CHECKLIST.md); read it before the first Mac tag. The same `production` environment holds `APPLE_CERTIFICATE` (base64 of the Developer ID Application `.p12`), `APPLE_CERTIFICATE_PASSWORD`, `APPLE_API_KEY` (App Store Connect Team key ID), `APPLE_API_ISSUER`, and `APPLE_API_KEY_P8` (the `.p8` body; the job writes it to disk and sets `APPLE_API_KEY_PATH`). `KEYCHAIN_PASSWORD` is generated per run because it only guards a keychain the runner deletes. There is no `APPLE_ID`/`APPLE_PASSWORD` and the workflow does not want them: an app-specific password rides on a human account Apple can lock at any time. Individual keys cannot notarize; the key must be a Team key, Developer role is enough. Tauri does the import, `codesign --options runtime`, `notarytool submit --wait` and `stapler staple` itself from those env vars; a missing notarization credential is a build failure, never a silent skip.
 
-**BEFORE PUBLIC LAUNCH: the certificate is the individual membership's.** Replacing it with the company's Developer ID changes the Team ID, and macOS keys every TCC grant and the login-keychain master key's ACL on that identity. Every beta install will re-prompt for Microphone, Accessibility, Input Monitoring and Screen Recording, plus one keychain "Always Allow", on its first launch after that update. Ship that release with a note that says so; nothing in the code can avoid it. The updater itself is unaffected: it trusts the minisign key, not the Apple one. The same release is the moment to test dropping the unproven JIT entitlements (see `entitlements.plist`).
+**BEFORE PUBLIC LAUNCH: the certificate is the individual membership's.** Replacing it with the company's Developer ID changes the Team ID, and macOS keys every TCC grant on that identity. Every beta install will re-prompt for Microphone, Accessibility, Input Monitoring and Screen Recording on its first launch after that update. Ship that release with a note that says so; nothing in the code can avoid it. The at-rest master key is NOT affected any more: it is derived locally rather than held in the login Keychain, so no keychain dialog rides along with the Team ID change. The updater itself is unaffected: it trusts the minisign key, not the Apple one. The same release is the moment to test dropping the unproven JIT entitlements (see `entitlements.plist`).
 
 **Local Mac builds.** `tauri dev` runs an unsigned binary, and every rebuild is a new identity to TCC: Accessibility, Input Monitoring and Screen Recording grants vanish each time, and Sequoia refuses screen capture to ad-hoc binaries entirely. To test permissions or capture, build the real bundle with `APPLE_SIGNING_IDENTITY="Developer ID Application: <name> (<team>)" npm run tauri build -- --target universal-apple-darwin` and run the `.app` from /Applications. A locally built bundle carries no quarantine flag, so it launches without notarization.
 
-The same new-identity rule hits the keychain master key: the item's access list names the binary that created it, so every dev rebuild gets the "aura-desktop wants to use your confidential information" dialog, and it asks for the LOGIN KEYCHAIN password, which is only the Mac password if the two never drifted apart. Nothing in the code can fix that for unsigned builds. On a dev Mac, create the item once with every application trusted, and no rebuild will ever prompt again (a signed release build creates its own item and is never prompted, except once after the Team ID changes):
+The new-identity rule used to hit the at-rest master key too, because it lived in the login Keychain and that item's ACL names the binary that created it. It no longer does: the key is derived from `master.salt` plus the hardware UUID, neither of which cares which binary is asking, so a dev rebuild raises no dialog. If a Mac still has the retired item from an older build, delete it once; nothing recreates it.
 
 ```
-security delete-generic-password -s com.aura.desktop -a at-rest-master-key   # only if one exists; every key file sealed under it must go too
-security add-generic-password -s com.aura.desktop -a at-rest-master-key -X "$(openssl rand -hex 32)" -A
+security delete-generic-password -s com.aura.desktop -a at-rest-master-key
 ```
 
 ### Adding a new Tauri command

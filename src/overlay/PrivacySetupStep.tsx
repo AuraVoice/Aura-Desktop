@@ -16,6 +16,31 @@ import "./PrivacySetupStep.css";
 
 type MicrophoneStatus = "idle" | "checking" | "granted" | "denied" | "unavailable";
 
+/** The trailing control for a feature row the user can actually decide about.
+ * Styled in this step's own CSS rather than reusing the dashboard's ToggleRow:
+ * this step also renders in the overlay window, which never loads dashboard.css
+ * or the --db-* tokens, so a db- class here would be a bare checkbox. */
+function FeatureSwitch({
+  label,
+  checked,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <label className="privacy-row-switch">
+      <span className="privacy-row-switch-label">{label}</span>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+    </label>
+  );
+}
+
 export function PrivacySetupStep({
   onContinue,
 }: {
@@ -65,8 +90,8 @@ export function PrivacySetupStep({
     }
   }
 
-  function setImprovementChoice(
-    key: "improveConversations" | "improveActions",
+  function setChoice(
+    key: "chatScreenshots" | "voiceScreenContext" | "improveConversations" | "improveActions",
     checked: boolean,
   ) {
     setSettings((current) => ({ ...current, [key]: checked }));
@@ -160,11 +185,16 @@ export function PrivacySetupStep({
             <span className="privacy-row-copy">
               <strong>Text chat screenshot</strong>
               <small>
-                No screenshot is captured unless you attach one from the text chat composer.
+                Lets you attach what's on screen to a text chat message. Nothing is captured
+                until you attach it.
                 {isMac ? " macOS may ask for screen access the first time." : ""}
               </small>
             </span>
-            <span className="privacy-status-badge">Off by default</span>
+            <FeatureSwitch
+              label="Allow text chat screenshots"
+              checked={settings.chatScreenshots}
+              onChange={(checked) => setChoice("chatScreenshots", checked)}
+            />
           </div>
 
           <div className="privacy-feature-row">
@@ -172,11 +202,15 @@ export function PrivacySetupStep({
             <span className="privacy-row-copy">
               <strong>Voice Screen Sight</strong>
               <small>
-                Buddy sees your screen during Guide Mode, or while you talk after enabling
-                &quot;Let Aura see your screen while you talk&quot; in Settings.
+                Sends what's on screen with each thing you say during a voice call. Nothing is
+                sent while you're silent or not on a call.
               </small>
             </span>
-            <span className="privacy-status-badge">Off by default</span>
+            <FeatureSwitch
+              label="Let Aura see your screen while you talk"
+              checked={settings.voiceScreenContext}
+              onChange={(checked) => setChoice("voiceScreenContext", checked)}
+            />
           </div>
 
           {isMac && (
@@ -218,7 +252,7 @@ export function PrivacySetupStep({
             <input
               type="checkbox"
               checked={settings.improveConversations}
-              onChange={(event) => setImprovementChoice("improveConversations", event.target.checked)}
+              onChange={(event) => setChoice("improveConversations", event.target.checked)}
             />
           </label>
           <label className={`privacy-choice-card${settings.improveActions ? " is-selected" : ""}`}>
@@ -229,7 +263,7 @@ export function PrivacySetupStep({
             <input
               type="checkbox"
               checked={settings.improveActions}
-              onChange={(event) => setImprovementChoice("improveActions", event.target.checked)}
+              onChange={(event) => setChoice("improveActions", event.target.checked)}
             />
           </label>
         </div>

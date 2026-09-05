@@ -201,7 +201,7 @@ claims the meeting (`POST /meetings/claim`, monthly cap server-side: 5/month on 
 Companion, unlimited count on Pro, 402 mirrors the voice-cap shape) and starts
 `meeting/audio.rs`: WASAPI mic + render-loopback, both autoconverted to 16 kHz mono, written as
 5-minute 2-channel FLAC segments (ch0 = you, ch1 = everyone else), AES-256-GCM encrypted at
-rest (key wrapped by DPAPI on Windows, by a login-Keychain master key on macOS). A red recording indicator shows in the bar the whole time (tray
+rest (key wrapped by DPAPI on Windows, by a locally derived master key on macOS). A red recording indicator shows in the bar the whole time (tray
 tooltip too), capture pauses while the session is locked, and defers any pending update
 install. The JS pump uploads segments over REST, sends `/complete`, and the backend synthesizes
 (Deepgram nova-3 multichannel + LLM) into `users/{uid}/meetings/{id}` (7-day TTL on non-pro),
@@ -218,7 +218,7 @@ Notes; what still differs is how a few of them are implemented, not whether they
 |---|---|---|
 | Voice, text chat, dashboard, tray, hotkeys, updater | yes | yes |
 | Screen Sight / Guide Mode | DXGI fast path | `xcap` fallback, full readback per tick |
-| At-rest encryption and the stores on it | DPAPI-wrapped key | login-Keychain master key |
+| At-rest encryption and the stores on it | DPAPI-wrapped key | key derived from a local salt + hardware UUID |
 | Dictation transcription stack (ASR, vocab, polish, usage) | yes | yes |
 | Dictation microphone capture | WASAPI shared-mode autoconvert | AVAudioEngine + AVAudioConverter |
 | Dictation text insertion | SendInput | CGEvent, Accessibility grant |

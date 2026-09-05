@@ -10,7 +10,11 @@
 //!   Panel`. Tauri builds plain `NSWindow`s, so the class is swapped in place
 //!   after creation. That matters far beyond tidiness: dictation aborts its own
 //!   insert when the foreground app changes, so an overlay that activates Aura
-//!   on click would break every dictation that started from the notch.
+//!   on click would break every dictation that started from the notch. There
+//!   are two panel classes: the overlay's may always become key (its chat
+//!   composer types), the accessory windows' only when granted for a phase,
+//!   because tao's `show()` is `makeKeyAndOrderFront:` and a non-activating
+//!   panel that takes key steals keystrokes without ever looking frontmost.
 //! - **Work area.** `GetMonitorInfoW`'s `rcWork` is `NSScreen.visibleFrame`.
 //!   Without it a Top-docked notch renders under the menu bar and a
 //!   Bottom-docked one under the Dock.
@@ -26,6 +30,7 @@
 
 #![cfg(target_os = "macos")]
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use log::{error, warn};
@@ -49,6 +54,18 @@ struct ScreenRect {
 }
 
 static SCREENS: Mutex<Vec<ScreenRect>> = Mutex::new(Vec::new());
+
+/// The one accessory panel (dictation HUD, status pill) currently allowed to
+/// answer YES to `canBecomeKeyWindow`, stored as its NSWindow pointer; 0 means
+/// none. tao's `set_visible(true)` is `makeKeyAndOrderFront:`, so a panel that
+/// is always key-eligible becomes the key window on every show and, being
+/// non-activating, does so while the user's app still looks frontmost. For the
+/// dictation HUD that meant every CGEvent it posted landed in its own webview.
+/// The HUD grants itself here for the two phases with buttons (Recovery,
+/// Consent) and revokes otherwise: the macOS twin of toggling WS_EX_NOACTIVATE
+/// per phase. A pointer rather than a bool so a status-pill show during a card
+/// cannot make the PILL key and strip the card of its buttons.
+static KEY_GRANTED_PANEL: AtomicUsize = AtomicUsize::new(0);
 
 /// Runs `body` against the window's `NSWindow`, on the main thread, hopping
 /// there first if we are not already on it. Silently does nothing when the
@@ -103,13 +120,54 @@ where
 /// borderless panel answers NO to `canBecomeKeyWindow`, so a bare swap leaves
 /// every text field in the overlay showing a caret and receiving nothing; see
 /// `aura_panel_class`. With the subclass it can take key input, and still does
-/// not activate the application to get it.
+/// not activate the application to get it. This is the MAIN overlay's variant;
+/// accessory windows use `make_non_activating_accessory_panel`, whose key
+/// eligibility is phase-gated.
 pub fn make_non_activating_panel(window: &WebviewWindow) {
     with_ns_window(window, "make_non_activating_panel", |ns_window, _mtm| {
         if !ensure_panel_class(ns_window) {
             return;
         }
         apply_panel_style(ns_window);
+    });
+}
+
+/// The accessory variant of `make_non_activating_panel`: same style, but the
+/// class is `AuraAccessoryPanel`, so the window can only become key while
+/// `set_accessory_key_eligible` says so. `window_util::apply_no_activate` uses
+/// this; the main overlay keeps the unconditional class because its chat
+/// composer must take keys in every presentation.
+pub fn make_non_activating_accessory_panel(window: &WebviewWindow) {
+    with_ns_window(window, "make_non_activating_accessory_panel", |ns_window, _mtm| {
+        if !ensure_accessory_class(ns_window) {
+            return;
+        }
+        apply_panel_style(ns_window);
+    });
+}
+
+/// Grants or revokes this accessory panel's right to become key. MUST run
+/// before the `window.show()` for the phase, because show is
+/// `makeKeyAndOrderFront:` and consults `canBecomeKeyWindow` at that moment.
+///
+/// Revoking while the panel currently IS key also makes it resign: `orderOut:`
+/// is the one public call that does so without closing the window
+/// (`resignKeyWindow` must never be invoked directly). With no other
+/// key-eligible window in an inactive app, the window server hands keyboard
+/// routing back to the frontmost application, which is where the next
+/// dictation has to land. Callers re-order the panel front with their own
+/// `show()`, which is now a plain orderFront because the panel answers NO.
+pub fn set_accessory_key_eligible(window: &WebviewWindow, eligible: bool) {
+    with_ns_window(window, "set_accessory_key_eligible", move |ns_window, _mtm| {
+        let ptr = ns_window as *const NSWindow as usize;
+        if eligible {
+            KEY_GRANTED_PANEL.store(ptr, Ordering::SeqCst);
+            return;
+        }
+        let _ = KEY_GRANTED_PANEL.compare_exchange(ptr, 0, Ordering::SeqCst, Ordering::SeqCst);
+        if ns_window.isKeyWindow() {
+            ns_window.orderOut(None);
+        }
     });
 }
 
@@ -177,11 +235,51 @@ fn aura_panel_class() -> Option<&'static AnyClass> {
     })
 }
 
+/// The class the accessory windows (dictation HUD, status pill) are swapped
+/// to: a SUBCLASS of `AuraOverlayPanel` whose `canBecomeKeyWindow` is gated
+/// through `KEY_GRANTED_PANEL` instead of unconditional.
+///
+/// It has to be a subclass, not a sibling: `reassert_panel_style` runs
+/// `ensure_panel_class` on the HUD after every phase change, and its
+/// `is_kind_of` check would swap a sibling straight back to the overlay class.
+/// Adds no ivars, so the instance-size guard in `ensure_class` still holds.
+fn aura_accessory_class() -> Option<&'static AnyClass> {
+    static CLASS: OnceLock<Option<&'static AnyClass>> = OnceLock::new();
+    *CLASS.get_or_init(|| {
+        extern "C" fn key_if_granted(this: *const AnyObject, _cmd: Sel) -> Bool {
+            Bool::new(KEY_GRANTED_PANEL.load(Ordering::SeqCst) == this as usize)
+        }
+        let parent = aura_panel_class()?;
+        let Some(mut builder) = ClassBuilder::new(c"AuraAccessoryPanel", parent) else {
+            return AnyClass::get(c"AuraAccessoryPanel");
+        };
+        unsafe {
+            builder.add_method(
+                sel!(canBecomeKeyWindow),
+                key_if_granted as extern "C" fn(*const AnyObject, Sel) -> Bool,
+            );
+        }
+        Some(builder.register())
+    })
+}
+
 /// Swaps the object's class to the panel subclass if it is not already one.
 /// Returns whether the window can be treated as a panel afterwards.
 fn ensure_panel_class(ns_window: &NSWindow) -> bool {
-    let Some(panel_class) = aura_panel_class() else {
-        warn!("macos_window: could not register AuraOverlayPanel, leaving the window as an ordinary NSWindow");
+    ensure_class(ns_window, aura_panel_class(), "AuraOverlayPanel")
+}
+
+/// The accessory twin. An `AuraOverlayPanel` window would be swapped, but
+/// nothing ever calls this on the main window.
+fn ensure_accessory_class(ns_window: &NSWindow) -> bool {
+    ensure_class(ns_window, aura_accessory_class(), "AuraAccessoryPanel")
+}
+
+/// Swaps the object's class to `wanted` unless it already is one (or a
+/// subclass of one). Returns whether the window can be treated as a panel.
+fn ensure_class(ns_window: &NSWindow, wanted: Option<&'static AnyClass>, name: &str) -> bool {
+    let Some(panel_class) = wanted else {
+        warn!("macos_window: could not register {name}, leaving the window as an ordinary NSWindow");
         return false;
     };
     let object: &AnyObject = unsafe { &*((ns_window as *const NSWindow) as *const AnyObject) };
@@ -280,7 +378,9 @@ pub fn set_shares_screen_content(window: &WebviewWindow, shares: bool) {
 
 /// Brings the window forward and gives it keyboard focus WITHOUT activating
 /// Aura. This is the hotkey/chat summon path: the notch is a passive HUD and
-/// the app the user was working in must keep its foreground status.
+/// the app the user was working in must keep its foreground status. For an
+/// accessory panel this only succeeds after `set_accessory_key_eligible(true)`;
+/// the dictation HUD grants that in its pre-show step.
 pub fn make_key_without_activating(window: &WebviewWindow) {
     with_ns_window(window, "make_key_without_activating", |ns_window, _mtm| {
         ns_window.orderFrontRegardless();
