@@ -22,7 +22,7 @@ tauri-build = { version = "2", features = [] }
 # the whole overlay/HUD design depends on. It is a no-op on Windows. Note the
 # trade: an app built with it cannot be distributed through the Mac App Store,
 # only Developer ID + notarization, which is how this app ships anyway.
-tauri = { version = "2", features = ["tray-icon", "macos-private-api"] }
+tauri = { version = "2", features = ["tray-icon", "macos-private-api", "image-png"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

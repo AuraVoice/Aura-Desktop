@@ -116,6 +116,16 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     app.manage(NotificationsMenuItem(notifications_item));
     app.manage(CaptureMenuItem(capture_now_item));
 
+    // The menu bar gets its own asset rather than the app icon. tray-icon
+    // normalises every icon to 18 points tall and scales the width to match,
+    // and the app icon is a square canvas whose artwork fills barely 40% of
+    // it, so the glyph landed around 7 points and was genuinely hard to pick
+    // out among other menu bar items. tray-macos.png is that same artwork
+    // cropped to its bounding box, kept at 2x so the 18 point slot is backed
+    // by 36 real pixels on a Retina display.
+    #[cfg(target_os = "macos")]
+    let icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray-macos.png"))?;
+    #[cfg(not(target_os = "macos"))]
     let icon = app
         .default_window_icon()
         .cloned()

@@ -530,12 +530,22 @@ pub fn run() {
             // reflects whether the key hook / event tap actually came up.
             dictation::emit_status_changed(app.handle());
 
-            // tauri.conf.json's `skipTaskbar: true` keeps this off the Windows
-            // taskbar but has no macOS equivalent - Accessory is the matching
-            // policy there, hiding the Dock icon and Cmd+Tab entry so presence
-            // stays tray-icon-only on both platforms.
+            // Regular so the app has a Dock icon and a Cmd+Tab entry to
+            // navigate back to, which the menu bar item alone did not give
+            // people: it is one small mark competing with every other menu bar
+            // app, and on a notched display it can be pushed off screen
+            // entirely with nothing to say so.
+            //
+            // This does NOT loosen the focus rules. What keeps the overlay and
+            // the dictation HUD from stealing focus is the
+            // `NSWindowStyleMask::NonactivatingPanel` every window carries
+            // (`macos_window::apply_panel_style`) plus the phase-gated
+            // `canBecomeKeyWindow` on the accessory panels, none of which
+            // consults the activation policy. Accessory only ever hid the Dock
+            // icon. tauri.conf.json's `skipTaskbar: true` still keeps the
+            // windows themselves off the Windows taskbar.
             #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            app.set_activation_policy(tauri::ActivationPolicy::Regular);
 
             let handle = app.handle().clone();
 
@@ -662,6 +672,22 @@ pub fn run() {
             if matches!(event, tauri::RunEvent::Exit) {
                 if let Some(queue) = app.try_state::<screenshot_store::PersistenceQueue>() {
                     queue.drain_for_shutdown();
+                }
+            }
+            // Clicking the Dock icon. Without this the icon is decoration: the
+            // app has no ordinary window for macOS to bring back, so the click
+            // does nothing at all. Same destination as relaunching the
+            // installed app, which is the gesture this one is, so it matches
+            // the single-instance handler above rather than the tray's
+            // left-click: a Dock click asks for the full app window, not the
+            // overlay notch. `has_visible_windows` is ignored deliberately -
+            // the overlay counts as visible, so honouring it would make the
+            // click do nothing in exactly the resting state people click from.
+            #[cfg(target_os = "macos")]
+            if matches!(event, tauri::RunEvent::Reopen { .. }) {
+                if let Err(e) = dashboard::open_dashboard_window(app) {
+                    error!("dock reopen: open dashboard failed: {e}; falling back to overlay");
+                    overlay::summon(app);
                 }
             }
             let _ = (app, event);

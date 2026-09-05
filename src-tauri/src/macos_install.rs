@@ -19,6 +19,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use core_foundation::base::TCFType;
 use core_foundation::error::{CFError, CFErrorRef};
@@ -29,6 +30,12 @@ use objc2_app_kit::{NSAlert, NSAlertFirstButtonReturn, NSApplication};
 use objc2_foundation::NSString;
 
 const APPLICATIONS: &str = "/Applications";
+
+/// How recent a guard relaunch has to be for a fresh launch to count as the
+/// same cycle. Comfortably longer than the two second delay in
+/// `relaunch_and_exit` plus a cold start, short enough that a genuine relaunch
+/// hours later is never mistaken for a loop.
+const RELAUNCH_WINDOW: Duration = Duration::from_secs(60);
 
 /// The attribute that arms App Translocation. Everything else a downloaded
 /// bundle carries (com.apple.macl for TCC, com.apple.provenance) must survive,
@@ -52,46 +59,75 @@ extern "C" {
     ) -> CFURLRef;
 }
 
-/// Offers to move a misplaced bundle into /Applications and relaunch from
-/// there. Returns normally when the app is already installed, the user
-/// declines, or the move fails; exits the process after a successful move.
+/// Gets a misplaced bundle into /Applications and relaunches from there.
+/// Silent for a first install off the disk image, where there is nothing to
+/// lose and macOS has already made this launch useless for updates; asks first
+/// in every other case. Returns normally when the app is already installed,
+/// the user declines, the move fails, or a previous guard relaunch just came
+/// back unfixed; exits the process after a successful move.
 pub fn ensure_in_applications() {
     if cfg!(debug_assertions) {
         return;
     }
-    // Checked before misplaced_bundle, which cannot tell a translocated launch
-    // of an installed app from an app that was never installed: the mirror
-    // lives under /private/var/folders, so it fails the /Applications test and
-    // the copy path below would try to overwrite its own mount source.
-    if let Some(origin) = translocation_origin() {
-        repair_translocated(&origin);
+    // Resolved before misplaced_bundle, which cannot tell a translocated
+    // launch from an ordinary one: the mirror lives under /private/var/folders,
+    // so it fails the /Applications test and the copy path below would be
+    // handed a path that vanishes with the mount. Which of the two translocated
+    // cases this is depends on where the ORIGIN lives, not on the fact of
+    // translocation.
+    let translocated = translocation_origin();
+    let misplaced = if translocated.is_none() { misplaced_bundle() } else { None };
+
+    // Installed, and running from where it was installed. The ordinary case,
+    // and the one that must NOT consult the relaunch stamp: the launch right
+    // after a SUCCESSFUL guard relaunch lands here about three seconds after
+    // the stamp was written, and telling a correctly installed app that it
+    // "cannot update itself from here" would be worse than the loop the stamp
+    // exists to stop.
+    if translocated.is_none() && misplaced.is_none() {
         return;
     }
-    let Some(bundle) = misplaced_bundle() else {
-        return;
-    };
-    let Some(mtm) = MainThreadMarker::new() else {
-        warn!("install guard: not on the main thread, skipping");
-        return;
-    };
-    let location = describe(&bundle);
-    info!("install guard: running from {location}");
-
-    let accepted = ask(
-        mtm,
-        "Move Aura Desktop to the Applications folder?",
-        &format!(
-            "Aura is running from {location}. It can only keep itself up to date from the \
-             Applications folder. Move it there now and relaunch?"
-        ),
-        "Move to Applications",
-        Some("Not Now"),
-    );
-    if !accepted {
-        info!("install guard: user declined the move");
+    // Something still needs fixing AND the guard already relaunched us for it
+    // moments ago, so that relaunch did not work. Going round again is how this
+    // turns into an app that never opens at all.
+    if relaunched_recently() {
+        loop_broken();
         return;
     }
 
+    let was_translocated = translocated.is_some();
+    let bundle = match translocated {
+        // Already installed, so there is nothing to copy and the attribute is
+        // the whole problem.
+        Some(origin) if is_installed(&origin) => {
+            repair_translocated(&origin);
+            return;
+        }
+        // Still on the disk image or in Downloads. The quarantine that armed
+        // the translocation is on the MOUNT here, not on the bundle, so
+        // clear_quarantine has nothing to remove and reports success anyway;
+        // relaunching in place just translocates again. A copy is the only way
+        // out.
+        Some(origin) => origin,
+        None => match misplaced {
+            Some(bundle) => bundle,
+            None => return,
+        },
+    };
+
+    // move_to_applications DELETES whatever is already at the destination, and
+    // nothing here checks versions, so a user opening an old disk image while a
+    // newer build is installed would silently lose it and be downgraded. Ask
+    // whenever there is an install to lose. Staying silent is only right for
+    // the case this guard was written for: a first install off the disk image,
+    // where macOS has already made this launch useless for updates and
+    // /Applications holds nothing.
+    let replacing = destination_for(&bundle).is_some_and(|dest| dest.exists());
+    if (!was_translocated || replacing) && !confirm_move(&bundle, replacing) {
+        return;
+    }
+
+    info!("install guard: copying into Applications from {}", describe(&bundle));
     match move_to_applications(&bundle) {
         Ok(dest) => relaunch_and_exit(&dest),
         Err(e) => {
@@ -100,6 +136,10 @@ pub fn ensure_in_applications() {
                 &format!("install guard: move failed: {e}"),
                 sentry::Level::Warning,
             );
+            let Some(mtm) = MainThreadMarker::new() else {
+                warn!("install guard: not on the main thread, skipping");
+                return;
+            };
             ask(
                 mtm,
                 "Aura could not move itself",
@@ -111,14 +151,56 @@ pub fn ensure_in_applications() {
     }
 }
 
-/// A translocated launch means the app is ALREADY installed, so there is
-/// nothing to copy: the bundle at `origin` is the very thing macOS mounted
-/// read-only over. Copying onto it would set a live mount source aside and then
-/// fail, which is how this guard used to die with "ditto exited with 1". Drop
-/// the attribute that armed the translocation and come back from the real path
-/// instead. Silent on the way through, because it takes under a second and the
-/// user asked for none of it; the alert is only for the case that cannot be
-/// repaired without them.
+/// Asks whether to move a bundle that is misplaced but running normally, so
+/// nothing about its situation is obvious to the user yet. Returns whether they
+/// accepted.
+fn confirm_move(bundle: &Path, replacing: bool) -> bool {
+    let Some(mtm) = MainThreadMarker::new() else {
+        warn!("install guard: not on the main thread, skipping");
+        return false;
+    };
+    let location = describe(bundle);
+    info!("install guard: running from {location}, replacing={replacing}");
+
+    let (message, detail, primary) = if replacing {
+        (
+            "Replace the copy in your Applications folder?",
+            format!(
+                "Aura is running from {location}, and there is already a copy in your \
+                 Applications folder. Replacing it puts this version in its place, which \
+                 may be older."
+            ),
+            "Replace",
+        )
+    } else {
+        (
+            "Move Aura Desktop to the Applications folder?",
+            format!(
+                "Aura is running from {location}. It can only keep itself up to date from \
+                 the Applications folder. Move it there now and relaunch?"
+            ),
+            "Move to Applications",
+        )
+    };
+    let accepted = ask(mtm, message, &detail, primary, Some("Not Now"));
+    if !accepted {
+        info!("install guard: user declined the move");
+    }
+    accepted
+}
+
+/// For an origin that is ALREADY installed, where there is nothing to copy: the
+/// bundle at `origin` is the very thing macOS mounted read-only over. Copying
+/// onto it would set a live mount source aside and then fail, which is how this
+/// guard used to die with "ditto exited with 1". Drop the attribute that armed
+/// the translocation and come back from the real path instead. Silent on the
+/// way through, because it takes under a second and the user asked for none of
+/// it; the alert is only for the case that cannot be repaired without them.
+///
+/// Only ever called for an installed origin. A bundle still on the disk image
+/// has no attribute to drop, because there the quarantine is on the mount, so
+/// this would relaunch it in place unchanged and be handed the same read-only
+/// mirror on the way back round. The caller makes that distinction.
 fn repair_translocated(origin: &Path) {
     info!("install guard: running translocated, clearing quarantine on the real bundle");
     if clear_quarantine(origin) {
@@ -191,15 +273,25 @@ fn misplaced_bundle() -> Option<PathBuf> {
     if bundle.extension()?.to_str()? != "app" {
         return None;
     }
-    let path = bundle.to_str()?;
-    let home_apps = std::env::var("HOME").ok().map(|home| format!("{home}/Applications/"));
-    let installed = path.starts_with(&format!("{APPLICATIONS}/"))
-        || home_apps.as_deref().is_some_and(|dir| path.starts_with(dir));
-    if installed {
+    if is_installed(bundle) {
         None
     } else {
         Some(bundle.to_path_buf())
     }
+}
+
+/// Whether a bundle sits somewhere the updater can write its replacement, which
+/// means /Applications or ~/Applications and nowhere else. Asked of the running
+/// bundle to decide whether the guard has anything to do, and of a translocation
+/// origin to tell an installed app that kept its quarantine attribute from one
+/// still sitting on the disk image.
+fn is_installed(bundle: &Path) -> bool {
+    let Some(path) = bundle.to_str() else {
+        return false;
+    };
+    let home_apps = std::env::var("HOME").ok().map(|home| format!("{home}/Applications/"));
+    path.starts_with(&format!("{APPLICATIONS}/"))
+        || home_apps.as_deref().is_some_and(|dir| path.starts_with(dir))
 }
 
 /// A user-facing name for where the bundle is, never the path itself: the
@@ -228,7 +320,7 @@ fn move_to_applications(bundle: &Path) -> Result<PathBuf, String> {
     let name = bundle
         .file_name()
         .ok_or_else(|| "bundle has no name".to_string())?;
-    let dest = Path::new(APPLICATIONS).join(name);
+    let dest = destination_for(bundle).ok_or_else(|| "bundle has no name".to_string())?;
     let aside = Path::new(APPLICATIONS).join(format!("{}.previous", name.to_string_lossy()));
 
     if aside.exists() {
@@ -265,11 +357,24 @@ fn move_to_applications(bundle: &Path) -> Result<PathBuf, String> {
     Ok(dest)
 }
 
+/// Where `move_to_applications` would put this bundle. Shared with the caller
+/// so the question "is an existing install about to be replaced" is asked of
+/// the very path that would be overwritten, rather than of one built the same
+/// way and free to drift from it.
+fn destination_for(bundle: &Path) -> Option<PathBuf> {
+    Some(Path::new(APPLICATIONS).join(bundle.file_name()?))
+}
+
 /// Finder clears an app's translocation eligibility when the user drags it in.
 /// ditto does not: it copies com.apple.quarantine across with everything else,
 /// and a bundle that keeps that attribute is mounted read-only through
 /// AppTranslocation on its next launch, which is the exact state this guard
 /// exists to get out of. Returns whether the bundle ended up quarantine-free.
+///
+/// Quarantine-free is NOT the same question as "will not be translocated". A
+/// bundle on a mounted disk image carries no attribute of its own, because the
+/// volume is what is flagged, so this returns true for it having removed
+/// nothing. Only ask it about a path the caller can write to.
 fn clear_quarantine(bundle: &Path) -> bool {
     // -r because the attribute sits on the nested files as well as the bundle
     // root, and a non-zero exit here only means there was nothing to remove.
@@ -298,6 +403,7 @@ fn xattr(args: &[&str], bundle: &Path) -> Result<bool, std::io::Error> {
 /// using it has gone, so opening too early can be handed the read-only mirror
 /// again.
 fn relaunch_and_exit(dest: &Path) -> ! {
+    stamp_relaunch();
     let script = format!("sleep 2; /usr/bin/open \"{}\"", dest.display());
     match Command::new("/bin/sh")
         .arg("-c")
@@ -313,10 +419,78 @@ fn relaunch_and_exit(dest: &Path) -> ! {
     std::process::exit(0);
 }
 
+/// The stamp that says a guard relaunch is in flight. Lives with the app's
+/// other state rather than in the bundle, which is read-only in exactly the
+/// cases this matters. Spelled out for the same reason `crypto`'s copy is:
+/// there is no `AppHandle` this early to ask for `app_local_data_dir()`.
+fn relaunch_stamp() -> Option<PathBuf> {
+    let home = std::env::var_os("HOME")?;
+    Some(
+        PathBuf::from(home)
+            .join("Library")
+            .join("Application Support")
+            .join("com.aura.desktop")
+            .join(".install-guard-relaunch"),
+    )
+}
+
+/// Records that the guard is about to relaunch. Best effort: a stamp that
+/// cannot be written costs the loop protection, not the relaunch.
+fn stamp_relaunch() {
+    let Some(path) = relaunch_stamp() else {
+        return;
+    };
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Err(e) = std::fs::write(&path, b"") {
+        warn!("install guard: could not stamp the relaunch: {e}");
+    }
+}
+
+/// Whether the guard relaunched us within the last minute. A second guard pass
+/// that soon means the relaunch did not fix anything, and going round again is
+/// how this turns into an app that never opens at all. No cleanup: the stamp is
+/// only ever read inside this window and is overwritten on each relaunch, so it
+/// goes stale on its own.
+fn relaunched_recently() -> bool {
+    let Some(path) = relaunch_stamp() else {
+        return false;
+    };
+    std::fs::metadata(&path)
+        .and_then(|meta| meta.modified())
+        .ok()
+        .and_then(|modified| modified.elapsed().ok())
+        .is_some_and(|age| age < RELAUNCH_WINDOW)
+}
+
+/// Reports a relaunch that came straight back and stops. Returning rather than
+/// exiting is the point: the app still opens and is fully usable, it just
+/// cannot update itself until it is dragged into /Applications by hand.
+fn loop_broken() {
+    error!("install guard: the relaunch came back unfixed, not relaunching again");
+    sentry::capture_message(
+        "install guard: relaunch loop broken, the app is still not installed",
+        sentry::Level::Warning,
+    );
+    let Some(mtm) = MainThreadMarker::new() else {
+        warn!("install guard: not on the main thread, skipping");
+        return;
+    };
+    ask(
+        mtm,
+        "Aura cannot update itself from here",
+        "Drag Aura Desktop into your Applications folder, then open it from there.",
+        "OK",
+        None,
+    );
+}
+
 /// A modal alert with one or two buttons. Returns true when the first button
-/// was chosen. Activates the app first: an Accessory-policy app has no Dock
-/// presence, and an alert from one appears behind the current window unless
-/// the app is brought forward.
+/// was chosen. Activates the app first: this runs before any window exists, so
+/// the app is not frontmost and the alert would otherwise open behind whatever
+/// the user is looking at. Still needed now the policy is Regular, because a
+/// Dock icon does not make an app active.
 fn ask(
     mtm: MainThreadMarker,
     message: &str,

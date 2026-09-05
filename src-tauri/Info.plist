@@ -44,11 +44,14 @@
     <string>Aura needs accessibility access to type dictated text into the app you are using and to avoid typing into password fields.</string>
 
     <!--
-      The app lives in the menu bar, not the Dock. lib.rs already calls
-      set_activation_policy(Accessory) at runtime, but declaring it here too
-      means the Dock icon never flashes during launch before that call lands.
+      No LSUIElement. The app is a Regular activation policy app so it has a
+      Dock icon and a Cmd+Tab entry; see lib.rs's set_activation_policy call
+      for why that does not affect the overlay's focus behaviour. Declaring
+      LSUIElement would still work - a runtime setActivationPolicy(Regular)
+      brings the Dock icon back, which is how menu bar apps toggle it - but the
+      app would launch as an Accessory and only gain the icon once setup runs,
+      so the icon would visibly arrive late. Absent here, it is Regular from
+      process start.
     -->
-    <key>LSUIElement</key>
-    <true/>
 </dict>
 </plist>
