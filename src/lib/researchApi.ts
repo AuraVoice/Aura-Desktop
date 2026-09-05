@@ -5,7 +5,11 @@
  * never enter this client; only the persisted brief and bounded citation data do.
  */
 
-import { authFetch, authGetJson } from "./api";
+import { authFetch, authFetchWithTimeout, authGetJson } from "./api";
+
+/** Hard deadline on every mutation. A hung POST used to leave the page's busy
+ * flag latched forever, permanently disabling Cancel/Answer/Delete. */
+const MUTATION_TIMEOUT_MS = 15_000;
 
 export type ResearchState =
   | "planning"
@@ -185,12 +189,18 @@ async function request(path: string, init?: RequestInit): Promise<ResearchRun> {
   return mapRun(await response.json() as RawResearchRun);
 }
 
-export async function startResearch(text: string, signal?: AbortSignal): Promise<ResearchRun> {
-  return request("/research", {
+/** Mutation variant of request: same mapping, hard deadline. */
+async function mutate(path: string, init: RequestInit): Promise<ResearchRun> {
+  const response = await authFetchWithTimeout(path, init, MUTATION_TIMEOUT_MS);
+  if (!response.ok) throw new Error(`Research request failed (${response.status})`);
+  return mapRun(await response.json() as RawResearchRun);
+}
+
+export async function startResearch(text: string): Promise<ResearchRun> {
+  return mutate("/research", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ request: text, depth: "quick", client_run_id: crypto.randomUUID(), origin_surface: "dashboard" }),
-    signal,
   });
 }
 
@@ -240,10 +250,33 @@ export async function getResearchActivity(runId: string, signal?: AbortSignal): 
 }
 
 export function cancelResearch(runId: string): Promise<ResearchRun> {
-  return request(`/research/${encodeURIComponent(runId)}/cancel`, { method: "POST" });
+  return mutate(`/research/${encodeURIComponent(runId)}/cancel`, { method: "POST" });
+}
+
+export function answerResearch(
+  runId: string,
+  questionId: string,
+  answerText: string,
+): Promise<ResearchRun> {
+  return mutate(`/research/${encodeURIComponent(runId)}/answer`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      question_id: questionId,
+      answer: { text: answerText, via: "dashboard" },
+      // Answers are idempotent server-side by question_id (a question is
+      // cleared on first use), but the id makes a transport-level replay
+      // attributable in the backend's correlation logs.
+      correlation_id: `dashboard:${crypto.randomUUID()}`,
+    }),
+  });
 }
 
 export async function deleteResearch(runId: string): Promise<void> {
-  const response = await authFetch(`/research/${encodeURIComponent(runId)}`, { method: "DELETE" });
+  const response = await authFetchWithTimeout(
+    `/research/${encodeURIComponent(runId)}`,
+    { method: "DELETE" },
+    MUTATION_TIMEOUT_MS,
+  );
   if (!response.ok) throw new Error(`Research deletion failed (${response.status})`);
 }

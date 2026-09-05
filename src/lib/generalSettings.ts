@@ -80,6 +80,15 @@ export async function saveGeneralSettings(settings: GeneralSettings): Promise<vo
   await store.save();
 }
 
+/** Flip the per-turn screen-context setting. Used by the Settings page and by
+ * the overlay's consent card (agent-requested enable); every subscriber,
+ * including the Rust security mirror sync in OverlayRoot, follows the store
+ * change. */
+export async function setVoiceScreenContext(enabled: boolean): Promise<void> {
+  const current = await loadGeneralSettings();
+  await saveGeneralSettings({ ...current, voiceScreenContext: enabled });
+}
+
 export async function subscribeGeneralSettings(
   listener: (settings: GeneralSettings) => void,
 ): Promise<() => void> {

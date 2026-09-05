@@ -4,6 +4,7 @@ import { useState } from "react";
 import type {
   GmailConnectorStatus,
   GoogleCalendarConnectorStatus,
+  NotionConnectorStatus,
 } from "../../lib/connectors";
 import {
   GmailBrandIcon,
@@ -17,7 +18,7 @@ import {
 } from "../useConnectors";
 
 const COMING_SOON_CONNECTORS: Array<{
-  id: "gmail" | "slack" | "notion";
+  id: "gmail" | "slack";
   Icon: ComponentType<{ size?: number; className?: string }>;
   name: string;
   copy: string;
@@ -28,21 +29,17 @@ const COMING_SOON_CONNECTORS: Array<{
     name: "Slack",
     copy: "Keep Buddy in the loop with your team conversations.",
   },
-  {
-    id: "notion",
-    Icon: NotionBrandIcon,
-    name: "Notion",
-    copy: "Bring your notes and pages into what Buddy knows.",
-  },
 ];
 
 export function ConnectorsPage() {
   const connectors = useConnectors();
-  const [confirmDisconnect, setConfirmDisconnect] = useState<"calendar" | "gmail" | null>(null);
+  const [confirmDisconnect, setConfirmDisconnect] = useState<"calendar" | "gmail" | "notion" | null>(null);
   const calendar = connectors.catalog?.googleCalendar ?? null;
   const gmail = connectors.catalog?.gmail ?? null;
+  const notion = connectors.catalog?.notion ?? null;
   const calendarConnected = calendar?.enabled === true;
   const gmailConnected = gmail?.enabled === true;
+  const notionConnected = notion?.enabled === true;
   const busy = connectors.loading || connectors.action !== null;
 
   return (
@@ -102,6 +99,21 @@ export function ConnectorsPage() {
             }}
           />
 
+          <NotionConnectorRow
+            notion={notion}
+            connected={notionConnected}
+            busy={busy}
+            onToggle={(checked) => {
+              if (checked) {
+                setConfirmDisconnect(null);
+                void connectors.enableNotion();
+              } else {
+                connectors.clearBanner();
+                setConfirmDisconnect("notion");
+              }
+            }}
+          />
+
           {confirmDisconnect && (
             <div
               className="db-connector-banner is-confirm"
@@ -112,7 +124,11 @@ export function ConnectorsPage() {
                 <strong id="connector-disconnect-title">Leave Buddy hanging?</strong>
                 <p>
                   Are you sure you want to disconnect{" "}
-                  {confirmDisconnect === "calendar" ? "Google Calendar" : "Gmail"}?
+                  {confirmDisconnect === "calendar"
+                    ? "Google Calendar"
+                    : confirmDisconnect === "notion"
+                      ? "Notion"
+                      : "Gmail"}?
                   Buddy will stop using it, but you can reconnect anytime.
                 </p>
               </div>
@@ -132,6 +148,8 @@ export function ConnectorsPage() {
                     setConfirmDisconnect(null);
                     if (target === "calendar") {
                       void connectors.disableCalendar();
+                    } else if (target === "notion") {
+                      void connectors.disableNotion();
                     } else {
                       void connectors.disableGmail();
                     }
@@ -274,6 +292,55 @@ function GmailConnectorRow({
           connected={connected}
           busy={busy}
           name="Gmail"
+          onToggle={onToggle}
+        />
+      </div>
+    </article>
+  );
+}
+
+function NotionConnectorRow({
+  notion,
+  connected,
+  busy,
+  onToggle,
+}: {
+  notion: NotionConnectorStatus | null;
+  connected: boolean;
+  busy: boolean;
+  onToggle: (checked: boolean) => void;
+}) {
+  return (
+    <article className={`db-panel db-connector-row${connected ? " is-connected" : ""}`}>
+      <span className="db-connector-icon">
+        <NotionBrandIcon size={28} />
+      </span>
+      <div className="db-connector-row-copy">
+        <div className="db-connector-title-line">
+          <h2>Notion</h2>
+          {connected && <span className="db-connector-connected-dot">Connected</span>}
+        </div>
+        <p>
+          {connected
+            ? notion?.workspaceName ?? "Connected workspace"
+            : "Say where something on your screen should go and Buddy saves it there."}
+        </p>
+        {!connected && notion?.lastError && (
+          // The backend records WHY the connector went down (dead token,
+          // revoked access); hiding that left the row looking merely "off"
+          // when it actually needed a reconnect.
+          <p className="db-connector-attention">
+            {notion.canReconnect
+              ? "Notion needs to be reconnected. Turn it on to reconnect."
+              : notion.lastError}
+          </p>
+        )}
+      </div>
+      <div className="db-connector-row-controls">
+        <ConnectorSwitch
+          connected={connected}
+          busy={busy}
+          name="Notion"
           onToggle={onToggle}
         />
       </div>

@@ -1,0 +1,63 @@
+/* Bright glass recipe (CLAUDE.md): alpha-based children only, sheen omitted
+ * because a consent prompt should read calm, not promotional. */
+.screen-context-consent-card {
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.screen-context-consent-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+}
+
+.screen-context-consent-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: rgba(30, 45, 40, 0.92);
+}
+
+.screen-context-consent-body {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: rgba(30, 45, 40, 0.72);
+}
+
+.screen-context-consent-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.screen-context-consent-allow,
+.screen-context-consent-dismiss {
+  border: 1px solid rgba(63, 86, 78, 0.16);
+  border-radius: 9px;
+  padding: 5px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  background: rgba(255, 255, 255, 0.5);
+  color: rgba(30, 45, 40, 0.88);
+}
+
+.screen-context-consent-allow {
+  background: rgba(63, 128, 104, 0.88);
+  border-color: rgba(63, 128, 104, 0.4);
+  color: rgba(255, 255, 255, 0.96);
+}
+
+.screen-context-consent-allow:hover {
+  background: rgba(52, 110, 89, 0.92);
+}
+
+.screen-context-consent-dismiss:hover {
+  background: rgba(255, 255, 255, 0.72);
+}

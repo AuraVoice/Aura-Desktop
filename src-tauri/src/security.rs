@@ -65,6 +65,13 @@ pub struct SecurityState {
     voice_active: bool,
     screen_sight_armed: bool,
     guide_armed: bool,
+    /// Mirror of the React `voiceScreenContext` setting, pushed on load and on
+    /// every change. The privacy gate used to live only in React (the hook was
+    /// simply not mounted with a room), which contradicted this file's role as
+    /// the authorization decision point; with the flag here, a webview bug
+    /// cannot capture a turn screen the user has switched off. Default false
+    /// mirrors the setting's own default.
+    voice_screen_context_enabled: bool,
     guide_epoch: u64,
     /// A screen frame was actually captured (and authorized) during the
     /// current voice session - the precondition for `point_at`, since a
@@ -156,6 +163,7 @@ pub enum Denied {
     NoCaptureThisSession,
     StaleAuth,
     StaleGuide,
+    ScreenContextDisabled,
 }
 
 impl fmt::Display for Denied {
@@ -168,6 +176,7 @@ impl fmt::Display for Denied {
             Denied::NoCaptureThisSession => "denied: no screen capture in this voice session",
             Denied::StaleAuth => "denied: session changed while the operation was in flight",
             Denied::StaleGuide => "denied: Guide session changed while the operation was in flight",
+            Denied::ScreenContextDisabled => "denied: screen context sharing is off in settings",
         };
         f.write_str(reason)
     }
@@ -182,6 +191,9 @@ impl SecurityState {
         };
         match op {
             Operation::CaptureTurnScreen => {
+                if !self.voice_screen_context_enabled {
+                    return Err(Denied::ScreenContextDisabled);
+                }
                 if self.guide_armed {
                     return Err(Denied::ModeConflict);
                 }
@@ -407,6 +419,10 @@ impl SecurityState {
         self.guide_epoch
     }
 
+    pub fn set_voice_screen_context(&mut self, enabled: bool) {
+        self.voice_screen_context_enabled = enabled;
+    }
+
     pub fn note_capture(&mut self, at_ms: i64) {
         self.captured_this_voice_session = true;
         self.last_capture_at_ms = Some(at_ms);
@@ -546,6 +562,16 @@ pub fn note_voice_active(app: &AppHandle, active: bool) {
     if transition.guide_disarmed {
         crate::guide::on_security_disarmed(app);
     }
+}
+
+/// Settings hook - called from the `set_voice_screen_context` command whenever
+/// React loads or changes the voiceScreenContext setting.
+pub fn note_voice_screen_context(app: &AppHandle, enabled: bool) {
+    let Some(handle) = handle(app) else {
+        return;
+    };
+    let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+    state.set_voice_screen_context(enabled);
 }
 
 /// Ctrl+Alt+S: toggle armed natively and tell JS. Silently a no-op while

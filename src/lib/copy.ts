@@ -270,6 +270,19 @@ export const callbackCard = {
   turnOff: "Turn off daily catch-ups",
 } as const;
 
+// Consent prompt for the agent-requested screen-context enable
+// (screen_context.request). The desktop is the sole authority over the
+// setting; this card's Allow button is the only thing that flips it.
+export const screenContextConsent = {
+  title: "Share your screen with Buddy?",
+  body:
+    "Buddy asked to see your screen so it can help with what you're looking at. " +
+    "This turns on per-turn screen context; you can turn it off any time in Settings.",
+  allow: "Allow",
+  dismiss: "Not now",
+  enabledNotice: "Screen sharing is on. Ask Buddy again.",
+} as const;
+
 export const kebabMenu = {
   openTooltip: "More",
   calendar: "Calendar",

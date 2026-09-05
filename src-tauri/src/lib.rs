@@ -88,6 +88,14 @@ fn set_voice_active(app: AppHandle, active: bool) {
     overlay::set_voice_active(&app, active);
 }
 
+/// Mirrors the React voiceScreenContext setting into the native authorization
+/// state, so `capture_turn_screen_with_geometry` is denied at the decision
+/// point rather than only by the hook not being mounted.
+#[tauri::command]
+fn set_voice_screen_context(app: AppHandle, enabled: bool) {
+    security::note_voice_screen_context(&app, enabled);
+}
+
 #[tauri::command]
 fn set_panel_variant(app: AppHandle, variant: PanelVariant) {
     overlay::set_panel_variant(&app, variant);
@@ -327,6 +335,7 @@ pub fn run() {
             current_overlay_state,
             esc_pressed,
             set_voice_active,
+            set_voice_screen_context,
             set_panel_variant,
             set_slot_height,
             set_chat_enabled,

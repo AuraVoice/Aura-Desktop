@@ -50,6 +50,9 @@ import {
   INITIAL_INTERVIEW_SLOT_HEIGHT,
 } from "./interview/InterviewPasteCard";
 import { CallbackCard } from "./CallbackCard";
+import { ScreenContextConsentCard } from "./ScreenContextConsentCard";
+import { setVoiceScreenContext } from "../lib/generalSettings";
+import { screenContextConsent } from "../lib/copy";
 import { NotificationInboxCard } from "./NotificationInboxCard";
 import { NotchBar } from "./NotchBar";
 import { NotchMoveOverlay } from "./NotchMoveOverlay";
@@ -75,6 +78,7 @@ import { UpdateBanner } from "../UpdateBanner";
 // overflow): NotificationInboxCard.css, CallbackCard.css, UpdateBanner.css.
 const NOTIFICATION_INBOX_CARD_HEIGHT = 300;
 const CALLBACK_CARD_HEIGHT = 180;
+const SCREEN_CONTEXT_CONSENT_HEIGHT = 132;
 const UPDATE_BANNER_HEIGHT = 112;
 const UPDATED_NOTICE_HEIGHT = 72;
 
@@ -156,14 +160,53 @@ export function OverlayRoot() {
     signedIn: user !== null,
     onPoint: handleGuidePoint,
   });
-  // Per-turn screen context for voice, opt-in only. The hook treats a null room
-  // as "do nothing", so the opt-out is the same disable path the hook already
-  // uses, and it stays inert while Guide Mode is armed because Guide owns
-  // continuous capture. Mounted after useGuideMode because it needs guide.armed.
+  // Per-turn screen context for voice, opt-in only. The room is passed even
+  // with the setting off so a skipped capture can report WHY to the worker
+  // (screen_context.unavailable) and so the agent's enable request and
+  // notion.saved captions still land; the hook gates the capture itself on
+  // the setting and stays inert while Guide Mode owns continuous capture.
+  const voiceScreenContextEnabled = generalSettings.voiceScreenContext;
+  const [screenContextRequested, setScreenContextRequested] = useState(false);
+  const handleScreenContextRequest = useCallback(() => {
+    setScreenContextRequested(true);
+  }, []);
   const turnCapture = useTurnScreenCapture(
-    generalSettings.voiceScreenContext ? voice.room : null,
+    voice.room,
     guide.armed,
+    voiceScreenContextEnabled,
+    handleScreenContextRequest,
   );
+  // Mirror the privacy setting into Rust's authorization state on load and on
+  // every change, so capture_turn_screen_with_geometry is denied at the
+  // decision point (security.rs) too, not only by this hook's gate.
+  useEffect(() => {
+    invoke("set_voice_screen_context", { enabled: voiceScreenContextEnabled }).catch(
+      (err) => logError("OverlayRoot: set_voice_screen_context", err),
+    );
+  }, [voiceScreenContextEnabled]);
+  // The consent card is moot once the setting is on, and stale once the call
+  // that asked for it is gone.
+  useEffect(() => {
+    if (voiceScreenContextEnabled || voice.room === null) {
+      setScreenContextRequested(false);
+    }
+  }, [voiceScreenContextEnabled, voice.room]);
+  const allowScreenContext = useCallback(() => {
+    setScreenContextRequested(false);
+    setVoiceScreenContext(true)
+      .then(() =>
+        invoke("show_actionable_toast", {
+          notificationId: "screen-context-enabled",
+          action: null,
+          title: "Aura",
+          body: screenContextConsent.enabledNotice,
+        }),
+      )
+      .catch((err) => logError("OverlayRoot: enable voice screen context", err));
+  }, []);
+  const dismissScreenContextRequest = useCallback(() => {
+    setScreenContextRequested(false);
+  }, []);
   const guideVoiceEpochRef = useRef<number | null>(null);
   // Same rule as the notch gesture: a muted call never opens the audio-only
   // Realtime leg, so Guide's voice start goes straight to the cold path.
@@ -312,18 +355,29 @@ export function OverlayRoot() {
   // Chat still outranks it for the documented reason, and that degradation is
   // honest: the box never renders, so it is never acknowledged, and the worker's
   // own fallback asks for the role by voice instead.
+  // The consent card sits directly under draft: the user just told Buddy
+  // "yes, turn it on" out loud, so it must not queue behind the inbox or a
+  // banner while that sentence is still hanging.
+  const showScreenContextConsent =
+    user !== null
+    && screenContextRequested
+    && !showInterviewHacker
+    && !showInterviewPaste
+    && !showDraftCard;
   const showInbox =
     user !== null
     && inboxOpen
     && !showInterviewHacker
     && !showDraftCard
-    && !showInterviewPaste;
+    && !showInterviewPaste
+    && !showScreenContextConsent;
   const showUpdateBanner =
     user !== null
     && (updateReady.version !== null || updateReady.updatedNotice !== null)
     && !showInterviewHacker
     && !showInterviewPaste
     && !showDraftCard
+    && !showScreenContextConsent
     && !showInbox;
   const showCallbackCard =
     user !== null
@@ -331,6 +385,7 @@ export function OverlayRoot() {
     && !showInterviewHacker
     && !showInterviewPaste
     && !showDraftCard
+    && !showScreenContextConsent
     && !showInbox
     && !showUpdateBanner;
   // The opening pitch needs room the resting card does not have, so the slot
@@ -346,6 +401,8 @@ export function OverlayRoot() {
       ? interviewSlotHeight
       : showDraftCard
         ? draftCardHeight
+        : showScreenContextConsent
+          ? SCREEN_CONTEXT_CONSENT_HEIGHT
         : showInbox
           ? NOTIFICATION_INBOX_CARD_HEIGHT
           : showUpdateBanner
@@ -376,26 +433,31 @@ export function OverlayRoot() {
   // being unavailable, or a screen capture that could not be shared - to a toast
   // so a failure is never silent. De-duped so the same message doesn't re-toast
   // on every render.
-  const lastNoticeRef = useRef<string | null>(null);
+  // De-duped with a cooldown, not only per render: the old Date.now() id
+  // bypassed the broker's dedup entirely, so a capture failing on every
+  // spoken turn re-toasted every few seconds for the whole call.
+  const NOTICE_RETOAST_COOLDOWN_MS = 5 * 60 * 1000;
+  const lastNoticeRef = useRef<{ text: string; at: number } | null>(null);
   const voiceError = voice.errorMessage;
   const captureNotice = turnCapture.notice;
   const shortcutReason =
     !notchGesture.checking && !notchGesture.available ? notchGesture.reason ?? null : null;
   useEffect(() => {
     const notice = voiceError ?? shortcutReason ?? captureNotice;
-    if (!notice) {
-      lastNoticeRef.current = null;
+    if (!notice) return;
+    const last = lastNoticeRef.current;
+    const now = Date.now();
+    if (last && last.text === notice && now - last.at < NOTICE_RETOAST_COOLDOWN_MS) {
       return;
     }
-    if (notice === lastNoticeRef.current) return;
-    lastNoticeRef.current = notice;
+    lastNoticeRef.current = { text: notice, at: now };
     invoke("show_actionable_toast", {
-      notificationId: `overlay-notice-${Date.now()}`,
+      notificationId: `overlay-notice-${now}`,
       action: null,
       title: "Aura",
       body: notice,
     }).catch((err) => logError("OverlayRoot: overlay notice toast", err));
-  }, [voiceError, shortcutReason, captureNotice]);
+  }, [voiceError, shortcutReason, captureNotice, NOTICE_RETOAST_COOLDOWN_MS]);
 
   const unreadCount = notifications.unreadCount;
   useEffect(() => {
@@ -710,6 +772,12 @@ export function OverlayRoot() {
             visible={presentation === "bar" || presentation === "companion"}
           />
         )}
+      {!visibleChatOpen && showScreenContextConsent && (
+        <ScreenContextConsentCard
+          onAllow={allowScreenContext}
+          onDismiss={dismissScreenContextRequest}
+        />
+      )}
       {!visibleChatOpen && showInbox && (
         <NotificationInboxCard
           notifications={notifications}

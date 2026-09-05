@@ -46,6 +46,9 @@ export interface DataParticipantLike {
 export type KnownAgentEventType =
   | "element.point"
   | "screen_save.created"
+  // Backend confirmation that a voice-triggered Notion save landed. Caption
+  // only; page_url is stored but never auto-opened.
+  | "notion.saved"
   | "assistant.text.delta"
   | "assistant.text.done"
   | "text_input.accepted"
@@ -69,6 +72,10 @@ export type KnownAgentEventType =
   // authority: this only asks, and useGuideMode routes it to the native
   // arm_guide/disarm_guide command (payload.enable decides which).
   | "guide.request"
+  // Agent-requested screen-context enable. Mirrors guide.request's authority
+  // split: the desktop shows an explicit consent prompt, and only the user's
+  // own click flips the voiceScreenContext setting. Empty payload.
+  | "screen_context.request"
   // Interview Mode: show one job-description paste overlay. The desktop must
   // echo interview.material.overlay_shown only once the box is genuinely on
   // screen (see overlay/interview/), because the worker speaks a line to the
@@ -142,11 +149,15 @@ const FIELD_CAPS: Record<string, number> = {
   parent_event_id: 64,
   stage: 32,
   error_type: 120,
+  database_name: 300,
+  page_url: 2_000,
+  page_id: 64,
 };
 
 const KNOWN_TYPES: ReadonlySet<string> = new Set([
   "element.point",
   "screen_save.created",
+  "notion.saved",
   "assistant.text.delta",
   "assistant.text.done",
   "text_input.accepted",
@@ -165,6 +176,7 @@ const KNOWN_TYPES: ReadonlySet<string> = new Set([
   "guide.instruction",
   "guide.failure",
   "guide.request",
+  "screen_context.request",
   "interview.material.request",
   "desktop.run",
 ] satisfies KnownAgentEventType[]);
@@ -273,6 +285,16 @@ function payloadWithinLimits(type: KnownAgentEventType, payload: Record<string, 
   }
   if (type === "guide.request") {
     return typeof payload.enable === "boolean";
+  }
+  if (type === "notion.saved") {
+    // page_url is the one field that could reach openUrl someday; only https
+    // (or absent) survives validation.
+    return (
+      typeof payload.database_name === "string" &&
+      (payload.page_url == null ||
+        (typeof payload.page_url === "string" &&
+          (payload.page_url === "" || payload.page_url.startsWith("https://"))))
+    );
   }
   if (type === "guide.failure") {
     return (

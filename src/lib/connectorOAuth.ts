@@ -28,7 +28,7 @@ export function parseConnectorOAuthCompletion(
   const outcome = url.searchParams.get("outcome");
   if (
     !attemptId
-    || (connector !== "google_calendar" && connector !== "gmail")
+    || (connector !== "google_calendar" && connector !== "gmail" && connector !== "notion")
     || (outcome !== "success" && outcome !== "cancelled" && outcome !== "failed")
   ) {
     return null;
