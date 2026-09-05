@@ -1,18 +1,17 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useState } from "react";
-import {
-  fetchBillingPortal,
-  fetchEntitlement,
-  type Entitlement,
-} from "../../lib/entitlement";
+import { fetchBillingPortal } from "../../lib/entitlement";
+import { useEntitlementState } from "../../state/EntitlementProvider";
+import { type EntitlementState } from "../../state/useEntitlement";
 import { DataView } from "../DataView";
 import {
   SettingsPageLayout,
   SettingsSection,
 } from "../components/SettingsPageLayout";
-import { useAsyncData } from "../useAsyncData";
+import { type AsyncState } from "../useAsyncData";
 
-function statusLabel(entitlement: Entitlement): string {
+function statusLabel(entitlement: EntitlementState): string {
+  if (entitlement.status === "unknown") return "Unknown";
   if (entitlement.status === "trialing") return "Trial";
   if (entitlement.status === "gracePeriod") return "Payment issue";
   if (entitlement.status === "expired") return "Expired";
@@ -20,7 +19,17 @@ function statusLabel(entitlement: Entitlement): string {
 }
 
 export function BillingPage() {
-  const state = useAsyncData(() => fetchEntitlement(), "entitlement");
+  const entitlement = useEntitlementState();
+  // The same four states DataView renders everywhere else, sourced from the
+  // shared entitlement rather than a second GET /entitlement. `loaded && !known`
+  // is the real error case: the fetch failed AND no cached copy was inside the
+  // 7 day offline grace.
+  const state: AsyncState<EntitlementState> = {
+    data: entitlement.known ? entitlement : null,
+    loading: !entitlement.loaded,
+    error: entitlement.loaded && !entitlement.known,
+    reload: entitlement.refresh,
+  };
   const [portalBusy, setPortalBusy] = useState(false);
   const [portalError, setPortalError] = useState(false);
 

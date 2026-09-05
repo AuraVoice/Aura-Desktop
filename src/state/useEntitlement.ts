@@ -44,10 +44,18 @@ export type CheckoutPhase =
 
 export interface EntitlementState {
   loaded: boolean;
+  /** True once a real entitlement document is in hand, live or from the Rust
+   * offline cache. `loaded && !known` is the degraded read: the fetch failed and
+   * no cache was inside the 7 day grace, so every field below is a default
+   * rather than this account's plan. Gate a lock on `known`, never on `loaded`
+   * alone, or a network blip reads as "free" and padlocks a paying user. */
+  known: boolean;
   tier: EntitlementTier;
   effectiveTier: EntitlementTier;
   status: EntitlementStatus | "unknown";
   trialDaysLeft: number;
+  trialEndDate: string | null;
+  cancelAtPeriodEnd: boolean;
   isTrialing: boolean;
   /** The purchased tier is paid (not merely trial-derived pro): drives the
    * "show Upgrade" vs "show plan only" split in the UI. */
@@ -77,6 +85,10 @@ function computeTrialDaysLeft(entitlement: Entitlement | null): number {
  * browser (mirroring useWebAuthSignIn), and poll entitlement until the tier
  * flips paid. The poll lives here (not in the menu component) so it survives the
  * kebab menu closing mid-checkout.
+ *
+ * Mounted exactly once per window by EntitlementProvider. Feature components
+ * read the result through useEntitlementState() and must not call this directly,
+ * or the window is back to one GET /entitlement per component.
  */
 export function useEntitlement({
   signedIn,
@@ -278,10 +290,13 @@ export function useEntitlement({
 
   return {
     loaded,
+    known: entitlement !== null,
     tier: entitlement?.tier ?? "free",
     effectiveTier: entitlement?.effectiveTier ?? "free",
     status: entitlement?.status ?? "unknown",
     trialDaysLeft: computeTrialDaysLeft(entitlement),
+    trialEndDate: entitlement?.trialEndDate ?? null,
+    cancelAtPeriodEnd: entitlement?.cancelAtPeriodEnd ?? false,
     isTrialing: entitlement?.status === "trialing",
     isPurchased: (entitlement?.tier ?? "free") !== "free",
     checkout,

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { CircleCheck, LockKeyhole, Play, Square } from "lucide-react";
 import { buddyVoices, defaultBuddyVoiceSlug, type BuddyVoice } from "../lib/buddyVoices";
-import { fetchEntitlement } from "../lib/entitlement";
+import { useEntitlementState } from "../state/EntitlementProvider";
 import { logError } from "../lib/log";
 import { fetchVoicePreference, saveVoicePreference } from "../lib/voicePreferences";
 import "./VoicePickerCards.css";
@@ -32,28 +32,36 @@ export function VoicePickerCards({
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [selectedSlug, setSelectedSlug] = useState(defaultBuddyVoiceSlug);
   const [playingSlug, setPlayingSlug] = useState<string | null>(null);
-  const [paidAccess, setPaidAccess] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [savingSlug, setSavingSlug] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const entitlement = useEntitlementState();
+
+  // Fail OPEN. A voice is locked only once the shared entitlement actually
+  // resolved AND says free. While it is in flight, or after a failed read,
+  // everything stays pickable: the backend refuses a locked voice on
+  // PUT /voice/preferences and re-resolves the tier at call time in the voice
+  // worker, whose own catalog fails open for exactly this reason. A padlock on
+  // someone who really is inside the 45 day trial is the worse failure.
+  const paidLocked = entitlement.known && entitlement.effectiveTier === "free";
 
   useEffect(() => {
     let active = true;
-    void Promise.allSettled([fetchVoicePreference(), fetchEntitlement()]).then(([voice, entitlement]) => {
-      if (!active) return;
-      if (voice.status === "fulfilled") {
-        setSelectedSlug(voice.value.voiceId);
-      } else {
-        logError("VoicePickerCards: load preference", voice.reason);
+    // `loaded` now means only "the saved voice resolved". It never had any
+    // business gating the lock, and conflating the two is what let a slow
+    // entitlement read padlock a paid account.
+    void fetchVoicePreference()
+      .then((preference) => {
+        if (active) setSelectedSlug(preference.voiceId);
+      })
+      .catch((err) => {
+        if (!active) return;
+        logError("VoicePickerCards: load preference", err);
         setError("Your saved voice couldn't be loaded. You can try again here.");
-      }
-      if (entitlement.status === "fulfilled") {
-        setPaidAccess(entitlement.value.effectiveTier !== "free");
-      } else {
-        logError("VoicePickerCards: load entitlement", entitlement.reason);
-      }
-      setLoaded(true);
-    });
+      })
+      .finally(() => {
+        if (active) setLoaded(true);
+      });
     return () => {
       active = false;
       audioRef.current?.pause();
@@ -91,7 +99,7 @@ export function VoicePickerCards({
   }
 
   async function choose(voice: BuddyVoice) {
-    const locked = voice.paidOnly && !paidAccess;
+    const locked = voice.paidOnly && paidLocked;
     if (locked) {
       onLockedVoice?.(voice);
       return;
@@ -110,6 +118,10 @@ export function VoicePickerCards({
       logError(`VoicePickerCards: save ${voice.slug}`, err);
       setSelectedSlug(previousSlug);
       setError("That voice couldn't be saved. Your previous voice is still selected.");
+      // If we optimistically let a lapsed account pick a paid voice, the backend
+      // 403 lands here. Re-resolve so the padlocks appear on the next render
+      // instead of the same click failing again.
+      entitlement.refresh();
     } finally {
       setSavingSlug(null);
       onSavingChange?.(false);
@@ -128,7 +140,7 @@ export function VoicePickerCards({
         {buddyVoices.map((voice) => {
           const selected = voice.slug === selectedSlug;
           const playing = voice.slug === playingSlug;
-          const locked = loaded && voice.paidOnly && !paidAccess;
+          const locked = voice.paidOnly && paidLocked;
           return (
             <div
               key={voice.slug}

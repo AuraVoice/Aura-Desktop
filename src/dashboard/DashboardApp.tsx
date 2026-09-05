@@ -33,6 +33,8 @@ import { DictationPage } from "./pages/DictationPage";
 import { ResearchPage } from "./pages/ResearchPage";
 import { InterviewPage } from "./pages/InterviewPage";
 import { DashboardOnboarding } from "./DashboardOnboarding";
+import { TrialBanner } from "./TrialBanner";
+import { EntitlementProvider } from "../state/EntitlementProvider";
 import {
   fetchAccountOnboarding,
   hasConfirmedAccountOnboarding,
@@ -115,6 +117,7 @@ export function DashboardShell({ user, collapsed }: { user: User | null; collaps
           updatedVersion={updateReady.updatedNotice}
           surface="dashboard"
         />
+        <TrialBanner uid={user.uid} />
         <div className="db-content" ref={contentRef}>
           <DashboardResourceScope uid={user.uid}>
             <Routes location={settingsOpen ? mainPath : location}>
@@ -234,6 +237,9 @@ export function DashboardApp() {
   const showApp = user !== null && onboarded === true && accountComplete === true;
 
   return (
+    // Above the showApp fork on purpose: the onboarding tail's voice picker
+    // needs the same shared entitlement the finished app does.
+    <EntitlementProvider signedIn={user !== null} uid={uid}>
     <div className="db-window">
       <DashboardTitleBar
         collapsed={collapsed}
@@ -272,5 +278,6 @@ export function DashboardApp() {
         )}
       </div>
     </div>
+    </EntitlementProvider>
   );
 }

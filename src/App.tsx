@@ -1,6 +1,7 @@
-import { useEffect } from "react";
+import { useEffect, type ReactNode } from "react";
 import { Store } from "@tauri-apps/plugin-store";
-import { AuthProvider } from "./state/AuthProvider";
+import { AuthProvider, useAuth } from "./state/AuthProvider";
+import { EntitlementProvider } from "./state/EntitlementProvider";
 import { OverlayRoot } from "./overlay/OverlayRoot";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { initializeAcquisitionAnalytics } from "./lib/acquisitionAnalytics";
@@ -8,6 +9,20 @@ import { desktopConsentAcceptedKey, overlayStorePath } from "./lib/copy";
 import { initSentryIfEnabled } from "./lib/sentry";
 import { logError } from "./lib/log";
 import "./App.css";
+
+/** Bridges the overlay window's auth into the shared entitlement source. Sits
+ * INSIDE AuthProvider because it reads useAuth, and OUTSIDE OverlayRoot because
+ * the onboarding tail's voice picker reads the context from under there. Lives
+ * here rather than in EntitlementProvider.tsx so the dashboard bundle never
+ * imports AuthProvider and its native side effects. */
+function OverlayEntitlement({ children }: { children: ReactNode }) {
+  const { user } = useAuth();
+  return (
+    <EntitlementProvider signedIn={user !== null} uid={user?.uid ?? null}>
+      {children}
+    </EntitlementProvider>
+  );
+}
 
 function App() {
   useEffect(() => {
@@ -27,7 +42,9 @@ function App() {
   return (
     <ErrorBoundary>
       <AuthProvider>
-        <OverlayRoot />
+        <OverlayEntitlement>
+          <OverlayRoot />
+        </OverlayEntitlement>
       </AuthProvider>
     </ErrorBoundary>
   );

@@ -62,7 +62,6 @@ import type { OverlayPresentation } from "./overlayPresentation";
 import { screenPointFor, type ScreenFrameGeometry } from "../lib/screenFrame";
 import { useGuideMode, type GuidePoint } from "./useGuideMode";
 import { useGeneralSettings } from "../state/useGeneralSettings";
-import { useEntitlement } from "../state/useEntitlement";
 import { ChatSlot, INITIAL_CHAT_SLOT_HEIGHT } from "./ChatSlot";
 import { useChatScreenCapture } from "./useChatScreenCapture";
 import { useChatSession } from "./useChatSession";
@@ -255,13 +254,6 @@ export function OverlayRoot() {
     presentation === "pointing" || tail.status === "active",
     overlayVisible && !visibleChatOpen,
   );
-  // Kept for its cache side effects: it writes the fetched entitlement to the
-  // native cache (cache_entitlement) and clears it on sign-out. Nothing in the
-  // overlay renders it any more now that the kebab menu's plan row is gone.
-  useEntitlement({
-    signedIn: user !== null,
-    uid: user?.uid ?? null,
-  });
   // Desktop control: dispatches the agent's `desktop.run` messages to native
   // commands. Native side gates on a live voice session, so no extra guard here.
   useSystemControl(voice.room);

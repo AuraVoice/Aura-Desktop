@@ -193,6 +193,7 @@ export function OnboardingFlow() {
           {copy.welcome.headingTail}
         </h2>
         <p className="onboarding-body">{copy.welcome.body}</p>
+        <p className="onboarding-trial-note">{copy.welcome.trialNote}</p>
 
         {!consentAccepted && (
           <label className="onboarding-age-check">

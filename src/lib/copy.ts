@@ -91,6 +91,10 @@ export const onboarding = {
     headingAccent: "Meet Buddy",
     headingTail: `, your AI companion on this ${deviceNoun()}.`,
     body: "Talk things through, get help, and complete tasks without leaving the screen you're on.",
+    // Matches the mobile paywall's framing (paywall_screen.dart's default
+    // subtitle) so the two surfaces tell the same story. The backend grants the
+    // trial on the first GET /entitlement; nothing here creates it.
+    trialNote: "45 days free while we're in beta. No card needed.",
     // Takes the live trigger phrase (voiceTriggerPhrase in lib/hotkeys.ts)
     // rather than primaryModifierLabel(): the trigger is user-configurable, and
     // the macOS default is now a chord, so neither the verb "Double-tap" nor a
@@ -292,9 +296,10 @@ export const kebabMenu = {
   signOut: "Sign out",
 } as const;
 
-// The plan line + Upgrade button at the top of the kebab menu. The desktop is a
-// pure reader of the account's subscription: it shows the state and links out
-// to web checkout. Payments never happen in the app.
+// Plan and trial copy. The desktop is a pure reader of the account's
+// subscription: it shows the state and links out to web checkout. Payments
+// never happen in the app. The trialBanner* strings are the dashboard strip;
+// the countdown headline above it reuses trialDaysLeft / trialLastDay.
 export const subscription = {
   trialDaysLeft: (n: number) => `Trial · ${n} days left`,
   trialLastDay: "Trial · last day",
@@ -306,6 +311,9 @@ export const subscription = {
   upgradeWaiting: "Waiting for payment...",
   upgraded: "You're upgraded",
   upgradeFailed: "Try again",
+  trialBannerBody: "Everything paid is unlocked while we're in beta. You'll pick a plan only when it ends.",
+  trialBannerCta: "See plans",
+  trialBannerDismiss: "Dismiss",
   voiceCapReached: "You've used today's free voice minutes. They reset tomorrow.",
   voiceCapUpgradeTooltip: "Upgrade for unlimited voice",
 } as const;
@@ -380,3 +388,10 @@ export const desktopAnonAliasedUidKey = "desktop_anon_aliased_uid";
 // auth transition (OnboardingFlow unmounts once `user` is set; the tail - hotkey
 // tour + live demo - reads this to know it should keep running).
 export const desktopOnboardingPhaseKey = "desktop_onboarding_phase";
+// Which trial milestone the dashboard trial banner was last dismissed at
+// ("early" / "14" / "7" / "3" / "last"). Per uid so a second account on this
+// machine starts clean, per milestone so one dismissal does not silence the
+// whole 45 days.
+export const desktopTrialBannerDismissedKey = "desktop_trial_banner_dismissed";
+export const desktopTrialBannerDismissedForUidKey = (uid: string) =>
+  `${desktopTrialBannerDismissedKey}_${encodeURIComponent(uid)}`;
