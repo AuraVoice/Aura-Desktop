@@ -24,6 +24,9 @@ const EXPLICIT_SCREEN_SAVE_REQUEST =
 export interface ChatScreenState {
   /** Whether the next message carries the screen. */
   armed: boolean;
+  /** The user's standing choice (GeneralSettings.chatScreenshots). False means
+   * the composer must not offer the attachment at all. */
+  enabled: boolean;
   /** Object URL for the chip's thumbnail, null while nothing is captured. */
   previewUrl: string | null;
   /** False when capture is unavailable (Guide Mode owns the screen, or the
@@ -45,16 +48,22 @@ export interface ChatScreenState {
  *
  * Rust remembers the monitor at summon (see overlay::summon_chat), but no
  * pixels are captured until the user turns the attachment on.
+ *
+ * `enabled` is the standing preference above that per-message arm. Off means no
+ * path in here captures anything, including the explicit-request phrase, which
+ * is what lets the settings switch be described as a real off.
  */
-export function useChatScreenCapture(open: boolean) {
+export function useChatScreenCapture(open: boolean, enabled: boolean) {
   const [armed, setArmed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [capture, setCapture] = useState<ChatScreenCapture | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const captureRef = useRef<ChatScreenCapture | null>(null);
   const armedRef = useRef(armed);
+  const enabledRef = useRef(enabled);
   captureRef.current = capture;
   armedRef.current = armed;
+  enabledRef.current = enabled;
 
   // One owner for the object URL: whatever replaces the capture revokes the URL
   // it is replacing, so a session of re-arms cannot leak blobs.
@@ -95,6 +104,18 @@ export function useChatScreenCapture(open: boolean) {
     discardChatCapture().catch((err) => logError("useChatScreenCapture: discard on close", err));
   }, [open, adoptCapture]);
 
+  // Turning the preference off mid-compose has to drop whatever is already
+  // pending, not just stop the next arm: a frame captured a second before the
+  // switch moved must never ride the next message. Same three steps as the
+  // close path above.
+  useEffect(() => {
+    if (enabled) return;
+    adoptCapture(null);
+    setArmed(false);
+    setError(null);
+    discardChatCapture().catch((err) => logError("useChatScreenCapture: discard on disable", err));
+  }, [enabled, adoptCapture]);
+
   useEffect(() => {
     return () => {
       setPreviewUrl((current) => {
@@ -105,6 +126,7 @@ export function useChatScreenCapture(open: boolean) {
   }, []);
 
   const toggle = useCallback(() => {
+    if (!enabledRef.current) return;
     const next = !armedRef.current;
     setArmed(next);
     setError(null);
@@ -141,6 +163,9 @@ export function useChatScreenCapture(open: boolean) {
    * screenshot the user never asked for.
    */
   const resolveForSend = useCallback(async (message: string): Promise<ChatAttachment[]> => {
+    // Before the explicit-request test on purpose: a phrase that can walk around
+    // the preference would make the settings switch a lie.
+    if (!enabledRef.current) return [];
     const explicitlyRequested = EXPLICIT_SCREEN_SAVE_REQUEST.test(message);
     if (!armedRef.current && !explicitlyRequested) return [];
     try {
@@ -169,6 +194,7 @@ export function useChatScreenCapture(open: boolean) {
 
   const state: ChatScreenState = {
     armed,
+    enabled,
     previewUrl,
     error,
     available: capture !== null,

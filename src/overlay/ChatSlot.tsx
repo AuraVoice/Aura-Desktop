@@ -674,13 +674,15 @@ export function ChatSlot({
     )}px`;
   }, [message]);
 
-  const screenToggleTitle = lane === "live"
-    ? "Ask out loud and Aura already sees your screen"
-    : screen.error
-      ? screen.error
-      : screen.armed
-        ? "Screen is attached to your next message"
-        : "Attach your screen to the next message";
+  const screenToggleTitle = !screen.enabled
+    ? "Screenshots in text chat are off. Turn them on in Settings > System."
+    : lane === "live"
+      ? "Ask out loud and Aura already sees your screen"
+      : screen.error
+        ? screen.error
+        : screen.armed
+          ? "Screen is attached to your next message"
+          : "Attach your screen to the next message";
 
   function sendMessage() {
     if (!trimmedMessage || trimmedMessage.length > maxMessageLength || sending || limitReached) return;
@@ -869,7 +871,7 @@ export function ChatSlot({
               type="button"
               className={`chat-screen-toggle${screen.armed && lane !== "live" ? " armed" : ""}`}
               aria-pressed={screen.armed && lane !== "live"}
-              disabled={lane === "live"}
+              disabled={lane === "live" || !screen.enabled}
               title={screenToggleTitle}
               onClick={screen.toggle}
             >
