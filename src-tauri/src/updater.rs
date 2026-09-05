@@ -190,13 +190,45 @@ pub fn install_pending_update(app: &AppHandle) -> Result<bool, String> {
                 Err(e) => {
                     remove_just_updated_marker(app);
                     error!("install_pending_update: install failed: {e}");
-                    // The taken pending update is dropped here on purpose:
-                    // the next periodic re-check re-downloads it fresh.
-                    Err(e.to_string())
+                    match read_only_bundle_hint(&e) {
+                        // Put this one back. Re-downloading would fail in
+                        // exactly the same place, and the banner asks the user
+                        // to reopen Aura from the Applications folder and try
+                        // again, so the update has to still be here when they
+                        // do rather than waiting out the next re-check.
+                        Some(hint) => {
+                            *handle.0.lock().unwrap_or_else(|e| e.into_inner()) =
+                                Some((update, bytes));
+                            Err(hint)
+                        }
+                        // The taken pending update is dropped here on purpose:
+                        // the next periodic re-check re-downloads it fresh.
+                        None => Err(e.to_string()),
+                    }
                 }
             }
         }
         None => Ok(false),
+    }
+}
+
+/// Marker the banner matches on. Not a sentence, because the copy that reaches
+/// the user lives in `src/lib/copy.ts` with the rest of it.
+const READ_ONLY_BUNDLE: &str = "bundle-read-only";
+
+/// The updater swaps the bundle in place, so it needs the bundle to be
+/// writable. It is not when the app runs from a mounted disk image or, far more
+/// often, from the read-only AppTranslocation mirror macOS gives a bundle that
+/// still carries com.apple.quarantine. Both arrive here as EROFS, which the
+/// plugin does not treat as an install problem it can prompt about: its admin
+/// privileges fallback fires only for PermissionDenied. Naming it lets the
+/// banner say what to do instead of promising a retry that cannot work.
+fn read_only_bundle_hint(e: &tauri_plugin_updater::Error) -> Option<String> {
+    match e {
+        tauri_plugin_updater::Error::Io(io) if io.raw_os_error() == Some(30) => {
+            Some(READ_ONLY_BUNDLE.to_string())
+        }
+        _ => None,
     }
 }
 

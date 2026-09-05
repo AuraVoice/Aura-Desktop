@@ -220,6 +220,8 @@ export const update = {
   restarting: "Installing the update. Buddy will be right back.",
   deferred: "Buddy is in a call. Try again after it ends.",
   failed: "The update couldn't install. Buddy will retry in the background.",
+  blocked:
+    "Aura is running from a read-only copy of itself. Quit Aura, open it from the Applications folder, then try again.",
   updatedNotice: (version: string) => `Updated to v${version}. You're on the latest Buddy.`,
 } as const;
 

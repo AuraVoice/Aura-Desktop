@@ -5,7 +5,11 @@ import { logError } from "./lib/log";
 import { GlassSurface } from "./overlay/GlassSurface";
 import "./UpdateBanner.css";
 
-type InstallPhase = "idle" | "installing" | "deferred" | "failed";
+type InstallPhase = "idle" | "installing" | "deferred" | "failed" | "blocked";
+
+// The one install failure the user can act on, so updater.rs hands back a
+// marker rather than an errno. See its read_only_bundle_hint.
+const READ_ONLY_BUNDLE = "bundle-read-only";
 
 export function UpdateBanner({
   version,
@@ -26,7 +30,10 @@ export function UpdateBanner({
     </div>
   ) : version ? (
     <>
-      <div className="update-banner-copy" role={phase === "failed" ? "alert" : "status"}>
+      <div
+        className="update-banner-copy"
+        role={phase === "failed" || phase === "blocked" ? "alert" : "status"}
+      >
         <strong>{copy.ready(version)}</strong>
         <span>{messageFor(phase)}</span>
       </div>
@@ -71,7 +78,7 @@ async function install(version: string, setPhase: (phase: InstallPhase) => void)
     setPhase(pending === version ? "deferred" : "failed");
   } catch (err) {
     logError("UpdateBanner: install update", err);
-    setPhase("failed");
+    setPhase(err === READ_ONLY_BUNDLE ? "blocked" : "failed");
   }
 }
 
@@ -91,6 +98,8 @@ function messageFor(phase: InstallPhase): string {
       return "Finish your call or meeting, then try again.";
     case "failed":
       return copy.failed;
+    case "blocked":
+      return copy.blocked;
     default:
       return copy.laterHint;
   }
