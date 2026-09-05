@@ -50,6 +50,11 @@
   justify-content: center;
   min-height: 0;
   overflow-y: auto;
+  scrollbar-width: none;
+}
+
+.setup-panel-content::-webkit-scrollbar {
+  display: none;
 }
 
 .setup-panel-version {

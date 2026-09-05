@@ -4,10 +4,13 @@
   position: absolute;
   inset: 0;
   display: flex;
-  align-items: center;
-  justify-content: center;
   padding: 32px;
-  overflow: hidden;
+  overflow-x: hidden;
+  /* Scrolls only when a step is taller than the window; the panel's auto
+     margins keep it centered when it fits, and auto margins collapse to 0
+     when it does not, so the top never gets clipped off. */
+  overflow-y: auto;
+  scrollbar-width: none;
   --glass-text-bright: #28231d;
   --glass-text-dim: #6f655b;
   --glass-field-fill: rgba(255, 255, 255, 0.56);
@@ -15,9 +18,14 @@
   --glass-accent: #76c7b5;
   background: #f5f4f0 url("../assets/onboarding-ambient-v2.png") center / cover no-repeat;
 }
+.db-onboarding::-webkit-scrollbar {
+  display: none;
+}
+
 .db-onboarding-panel {
   width: 100%;
   max-width: 780px;
+  margin: auto;
 }
 
 .account-onboarding {
