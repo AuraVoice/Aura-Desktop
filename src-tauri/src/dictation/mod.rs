@@ -126,7 +126,7 @@ const RELAUNCH_REASON: &str =
     "Input Monitoring is allowed. Restart Aura so it can start listening for the dictation keys.";
 
 mod platform {
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
     use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};
     use std::sync::{Arc, Mutex, OnceLock};
     use std::time::{Duration, Instant};
@@ -229,6 +229,11 @@ mod platform {
     /// rather than a Mutex on purpose: the hook callback runs on every key the
     /// user presses anywhere in Windows and must never contend on a lock.
     static CHORD_TX: OnceLock<Sender<Message>> = OnceLock::new();
+    /// Set the first time a chord press cannot reach the worker, which means
+    /// the worker thread is gone. Without it a dead worker is completely
+    /// invisible: every press is dropped and the Dictation page keeps saying
+    /// the chord is available.
+    static WORKER_LOST: AtomicBool = AtomicBool::new(false);
 
     /// Bumped for every hold, so a delayed HUD hide from an earlier utterance
     /// cannot close the HUD of the one the user just started.
@@ -271,9 +276,20 @@ mod platform {
     /// stay allocation-light and never block: a send on an unbounded channel
     /// with no live contention is the whole body.
     pub fn signal(chord_signal: ChordSignal) {
-        if let Some(tx) = CHORD_TX.get() {
-            let _ = tx.send(Message::Chord(chord_signal));
+        let Some(tx) = CHORD_TX.get() else {
+            return;
+        };
+        if tx.send(Message::Chord(chord_signal)).is_err() && !WORKER_LOST.swap(true, Ordering::SeqCst)
+        {
+            // Once only: the hook fires this on every press, and a dead worker
+            // would otherwise fill the whole readable log tail.
+            error!("dictation: worker thread is gone, the chord is dead until restart");
         }
+    }
+
+    /// Whether the worker has been observed to be unreachable.
+    pub(super) fn worker_lost() -> bool {
+        WORKER_LOST.load(Ordering::SeqCst)
     }
 
     /// True while text or failed audio is waiting for dismissal or resolution.
@@ -648,7 +664,9 @@ mod platform {
     /// expire. Both change while the app is running, so every caller that
     /// might have observed a change calls this rather than latching a value.
     pub(super) fn refresh_status(app: &AppHandle, status: &Arc<Mutex<DictationStatus>>) {
-        let next = if !consent::is_accepted(app) {
+        let next = if worker_lost() {
+            DictationStatus::unavailable("Dictation stopped working. Restart Aura to fix it.")
+        } else if !consent::is_accepted(app) {
             DictationStatus::unavailable(
                 "Turn on online dictation to use the dictation chord.",
             )
@@ -1101,6 +1119,13 @@ mod platform {
         // gate happens on the blocking pool, so the caption is already on
         // screen while the clip encodes.
         if !matches!(outcome, InsertOutcome::PasswordField) {
+            // Shareable is about what actually happened to the text, not about
+            // consent - consent is checked in share.rs. A dictation that never
+            // reached a field (focus moved, keys still held, insertion blocked)
+            // is archived so the user can recover it, but it must never upload:
+            // the payload asserts labelSource "observed_field", and for these
+            // rows nothing was ever observed in one.
+            let shareable = matches!(outcome, InsertOutcome::Inserted);
             history::record_later(
                 app,
                 final_text.clone(),
@@ -1108,6 +1133,7 @@ mod platform {
                 std::mem::take(&mut utterance),
                 hold_ms as i64,
                 usage::word_count(&final_text),
+                shareable,
             );
         }
 

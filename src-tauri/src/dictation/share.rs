@@ -23,7 +23,7 @@
 //!    withdrawn opt-in and an upload.
 
 use log::{info, warn};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use tauri::AppHandle;
@@ -67,7 +67,13 @@ const STATE_FAILED: i64 = 3;
 /// request, so this struct IS the wire format - changing a field name here
 /// changes the API. Mirrors the backend's TracePayloadV2, which is
 /// `strict=True, extra="forbid"`: every field must be present and typed exactly.
-#[derive(Clone, Debug, Serialize)]
+///
+/// Deliberately NOT `Debug`, same discipline as `credential.rs`: it carries four
+/// copies of the transcript (raw, inserted, final, training), so a single
+/// `{:?}` in a log line or an error context would dump the user's speech into
+/// the plaintext log. `Serialize` has to stay - it is the wire format - which is
+/// exactly why `Debug` must not be there to be reached for by accident.
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TraceUploadLease {
     pub trace_id: String,
@@ -165,6 +171,7 @@ pub fn enqueue_backlog(app: &AppHandle, uid: &str) -> Result<usize, String> {
                 SET share_state = ?1, share_attempts = 0, share_next_attempt_ms = 0
               WHERE uid = ?2
                 AND share_state = ?3
+                AND shareable = 1
                 AND audio_path IS NOT NULL
                 AND audio_bytes > 0
                 AND audio_bytes <= ?4
@@ -420,15 +427,24 @@ pub fn audio_body(app: &AppHandle, uid: &str, trace_id: &str) -> Result<Vec<u8>,
 }
 
 /// The server has both halves.
+///
+/// Checks rows-affected: an UPDATE that matches nothing used to report success,
+/// which left the row PENDING to be uploaded again the next night and burn a
+/// second slot of the monthly quota for a trace the server already had.
 pub fn resolve(app: &AppHandle, uid: &str, trace_id: &str) -> Result<(), String> {
     let conn = history::open(app)?;
-    conn.execute(
-        "UPDATE transcripts
-            SET share_state = ?1, shared_at_ms = ?2, share_next_attempt_ms = 0
-          WHERE uid = ?3 AND share_trace_id = ?4",
-        params![STATE_UPLOADED, now_ms(), uid, trace_id],
-    )
-    .map_err(|e| e.to_string())?;
+    let updated = conn
+        .execute(
+            "UPDATE transcripts
+                SET share_state = ?1, shared_at_ms = ?2, share_next_attempt_ms = 0
+              WHERE uid = ?3 AND share_trace_id = ?4",
+            params![STATE_UPLOADED, now_ms(), uid, trace_id],
+        )
+        .map_err(|e| e.to_string())?;
+    if updated == 0 {
+        warn!("dictation.share: resolve matched no row trace={trace_id}");
+        return Err("dictation share: resolve matched no row".to_string());
+    }
     Ok(())
 }
 
@@ -437,14 +453,22 @@ pub fn resolve(app: &AppHandle, uid: &str, trace_id: &str) -> Result<(), String>
 /// everything transient.
 pub fn fail(app: &AppHandle, uid: &str, trace_id: &str, retryable: bool) -> Result<(), String> {
     let conn = history::open(app)?;
-    let attempts: i64 = conn
+    // A missing row is NOT "zero attempts so far". Reading it that way reset the
+    // counter to 1, updated nothing, and then logged attempts=1 as if the retry
+    // budget were intact.
+    let previous: Option<i64> = conn
         .query_row(
             "SELECT share_attempts FROM transcripts WHERE uid = ?1 AND share_trace_id = ?2",
             params![uid, trace_id],
             |row| row.get(0),
         )
-        .unwrap_or(0_i64)
-        .saturating_add(1);
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some(previous) = previous else {
+        warn!("dictation.share: fail for a row that is gone trace={trace_id}");
+        return Ok(());
+    };
+    let attempts = previous.max(0).saturating_add(1);
     if !retryable || attempts >= MAX_SHARE_ATTEMPTS {
         conn.execute(
             "UPDATE transcripts SET share_state = ?1, share_attempts = ?2
@@ -462,7 +486,7 @@ pub fn fail(app: &AppHandle, uid: &str, trace_id: &str, retryable: bool) -> Resu
         )
         .map_err(|e| e.to_string())?;
     }
-    info!("dictation.share: attempt failed retryable={retryable} attempts={attempts}");
+    warn!("dictation.share: attempt failed trace={trace_id} retryable={retryable} attempts={attempts}");
     Ok(())
 }
 
@@ -521,11 +545,17 @@ pub fn claim_deletion(app: &AppHandle, uid: &str) -> Result<Option<String>, Stri
 
 pub fn resolve_deletion(app: &AppHandle, uid: &str, trace_id: &str) -> Result<(), String> {
     let conn = history::open(app)?;
-    conn.execute(
-        "DELETE FROM share_deletions WHERE uid = ?1 AND trace_id = ?2",
-        params![uid, trace_id],
-    )
-    .map_err(|e| e.to_string())?;
+    let removed = conn
+        .execute(
+            "DELETE FROM share_deletions WHERE uid = ?1 AND trace_id = ?2",
+            params![uid, trace_id],
+        )
+        .map_err(|e| e.to_string())?;
+    if removed == 0 {
+        // Not fatal: the obligation is discharged either way. But it means the
+        // pump and the store disagree about what is owed, which is worth seeing.
+        warn!("dictation.share: deletion resolve matched no row trace={trace_id}");
+    }
     Ok(())
 }
 

@@ -165,8 +165,13 @@ fn db_path(app: &AppHandle) -> Result<PathBuf, String> {
 /// Clips are sharded by the first two characters of their id, so a heavy user's
 /// thousands of files never land in one directory. The uid deliberately never
 /// appears in a path: it lives in the row and in the AAD only.
+/// Ids come from `new_id` (16 hex chars) so the shard prefix always exists, but
+/// `&id[..2]` is a BYTE slice and would panic on a short or non-ASCII id rather
+/// than fail. Take the prefix by character instead, so a malformed id produces a
+/// wrong path that simply misses rather than taking the process down.
 fn clip_relative(id: &str) -> String {
-    format!("{CLIPS_DIR}/{}/{id}.flac.enc", &id[..2])
+    let shard: String = id.chars().take(2).collect();
+    format!("{CLIPS_DIR}/{shard}/{id}.flac.enc")
 }
 
 pub(super) fn clip_path(app: &AppHandle, relative: &str) -> Result<PathBuf, String> {
@@ -204,6 +209,18 @@ pub(super) fn open(app: &AppHandle) -> Result<Connection, String> {
             audio_bytes INTEGER NOT NULL DEFAULT 0,
             -- The transcript as it left ASR, stored only when polish changed it.
             raw_text BLOB,
+            -- Whether this dictation is allowed to be SHARED, which is a
+            -- property of the capture, not a queue state. A dictation that was
+            -- never typed into a field (focus moved, keys still held, insertion
+            -- blocked) is kept so the user can recover what they said, but it
+            -- cannot be uploaded: the payload asserts an observed-field label,
+            -- and for those rows that would be a lie.
+            shareable INTEGER NOT NULL DEFAULT 1,
+            -- SHA-256 of the plaintext FLAC, computed once when the clip is
+            -- written. The digest is a property of bytes that never change, so
+            -- recomputing it per upload attempt meant decrypting the whole clip
+            -- again on every claim and every retry.
+            audio_sha256 TEXT,
             -- Sharing queue state. 0 ineligible, 1 pending, 2 uploaded, 3 failed.
             share_state INTEGER NOT NULL DEFAULT 0,
             share_attempts INTEGER NOT NULL DEFAULT 0,
@@ -349,6 +366,7 @@ fn sweep(app: &AppHandle, conn: &Connection, uid: &str) -> Result<(), String> {
 /// Every failure here is swallowed after a warn. The words were already typed
 /// by the time this runs, so a full disk must never surface in the HUD or
 /// change what the user just saw happen.
+#[allow(clippy::too_many_arguments)]
 pub fn record_later(
     app: &AppHandle,
     text: String,
@@ -356,6 +374,7 @@ pub fn record_later(
     samples: Vec<f32>,
     duration_ms: i64,
     words: u64,
+    shareable: bool,
 ) {
     if !ENCRYPTION_AVAILABLE || text.trim().is_empty() || !is_enabled(app) {
         return;
@@ -365,6 +384,9 @@ pub fn record_later(
     };
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
+        // `record` both inserts and then sweeps, so a failure here does not
+        // mean the entry was lost - it may well have been written and the
+        // retention pass afterwards is what failed. Say what actually happened.
         if let Err(error) = record(
             &app,
             &uid,
@@ -373,12 +395,14 @@ pub fn record_later(
             &samples,
             duration_ms,
             words,
+            shareable,
         ) {
-            warn!("dictation.history: entry was not saved: {error}");
+            warn!("dictation.history: record or retention failed ({error})");
         }
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 fn record(
     app: &AppHandle,
     uid: &str,
@@ -387,6 +411,7 @@ fn record(
     samples: &[f32],
     duration_ms: i64,
     words: u64,
+    shareable: bool,
 ) -> Result<(), String> {
     let key = load_or_create_key(app)?;
     let id = new_id()?;
@@ -400,13 +425,15 @@ fn record(
     // a normal state; a transcript lost because its audio failed is not.
     let mut relative: Option<String> = None;
     let mut audio_bytes: i64 = 0;
+    let mut audio_sha256: Option<String> = None;
     if !samples.is_empty() {
         match store_clip(app, &key, uid, &id, samples) {
-            Ok(written) => {
+            Ok(stored) => {
                 relative = Some(clip_relative(&id));
-                audio_bytes = written;
+                audio_bytes = stored.sealed_bytes;
+                audio_sha256 = Some(stored.plain_sha256);
             }
-            Err(error) => warn!("dictation.history: clip was not saved: {error}"),
+            Err(error) => warn!("dictation.history: clip was not saved ({error})"),
         }
     }
 
@@ -414,8 +441,8 @@ fn record(
     conn.execute(
         "INSERT INTO transcripts (
             uid, id, recorded_at_ms, word_count, duration_ms, text,
-            flagged, audio_path, audio_bytes, raw_text
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, ?9)",
+            flagged, audio_path, audio_bytes, raw_text, shareable, audio_sha256
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, ?9, ?10, ?11)",
         params![
             uid,
             id,
@@ -426,38 +453,41 @@ fn record(
             relative,
             audio_bytes,
             sealed_raw,
+            i64::from(shareable),
+            audio_sha256,
         ],
     )
     .map_err(|e| e.to_string())?;
     sweep(app, &conn, uid)
 }
 
+/// What writing a clip produced. The digest is of the PLAINTEXT FLAC, which is
+/// what the upload contract signs (`X-Audio-Sha256`) and what the server checks;
+/// the byte count is of the sealed file, which is what the audio budget bounds.
+pub(super) struct StoredClip {
+    pub sealed_bytes: i64,
+    pub plain_sha256: String,
+}
+
+/// The one place a clip is encoded, sealed and written.
+///
+/// The digest is taken here, on the plaintext, and persisted on the row. It is a
+/// property of bytes that never change once written, so computing it at upload
+/// time instead meant reading and decrypting the whole clip on every claim and
+/// again on every retry.
 fn store_clip(
     app: &AppHandle,
     key: &[u8; 32],
     uid: &str,
     id: &str,
     samples: &[f32],
-) -> Result<i64, String> {
+) -> Result<StoredClip, String> {
     let pcm: Vec<i32> = super::audio::to_i16(samples)
         .into_iter()
         .map(i32::from)
         .collect();
-    store_pcm(app, key, uid, id, &pcm)
-}
-
-/// The one place a clip is encoded, sealed and written. Live capture arrives
-/// here as f32 through `store_clip`; the trace import arrives with i16-derived
-/// samples it decoded from the old WAV. Both must produce byte-identical
-/// on-disk shape, so neither gets its own copy of this.
-fn store_pcm(
-    app: &AppHandle,
-    key: &[u8; 32],
-    uid: &str,
-    id: &str,
-    pcm: &[i32],
-) -> Result<i64, String> {
-    let flac = crate::meeting::audio::encode_flac(pcm, 1)?;
+    let flac = crate::meeting::audio::encode_flac(&pcm, 1)?;
+    let plain_sha256 = crate::util::sha256_hex(&flac);
     let sealed = crate::crypto::encrypt_with_aad(key, &flac, row_aad(uid, id, "audio").as_bytes())?;
     let relative = clip_relative(id);
     let path = clip_path(app, &relative)?;
@@ -465,7 +495,10 @@ fn store_pcm(
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     crate::fsx::write_atomic(&path, &sealed, crate::fsx::Durability::Fsync)?;
-    Ok(sealed.len() as i64)
+    Ok(StoredClip {
+        sealed_bytes: sealed.len() as i64,
+        plain_sha256,
+    })
 }
 
 // ---------------------------------------------------------------- commands
@@ -873,7 +906,10 @@ fn write_export(
         .map_err(|e| e.to_string())?
         .join("Aura Dictation");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let path = dir.join(format!("{}-{}.{extension}", stamp(recorded_at_ms), &id[..8]));
+    // `id` arrives from the webview, so this must not be a byte slice: a short
+    // or non-ASCII id would panic inside a command rather than fail cleanly.
+    let short: String = id.chars().take(8).collect();
+    let path = dir.join(format!("{}-{}.{extension}", stamp(recorded_at_ms), short));
     std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
     Ok(path.to_string_lossy().to_string())
 }

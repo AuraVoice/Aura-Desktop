@@ -51,11 +51,20 @@ interface SharePumpState {
 class TraceUploadError extends Error {
   retryable: boolean;
   quotaResetAtMs: number | null;
+  /** The account is gone or changed. Systemic, and not attributable to the row
+   * being uploaded, so it must never consume that row's retry budget. */
+  signedOut: boolean;
 
-  constructor(message: string, retryable: boolean, quotaResetAtMs: number | null = null) {
+  constructor(
+    message: string,
+    retryable: boolean,
+    quotaResetAtMs: number | null = null,
+    signedOut = false,
+  ) {
     super(message);
     this.retryable = retryable;
     this.quotaResetAtMs = quotaResetAtMs;
+    this.signedOut = signedOut;
   }
 }
 
@@ -108,7 +117,7 @@ export function classifyUploadFailure(error: unknown): TraceUploadError {
   // A missing session is not a queue failure. The pump stops entirely rather
   // than burning an attempt on every queued dictation.
   if (error instanceof AuthRequiredError) {
-    return new TraceUploadError("Not signed in", true);
+    return new TraceUploadError("Not signed in", true, null, true);
   }
   return new TraceUploadError(
     error instanceof Error ? error.message : "Network unavailable",

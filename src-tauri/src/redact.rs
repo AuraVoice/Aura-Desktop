@@ -29,6 +29,18 @@ const RULES: &[Rule] = &[
         pattern: r"[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
         replacement: "[redacted:jwt]",
     },
+    // Home directories. OS error strings routinely carry the full path of the
+    // file they failed on, and on every platform that path begins with the
+    // user's own name. Keeps the rest of the path, which is the diagnostic
+    // part, and drops only the identity.
+    Rule {
+        pattern: r"(?i)([A-Za-z]:\\Users\\)[^\\/\s]+",
+        replacement: "${1}[redacted:user]",
+    },
+    Rule {
+        pattern: r"(/(?:home|Users)/)[^/\s]+",
+        replacement: "${1}[redacted:user]",
+    },
     // "Authorization: Bearer <x>" / "authorization=<x>" - consumes up to two
     // tokens so the scheme word can't strand the credential behind it.
     Rule {

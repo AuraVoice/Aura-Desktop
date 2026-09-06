@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { logError } from "../lib/log";
 
 /**
  * Keeps Rust supplied with a short-lived credential, refreshed ahead of expiry.
@@ -64,7 +65,9 @@ export function useCredentialPump(
     const generation = ++generationRef.current;
 
     if (!ownerUid) {
-      void clearRef.current();
+      void Promise.resolve(clearRef.current()).catch((err) =>
+        logError("useCredentialPump: clear", err),
+      );
       return;
     }
 
@@ -72,7 +75,17 @@ export function useCredentialPump(
     let cancelled = false;
 
     const run = async () => {
-      const outcome = await cycleRef.current();
+      // The cycle is supplied by the caller, so this cannot assume it never
+      // throws. Without the catch, one rejection means no timer is scheduled and
+      // the pump is dead for the rest of the session, silently, with the
+      // credential quietly expiring underneath it.
+      let outcome: PumpOutcome;
+      try {
+        outcome = await cycleRef.current();
+      } catch (err) {
+        logError("useCredentialPump: cycle threw", err);
+        outcome = { nextDelayMs: RETRY_DELAY_MS };
+      }
       // A cycle that started before a sign-out or a user switch must not
       // schedule work for, or on behalf of, the session that replaced it.
       if (cancelled || generationRef.current !== generation) return;
@@ -86,7 +99,9 @@ export function useCredentialPump(
     return () => {
       cancelled = true;
       if (timer !== undefined) clearTimeout(timer);
-      void clearRef.current();
+      void Promise.resolve(clearRef.current()).catch((err) =>
+        logError("useCredentialPump: clear", err),
+      );
     };
   }, [ownerUid]);
 }

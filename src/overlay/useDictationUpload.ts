@@ -157,6 +157,12 @@ export function useDictationUpload(ownerUid: string | null, sharing: boolean): v
           await resolveTraceUpload(uid, lease.traceId);
         } catch (err) {
           const failure = classifyUploadFailure(err);
+          if (failure.signedOut) {
+            // Not this row's fault, so it must not cost this row an attempt.
+            // Burning one per night while signed out would permanently FAIL a
+            // healthy dictation in eight nights.
+            return;
+          }
           if (failure.quotaResetAtMs !== null) {
             // A quota refusal is about the account, not this dictation, so it
             // pauses the queue instead of burning an attempt on every row.
