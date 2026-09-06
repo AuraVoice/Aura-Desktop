@@ -24,7 +24,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [initializing, setInitializing] = useState(true);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (nextUser) => {
+    let unsubscribe: (() => void) | undefined;
+    let cancelled = false;
+
+    // onAuthStateChanged fires its FIRST callback with null whenever the
+    // persisted session has not been rehydrated yet, and both the overlay and
+    // the dashboard mount their own provider. Reporting that null to Rust
+    // announces a signed-out session on every launch, which used to be read as
+    // a real account boundary and pruned the per-account local stores.
+    // security.rs now ignores a no-change report, and this keeps the phantom
+    // from being sent at all. Awaiting persistence costs nothing: it resolves
+    // immediately when there is no stored session.
+    void auth.authStateReady().then(() => {
+      if (cancelled) return;
+      unsubscribe = attach();
+    });
+
+    function attach() {
+      return onAuthStateChanged(auth, async (nextUser) => {
       // Rust's security state (security.rs) is the authorization boundary
       // for screen capture / meeting audio / pointing; it must be current
       // BEFORE React exposes the user, or a signed-in-gated effect (the
@@ -68,9 +85,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           }))
           .catch((err) => logError("AuthProvider: syncProfileOnSignIn", err));
       }
-    });
+      });
+    }
 
-    return unsubscribe;
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
   }, []);
 
   // Ctrl+Shift+D: sign out immediately, bypassing VoiceBar's usual confirm step.

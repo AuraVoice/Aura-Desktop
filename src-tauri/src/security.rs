@@ -140,6 +140,11 @@ impl Ticket {
 /// caller must run outside the state lock.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct SessionTransition {
+    /// The session actually moved. False for a redundant report of the state
+    /// already held. Per-account pruning must gate on this: a repeated
+    /// "signed out" is not a new boundary and must not re-run destructive
+    /// cleanup.
+    pub changed: bool,
     /// A previously signed-in session lost authorization (sign-out or a
     /// direct uid change).
     pub revoked: bool,
@@ -322,6 +327,7 @@ impl SecurityState {
         };
         if next == self.session {
             return SessionTransition {
+                changed: false,
                 revoked: false,
                 disarmed: false,
                 guide_disarmed: false,
@@ -347,6 +353,7 @@ impl SecurityState {
             guide_disarmed = self.disarm_guide();
         }
         SessionTransition {
+            changed: true,
             revoked,
             disarmed,
             guide_disarmed,
@@ -528,10 +535,20 @@ pub fn session_changed(app: &AppHandle, signed_in: bool, uid: Option<String>) {
         // the next one, and the chat buffer is plaintext in memory.
         crate::screenshot::clear_chat_capture(app);
     }
-    // The local chat transcript is per-account. This runs on EVERY transition,
-    // not only `revoked`, so a fresh sign-in that follows a crash (no sign-out
-    // ever ran) still drops the previous account's cached messages before the
-    // overlay can paint them.
+    // Per-account pruning below runs on EVERY real transition, not only
+    // `revoked`, so a fresh sign-in that follows a crash (no sign-out ever ran)
+    // still drops the previous account's data before the overlay can paint it.
+    //
+    // It must NOT run on a redundant report. `onAuthStateChanged` fires once
+    // with `null` before Firebase rehydrates the persisted session, and the
+    // overlay and dashboard each mount their own listener, so this function is
+    // called several times per launch with no session change at all. Treating
+    // those as boundaries is what silently deleted a user's whole dictation
+    // history on every start.
+    if !transition.changed {
+        return;
+    }
+    // The local chat transcript is per-account.
     crate::chat_cache::retain_only_for_session(app, session_uid.clone());
     // Stored interview sessions are per-account for the same reason and get the
     // same crash-safe boundary: the backend never holds these transcripts, so

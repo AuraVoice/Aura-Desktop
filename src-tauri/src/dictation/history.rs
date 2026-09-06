@@ -906,10 +906,17 @@ pub fn retain_only_for_session(app: &AppHandle, uid: Option<String>) {
                         .map_err(|e| e.to_string())?;
                     remove_clips(&app, &doomed);
                 }
+                // No uid to scope by, which means signed out. That is NOT a
+                // reason to destroy anything: every read is already uid-scoped,
+                // so isolation does not need deletion, and signing back in must
+                // return the user's own history. Deleting here conflated "nobody
+                // is looking" with "this must die", and because a transient
+                // signed-out report arrives on every launch it wiped the whole
+                // store between sessions. Account switches still prune, in the
+                // arm above. Explicit erasure (account deletion, clear history)
+                // does not route through this function.
                 _ => {
-                    conn.execute("DELETE FROM transcripts", [])
-                        .map_err(|e| e.to_string())?;
-                    drop_clip_tree(&app);
+                    warn!("dictation.history: session prune skipped, no uid to scope by");
                 }
             }
             Ok::<(), String>(())
