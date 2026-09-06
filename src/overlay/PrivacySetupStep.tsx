@@ -247,7 +247,7 @@ export function PrivacySetupStep({
           <label className={`privacy-choice-card${settings.improveConversations ? " is-selected" : ""}`}>
             <span>
               <strong>Conversation samples</strong>
-              <small>Save an on-device opt-in for voice samples. Uploads are not active yet.</small>
+              <small>Send dictation recordings and their transcripts so Aura gets better at hearing you. Kept for 180 days, then deleted. You can turn this off any time and what was sent is deleted too.</small>
             </span>
             <input
               type="checkbox"
@@ -258,7 +258,7 @@ export function PrivacySetupStep({
           <label className={`privacy-choice-card${settings.improveActions ? " is-selected" : ""}`}>
             <span>
               <strong>Action samples</strong>
-              <small>Save an on-device opt-in for screen and action samples. Uploads are not active yet.</small>
+              <small>Send screen context and the corrections you make, so Aura gets better at acting for you. Kept for 180 days, then deleted. You can turn this off any time and what was sent is deleted too.</small>
             </span>
             <input
               type="checkbox"

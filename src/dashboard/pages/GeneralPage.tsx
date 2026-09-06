@@ -8,6 +8,9 @@ import {
   type GeneralSettings,
 } from "../../lib/generalSettings";
 import { logError } from "../../lib/log";
+import { improvementSharingActive } from "../../lib/generalSettings";
+import { revokeTraceSharing } from "../../lib/dictationUpload";
+import { useAuth } from "../../state/AuthProvider";
 import { chordKeysOf, useDictationStatus } from "../../lib/dictationStatus";
 import { dictationChord as chordCopy } from "../../lib/copy";
 import { osName } from "../../lib/platformKeys";
@@ -68,6 +71,7 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
   const [editingShortcut, setEditingShortcut] = useState<{ id: string; label: string } | null>(null);
   const [resettingShortcuts, setResettingShortcuts] = useState(false);
   const [shortcutResetError, setShortcutResetError] = useState<string | null>(null);
+  const { user } = useAuth();
   const [settings, setSettings] = useState<GeneralSettings>(DEFAULT_GENERAL_SETTINGS);
   const [loaded, setLoaded] = useState(false);
   const [saveError, setSaveError] = useState(false);
@@ -131,6 +135,15 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
     setSaveError(false);
     try {
       await saveGeneralSettings(next);
+      // Withdrawal has to remove what was already sent, not merely stop
+      // sending more. Queued here rather than fired directly so a machine that
+      // is offline right now still owes the deletion when it comes back; the
+      // nightly pump drains it, and drains deletions even when sharing is off.
+      if (improvementSharingActive(previous) && !improvementSharingActive(next) && user?.uid) {
+        await revokeTraceSharing(user.uid).catch((err) =>
+          logError("GeneralPage: revoke trace sharing", err),
+        );
+      }
     } catch (err) {
       logError("GeneralPage: save improvement consent", err);
       setSettings(previous);
@@ -412,18 +425,18 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
         <>
           <SettingsSection
             title="Improvement preferences"
-            description="Control optional data sharing for voice and screen-aware improvements."
+            description="Samples you share leave this device, are kept for 180 days, and are deleted when you turn a switch off."
           >
             <div className="db-panel db-settings-panel">
               <ToggleRow
                 label="Conversation samples"
-                description="Save an opt-in preference for selected voice recordings and transcripts."
+                description="Send dictation recordings and their transcripts so Aura gets better at hearing you."
                 checked={settings.improveConversations}
                 onChange={(value) => void updateImprovementChoice("improveConversations", value)}
               />
               <ToggleRow
                 label="Action samples"
-                description="Save an opt-in preference for selected screen context, corrections, and outcomes."
+                description="Send screen context, corrections, and outcomes so Aura gets better at acting for you."
                 checked={settings.improveActions}
                 onChange={(value) => void updateImprovementChoice("improveActions", value)}
               />

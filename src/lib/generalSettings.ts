@@ -3,7 +3,13 @@ import { overlayStorePath } from "./copy";
 import { logError } from "./log";
 
 export const GENERAL_SETTINGS_KEY = "dashboard_general_settings";
-export const IMPROVEMENT_CONSENT_VERSION = 1;
+// Bumped to 2 when uploads actually became real. Version 1 was recorded
+// against copy that said "Uploads are not active yet", so it is not consent
+// to send anything; anyone still at 1 is treated as not opted in and must
+// choose again. Matches CONSENT_VERSION in the backend's
+// services/dictation/fields.py, which is the value the upload payload has to
+// assert.
+export const IMPROVEMENT_CONSENT_VERSION = 2;
 
 export interface GeneralSettings {
   dailyCatchUp: boolean;
@@ -61,7 +67,30 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
 };
 
 function mergeSettings(saved: GeneralSettings | null | undefined): GeneralSettings {
-  return { ...DEFAULT_GENERAL_SETTINGS, ...(saved ?? {}) };
+  const merged = { ...DEFAULT_GENERAL_SETTINGS, ...(saved ?? {}) };
+  // Consent below the current version is not consent. It was given against
+  // copy describing something else, so the switches read OFF until the user
+  // chooses again against the copy that now applies. Clearing here rather than
+  // at each call site makes this the single choke point: every reader of these
+  // flags, including the upload eligibility check, sees false without needing
+  // to know a version exists. The stored value is left alone until the user
+  // actually saves, so nothing is silently rewritten underneath them.
+  if (merged.improvementConsentVersion < IMPROVEMENT_CONSENT_VERSION) {
+    merged.improveConversations = false;
+    merged.improveActions = false;
+    merged.improvementConsentVersion = 0;
+  }
+  return merged;
+}
+
+/// Whether sharing is genuinely authorized right now. The only thing an
+/// upload path may ask. Never read the two toggles directly for that decision:
+/// they are meaningless without the version they were recorded against.
+export function improvementSharingActive(settings: GeneralSettings): boolean {
+  return (
+    settings.improvementConsentVersion >= IMPROVEMENT_CONSENT_VERSION &&
+    (settings.improveConversations || settings.improveActions)
+  );
 }
 
 export async function loadGeneralSettings(): Promise<GeneralSettings> {

@@ -58,6 +58,9 @@ mod credential;
 #[cfg(windows)]
 pub mod import_traces;
 pub mod history;
+#[cfg(any(windows, target_os = "macos"))]
+pub mod share;
+pub mod share_commands;
 mod hud;
 mod insert;
 mod usage;

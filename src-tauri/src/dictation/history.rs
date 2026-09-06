@@ -222,7 +222,62 @@ fn open(app: &AppHandle) -> Result<Connection, String> {
     // no-op on an existing table, so the upgrade is this guarded ALTER; the
     // only expected error is "duplicate column name" on an already-upgraded DB.
     let _ = conn.execute_batch("ALTER TABLE transcripts ADD COLUMN raw_text BLOB;");
+    // Sharing state (share.rs). Same guarded-ALTER upgrade as raw_text above.
+    // These live on the transcript row rather than in a second store because
+    // the row already IS the record being shared; a parallel index was what the
+    // retired trace subsystem did, and keeping two copies of the same dictation
+    // in sync is the thing that made it worth deleting.
+    let _ = conn.execute_batch(
+        "ALTER TABLE transcripts ADD COLUMN share_state INTEGER NOT NULL DEFAULT 0;",
+    );
+    let _ = conn.execute_batch(
+        "ALTER TABLE transcripts ADD COLUMN share_attempts INTEGER NOT NULL DEFAULT 0;",
+    );
+    let _ = conn.execute_batch(
+        "ALTER TABLE transcripts ADD COLUMN share_next_attempt_ms INTEGER NOT NULL DEFAULT 0;",
+    );
+    let _ = conn.execute_batch("ALTER TABLE transcripts ADD COLUMN shared_at_ms INTEGER;");
+    // The id the server knows this row by. Not the row id: the backend requires
+    // 24 lowercase hex and `new_id` produces 16, while rows imported from the
+    // retired store already carry a 24-hex id that must be preserved.
+    let _ = conn.execute_batch("ALTER TABLE transcripts ADD COLUMN share_trace_id TEXT;");
+    conn.execute_batch(
+        // An uploaded row deleted locally leaves an obligation to delete the
+        // server's copy. It outlives the row, so it cannot live on it.
+        "CREATE TABLE IF NOT EXISTS share_deletions (
+            uid TEXT NOT NULL,
+            trace_id TEXT NOT NULL,
+            requested_at_ms INTEGER NOT NULL,
+            PRIMARY KEY (uid, trace_id)
+         );
+         CREATE TABLE IF NOT EXISTS share_quota_pause (
+            uid TEXT PRIMARY KEY,
+            blocked_until_ms INTEGER NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS transcripts_share_queue
+            ON transcripts (uid, share_next_attempt_ms) WHERE share_state = 1;",
+    )
+    .map_err(|e| e.to_string())?;
     Ok(conn)
+}
+
+/// The connection, for `share.rs`. Same reasoning as `open_for_import`.
+#[cfg(any(windows, target_os = "macos"))]
+pub(super) fn open_for_share(app: &AppHandle) -> Result<Connection, String> {
+    open(app)
+}
+
+/// Clip path resolution, for `share.rs`.
+#[cfg(any(windows, target_os = "macos"))]
+pub(super) fn clip_path_for_share(app: &AppHandle, relative: &str) -> Result<PathBuf, String> {
+    clip_path(app, relative)
+}
+
+/// The per-row AAD grammar, for `share.rs`. Exposed rather than re-derived so
+/// the two cannot drift: a mismatched AAD reads as corruption, not as a bug.
+#[cfg(any(windows, target_os = "macos"))]
+pub(super) fn share_row_aad(uid: &str, id: &str, slot: &str) -> String {
+    row_aad(uid, id, slot)
 }
 
 /// The connection, for `import_traces.rs`. Exposed rather than duplicated so
