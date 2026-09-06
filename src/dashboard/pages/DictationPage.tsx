@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { Mic } from "lucide-react";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { logError } from "../../lib/log";
@@ -15,6 +16,19 @@ import {
   type DictationHistoryEntry,
   type DictationHistorySettings,
 } from "../../lib/dictationHistory";
+type VirtualRow =
+  | { kind: "heading"; key: string; label: string }
+  // firstOfDay/lastOfDay rebuild the day card from row edges. The card used to
+  // be one element wrapping a day's rows, which absolute positioning cannot
+  // express: every row would become its own card.
+  | {
+      kind: "entry";
+      key: string;
+      entry: DictationHistoryEntry;
+      firstOfDay: boolean;
+      lastOfDay: boolean;
+    };
+
 import { EmptyState } from "../components/EmptyState";
 import { ExpandingSearch } from "../components/ExpandingSearch";
 import { PageError } from "../components/PageError";
@@ -62,6 +76,7 @@ export function DictationPage() {
     loading,
     error,
     reload,
+    mutate,
   } = useAsyncData(
     () => (uid ? listDictationHistory(uid) : Promise.resolve([])),
     "dictation history",
@@ -100,6 +115,8 @@ export function DictationPage() {
   const activeUrlRef = useRef<string | null>(null);
   const [activePlay, setActivePlay] = useState<{ id: string; url: string } | null>(null);
   const [loadingId, setLoadingId] = useState<string | null>(null);
+  // Bumped by the actions that actually change stored bytes.
+  const [settingsEpoch, setSettingsEpoch] = useState(0);
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedQuery(query.trim().toLowerCase()), SEARCH_DEBOUNCE_MS);
@@ -117,7 +134,11 @@ export function DictationPage() {
     return () => {
       active = false;
     };
-  }, [uid, entries]);
+    // Keyed on uid, not on the entries array. The settings carry the storage
+    // totals, so they were refetched on every list identity change - including
+    // a flag, which moves no bytes. The two actions that genuinely change the
+    // totals refresh them explicitly below.
+  }, [uid, settingsEpoch]);
 
   const stopPlayback = useCallback(() => {
     audioRef.current?.pause();
@@ -139,6 +160,72 @@ export function DictationPage() {
   }, [entries, debouncedQuery]);
 
   const groups = useMemo(() => groupByDay(filtered), [filtered]);
+
+  // Flattened for virtualization: day headings and dictations become one list
+  // of positioned items, so the number of mounted rows stops tracking the
+  // number of stored dictations. Unvirtualized, MAX_ENTRIES of them is roughly
+  // 400,000 DOM nodes, which does not render slowly - it does not render.
+  const rows = useMemo<VirtualRow[]>(
+    () =>
+      groups.flatMap((group) => [
+        { kind: "heading" as const, key: group.key, label: group.label },
+        ...group.entries.map((entry, index) => ({
+          kind: "entry" as const,
+          key: entry.id,
+          entry,
+          firstOfDay: index === 0,
+          lastOfDay: index === group.entries.length - 1,
+        })),
+      ]),
+    [groups],
+  );
+
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => scrollRef.current,
+    // Rough starting heights; measureElement corrects each one after paint, so
+    // an expanded transcript does not have to be predicted.
+    estimateSize: (index) => (rows[index]?.kind === "heading" ? 40 : 56),
+    overscan: 8,
+    getItemKey: (index) => rows[index]?.key ?? index,
+  });
+
+  // All of these are stable across renders, which is the half of memoization
+  // that is easy to get wrong: a memoized row whose props are fresh closures
+  // re-renders exactly as often as an unmemoized one.
+  const handleMenuOpenChange = useCallback(
+    (entry: DictationHistoryEntry, open: boolean) => setOpenMenuId(open ? entry.id : null),
+    [],
+  );
+  const handleToggleExpanded = useCallback(
+    (entry: DictationHistoryEntry) => toggleExpanded(entry.id),
+    [],
+  );
+  const handleToggleRaw = useCallback((entry: DictationHistoryEntry) => toggleRaw(entry.id), []);
+  const handleFlag = useCallback((entry: DictationHistoryEntry) => setFeedbackFor(entry), []);
+  const handleDelete = useCallback((entry: DictationHistoryEntry) => setConfirmDelete(entry), []);
+  // These close over play/runExport, which are redeclared each render, so they
+  // are held in a ref: the row only needs the call to reach the current one.
+  const actionsRef = useRef({ play, runExport });
+  actionsRef.current = { play, runExport };
+  const handlePlay = useCallback((entry: DictationHistoryEntry) => {
+    void actionsRef.current.play(entry);
+  }, []);
+  const handleExportText = useCallback((entry: DictationHistoryEntry) => {
+    void actionsRef.current.runExport(
+      entry,
+      exportDictationText,
+      "That transcript could not be saved.",
+    );
+  }, []);
+  const handleExportAudio = useCallback((entry: DictationHistoryEntry) => {
+    void actionsRef.current.runExport(
+      entry,
+      exportDictationAudio,
+      "That audio could not be extracted.",
+    );
+  }, []);
 
   const playbackFor = (id: string): PlaybackState => {
     if (loadingId === id) return "loading";
@@ -210,6 +297,7 @@ export function DictationPage() {
     try {
       await deleteDictationEntry(uid, entry.id);
       reload();
+      setSettingsEpoch((n) => n + 1);
     } catch (err) {
       logError("DictationPage: delete", err);
       setNotice("That dictation could not be deleted.");
@@ -223,6 +311,7 @@ export function DictationPage() {
     try {
       await clearDictationHistory(uid);
       reload();
+      setSettingsEpoch((n) => n + 1);
     } catch (err) {
       logError("DictationPage: clear", err);
       setNotice("The history could not be cleared.");
@@ -233,7 +322,11 @@ export function DictationPage() {
     if (!uid) return;
     try {
       await setDictationFlag(uid, entry.id, true);
-      reload();
+      // Applied locally rather than reloading. A reload re-decrypts every row
+      // and ships the whole list back across IPC to change one boolean.
+      mutate?.((current) =>
+        (current ?? []).map((row) => (row.id === entry.id ? { ...row, flagged: true } : row)),
+      );
     } catch (err) {
       logError("DictationPage: flag", err);
     }
@@ -310,43 +403,56 @@ export function DictationPage() {
               }
             />
           ) : (
-            groups.map((group) => (
-              <section key={group.key} className="db-dictation-day-group">
-                <h2 className="db-dictation-day">{group.label}</h2>
-                <div className="db-dictation-day-card">
-                  {group.entries.map((entry) => (
-                    <DictationRow
-                      key={entry.id}
-                      entry={entry}
-                      playback={playbackFor(entry.id)}
-                      expanded={expandedIds.has(entry.id) || debouncedQuery !== ""}
-                      showRaw={rawShownIds.has(entry.id)}
-                      menuOpen={openMenuId === entry.id}
-                      onMenuOpenChange={(open) => setOpenMenuId(open ? entry.id : null)}
-                      onPlay={() => void play(entry)}
-                      onToggleExpanded={() => toggleExpanded(entry.id)}
-                      onToggleRaw={() => toggleRaw(entry.id)}
-                      onFlag={() => setFeedbackFor(entry)}
-                      onDelete={() => setConfirmDelete(entry)}
-                      onExportText={() =>
-                        void runExport(
-                          entry,
-                          exportDictationText,
-                          "That transcript could not be saved.",
-                        )
-                      }
-                      onExportAudio={() =>
-                        void runExport(
-                          entry,
-                          exportDictationAudio,
-                          "That audio could not be extracted.",
-                        )
-                      }
-                    />
-                  ))}
-                </div>
-              </section>
-            ))
+            <div ref={scrollRef} className="db-dictation-scroll">
+              <div
+                style={{ height: virtualizer.getTotalSize(), position: "relative", width: "100%" }}
+              >
+                {virtualizer.getVirtualItems().map((item) => {
+                  const row = rows[item.index];
+                  if (!row) return null;
+                  return (
+                    <div
+                      key={item.key}
+                      ref={virtualizer.measureElement}
+                      data-index={item.index}
+                      style={{
+                        position: "absolute",
+                        top: 0,
+                        left: 0,
+                        width: "100%",
+                        transform: `translateY(${item.start}px)`,
+                      }}
+                    >
+                      {row.kind === "heading" ? (
+                        <h2 className="db-dictation-day">{row.label}</h2>
+                      ) : (
+                        <div
+                          className={`db-dictation-vrow${row.firstOfDay ? " is-first" : ""}${
+                            row.lastOfDay ? " is-last" : ""
+                          }`}
+                        >
+                          <DictationRow
+                            entry={row.entry}
+                            playback={playbackFor(row.entry.id)}
+                            expanded={expandedIds.has(row.entry.id) || debouncedQuery !== ""}
+                            showRaw={rawShownIds.has(row.entry.id)}
+                            menuOpen={openMenuId === row.entry.id}
+                            onMenuOpenChange={handleMenuOpenChange}
+                            onPlay={handlePlay}
+                            onToggleExpanded={handleToggleExpanded}
+                            onToggleRaw={handleToggleRaw}
+                            onFlag={handleFlag}
+                            onDelete={handleDelete}
+                            onExportText={handleExportText}
+                            onExportAudio={handleExportAudio}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           )}
         </div>
 

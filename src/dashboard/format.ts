@@ -92,28 +92,49 @@ export function bodyAfterTitle(text: string | null | undefined): string {
     .replace(/\s+/g, " ");
 }
 
+// Formatters are built once and reused. `toLocaleDateString`/`toLocaleTimeString`
+// construct a fresh Intl formatter on every call, which costs microseconds
+// against the tens of nanoseconds a cached `.format()` takes. These run once per
+// row per render on a list that can hold thousands, where that difference is the
+// single most expensive thing the row does. Lazily built so module load does not
+// pay for formatters a page may never use.
+let dayKeyFormat: Intl.DateTimeFormat | undefined;
+let dayHeadingFormat: Intl.DateTimeFormat | undefined;
+let timeOfDayFormat: Intl.DateTimeFormat | undefined;
+
+function asDate(value: string | number | Date): Date | null {
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 /** Sortable local day key ("2026-08-24"). en-CA is the shortest route to
  * ISO-shaped output that still respects the machine's timezone, so a day
  * boundary means the same thing on every page that groups by date. */
 export function localDateKey(value: string | number | Date): string {
-  const date = value instanceof Date ? value : new Date(value);
-  return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString("en-CA");
+  const date = asDate(value);
+  if (!date) return "";
+  dayKeyFormat ??= new Intl.DateTimeFormat("en-CA");
+  return dayKeyFormat.format(date);
 }
 
 /** The uppercase date header over a day's group ("AUGUST 24, 2026"). */
 export function dayHeading(value: string | number | Date): string {
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return DASH;
-  return date
-    .toLocaleDateString([], { month: "long", day: "numeric", year: "numeric" })
-    .toUpperCase();
+  const date = asDate(value);
+  if (!date) return DASH;
+  dayHeadingFormat ??= new Intl.DateTimeFormat([], {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+  return dayHeadingFormat.format(date).toUpperCase();
 }
 
 /** Time of day for a list row ("2:09 pm"). */
 export function timeOfDay(value: string | number | Date): string {
-  const date = value instanceof Date ? value : new Date(value);
-  if (Number.isNaN(date.getTime())) return DASH;
-  return date.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }).toLowerCase();
+  const date = asDate(value);
+  if (!date) return DASH;
+  timeOfDayFormat ??= new Intl.DateTimeFormat([], { hour: "numeric", minute: "2-digit" });
+  return timeOfDayFormat.format(date).toLowerCase();
 }
 
 /** Byte sizes for storage figures ("41 MB"). */

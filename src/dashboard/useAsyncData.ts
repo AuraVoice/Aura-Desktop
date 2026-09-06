@@ -6,6 +6,13 @@ export interface AsyncState<T> {
   loading: boolean;
   error: boolean;
   reload: () => void;
+  /** Applies a local change without refetching. For mutations whose result is
+   * already known - flipping one row's flag - where a reload would re-fetch and
+   * re-decrypt the whole collection to learn something the caller just did.
+   *
+   * Optional because AsyncState is also satisfied structurally by hand-built
+   * objects and by ResourceHandle, neither of which can apply a local edit. */
+  mutate?: (update: (current: T | null) => T | null) => void;
 }
 
 /** Runs an async fetcher on mount, exposing loading/error/data plus a reload.
@@ -21,6 +28,10 @@ export function useAsyncData<T>(
   const [nonce, setNonce] = useState(0);
 
   const reload = useCallback(() => setNonce((n) => n + 1), []);
+  const mutate = useCallback(
+    (update: (current: T | null) => T | null) => setData((current) => update(current)),
+    [],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -46,5 +57,5 @@ export function useAsyncData<T>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [nonce, label]);
 
-  return { data, loading, error, reload };
+  return { data, loading, error, reload, mutate };
 }

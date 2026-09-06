@@ -1,3 +1,4 @@
+import { memo } from "react";
 import { Play, Square, Loader2, Flag, Trash2, FileText, Download, ScrollText } from "lucide-react";
 import { CopyButton } from "../../components/CopyButton";
 import { RowMenu } from "../../components/RowMenu";
@@ -17,7 +18,13 @@ export type PlaybackState = "idle" | "loading" | "playing";
  * The cluster is always laid out and only fades, so neither the row height nor
  * the text width shifts when the pointer enters.
  */
-export function DictationRow({
+/**
+ * Memoized, and the handler props all take the entry rather than closing over
+ * it. Both halves are needed: without `memo` every row re-rendered on every
+ * keystroke and on every menu toggle, and with `memo` but per-row closures the
+ * props would differ on every render and the memo would never hit.
+ */
+export const DictationRow = memo(function DictationRow({
   entry,
   playback,
   expanded,
@@ -37,14 +44,14 @@ export function DictationRow({
   expanded: boolean;
   showRaw: boolean;
   menuOpen: boolean;
-  onMenuOpenChange: (open: boolean) => void;
-  onPlay: () => void;
-  onToggleExpanded: () => void;
-  onToggleRaw: () => void;
-  onFlag: () => void;
-  onDelete: () => void;
-  onExportText: () => void;
-  onExportAudio: () => void;
+  onMenuOpenChange: (entry: DictationHistoryEntry, open: boolean) => void;
+  onPlay: (entry: DictationHistoryEntry) => void;
+  onToggleExpanded: (entry: DictationHistoryEntry) => void;
+  onToggleRaw: (entry: DictationHistoryEntry) => void;
+  onFlag: (entry: DictationHistoryEntry) => void;
+  onDelete: (entry: DictationHistoryEntry) => void;
+  onExportText: (entry: DictationHistoryEntry) => void;
+  onExportAudio: (entry: DictationHistoryEntry) => void;
 }) {
   const active = menuOpen || playback !== "idle";
   const playLabel = entry.hasAudio
@@ -61,7 +68,7 @@ export function DictationRow({
           type="button"
           className={expanded ? "db-dictation-text is-expanded" : "db-dictation-text"}
           aria-expanded={expanded}
-          onClick={onToggleExpanded}
+          onClick={() => onToggleExpanded(entry)}
         >
           {entry.text}
         </button>
@@ -79,7 +86,7 @@ export function DictationRow({
           title={playLabel}
           aria-label={playLabel}
           disabled={!entry.hasAudio || playback === "loading"}
-          onClick={onPlay}
+          onClick={() => onPlay(entry)}
         >
           {playback === "loading" ? (
             <Loader2 size={17} className="db-spin" />
@@ -99,7 +106,7 @@ export function DictationRow({
           }
           title="Report a bad transcription"
           aria-label="Report a bad transcription"
-          onClick={onFlag}
+          onClick={() => onFlag(entry)}
         >
           {/* The fill is driven from CSS, not from this attribute: a
               presentation attribute loses to any rule, so hover and the
@@ -108,28 +115,28 @@ export function DictationRow({
         </button>
         <RowMenu
           open={menuOpen}
-          onOpenChange={onMenuOpenChange}
+          onOpenChange={(open) => onMenuOpenChange(entry, open)}
           label="More actions for this dictation"
           items={[
-            { label: "Save as text", Icon: FileText, onSelect: onExportText },
+            { label: "Save as text", Icon: FileText, onSelect: () => onExportText(entry) },
             {
               label: "Extract audio",
               Icon: Download,
-              onSelect: onExportAudio,
+              onSelect: () => onExportAudio(entry),
               disabled: !entry.hasAudio,
             },
             {
               label: showRaw ? "Hide original speech" : "View original speech",
               Icon: ScrollText,
-              onSelect: onToggleRaw,
+              onSelect: () => onToggleRaw(entry),
               // Present but greyed when polish never changed this dictation,
               // so the option is discoverable without implying hidden text.
               disabled: !entry.rawText,
             },
-            { label: "Delete this transcript", Icon: Trash2, onSelect: onDelete, danger: true },
+            { label: "Delete this transcript", Icon: Trash2, onSelect: () => onDelete(entry), danger: true },
           ]}
         />
       </div>
     </div>
   );
-}
+});

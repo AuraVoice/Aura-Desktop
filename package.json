@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@sentry/browser": "^10.63.0",
+    "@tanstack/react-virtual": "^3.14.10",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
     "@tauri-apps/plugin-http": "^2.5.9",
