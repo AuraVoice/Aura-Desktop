@@ -20,6 +20,8 @@ import { dictationConsent as consentCopy, dictationChord as chordCopy } from "..
 import { chordKeysOf, useDictationStatus } from "../../../lib/dictationStatus";
 import { bytes as formatBytes } from "../../format";
 import { deviceNoun } from "../../../lib/platformKeys";
+import { dictationSharingActive } from "../../../lib/generalSettings";
+import { useGeneralSettings } from "../../../state/useGeneralSettings";
 
 /**
  * The right-hand column of the Dictation page: everything that used to be the
@@ -88,6 +90,9 @@ export function DictationSettingsRail({
   onClearHistory: () => void;
 }) {
   const dictationStatus = useDictationStatus();
+  // The privacy line below is a claim about where audio goes, so it has to
+  // read the same switch the uploader is gated on, not a fixed string.
+  const sharingDictation = dictationSharingActive(useGeneralSettings());
   const [onlineAccepted, setOnlineAccepted] = useState<boolean | null>(null);
   const [polish, setPolish] = useState<PolishSettings | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -267,8 +272,18 @@ export function DictationSettingsRail({
 
       <p className="db-trace-privacy">
         <ShieldCheck size={14} />
-        Online transcription runs only while you hold the keys; what you
-        dictate never leaves this machine.
+        {sharingDictation ? (
+          <>
+            Online transcription runs only while you hold the keys. Because you turned on
+            Conversation samples, finished dictations and their audio are also sent to help
+            improve Aura. Turn it off in Settings to stop that and delete what was sent.
+          </>
+        ) : (
+          <>
+            Online transcription runs only while you hold the keys; what you dictate never
+            leaves this {deviceNoun()}.
+          </>
+        )}
       </p>
 
       {error && <p className="db-settings-error">{error}</p>}

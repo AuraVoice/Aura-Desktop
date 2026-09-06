@@ -105,7 +105,14 @@ const MAX_AUDIO_BYTES: i64 = 512 * 1024 * 1024;
 
 /// Whether rows can be sealed on this platform. False disables the store
 /// outright rather than degrading it to readable text on disk.
-const ENCRYPTION_AVAILABLE: bool = cfg!(windows);
+///
+/// True everywhere, matching `chat_cache.rs` and `interview_store.rs`. It was
+/// `cfg!(windows)` long after the macOS `seal`/`unseal`/`store_clip`/`read_clip`
+/// paths below were implemented, which left every one of this module's entry
+/// points short-circuiting on macOS: the table was permanently empty, the share
+/// queue polled nothing, and `retain_only_for_session` never pruned, so the
+/// account isolation this module is supposed to provide was vacuous there.
+const ENCRYPTION_AVAILABLE: bool = true;
 
 /// FROZEN namespace: existing sealed rows decrypt only under exactly this
 /// grammar (this version string, NUL-separated parts).

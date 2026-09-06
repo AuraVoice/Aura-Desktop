@@ -62,7 +62,7 @@ import type { OverlayPresentation } from "./overlayPresentation";
 import { screenPointFor, type ScreenFrameGeometry } from "../lib/screenFrame";
 import { useGuideMode, type GuidePoint } from "./useGuideMode";
 import { useGeneralSettings } from "../state/useGeneralSettings";
-import { improvementSharingActive } from "../lib/generalSettings";
+import { dictationSharingActive } from "../lib/generalSettings";
 import { useDictationUpload } from "./useDictationUpload";
 import { ChatSlot, INITIAL_CHAT_SLOT_HEIGHT } from "./ChatSlot";
 import { useChatScreenCapture } from "./useChatScreenCapture";
@@ -96,7 +96,7 @@ export function OverlayRoot() {
   // the dashboard is built on demand and would only upload while open.
   // improvementSharingActive is the only thing that may decide this: the two
   // toggles mean nothing without the consent version they were recorded under.
-  useDictationUpload(user?.uid ?? null, improvementSharingActive(generalSettings));
+  useDictationUpload(user?.uid ?? null, dictationSharingActive(generalSettings));
   const updateReady = useUpdateReady();
   const [presentation, setPresentation] = useState<OverlayPresentation>("hidden");
   const [notchEdge, setNotchEdge] = useState<NotchEdge>("top");

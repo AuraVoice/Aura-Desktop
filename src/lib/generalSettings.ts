@@ -83,14 +83,35 @@ function mergeSettings(saved: GeneralSettings | null | undefined): GeneralSettin
   return merged;
 }
 
-/// Whether sharing is genuinely authorized right now. The only thing an
-/// upload path may ask. Never read the two toggles directly for that decision:
-/// they are meaningless without the version they were recorded against.
-export function improvementSharingActive(settings: GeneralSettings): boolean {
-  return (
-    settings.improvementConsentVersion >= IMPROVEMENT_CONSENT_VERSION &&
-    (settings.improveConversations || settings.improveActions)
-  );
+/// Whether the recorded consent is current. Necessary for any sharing, never
+/// sufficient on its own: the two toggles are meaningless without the version
+/// they were recorded against, and each toggle authorizes a different thing.
+function consentIsCurrent(settings: GeneralSettings): boolean {
+  return settings.improvementConsentVersion >= IMPROVEMENT_CONSENT_VERSION;
+}
+
+/// Whether dictation recordings and transcripts may be uploaded.
+///
+/// Gated on `improveConversations` ALONE, deliberately. An earlier version
+/// OR-ed the two toggles, which meant turning on "Action samples" - a switch
+/// whose copy is about screen context and corrections - silently authorized
+/// sending speech audio. A consent switch may only authorize the thing its own
+/// copy describes.
+export function dictationSharingActive(settings: GeneralSettings): boolean {
+  return consentIsCurrent(settings) && settings.improveConversations;
+}
+
+/// Whether screen context, corrections and outcomes may be uploaded. Separate
+/// from the above for the same reason, and currently read by nothing: no
+/// uploader for action samples exists yet.
+export function actionSharingActive(settings: GeneralSettings): boolean {
+  return consentIsCurrent(settings) && settings.improveActions;
+}
+
+/// Whether ANY sharing is on. Only for UI that describes the pair as a group,
+/// such as the privacy line on the Dictation page. Never gate an upload on it.
+export function anySharingActive(settings: GeneralSettings): boolean {
+  return dictationSharingActive(settings) || actionSharingActive(settings);
 }
 
 export async function loadGeneralSettings(): Promise<GeneralSettings> {

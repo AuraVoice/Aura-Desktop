@@ -8,7 +8,7 @@ import {
   type GeneralSettings,
 } from "../../lib/generalSettings";
 import { logError } from "../../lib/log";
-import { improvementSharingActive } from "../../lib/generalSettings";
+import { anySharingActive } from "../../lib/generalSettings";
 import { revokeTraceSharing } from "../../lib/dictationUpload";
 import { useAuth } from "../../state/AuthProvider";
 import { chordKeysOf, useDictationStatus } from "../../lib/dictationStatus";
@@ -139,7 +139,7 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
       // sending more. Queued here rather than fired directly so a machine that
       // is offline right now still owes the deletion when it comes back; the
       // nightly pump drains it, and drains deletions even when sharing is off.
-      if (improvementSharingActive(previous) && !improvementSharingActive(next) && user?.uid) {
+      if (anySharingActive(previous) && !anySharingActive(next) && user?.uid) {
         await revokeTraceSharing(user.uid).catch((err) =>
           logError("GeneralPage: revoke trace sharing", err),
         );
