@@ -244,6 +244,12 @@ pub(super) fn open(app: &AppHandle) -> Result<Connection, String> {
             uid TEXT NOT NULL,
             trace_id TEXT NOT NULL,
             requested_at_ms INTEGER NOT NULL,
+            -- A deletion needs its own retry budget. Without one a single
+            -- permanently-failing delete was re-claimed every night forever,
+            -- and because the pump drains deletions first it blocked every
+            -- upload behind it too.
+            attempts INTEGER NOT NULL DEFAULT 0,
+            next_attempt_ms INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (uid, trace_id)
          );
          CREATE TABLE IF NOT EXISTS share_quota_pause (
@@ -341,14 +347,18 @@ fn sweep(app: &AppHandle, conn: &Connection, uid: &str) -> Result<(), String> {
                 evict.push((id, relative));
             }
         }
+        // One row that will not update must not abandon the eviction of the
+        // rest: the budget this loop exists to enforce would simply stop being
+        // enforced from that row onward.
         for (id, relative) in evict {
-            conn.execute(
+            match conn.execute(
                 "UPDATE transcripts SET audio_path = NULL, audio_bytes = 0
                  WHERE uid = ?1 AND id = ?2",
                 params![uid, id],
-            )
-            .map_err(|e| e.to_string())?;
-            doomed.push(relative);
+            ) {
+                Ok(_) => doomed.push(relative),
+                Err(error) => warn!("dictation.history: clip was not evicted ({error})"),
+            }
         }
     }
 
@@ -518,7 +528,12 @@ pub async fn dictation_history_list(
     tauri::async_runtime::spawn_blocking(move || {
         let key = load_or_create_key(&app)?;
         let conn = open(&app)?;
-        sweep(&app, &conn, &uid)?;
+        // Retention housekeeping must never break a read. One un-evictable clip
+        // used to make this whole command fail, so the user's Dictation page
+        // showed an error instead of their history.
+        if let Err(error) = sweep(&app, &conn, &uid) {
+            warn!("dictation.history: retention pass failed, listing anyway ({error})");
+        }
         let mut statement = conn
             .prepare(
                 "SELECT id, recorded_at_ms, word_count, duration_ms, text, flagged, audio_path,

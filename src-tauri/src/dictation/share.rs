@@ -257,18 +257,48 @@ pub fn pump_state(app: &AppHandle, uid: &str, sharing: bool) -> Result<SharePump
 /// under, and a constant compiled into Rust could disagree with the record the
 /// user's choice was written against. If it ever disagrees with what the
 /// backend accepts, that is a 422 rather than a quiet lie.
+///
+/// Skips past rows that cannot be uploaded rather than returning `None` for
+/// them. Returning `None` is indistinguishable from "the queue is empty", and
+/// the caller stops the drain on that - so one undecryptable row at the head of
+/// the queue used to end the whole night, and N bad rows meant draining one row
+/// per night forever, because the query orders oldest-first and hits them again
+/// every time. A per-item problem must cost one item.
 pub fn claim(
     app: &AppHandle,
     uid: &str,
     consent_version: u32,
 ) -> Result<Option<TraceUploadLease>, String> {
+    // Bounded so a pathological store cannot spin here. Anything skipped is
+    // marked ineligible, so the bound is only ever reached once.
+    const MAX_SKIPS: usize = 64;
+    for _ in 0..MAX_SKIPS {
+        match claim_one(app, uid, consent_version)? {
+            ClaimStep::Ready(lease) => return Ok(Some(*lease)),
+            ClaimStep::Skipped => continue,
+            ClaimStep::Empty => return Ok(None),
+        }
+    }
+    warn!("dictation.share: claim skipped {MAX_SKIPS} unusable rows, giving up this pass");
+    Ok(None)
+}
+
+enum ClaimStep {
+    Ready(Box<TraceUploadLease>),
+    /// This row cannot be uploaded and has been taken out of the queue. The
+    /// queue itself may still have work.
+    Skipped,
+    Empty,
+}
+
+fn claim_one(app: &AppHandle, uid: &str, consent_version: u32) -> Result<ClaimStep, String> {
     if !valid_uid(uid) {
-        return Ok(None);
+        return Ok(ClaimStep::Empty);
     }
     let conn = history::open(app)?;
     let now = now_ms();
     if quota_blocked(&conn, uid, now) {
-        return Ok(None);
+        return Ok(ClaimStep::Empty);
     }
 
     type ClaimRow = (String, i64, i64, Vec<u8>, Option<Vec<u8>>, String);
@@ -294,7 +324,7 @@ pub fn claim(
         )
         .ok();
     let Some((id, recorded_at_ms, duration_ms, sealed_text, sealed_raw, relative)) = row else {
-        return Ok(None);
+        return Ok(ClaimStep::Empty);
     };
 
     let key = load_or_create_key(app)?;
@@ -304,8 +334,8 @@ pub fn claim(
         // rest of this store follows. It leaves the queue so it cannot block
         // everything behind it forever.
         mark_ineligible(&conn, uid, &id)?;
-        warn!("dictation.share: row skipped, transcript did not decrypt");
-        return Ok(None);
+        warn!("dictation.share: row skipped, transcript did not decrypt id={id}");
+        return Ok(ClaimStep::Skipped);
     };
 
     // The pre-polish transcript, stored only when polish changed the text.
@@ -317,7 +347,8 @@ pub fn claim(
     let trimmed = text.trim().to_string();
     if trimmed.is_empty() || trimmed.chars().count() > MAX_TEXT_CHARS {
         mark_ineligible(&conn, uid, &id)?;
-        return Ok(None);
+        warn!("dictation.share: row skipped, transcript empty or oversized id={id}");
+        return Ok(ClaimStep::Skipped);
     }
     let raw_transcript = raw_text
         .as_deref()
@@ -334,7 +365,8 @@ pub fn claim(
         // wipe). Not retryable and not worth surfacing: the metadata promises a
         // digest this row can no longer produce.
         mark_ineligible(&conn, uid, &id)?;
-        return Ok(None);
+        warn!("dictation.share: row skipped, clip file is gone id={id}");
+        return Ok(ClaimStep::Skipped);
     };
     let Ok(flac) = decrypt_with_aad(
         &key,
@@ -342,8 +374,8 @@ pub fn claim(
         history::row_aad(uid, &id, "audio").as_bytes(),
     ) else {
         mark_ineligible(&conn, uid, &id)?;
-        warn!("dictation.share: row skipped, clip did not decrypt");
-        return Ok(None);
+        warn!("dictation.share: row skipped, clip did not decrypt id={id}");
+        return Ok(ClaimStep::Skipped);
     };
 
     let trace_id = trace_id_for(uid, &id);
@@ -359,7 +391,7 @@ pub fn claim(
         "corrected_silver"
     };
 
-    Ok(Some(TraceUploadLease {
+    Ok(ClaimStep::Ready(Box::new(TraceUploadLease {
         trace_id,
         schema_version: 2,
         recorded_at_ms,
@@ -379,7 +411,7 @@ pub fn claim(
         label_quality: label_quality.to_string(),
         normalization_version: 1,
         consent_version,
-    }))
+    })))
 }
 
 /// What produced the transcripts this store holds. The history row does not
@@ -527,20 +559,52 @@ pub fn pause_for_quota(app: &AppHandle, uid: &str, blocked_until_ms: i64) -> Res
     Ok(true)
 }
 
-/// The next remote copy owed a deletion, if any.
+/// The next remote copy owed a deletion and actually due, if any.
 pub fn claim_deletion(app: &AppHandle, uid: &str) -> Result<Option<String>, String> {
     if !valid_uid(uid) {
         return Ok(None);
     }
     let conn = history::open(app)?;
-    Ok(conn
+    conn.query_row(
+        "SELECT trace_id FROM share_deletions
+          WHERE uid = ?1 AND next_attempt_ms <= ?2
+          ORDER BY requested_at_ms ASC LIMIT 1",
+        params![uid, now_ms()],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+}
+
+/// A deletion attempt failed. Same shape as `fail`: bounded attempts and a
+/// persisted wall-clock backoff. The row stays, because the obligation to
+/// remove a copy the user withdrew consent for does not expire.
+pub fn fail_deletion(app: &AppHandle, uid: &str, trace_id: &str) -> Result<(), String> {
+    let conn = history::open(app)?;
+    let previous: Option<i64> = conn
         .query_row(
-            "SELECT trace_id FROM share_deletions WHERE uid = ?1
-              ORDER BY requested_at_ms ASC LIMIT 1",
-            params![uid],
+            "SELECT attempts FROM share_deletions WHERE uid = ?1 AND trace_id = ?2",
+            params![uid, trace_id],
             |row| row.get(0),
         )
-        .ok())
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some(previous) = previous else {
+        return Ok(());
+    };
+    let attempts = previous.max(0).saturating_add(1);
+    let index = (attempts as usize)
+        .saturating_sub(1)
+        .min(BACKOFF_SECONDS.len() - 1);
+    let next = now_ms() + jitter(BACKOFF_SECONDS[index] * 1_000);
+    conn.execute(
+        "UPDATE share_deletions SET attempts = ?1, next_attempt_ms = ?2
+          WHERE uid = ?3 AND trace_id = ?4",
+        params![attempts, next, uid, trace_id],
+    )
+    .map_err(|e| e.to_string())?;
+    warn!("dictation.share: deletion failed trace={trace_id} attempts={attempts}");
+    Ok(())
 }
 
 pub fn resolve_deletion(app: &AppHandle, uid: &str, trace_id: &str) -> Result<(), String> {
@@ -655,6 +719,17 @@ pub async fn dictation_claim_trace_deletion(
     uid: String,
 ) -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(move || claim_deletion(&app, &uid))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn dictation_fail_trace_deletion(
+    app: AppHandle,
+    uid: String,
+    trace_id: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || fail_deletion(&app, &uid, &trace_id))
         .await
         .map_err(|e| e.to_string())?
 }

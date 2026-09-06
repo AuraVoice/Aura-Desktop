@@ -4,6 +4,7 @@ import {
   claimTraceUpload,
   classifyUploadFailure,
   deleteRemoteTrace,
+  failTraceDeletion,
   failTraceUpload,
   pauseTraceUploads,
   resolveTraceDeletion,
@@ -136,10 +137,16 @@ export function useDictationUpload(ownerUid: string | null, sharing: boolean): v
           await deleteRemoteTrace(traceId, uid);
           await resolveTraceDeletion(uid, traceId);
         } catch (err) {
-          // A deletion that will not go through is retried on the next window
-          // rather than dropped; the obligation outlives this process.
-          logError("useDictationUpload: delete remote trace", err);
-          return;
+          const failure = classifyUploadFailure(err);
+          // Record the attempt so this row backs off instead of being
+          // re-claimed on the next pass. Then keep going: one undeletable copy
+          // is not a reason to abandon the others, and it is certainly not a
+          // reason to abandon the uploads below, which is what returning here
+          // used to do.
+          await failTraceDeletion(uid, traceId).catch((e) =>
+            logError("useDictationUpload: record deletion failure", e),
+          );
+          if (failure.signedOut || !failure.retryable) break;
         }
       }
 
@@ -170,10 +177,12 @@ export function useDictationUpload(ownerUid: string | null, sharing: boolean): v
             if (paused) return;
           }
           await failTraceUpload(uid, lease.traceId, failure.retryable);
-          // Stop the whole drain on the first failure. Whatever refused this
-          // one will refuse the rest, and each extra try costs a real attempt
-          // out of a budget of eight.
-          return;
+          // Per-item vs systemic. A 409/400/413/422 is about THIS row - a burned
+          // trace id, a payload the server will never accept - so the rest of
+          // the queue is unaffected and stopping would strand it behind a row
+          // that can never succeed. Anything transient (5xx, offline, TLS) is
+          // about the whole run, so stop and let the backoff handle it.
+          if (failure.retryable) return;
         }
       }
     }

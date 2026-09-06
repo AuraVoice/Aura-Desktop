@@ -217,6 +217,12 @@ export function resolveTraceDeletion(uid: string, traceId: string): Promise<void
   return invoke("dictation_resolve_trace_deletion", { uid, traceId });
 }
 
+/** Records a failed deletion so it backs off instead of being re-claimed
+ * immediately, which is what let one bad row block the queue forever. */
+export function failTraceDeletion(uid: string, traceId: string): Promise<void> {
+  return invoke("dictation_fail_trace_deletion", { uid, traceId });
+}
+
 export function pauseTraceUploads(uid: string, blockedUntilMs: number): Promise<boolean> {
   return invoke<boolean>("dictation_pause_trace_uploads", { uid, blockedUntilMs });
 }
