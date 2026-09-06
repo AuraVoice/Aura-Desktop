@@ -55,6 +55,7 @@ pub(crate) mod asr;
 mod audio;
 mod consent;
 mod credential;
+mod scoped_token;
 pub mod history;
 pub mod share;
 mod hud;

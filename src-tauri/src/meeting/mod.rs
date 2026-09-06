@@ -953,7 +953,6 @@ pub(crate) fn record_segment(
     flac_bytes: &[u8],
     metrics: queue::SegmentAudioMetrics,
 ) -> Result<(), String> {
-    use sha2::{Digest, Sha256};
 
     let owner_uid: &str = &run.owner_uid;
     let meeting_id: &str = &run.meeting_id;
@@ -964,7 +963,7 @@ pub(crate) fn record_segment(
     let installation_id: &str = &run.installation_id;
     let SegmentSpan { seq, start_ms, duration_ms, incomplete } = span;
     let key = crypto::load_or_create_key(app)?;
-    let content_sha256 = format!("{:x}", Sha256::digest(flac_bytes));
+    let content_sha256 = crate::util::sha256_hex(flac_bytes);
     let mut metadata = queue::SegmentRecoveryMetadata {
         schema_version: 2,
         encryption_version: 2,
@@ -990,7 +989,7 @@ pub(crate) fn record_segment(
         metrics,
     };
     let encrypted = crypto::encrypt_with_aad(&key, flac_bytes, &metadata.aad())?;
-    let encrypted_sha256 = format!("{:x}", Sha256::digest(&encrypted));
+    let encrypted_sha256 = crate::util::sha256_hex(&encrypted);
     metadata.encrypted_sha256 = encrypted_sha256;
     metadata.encrypted_byte_length = encrypted.len() as u64;
     queue::publish_segment(app, &metadata, &encrypted)?;

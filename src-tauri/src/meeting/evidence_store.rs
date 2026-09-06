@@ -12,7 +12,6 @@ use std::time::Duration;
 use rusqlite::{params, Connection, OptionalExtension, Row, Transaction, TransactionBehavior};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 
 mod capture;
 mod export;
@@ -549,15 +548,7 @@ fn db_error(error: rusqlite::Error) -> String {
 
 pub use crate::util::now_ms;
 
-pub fn random_hex(bytes: usize) -> Result<String, String> {
-    let mut value = vec![0u8; bytes];
-    getrandom::fill(&mut value).map_err(|e| e.to_string())?;
-    Ok(value.iter().map(|byte| format!("{byte:02x}")).collect())
-}
-
-fn sha256_hex(value: impl AsRef<[u8]>) -> String {
-    format!("{:x}", Sha256::digest(value.as_ref()))
-}
+pub use crate::util::{random_hex, sha256_hex};
 
 fn actor_hash(owner_uid: &str) -> String {
     if owner_uid.is_empty() {

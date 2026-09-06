@@ -34,6 +34,8 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
 use super::keystore;
+use super::scoped_token::ScopedToken;
+use crate::util::lock;
 
 const SETTINGS_FILE: &str = "polish.json";
 
@@ -49,11 +51,6 @@ const WAIT_BUDGET: Duration = Duration::from_millis(2500);
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(1000);
 const REQUEST_TIMEOUT: Duration = Duration::from_millis(2300);
 
-/// Refuse a token this close to its expiry, mirroring credential.rs: a token
-/// that dies between keyup and the request would surface as a silent raw
-/// fallback every time instead of a clean re-mint.
-const EXPIRY_MARGIN: Duration = Duration::from_secs(10);
-
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PolishSettings {
@@ -62,16 +59,9 @@ pub struct PolishSettings {
     pub enabled: bool,
 }
 
-/// The Firebase ID token, alone in a struct so nothing can derive Debug over
-/// it by accident (same discipline as credential.rs).
-struct BackendToken {
-    token: String,
-    expires_at: Instant,
-}
-
 struct PolishState {
     settings: PolishSettings,
-    token: Option<BackendToken>,
+    token: ScopedToken,
 }
 
 /// Managed in lib.rs at startup; the worker takes one mutex per utterance.
@@ -90,7 +80,7 @@ pub fn start(app: AppHandle) -> PolishHandle {
     let handle = PolishHandle {
         state: Arc::new(Mutex::new(PolishState {
             settings,
-            token: None,
+            token: ScopedToken::new("dictation.polish.credential"),
         })),
     };
     handle.warm_if_wanted();
@@ -99,11 +89,11 @@ pub fn start(app: AppHandle) -> PolishHandle {
 
 impl PolishHandle {
     pub fn snapshot(&self) -> PolishSettings {
-        self.state.lock().expect("polish state lock").settings.clone()
+        lock(&self.state).settings.clone()
     }
 
     pub fn apply_settings(&self, next: PolishSettings) {
-        let mut state = self.state.lock().expect("polish state lock");
+        let mut state = lock(&self.state);
         state.settings = next;
         drop(state);
         self.warm_if_wanted();
@@ -112,39 +102,22 @@ impl PolishHandle {
     /// Stores a fresh Firebase ID token from the webview's refresh pump.
     /// Duration only in the log - never the token, its length, or a prefix.
     pub fn set_token(&self, token: String, ttl: Duration) {
-        let mut state = self.state.lock().expect("polish state lock");
-        state.token = Some(BackendToken {
-            token,
-            expires_at: Instant::now() + ttl,
-        });
-        drop(state);
-        info!("dictation: phase=polish credential=stored ttl_s={}", ttl.as_secs());
+        lock(&self.state).token.set(token, ttl);
         self.warm_if_wanted();
     }
 
     /// Drops the token on sign-out, so it cannot outlive the session that was
     /// allowed to have it.
     pub fn clear_token(&self) {
-        let mut state = self.state.lock().expect("polish state lock");
-        if state.token.take().is_some() {
-            info!("dictation: phase=polish credential=cleared");
-        }
+        lock(&self.state).token.clear();
     }
 
     fn usable(&self) -> Option<String> {
-        let mut state = self.state.lock().expect("polish state lock");
+        let mut state = lock(&self.state);
         if !state.settings.enabled {
             return None;
         }
-        let expired = state
-            .token
-            .as_ref()
-            .is_some_and(|token| Instant::now() + EXPIRY_MARGIN >= token.expires_at);
-        if expired {
-            state.token = None;
-            return None;
-        }
-        state.token.as_ref().map(|token| token.token.clone())
+        state.token.usable()
     }
 
     /// Fire-and-forget TLS warmup so the handshake is not paid inside the

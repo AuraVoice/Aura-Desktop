@@ -1,8 +1,6 @@
 //! Tauri-facing facade over the SQLite meeting evidence store.
 
 use std::path::PathBuf;
-
-use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Manager};
 
 pub use super::evidence_store::{
@@ -189,7 +187,7 @@ fn read_and_verify(app: &AppHandle, stored: &StoredSegment) -> Result<Vec<u8>, S
     if encrypted.len() as u64 != stored.metadata.encrypted_byte_length {
         return Err("encrypted segment length check failed".to_string());
     }
-    if format!("{:x}", Sha256::digest(&encrypted)) != stored.metadata.encrypted_sha256 {
+    if crate::util::sha256_hex(&encrypted) != stored.metadata.encrypted_sha256 {
         return Err("encrypted segment integrity check failed".to_string());
     }
     let plain = {
@@ -203,7 +201,7 @@ fn read_and_verify(app: &AppHandle, stored: &StoredSegment) -> Result<Vec<u8>, S
     if plain.len() as u64 != stored.metadata.byte_length {
         return Err("plaintext segment length check failed".to_string());
     }
-    if format!("{:x}", Sha256::digest(&plain)) != stored.metadata.content_sha256 {
+    if crate::util::sha256_hex(&plain) != stored.metadata.content_sha256 {
         return Err("plaintext segment integrity check failed".to_string());
     }
     Ok(plain)
@@ -333,15 +331,7 @@ pub fn installation_id(app: &AppHandle) -> Result<String, String> {
             Err(error) => return Err(format!("could not read the installation id: {error}")),
         }
 
-        let mut bytes = [0u8; 16];
-        getrandom::fill(&mut bytes).map_err(|error| format!("system RNG failed: {error}"))?;
-        let minted = format!(
-            "install_{}",
-            bytes
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>()
-        );
+        let minted = format!("install_{}", crate::util::random_hex(16)?);
 
         // create_new on the final path so two processes racing at launch settle
         // on one id instead of overwriting each other. Losing is not an error.

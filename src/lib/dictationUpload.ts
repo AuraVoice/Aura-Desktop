@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { authFetch, AuthRequiredError } from "./api";
 import { auth } from "./firebase";
+import { IMPROVEMENT_CONSENT_VERSION } from "./generalSettings";
 
 /**
  * The transport half of dictation sharing.
@@ -179,7 +180,12 @@ export function sharePumpState(uid: string, sharing: boolean): Promise<SharePump
 }
 
 export function claimTraceUpload(uid: string): Promise<TraceUploadLease | null> {
-  return invoke<TraceUploadLease | null>("dictation_claim_trace_upload", { uid });
+  // The asserted consent version is the one the settings store records, so the
+  // payload cannot claim a consent the user did not give.
+  return invoke<TraceUploadLease | null>("dictation_claim_trace_upload", {
+    uid,
+    consentVersion: IMPROVEMENT_CONSENT_VERSION,
+  });
 }
 
 export function resolveTraceUpload(uid: string, traceId: string): Promise<void> {

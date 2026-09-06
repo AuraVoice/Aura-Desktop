@@ -32,7 +32,7 @@ use super::history;
 use super::keystore::load_or_create_key;
 use crate::crypto::decrypt_with_aad;
 use crate::sealed_store::unseal;
-use crate::util::now_ms;
+use crate::util::{now_ms, sha256_hex};
 
 /// Attempts before a dictation is abandoned. The row stays on disk and stays
 /// exportable by hand; only the automatic retry stops.
@@ -52,11 +52,6 @@ const MAX_QUOTA_PAUSE_MS: i64 = 32 * 24 * 60 * 60 * 1_000;
 const MAX_TEXT_CHARS: usize = 32_000;
 const MAX_DURATION_MS: i64 = 120_000;
 const MAX_AUDIO_BYTES: i64 = 8 * 1024 * 1024;
-
-/// The consent version this client asserts. Must equal the backend's
-/// CONSENT_VERSION, which pydantic checks as a literal, and the frontend's
-/// IMPROVEMENT_CONSENT_VERSION, which is what the user actually agreed to.
-pub const CONSENT_VERSION: u32 = 2;
 
 /// FROZEN. Changing this re-derives every trace id and would orphan every
 /// already-uploaded row behind a permanent server-side tombstone.
@@ -135,19 +130,7 @@ fn trace_id_for(uid: &str, row_id: &str) -> String {
     hasher.update(uid.as_bytes());
     hasher.update([0]);
     hasher.update(row_id.as_bytes());
-    let hex: String = hasher
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
-    hex[..24].to_string()
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    format!("{:x}", hasher.finalize())[..24].to_string()
 }
 
 fn valid_uid(uid: &str) -> bool {
@@ -175,7 +158,7 @@ pub fn enqueue_backlog(app: &AppHandle, uid: &str) -> Result<usize, String> {
     if !valid_uid(uid) {
         return Ok(0);
     }
-    let conn = history::open_for_share(app)?;
+    let conn = history::open(app)?;
     let queued = conn
         .execute(
             "UPDATE transcripts
@@ -211,7 +194,7 @@ pub fn revoke_all(app: &AppHandle, uid: &str) -> Result<usize, String> {
     if !valid_uid(uid) {
         return Ok(0);
     }
-    let conn = history::open_for_share(app)?;
+    let conn = history::open(app)?;
     let tombstoned = conn
         .execute(
             "INSERT OR IGNORE INTO share_deletions (uid, trace_id, requested_at_ms)
@@ -233,7 +216,7 @@ pub fn pump_state(app: &AppHandle, uid: &str, sharing: bool) -> Result<SharePump
     if !valid_uid(uid) {
         return Ok(SharePumpState::default());
     }
-    let conn = history::open_for_share(app)?;
+    let conn = history::open(app)?;
     let now = now_ms();
     let pending_uploads: i64 = if sharing && !quota_blocked(&conn, uid, now) {
         conn.query_row(
@@ -261,11 +244,21 @@ pub fn pump_state(app: &AppHandle, uid: &str, sharing: bool) -> Result<SharePump
 
 /// The next dictation due for upload, or `None` when the queue is empty, every
 /// entry is still waiting out a backoff, or the account is inside a quota pause.
-pub fn claim(app: &AppHandle, uid: &str) -> Result<Option<TraceUploadLease>, String> {
+/// `consent_version` is the version the user actually agreed to, read from the
+/// frontend settings store and passed in. It is deliberately NOT a constant
+/// here: the payload asserts to the backend which consent this upload was made
+/// under, and a constant compiled into Rust could disagree with the record the
+/// user's choice was written against. If it ever disagrees with what the
+/// backend accepts, that is a 422 rather than a quiet lie.
+pub fn claim(
+    app: &AppHandle,
+    uid: &str,
+    consent_version: u32,
+) -> Result<Option<TraceUploadLease>, String> {
     if !valid_uid(uid) {
         return Ok(None);
     }
-    let conn = history::open_for_share(app)?;
+    let conn = history::open(app)?;
     let now = now_ms();
     if quota_blocked(&conn, uid, now) {
         return Ok(None);
@@ -298,7 +291,7 @@ pub fn claim(app: &AppHandle, uid: &str) -> Result<Option<TraceUploadLease>, Str
     };
 
     let key = load_or_create_key(app)?;
-    let text = unseal(&key, &sealed_text, &history::share_row_aad(uid, &id, "text")).ok();
+    let text = unseal(&key, &sealed_text, &history::row_aad(uid, &id, "text")).ok();
     let Some(text) = text else {
         // A row that will not decrypt is skipped, never fatal - the rule the
         // rest of this store follows. It leaves the queue so it cannot block
@@ -312,7 +305,7 @@ pub fn claim(app: &AppHandle, uid: &str) -> Result<Option<TraceUploadLease>, Str
     // Absent means the final text IS the raw, which is what unchanged_silver
     // records.
     let raw_text = sealed_raw
-        .and_then(|sealed| unseal(&key, &sealed, &history::share_row_aad(uid, &id, "raw")).ok());
+        .and_then(|sealed| unseal(&key, &sealed, &history::row_aad(uid, &id, "raw")).ok());
 
     let trimmed = text.trim().to_string();
     if trimmed.is_empty() || trimmed.chars().count() > MAX_TEXT_CHARS {
@@ -328,7 +321,7 @@ pub fn claim(app: &AppHandle, uid: &str) -> Result<Option<TraceUploadLease>, Str
 
     // The clip is read now rather than cached, so a dictation deleted before it
     // is ever shared costs nothing.
-    let path = history::clip_path_for_share(app, &relative)?;
+    let path = history::clip_path(app, &relative)?;
     let Ok(sealed_clip) = std::fs::read(&path) else {
         // The clip went while the row survived (audio eviction, or a manual
         // wipe). Not retryable and not worth surfacing: the metadata promises a
@@ -339,7 +332,7 @@ pub fn claim(app: &AppHandle, uid: &str) -> Result<Option<TraceUploadLease>, Str
     let Ok(flac) = decrypt_with_aad(
         &key,
         &sealed_clip,
-        history::share_row_aad(uid, &id, "audio").as_bytes(),
+        history::row_aad(uid, &id, "audio").as_bytes(),
     ) else {
         mark_ineligible(&conn, uid, &id)?;
         warn!("dictation.share: row skipped, clip did not decrypt");
@@ -378,7 +371,7 @@ pub fn claim(app: &AppHandle, uid: &str) -> Result<Option<TraceUploadLease>, Str
         label_source: "observed_field".to_string(),
         label_quality: label_quality.to_string(),
         normalization_version: 1,
-        consent_version: CONSENT_VERSION,
+        consent_version,
     }))
 }
 
@@ -403,7 +396,7 @@ pub fn audio_body(app: &AppHandle, uid: &str, trace_id: &str) -> Result<Vec<u8>,
     if !valid_uid(uid) {
         return Err("dictation share: invalid account".to_string());
     }
-    let conn = history::open_for_share(app)?;
+    let conn = history::open(app)?;
     let row: Option<(String, String)> = conn
         .query_row(
             "SELECT id, audio_path FROM transcripts
@@ -417,18 +410,18 @@ pub fn audio_body(app: &AppHandle, uid: &str, trace_id: &str) -> Result<Vec<u8>,
     };
     let key = load_or_create_key(app)?;
     let sealed =
-        std::fs::read(history::clip_path_for_share(app, &relative)?).map_err(|e| e.to_string())?;
+        std::fs::read(history::clip_path(app, &relative)?).map_err(|e| e.to_string())?;
     decrypt_with_aad(
         &key,
         &sealed,
-        history::share_row_aad(uid, &id, "audio").as_bytes(),
+        history::row_aad(uid, &id, "audio").as_bytes(),
     )
     .map_err(|e| e.to_string())
 }
 
 /// The server has both halves.
 pub fn resolve(app: &AppHandle, uid: &str, trace_id: &str) -> Result<(), String> {
-    let conn = history::open_for_share(app)?;
+    let conn = history::open(app)?;
     conn.execute(
         "UPDATE transcripts
             SET share_state = ?1, shared_at_ms = ?2, share_next_attempt_ms = 0
@@ -443,7 +436,7 @@ pub fn resolve(app: &AppHandle, uid: &str, trace_id: &str) -> Result<(), String>
 /// succeed on their own - a rejected payload, a digest conflict - and true for
 /// everything transient.
 pub fn fail(app: &AppHandle, uid: &str, trace_id: &str, retryable: bool) -> Result<(), String> {
-    let conn = history::open_for_share(app)?;
+    let conn = history::open(app)?;
     let attempts: i64 = conn
         .query_row(
             "SELECT share_attempts FROM transcripts WHERE uid = ?1 AND share_trace_id = ?2",
@@ -499,7 +492,7 @@ pub fn pause_for_quota(app: &AppHandle, uid: &str, blocked_until_ms: i64) -> Res
     if blocked_until_ms <= now || blocked_until_ms > now.saturating_add(MAX_QUOTA_PAUSE_MS) {
         return Ok(false);
     }
-    let conn = history::open_for_share(app)?;
+    let conn = history::open(app)?;
     conn.execute(
         "INSERT INTO share_quota_pause (uid, blocked_until_ms) VALUES (?1, ?2)
          ON CONFLICT(uid) DO UPDATE SET blocked_until_ms = excluded.blocked_until_ms",
@@ -515,7 +508,7 @@ pub fn claim_deletion(app: &AppHandle, uid: &str) -> Result<Option<String>, Stri
     if !valid_uid(uid) {
         return Ok(None);
     }
-    let conn = history::open_for_share(app)?;
+    let conn = history::open(app)?;
     Ok(conn
         .query_row(
             "SELECT trace_id FROM share_deletions WHERE uid = ?1
@@ -527,7 +520,7 @@ pub fn claim_deletion(app: &AppHandle, uid: &str) -> Result<Option<String>, Stri
 }
 
 pub fn resolve_deletion(app: &AppHandle, uid: &str, trace_id: &str) -> Result<(), String> {
-    let conn = history::open_for_share(app)?;
+    let conn = history::open(app)?;
     conn.execute(
         "DELETE FROM share_deletions WHERE uid = ?1 AND trace_id = ?2",
         params![uid, trace_id],
@@ -570,8 +563,9 @@ pub async fn dictation_share_pump_state(
 pub async fn dictation_claim_trace_upload(
     app: AppHandle,
     uid: String,
+    consent_version: u32,
 ) -> Result<Option<TraceUploadLease>, String> {
-    tauri::async_runtime::spawn_blocking(move || claim(&app, &uid))
+    tauri::async_runtime::spawn_blocking(move || claim(&app, &uid, consent_version))
         .await
         .map_err(|e| e.to_string())?
 }

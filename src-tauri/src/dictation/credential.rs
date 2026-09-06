@@ -23,58 +23,30 @@
 
 
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-/// Refuse a token this close to its expiry. The handshake itself takes tens of
-/// milliseconds, but the user may hold the chord for a while before speaking,
-/// and a token that expires between the press and the connect would surface as
-/// a confusing auth failure rather than a clean re-mint.
-const EXPIRY_MARGIN: Duration = Duration::from_secs(10);
+use super::scoped_token::ScopedToken;
+use crate::util::lock;
 
-struct Credential {
-    token: String,
-    expires_at: Instant,
-}
-
-static CREDENTIAL: Mutex<Option<Credential>> = Mutex::new(None);
+static CREDENTIAL: Mutex<ScopedToken> = Mutex::new(ScopedToken::new("dictation.credential"));
 
 /// Stores a freshly minted token. `ttl` is what the provider said the token is
 /// good for, not a locally chosen number.
 pub fn set(token: String, ttl: Duration) {
-    let mut slot = CREDENTIAL.lock().unwrap_or_else(|e| e.into_inner());
-    *slot = Some(Credential {
-        token,
-        expires_at: Instant::now() + ttl,
-    });
-    // Duration only. Never the token, never its length, never a prefix.
-    log::info!(
-        "dictation.credential: state=stored ttl_s={}",
-        ttl.as_secs()
-    );
+    lock(&CREDENTIAL).set(token, ttl);
 }
 
 /// Drops the token. Called on sign-out and on an auth rejection, so the next
 /// press re-mints instead of retrying a credential the provider already
 /// refused.
 pub fn clear() {
-    let mut slot = CREDENTIAL.lock().unwrap_or_else(|e| e.into_inner());
-    if slot.take().is_some() {
-        log::info!("dictation.credential: state=cleared");
-    }
+    lock(&CREDENTIAL).clear();
 }
 
 /// A usable token, or `None` when there is none or it is too close to expiry.
 /// Returns a copy: the session holds it only for as long as the handshake.
 pub fn usable() -> Option<String> {
-    let mut slot = CREDENTIAL.lock().unwrap_or_else(|e| e.into_inner());
-    let expired = slot
-        .as_ref()
-        .is_some_and(|credential| Instant::now() + EXPIRY_MARGIN >= credential.expires_at);
-    if expired {
-        *slot = None;
-        return None;
-    }
-    slot.as_ref().map(|credential| credential.token.clone())
+    lock(&CREDENTIAL).usable()
 }
 
 /// Whether dictation currently has a credential, for `DictationStatus`. Does

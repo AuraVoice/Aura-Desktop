@@ -39,9 +39,11 @@ import {
   DictationUnavailableError,
   mintDictationCredential,
   parseDictationCredential,
-  refreshDelayMs,
   runCredentialCycle,
 } from "./dictationCredential";
+// refreshDelayMs moved to the shared credential pump when the transcription and
+// polish pumps were unified; both now schedule off the same fraction.
+import { refreshDelayMs } from "../overlay/useCredentialPump";
 
 beforeEach(() => {
   fake.invoked = [];

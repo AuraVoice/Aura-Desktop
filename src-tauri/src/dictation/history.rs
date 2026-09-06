@@ -94,8 +94,10 @@ const ENCRYPTION_AVAILABLE: bool = true;
 const AAD_NAMESPACE: &str = "aura-dictation-history-v1";
 
 /// Binds a sealed value to exactly one account, one row, and one slot, so a
-/// blob cannot be replayed into another account or another field.
-fn row_aad(uid: &str, id: &str, slot: &str) -> String {
+/// blob cannot be replayed into another account or another field. `share.rs`
+/// calls this directly rather than through a wrapper: a second spelling of the
+/// AAD grammar could drift, and a mismatched AAD reads as corruption.
+pub(super) fn row_aad(uid: &str, id: &str, slot: &str) -> String {
     aad(AAD_NAMESPACE, &[uid, id, slot])
 }
 
@@ -167,11 +169,11 @@ fn clip_relative(id: &str) -> String {
     format!("{CLIPS_DIR}/{}/{id}.flac.enc", &id[..2])
 }
 
-fn clip_path(app: &AppHandle, relative: &str) -> Result<PathBuf, String> {
+pub(super) fn clip_path(app: &AppHandle, relative: &str) -> Result<PathBuf, String> {
     Ok(dictation_dir(app)?.join(relative))
 }
 
-fn open(app: &AppHandle) -> Result<Connection, String> {
+pub(super) fn open(app: &AppHandle) -> Result<Connection, String> {
     let conn = Connection::open(db_path(app)?).map_err(|e| e.to_string())?;
     conn.execute_batch(
         // A dictation finishing while the page is listing is a real overlap,
@@ -238,28 +240,10 @@ fn open(app: &AppHandle) -> Result<Connection, String> {
     Ok(conn)
 }
 
-/// The connection, for `share.rs`. Same reasoning as `open_for_import`.
-pub(super) fn open_for_share(app: &AppHandle) -> Result<Connection, String> {
-    open(app)
-}
-
-/// Clip path resolution, for `share.rs`.
-pub(super) fn clip_path_for_share(app: &AppHandle, relative: &str) -> Result<PathBuf, String> {
-    clip_path(app, relative)
-}
-
-/// The per-row AAD grammar, for `share.rs`. Exposed rather than re-derived so
-/// the two cannot drift: a mismatched AAD reads as corruption, not as a bug.
-pub(super) fn share_row_aad(uid: &str, id: &str, slot: &str) -> String {
-    row_aad(uid, id, slot)
-}
-
 /// A 16-character random hex id. Random rather than sequential so a clip's
 /// filename says nothing about when it was made or how many exist.
-fn new_id() -> String {
-    let mut bytes = [0u8; 8];
-    getrandom::fill(&mut bytes).expect("system RNG");
-    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+fn new_id() -> Result<String, String> {
+    crate::util::random_hex(8)
 }
 
 // ------------------------------------------------------------------ sweep
@@ -405,7 +389,7 @@ fn record(
     words: u64,
 ) -> Result<(), String> {
     let key = load_or_create_key(app)?;
-    let id = new_id();
+    let id = new_id()?;
     let sealed_text = seal(&key, text, &row_aad(uid, &id, "text"))?;
     let sealed_raw = match raw_text {
         Some(raw) => Some(seal(&key, raw, &row_aad(uid, &id, "raw"))?),

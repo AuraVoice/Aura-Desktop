@@ -45,13 +45,16 @@ const JITTER_KEY = "dictationShareJitterMs";
 
 function installJitterMs(): number {
   try {
-    const stored = window.localStorage.getItem(JITTER_KEY);
+    // Guarded rather than assumed: this runs in the overlay webview, but the
+    // hook is also mounted under test where localStorage may be absent, and a
+    // throw here would take the whole pump down for a cosmetic offset.
+    const stored = globalThis.localStorage?.getItem(JITTER_KEY);
     if (stored) {
       const parsed = Number(stored);
       if (Number.isFinite(parsed) && parsed >= 0) return parsed;
     }
     const fresh = Math.floor(Math.random() * WINDOW_HOURS * 60 * 60 * 1000);
-    window.localStorage.setItem(JITTER_KEY, String(fresh));
+    globalThis.localStorage?.setItem(JITTER_KEY, String(fresh));
     return fresh;
   } catch {
     return 0;
@@ -189,11 +192,11 @@ export function useDictationUpload(ownerUid: string | null, sharing: boolean): v
       }
     }
 
-    const timer = window.setInterval(() => void tick(), CHECK_INTERVAL_MS);
+    const timer = setInterval(() => void tick(), CHECK_INTERVAL_MS);
     void tick();
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      clearInterval(timer);
     };
   }, [ownerUid, sharing]);
 }

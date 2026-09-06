@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { authFetch, AuthRequiredError } from "./api";
 import { logError } from "./log";
+import { refreshDelayMs, RETRY_DELAY_MS } from "../overlay/useCredentialPump";
 
 /**
  * The short-lived transcription credential for hold-to-talk dictation.
@@ -47,11 +48,9 @@ const MIN_USEFUL_TTL_SECONDS = 15;
  * failed attempt still lands before the current token dies, late enough that a
  * long session does not mint far more often than it needs to.
  */
-const REFRESH_FRACTION = 0.7;
 
 /** Backoff after a failed mint. Short, because until this succeeds the chord
  * does not work, but not so short that a down backend gets hammered. */
-const RETRY_DELAY_MS = 30_000;
 
 /** Mints one credential. Throws `AuthRequiredError` when there is no session,
  * `DictationUnavailableError` when the backend cannot serve one. */
@@ -91,9 +90,7 @@ export function parseDictationCredential(body: unknown): DictationCredential {
 }
 
 /** How long to wait before the next mint, in milliseconds. */
-export function refreshDelayMs(ttlSeconds: number): number {
-  return Math.max(1_000, Math.floor(ttlSeconds * REFRESH_FRACTION * 1_000));
-}
+
 
 export async function pushDictationCredential(
   credential: DictationCredential,
