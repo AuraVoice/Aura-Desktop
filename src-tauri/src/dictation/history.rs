@@ -258,6 +258,19 @@ pub(super) fn open(app: &AppHandle) -> Result<Connection, String> {
             next_attempt_ms INTEGER NOT NULL DEFAULT 0,
             PRIMARY KEY (uid, trace_id)
          );
+         -- RED counters for the share pump. Log lines roll over at 200, so
+         -- these are what can still answer whether it works, a week later.
+         CREATE TABLE IF NOT EXISTS share_stats (
+            uid TEXT PRIMARY KEY,
+            uploaded INTEGER NOT NULL DEFAULT 0,
+            failed_terminal INTEGER NOT NULL DEFAULT 0,
+            failed_retryable INTEGER NOT NULL DEFAULT 0,
+            skipped INTEGER NOT NULL DEFAULT 0,
+            deleted INTEGER NOT NULL DEFAULT 0,
+            last_drain_at_ms INTEGER NOT NULL DEFAULT 0,
+            last_drain_ms INTEGER NOT NULL DEFAULT 0,
+            last_error_reason TEXT
+         );
          CREATE TABLE IF NOT EXISTS share_quota_pause (
             uid TEXT PRIMARY KEY,
             blocked_until_ms INTEGER NOT NULL
@@ -592,7 +605,12 @@ pub async fn dictation_history_list(
         {
             // A row that will not decrypt is skipped, never fatal: one bad blob
             // must not make the whole page unreadable.
+            // A row that will not decrypt is skipped, never fatal. But it must
+            // not be skipped SILENTLY: this is the one the user sees, because
+            // the entry simply vanishes from their history with nothing
+            // anywhere saying why. share.rs warns for the identical condition.
             let Ok(text) = unseal_with(&cipher, &sealed, &row_aad(&uid, &id, "text")) else {
+                warn!("dictation.history: entry hidden, transcript did not decrypt id={id}");
                 continue;
             };
             // The raw slot degrades to None instead, so a bad raw blob costs

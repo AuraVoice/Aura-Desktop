@@ -443,6 +443,8 @@ pub fn run() {
             dictation::share::dictation_fail_trace_upload,
             dictation::share::dictation_pause_trace_uploads,
             dictation::share::dictation_claim_trace_deletion,
+            dictation::share::dictation_record_share_drain,
+            dictation::share::dictation_share_stats,
             dictation::share::dictation_fail_trace_deletion,
             dictation::share::dictation_resolve_trace_deletion,
             dictation::share::dictation_revoke_trace_sharing,

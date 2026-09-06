@@ -24,7 +24,7 @@
 
 use log::{info, warn};
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tauri::AppHandle;
 
@@ -143,14 +143,16 @@ fn valid_uid(uid: &str) -> bool {
     !uid.trim().is_empty() && uid.len() <= 128
 }
 
-fn quota_blocked(conn: &Connection, uid: &str, now: i64) -> bool {
-    conn.query_row(
-        "SELECT blocked_until_ms FROM share_quota_pause WHERE uid = ?1",
-        params![uid],
-        |row| row.get::<_, i64>(0),
-    )
-    .ok()
-    .is_some_and(|until| until > now)
+fn quota_blocked(conn: &Connection, uid: &str, now: i64) -> Result<bool, String> {
+    let until: Option<i64> = conn
+        .query_row(
+            "SELECT blocked_until_ms FROM share_quota_pause WHERE uid = ?1",
+            params![uid],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    Ok(until.is_some_and(|until| until > now))
 }
 
 /// Queues every stored dictation that is allowed to be shared.
@@ -219,7 +221,10 @@ pub fn pump_state(app: &AppHandle, uid: &str, sharing: bool) -> Result<SharePump
     }
     let conn = history::open(app)?;
     let now = now_ms();
-    let pending_uploads: i64 = if sharing && !quota_blocked(&conn, uid, now) {
+    // A failure here must not read as "nothing to do". It used to: both counts
+    // fell back to 0 on error, so a broken database and a genuinely idle night
+    // produced identical, permanently silent behaviour.
+    let pending_uploads: i64 = if sharing && !quota_blocked(&conn, uid, now)? {
         conn.query_row(
             // share_state is a LITERAL here, not a parameter: SQLite resolves
             // partial-index usability at prepare time, so binding it makes
@@ -229,6 +234,8 @@ pub fn pump_state(app: &AppHandle, uid: &str, sharing: bool) -> Result<SharePump
             params![uid, now],
             |row| row.get(0),
         )
+        .optional()
+        .map_err(|e| e.to_string())?
         .unwrap_or(0)
     } else {
         0
@@ -239,6 +246,8 @@ pub fn pump_state(app: &AppHandle, uid: &str, sharing: bool) -> Result<SharePump
             params![uid],
             |row| row.get(0),
         )
+        .optional()
+        .map_err(|e| e.to_string())?
         .unwrap_or(0);
     Ok(SharePumpState {
         pending_uploads,
@@ -261,16 +270,22 @@ pub fn pump_state(app: &AppHandle, uid: &str, sharing: bool) -> Result<SharePump
 /// the queue used to end the whole night, and N bad rows meant draining one row
 /// per night forever, because the query orders oldest-first and hits them again
 /// every time. A per-item problem must cost one item.
+///
+/// `retries_only` is what the hourly sweep passes: it claims rows that have
+/// already been attempted and are now due, and leaves brand new traces for the
+/// nightly window. That is what makes the sub-day steps of the backoff table
+/// reachable at all without turning the whole thing into an hourly uploader.
 pub fn claim(
     app: &AppHandle,
     uid: &str,
     consent_version: u32,
+    retries_only: bool,
 ) -> Result<Option<TraceUploadLease>, String> {
     // Bounded so a pathological store cannot spin here. Anything skipped is
     // marked ineligible, so the bound is only ever reached once.
     const MAX_SKIPS: usize = 64;
     for _ in 0..MAX_SKIPS {
-        match claim_one(app, uid, consent_version)? {
+        match claim_one(app, uid, consent_version, retries_only)? {
             ClaimStep::Ready(lease) => return Ok(Some(*lease)),
             ClaimStep::Skipped => continue,
             ClaimStep::Empty => return Ok(None),
@@ -288,13 +303,18 @@ enum ClaimStep {
     Empty,
 }
 
-fn claim_one(app: &AppHandle, uid: &str, consent_version: u32) -> Result<ClaimStep, String> {
+fn claim_one(
+    app: &AppHandle,
+    uid: &str,
+    consent_version: u32,
+    retries_only: bool,
+) -> Result<ClaimStep, String> {
     if !valid_uid(uid) {
         return Ok(ClaimStep::Empty);
     }
     let conn = history::open(app)?;
     let now = now_ms();
-    if quota_blocked(&conn, uid, now) {
+    if quota_blocked(&conn, uid, now)? {
         return Ok(ClaimStep::Empty);
     }
 
@@ -308,9 +328,10 @@ fn claim_one(app: &AppHandle, uid: &str, consent_version: u32) -> Result<ClaimSt
                FROM transcripts
               WHERE uid = ?1 AND share_state = 1 AND share_next_attempt_ms <= ?2
                 AND audio_path IS NOT NULL
+                AND (?3 = 0 OR share_attempts > 0)
               ORDER BY recorded_at_ms ASC
               LIMIT 1",
-            params![uid, now],
+            params![uid, now, i64::from(retries_only)],
             |row| {
                 Ok((
                     row.get(0)?,
@@ -323,7 +344,8 @@ fn claim_one(app: &AppHandle, uid: &str, consent_version: u32) -> Result<ClaimSt
                 ))
             },
         )
-        .ok();
+        .optional()
+        .map_err(|e| e.to_string())?;
     let Some((id, recorded_at_ms, duration_ms, sealed_text, sealed_raw, relative, digest)) = row
     else {
         return Ok(ClaimStep::Empty);
@@ -561,6 +583,119 @@ pub fn pause_for_quota(app: &AppHandle, uid: &str, blocked_until_ms: i64) -> Res
     Ok(true)
 }
 
+/// What one drain did. Persisted so the answer survives the 200-line log tail.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DrainOutcome {
+    pub uploaded: i64,
+    pub failed_terminal: i64,
+    pub failed_retryable: i64,
+    pub skipped: i64,
+    pub deleted: i64,
+    pub duration_ms: i64,
+    /// A short reason code, never a message and never any content.
+    pub last_error_reason: Option<String>,
+}
+
+/// Cumulative counters plus the last drain, for the Dictation page.
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShareStats {
+    pub uploaded: i64,
+    pub failed_terminal: i64,
+    pub failed_retryable: i64,
+    pub skipped: i64,
+    pub deleted: i64,
+    pub last_drain_at_ms: i64,
+    pub last_drain_ms: i64,
+    pub last_error_reason: Option<String>,
+    pub pending_uploads: i64,
+    pub pending_deletions: i64,
+}
+
+/// Folds one drain into the running totals.
+pub fn record_drain(app: &AppHandle, uid: &str, outcome: &DrainOutcome) -> Result<(), String> {
+    if !valid_uid(uid) {
+        return Ok(());
+    }
+    let conn = history::open(app)?;
+    conn.execute(
+        "INSERT INTO share_stats (
+            uid, uploaded, failed_terminal, failed_retryable, skipped, deleted,
+            last_drain_at_ms, last_drain_ms, last_error_reason
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+         ON CONFLICT(uid) DO UPDATE SET
+            uploaded = uploaded + excluded.uploaded,
+            failed_terminal = failed_terminal + excluded.failed_terminal,
+            failed_retryable = failed_retryable + excluded.failed_retryable,
+            skipped = skipped + excluded.skipped,
+            deleted = deleted + excluded.deleted,
+            last_drain_at_ms = excluded.last_drain_at_ms,
+            last_drain_ms = excluded.last_drain_ms,
+            last_error_reason = excluded.last_error_reason",
+        params![
+            uid,
+            outcome.uploaded,
+            outcome.failed_terminal,
+            outcome.failed_retryable,
+            outcome.skipped,
+            outcome.deleted,
+            now_ms(),
+            outcome.duration_ms,
+            outcome.last_error_reason,
+        ],
+    )
+    .map_err(|e| e.to_string())?;
+    // One line per drain, not one per trace: the readable log tail is 200 lines,
+    // so a line per upload would evict everything else that happened that day.
+    info!(
+        "dictation.share: drain uploaded={} skipped={} failed_terminal={}          failed_retryable={} deleted={} duration_ms={} reason={}",
+        outcome.uploaded,
+        outcome.skipped,
+        outcome.failed_terminal,
+        outcome.failed_retryable,
+        outcome.deleted,
+        outcome.duration_ms,
+        outcome.last_error_reason.as_deref().unwrap_or("none"),
+    );
+    Ok(())
+}
+
+pub fn stats(app: &AppHandle, uid: &str) -> Result<ShareStats, String> {
+    if !valid_uid(uid) {
+        return Ok(ShareStats::default());
+    }
+    let conn = history::open(app)?;
+    let mut out: ShareStats = conn
+        .query_row(
+            "SELECT uploaded, failed_terminal, failed_retryable, skipped, deleted,
+                    last_drain_at_ms, last_drain_ms, last_error_reason
+               FROM share_stats WHERE uid = ?1",
+            params![uid],
+            |row| {
+                Ok(ShareStats {
+                    uploaded: row.get(0)?,
+                    failed_terminal: row.get(1)?,
+                    failed_retryable: row.get(2)?,
+                    skipped: row.get(3)?,
+                    deleted: row.get(4)?,
+                    last_drain_at_ms: row.get(5)?,
+                    last_drain_ms: row.get(6)?,
+                    last_error_reason: row.get(7)?,
+                    pending_uploads: 0,
+                    pending_deletions: 0,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .unwrap_or_default();
+    let live = pump_state(app, uid, true)?;
+    out.pending_uploads = live.pending_uploads;
+    out.pending_deletions = live.pending_deletions;
+    Ok(out)
+}
+
 /// The next remote copy owed a deletion and actually due, if any.
 pub fn claim_deletion(app: &AppHandle, uid: &str) -> Result<Option<String>, String> {
     if !valid_uid(uid) {
@@ -647,7 +782,13 @@ pub async fn dictation_share_pump_state(
             // Cheap and idempotent: an already-queued row is not re-queued, so
             // this is what folds a newly-eligible backlog in without needing a
             // separate "sharing was just switched on" signal.
-            let _ = enqueue_backlog(&app, &uid);
+            //
+            // Its failure used to be discarded, and it is the ONLY call on the
+            // drain path: if it fails nothing is queued, so the pump reports an
+            // empty queue forever with nothing anywhere saying why.
+            if let Err(error) = enqueue_backlog(&app, &uid) {
+                warn!("dictation.share: could not queue the backlog ({error})");
+            }
         }
         pump_state(&app, &uid, sharing)
     })
@@ -660,8 +801,9 @@ pub async fn dictation_claim_trace_upload(
     app: AppHandle,
     uid: String,
     consent_version: u32,
+    retries_only: bool,
 ) -> Result<Option<TraceUploadLease>, String> {
-    tauri::async_runtime::spawn_blocking(move || claim(&app, &uid, consent_version))
+    tauri::async_runtime::spawn_blocking(move || claim(&app, &uid, consent_version, retries_only))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -721,6 +863,24 @@ pub async fn dictation_claim_trace_deletion(
     uid: String,
 ) -> Result<Option<String>, String> {
     tauri::async_runtime::spawn_blocking(move || claim_deletion(&app, &uid))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn dictation_record_share_drain(
+    app: AppHandle,
+    uid: String,
+    outcome: DrainOutcome,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || record_drain(&app, &uid, &outcome))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn dictation_share_stats(app: AppHandle, uid: String) -> Result<ShareStats, String> {
+    tauri::async_runtime::spawn_blocking(move || stats(&app, &uid))
         .await
         .map_err(|e| e.to_string())?
 }

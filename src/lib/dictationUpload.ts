@@ -188,13 +188,36 @@ export function sharePumpState(uid: string, sharing: boolean): Promise<SharePump
   return invoke<SharePumpState>("dictation_share_pump_state", { uid, sharing });
 }
 
-export function claimTraceUpload(uid: string): Promise<TraceUploadLease | null> {
+/** What one drain did. Counts and durations only - it is persisted and it is
+ * reported, so it must never carry a trace id or any text. */
+export interface DrainOutcome {
+  uploaded: number;
+  failedTerminal: number;
+  failedRetryable: number;
+  skipped: number;
+  deleted: number;
+  durationMs: number;
+  /** A short reason code, never a message. */
+  lastErrorReason: string | null;
+}
+
+export function claimTraceUpload(
+  uid: string,
+  retriesOnly: boolean,
+): Promise<TraceUploadLease | null> {
   // The asserted consent version is the one the settings store records, so the
   // payload cannot claim a consent the user did not give.
   return invoke<TraceUploadLease | null>("dictation_claim_trace_upload", {
     uid,
     consentVersion: IMPROVEMENT_CONSENT_VERSION,
+    retriesOnly,
   });
+}
+
+/** Folds one drain into the persisted counters and emits the summary log line
+ * on the Rust side. */
+export function recordShareDrain(uid: string, outcome: DrainOutcome): Promise<void> {
+  return invoke("dictation_record_share_drain", { uid, outcome });
 }
 
 export function resolveTraceUpload(uid: string, traceId: string): Promise<void> {
