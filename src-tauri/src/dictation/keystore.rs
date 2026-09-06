@@ -16,6 +16,7 @@
 //! so a real vocabulary source can be added back without re-plumbing anything.
 
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use tauri::{AppHandle, Manager};
 
@@ -34,6 +35,13 @@ pub(super) fn dictation_dir(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+/// Cached for the life of the process. Unwrapping costs a file read plus a
+/// platform call (DPAPI on Windows), and it was being paid on every recorded
+/// utterance, every history read, and twice per upload. The key cannot change
+/// while the process runs: `load_or_create_key_at` mints only when the file is
+/// absent, and fails closed rather than replacing one that will not unwrap.
+static KEY: OnceLock<[u8; 32]> = OnceLock::new();
+
 /// Loads the dictation key, minting and wrapping a fresh one on first use.
 ///
 /// A wrapped blob that no longer unwraps fails closed rather than being
@@ -41,6 +49,12 @@ pub(super) fn dictation_dir(app: &AppHandle) -> Result<PathBuf, String> {
 /// silently discarding history nobody can read any more. `crypto` owns that
 /// rule; this module only says which key file it applies to.
 pub(super) fn load_or_create_key(app: &AppHandle) -> Result<[u8; 32], String> {
+    if let Some(key) = KEY.get() {
+        return Ok(*key);
+    }
     let key_path = dictation_dir(app)?.join(KEY_FILE);
-    crate::crypto::load_or_create_key_at(&key_path, "dictation")
+    let key = crate::crypto::load_or_create_key_at(&key_path, "dictation")?;
+    // A race here is harmless: both threads unwrapped the same file.
+    let _ = KEY.set(key);
+    Ok(key)
 }

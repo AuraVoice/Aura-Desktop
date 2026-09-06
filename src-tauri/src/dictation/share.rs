@@ -32,7 +32,7 @@ use super::history;
 use super::keystore::load_or_create_key;
 use crate::crypto::decrypt_with_aad;
 use crate::sealed_store::unseal;
-use crate::util::{now_ms, sha256_hex};
+use crate::util::now_ms;
 
 /// Attempts before a dictation is abandoned. The row stays on disk and stays
 /// exportable by hand; only the automatic retry stops.
@@ -170,20 +170,14 @@ pub fn enqueue_backlog(app: &AppHandle, uid: &str) -> Result<usize, String> {
             "UPDATE transcripts
                 SET share_state = ?1, share_attempts = 0, share_next_attempt_ms = 0
               WHERE uid = ?2
-                AND share_state = ?3
+                AND share_state = 0
                 AND shareable = 1
                 AND audio_path IS NOT NULL
                 AND audio_bytes > 0
-                AND audio_bytes <= ?4
+                AND audio_bytes <= ?3
                 AND duration_ms > 0
-                AND duration_ms <= ?5",
-            params![
-                STATE_PENDING,
-                uid,
-                STATE_INELIGIBLE,
-                MAX_AUDIO_BYTES,
-                MAX_DURATION_MS
-            ],
+                AND duration_ms <= ?4",
+            params![STATE_PENDING, uid, MAX_AUDIO_BYTES, MAX_DURATION_MS],
         )
         .map_err(|e| e.to_string())?;
     if queued > 0 {
@@ -227,9 +221,12 @@ pub fn pump_state(app: &AppHandle, uid: &str, sharing: bool) -> Result<SharePump
     let now = now_ms();
     let pending_uploads: i64 = if sharing && !quota_blocked(&conn, uid, now) {
         conn.query_row(
+            // share_state is a LITERAL here, not a parameter: SQLite resolves
+            // partial-index usability at prepare time, so binding it makes
+            // transcripts_share_queue unusable and this becomes a scan.
             "SELECT COUNT(*) FROM transcripts
-              WHERE uid = ?1 AND share_state = ?2 AND share_next_attempt_ms <= ?3",
-            params![uid, STATE_PENDING, now],
+              WHERE uid = ?1 AND share_state = 1 AND share_next_attempt_ms <= ?2",
+            params![uid, now],
             |row| row.get(0),
         )
         .unwrap_or(0)
@@ -301,16 +298,19 @@ fn claim_one(app: &AppHandle, uid: &str, consent_version: u32) -> Result<ClaimSt
         return Ok(ClaimStep::Empty);
     }
 
-    type ClaimRow = (String, i64, i64, Vec<u8>, Option<Vec<u8>>, String);
+    type ClaimRow = (String, i64, i64, Vec<u8>, Option<Vec<u8>>, String, Option<String>);
     let row: Option<ClaimRow> = conn
         .query_row(
-            "SELECT id, recorded_at_ms, duration_ms, text, raw_text, audio_path
+            // Literal share_state, same reason as pump_state above. Also selects
+            // the persisted digest rather than recomputing it, which is what
+            // used to force a full read and decrypt of the clip on every claim.
+            "SELECT id, recorded_at_ms, duration_ms, text, raw_text, audio_path, audio_sha256
                FROM transcripts
-              WHERE uid = ?1 AND share_state = ?2 AND share_next_attempt_ms <= ?3
+              WHERE uid = ?1 AND share_state = 1 AND share_next_attempt_ms <= ?2
                 AND audio_path IS NOT NULL
               ORDER BY recorded_at_ms ASC
               LIMIT 1",
-            params![uid, STATE_PENDING, now],
+            params![uid, now],
             |row| {
                 Ok((
                     row.get(0)?,
@@ -319,11 +319,13 @@ fn claim_one(app: &AppHandle, uid: &str, consent_version: u32) -> Result<ClaimSt
                     row.get(3)?,
                     row.get(4)?,
                     row.get(5)?,
+                    row.get(6)?,
                 ))
             },
         )
         .ok();
-    let Some((id, recorded_at_ms, duration_ms, sealed_text, sealed_raw, relative)) = row else {
+    let Some((id, recorded_at_ms, duration_ms, sealed_text, sealed_raw, relative, digest)) = row
+    else {
         return Ok(ClaimStep::Empty);
     };
 
@@ -357,26 +359,26 @@ fn claim_one(app: &AppHandle, uid: &str, consent_version: u32) -> Result<ClaimSt
         .unwrap_or(&trimmed)
         .to_string();
 
-    // The clip is read now rather than cached, so a dictation deleted before it
-    // is ever shared costs nothing.
-    let path = history::clip_path(app, &relative)?;
-    let Ok(sealed_clip) = std::fs::read(&path) else {
-        // The clip went while the row survived (audio eviction, or a manual
-        // wipe). Not retryable and not worth surfacing: the metadata promises a
-        // digest this row can no longer produce.
+    // The digest was taken when the clip was written and stored on the row. It
+    // is a property of bytes that never change, so computing it here meant
+    // reading and decrypting the whole clip on every claim AND again on every
+    // one of up to eight retries - sixteen decrypts of the same file for a row
+    // that ultimately fails. The clip itself is read once, later, by audio_body.
+    let Some(audio_sha256) = digest.filter(|d| d.len() == 64) else {
+        // Written before the digest column existed, or the clip failed to save.
+        // Either way this row can never satisfy the digest its metadata would
+        // promise, so it leaves the queue rather than failing eight times.
+        mark_ineligible(&conn, uid, &id)?;
+        warn!("dictation.share: row skipped, no stored audio digest id={id}");
+        return Ok(ClaimStep::Skipped);
+    };
+    // Cheap existence check so a claim does not hand out a lease for a clip that
+    // is already gone. One stat, not a read and a decrypt.
+    if !history::clip_path(app, &relative)?.exists() {
         mark_ineligible(&conn, uid, &id)?;
         warn!("dictation.share: row skipped, clip file is gone id={id}");
         return Ok(ClaimStep::Skipped);
-    };
-    let Ok(flac) = decrypt_with_aad(
-        &key,
-        &sealed_clip,
-        history::row_aad(uid, &id, "audio").as_bytes(),
-    ) else {
-        mark_ineligible(&conn, uid, &id)?;
-        warn!("dictation.share: row skipped, clip did not decrypt id={id}");
-        return Ok(ClaimStep::Skipped);
-    };
+    }
 
     let trace_id = trace_id_for(uid, &id);
     conn.execute(
@@ -396,7 +398,7 @@ fn claim_one(app: &AppHandle, uid: &str, consent_version: u32) -> Result<ClaimSt
         schema_version: 2,
         recorded_at_ms,
         duration_ms,
-        audio_sha256: sha256_hex(&flac),
+        audio_sha256,
         sample_rate_hz: 16_000,
         channels: 1,
         language: "en-US".to_string(),

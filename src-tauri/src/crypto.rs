@@ -141,6 +141,37 @@ pub fn encrypt_with_aad(key: &[u8; 32], plaintext: &[u8], aad: &[u8]) -> Result<
     Ok(out)
 }
 
+/// A cipher built once and reused across many values.
+///
+/// `Aes256Gcm::new` runs the AES key expansion and builds the GHASH table. For
+/// the short values this app seals - a transcript is a few hundred bytes - that
+/// setup costs more than the decryption itself, so a loop over N rows was
+/// paying for N key schedules where one would do. The free functions above stay
+/// for one-off use; this is for loops.
+pub struct SealedCipher(Aes256Gcm);
+
+impl SealedCipher {
+    pub fn new(key: &[u8; 32]) -> Self {
+        Self(Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(key)))
+    }
+
+    pub fn decrypt_with_aad(&self, data: &[u8], aad: &[u8]) -> Result<Vec<u8>, String> {
+        if data.len() <= NONCE_LEN {
+            return Err("segment too short to decrypt".to_string());
+        }
+        let nonce = Nonce::from_slice(&data[..NONCE_LEN]);
+        self.0
+            .decrypt(
+                nonce,
+                Payload {
+                    msg: &data[NONCE_LEN..],
+                    aad,
+                },
+            )
+            .map_err(|e| format!("decrypt failed: {e}"))
+    }
+}
+
 /// Decryption without associated data.
 pub fn decrypt(key: &[u8; 32], data: &[u8]) -> Result<Vec<u8>, String> {
     if data.len() <= NONCE_LEN {

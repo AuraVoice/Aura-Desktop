@@ -17,6 +17,13 @@ pub fn unseal(key: &[u8; 32], sealed: &[u8], aad: &str) -> Result<String, String
     String::from_utf8(plain).map_err(|e| e.to_string())
 }
 
+/// `unseal` against a cipher that was built once, for callers decrypting many
+/// rows in a loop.
+pub fn unseal_with(cipher: &crate::crypto::SealedCipher, sealed: &[u8], aad: &str) -> Result<String, String> {
+    let plain = cipher.decrypt_with_aad(sealed, aad.as_bytes())?;
+    String::from_utf8(plain).map_err(|e| e.to_string())
+}
+
 /// The canonical AAD grammar for new stores: a versioned namespace and
 /// NUL-separated parts, so ids containing a join character cannot make two
 /// distinct rows collide (the flaw in the older colon-joined grammar).

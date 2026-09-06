@@ -59,7 +59,7 @@ use crate::util::now_ms;
 // key, and the sample/FLAC path are all Windows-only, and every entry point
 // checks `ENCRYPTION_AVAILABLE` before it reaches one of these.
 
-use crate::sealed_store::{seal, unseal};
+use crate::sealed_store::{seal, unseal, unseal_with};
 
 use super::keystore::{dictation_dir, load_or_create_key};
 
@@ -182,9 +182,11 @@ pub(super) fn open(app: &AppHandle) -> Result<Connection, String> {
     let conn = Connection::open(db_path(app)?).map_err(|e| e.to_string())?;
     conn.execute_batch(
         // A dictation finishing while the page is listing is a real overlap,
-        // and each side opens its own connection, so without a busy timeout
-        // one of them fails outright instead of waiting a few milliseconds.
-        "PRAGMA busy_timeout = 3000;",
+        // and each side opens its own connection. WAL lets the read proceed
+        // while the write is in flight instead of one of them waiting; the busy
+        // timeout stays as the backstop for the writer-writer case WAL does not
+        // solve.
+        "PRAGMA journal_mode = WAL; PRAGMA busy_timeout = 3000;",
     )
     .map_err(|e| e.to_string())?;
     conn.execute_batch(
@@ -233,8 +235,12 @@ pub(super) fn open(app: &AppHandle) -> Result<Connection, String> {
          );
          CREATE INDEX IF NOT EXISTS transcripts_recent
             ON transcripts (uid, recorded_at_ms DESC);
+         -- Leading uid is not optional: every sweep query starts with uid = ?,
+         -- and without it SQLite cannot use this index at all. Declared without
+         -- one it was maintained on every insert and every eviction and read by
+         -- nothing.
          CREATE INDEX IF NOT EXISTS transcripts_audio_sweep
-            ON transcripts (recorded_at_ms) WHERE audio_path IS NOT NULL;",
+            ON transcripts (uid, recorded_at_ms) WHERE audio_path IS NOT NULL;",
     )
     .map_err(|e| e.to_string())?;
     conn.execute_batch(
@@ -256,8 +262,18 @@ pub(super) fn open(app: &AppHandle) -> Result<Connection, String> {
             uid TEXT PRIMARY KEY,
             blocked_until_ms INTEGER NOT NULL
          );
+         -- Column order matters and was chosen by measurement, not taste:
+         -- with recorded_at_ms second the claim's ORDER BY is satisfied by the
+         -- index (no temp b-tree) and the pump's COUNT is still covering.
+         -- Putting share_next_attempt_ms second gives the count a range seek
+         -- but costs the claim a temp b-tree, which is the worse trade.
+         -- IMPORTANT: queries against this must write `share_state = 1` as a
+         -- LITERAL. SQLite decides whether a partial index applies at PREPARE
+         -- time, when a bound parameter is still unknown, so binding the state
+         -- makes the index unusable and silently falls back to a scan.
          CREATE INDEX IF NOT EXISTS transcripts_share_queue
-            ON transcripts (uid, share_next_attempt_ms) WHERE share_state = 1;",
+            ON transcripts (uid, recorded_at_ms, share_next_attempt_ms)
+            WHERE share_state = 1;",
     )
     .map_err(|e| e.to_string())?;
     Ok(conn)
@@ -274,8 +290,21 @@ fn new_id() -> Result<String, String> {
 /// Drops everything past either text bound, then evicts audio past either audio
 /// bound, oldest first. Audio eviction unlinks the file and NULLs the column;
 /// the row itself survives until the age or count bound takes it.
+/// How often the retention pass is allowed to actually run. It enforces a
+/// 90-day age bound and a byte budget; running it on every list AND every
+/// utterance meant an O(N) pass at roughly 1 Hz to police a rule that moves
+/// once a day.
+const SWEEP_INTERVAL_MS: i64 = 60 * 60 * 1000;
+static LAST_SWEEP_MS: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
 fn sweep(app: &AppHandle, conn: &Connection, uid: &str) -> Result<(), String> {
-    let cutoff = now_ms() - MAX_AGE_MS;
+    let now = now_ms();
+    let last = LAST_SWEEP_MS.load(std::sync::atomic::Ordering::Relaxed);
+    if now - last < SWEEP_INTERVAL_MS {
+        return Ok(());
+    }
+    LAST_SWEEP_MS.store(now, std::sync::atomic::Ordering::Relaxed);
+    let cutoff = now - MAX_AGE_MS;
     let mut doomed: Vec<String> = Vec::new();
     {
         let mut statement = conn
@@ -527,6 +556,8 @@ pub async fn dictation_history_list(
     }
     tauri::async_runtime::spawn_blocking(move || {
         let key = load_or_create_key(&app)?;
+        // Built once for the whole read: see crypto::SealedCipher.
+        let cipher = crate::crypto::SealedCipher::new(&key);
         let conn = open(&app)?;
         // Retention housekeeping must never break a read. One un-evictable clip
         // used to make this whole command fail, so the user's Dictation page
@@ -555,26 +586,27 @@ pub async fn dictation_history_list(
                 ))
             })
             .map_err(|e| e.to_string())?;
-        // Resolved once: clip_path() goes through dictation_dir(), which
-        // creates the directory, and doing that per row would be one syscall
-        // per stored dictation on every page load.
-        let dir = dictation_dir(&app)?;
         let mut entries = Vec::new();
         for (id, recorded_at_ms, word_count, duration_ms, sealed, flagged, audio_path, sealed_raw) in
             rows.flatten()
         {
             // A row that will not decrypt is skipped, never fatal: one bad blob
             // must not make the whole page unreadable.
-            let Ok(text) = unseal(&key, &sealed, &row_aad(&uid, &id, "text")) else {
+            let Ok(text) = unseal_with(&cipher, &sealed, &row_aad(&uid, &id, "text")) else {
                 continue;
             };
             // The raw slot degrades to None instead, so a bad raw blob costs
             // the "view original speech" affordance, not the whole entry.
             let raw_text = sealed_raw
-                .and_then(|sealed| unseal(&key, &sealed, &row_aad(&uid, &id, "raw")).ok());
-            let has_audio = audio_path
-                .as_deref()
-                .is_some_and(|relative| dir.join(relative).exists());
+                .and_then(|sealed| unseal_with(&cipher, &sealed, &row_aad(&uid, &id, "raw")).ok());
+            // `audio_path IS NOT NULL` is the store's own claim, and the
+            // retention sweep is what keeps it true. Confirming it per row cost
+            // one filesystem stat per row - the single largest cost of this
+            // command, and on a cold cache with a scanner in the way it is
+            // milliseconds each. The play path already treats a missing clip as
+            // a normal outcome, so a rare stale `true` costs one failed play
+            // rather than a syscall for every row of every read.
+            let has_audio = audio_path.is_some();
             entries.push(DictationHistoryEntry {
                 id,
                 recorded_at_ms,
