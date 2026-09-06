@@ -33,7 +33,7 @@ use log::{info, warn};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 
-use super::vocab;
+use super::keystore;
 
 const SETTINGS_FILE: &str = "polish.json";
 
@@ -168,7 +168,7 @@ pub fn wants(app: &AppHandle) -> bool {
 // Settings persistence
 
 fn load_settings(app: &AppHandle) -> PolishSettings {
-    let Ok(dir) = vocab::dictation_dir(app) else {
+    let Ok(dir) = keystore::dictation_dir(app) else {
         return PolishSettings::default();
     };
     let Ok(raw) = std::fs::read_to_string(dir.join(SETTINGS_FILE)) else {
@@ -179,7 +179,7 @@ fn load_settings(app: &AppHandle) -> PolishSettings {
 
 /// Writes the settings and returns the stored truth.
 pub fn save_settings(app: &AppHandle, settings: PolishSettings) -> Result<PolishSettings, String> {
-    let dir = vocab::dictation_dir(app)?;
+    let dir = keystore::dictation_dir(app)?;
     let body = serde_json::to_vec_pretty(&settings).map_err(|e| e.to_string())?;
     crate::fsx::write_atomic(&dir.join(SETTINGS_FILE), &body, crate::fsx::Durability::Fsync)?;
     Ok(settings)

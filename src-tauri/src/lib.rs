@@ -22,6 +22,9 @@ mod chat_cache;
 mod connector_oauth;
 mod crypto;
 mod dashboard;
+// Linux is not a build target (CI runs windows-latest and macos-14 only),
+// so the module carries no third-platform arms and is gated whole instead.
+#[cfg(any(windows, target_os = "macos"))]
 mod dictation;
 mod entitlement;
 mod events;
@@ -433,18 +436,15 @@ pub fn run() {
             dictation::dictation_set_hud_hovered,
             // registered ahead of UI: dictation vocabulary management has no
             // frontend invoke yet
-            dictation::dictation_vocabulary,
-            dictation::dictation_add_vocabulary,
-            dictation::dictation_record_correction,
-            dictation::share_commands::dictation_share_pump_state,
-            dictation::share_commands::dictation_claim_trace_upload,
-            dictation::share_commands::dictation_trace_upload_audio,
-            dictation::share_commands::dictation_resolve_trace_upload,
-            dictation::share_commands::dictation_fail_trace_upload,
-            dictation::share_commands::dictation_pause_trace_uploads,
-            dictation::share_commands::dictation_claim_trace_deletion,
-            dictation::share_commands::dictation_resolve_trace_deletion,
-            dictation::share_commands::dictation_revoke_trace_sharing,
+            dictation::share::dictation_share_pump_state,
+            dictation::share::dictation_claim_trace_upload,
+            dictation::share::dictation_trace_upload_audio,
+            dictation::share::dictation_resolve_trace_upload,
+            dictation::share::dictation_fail_trace_upload,
+            dictation::share::dictation_pause_trace_uploads,
+            dictation::share::dictation_claim_trace_deletion,
+            dictation::share::dictation_resolve_trace_deletion,
+            dictation::share::dictation_revoke_trace_sharing,
             dictation::history::dictation_history_list,
             dictation::history::dictation_history_audio,
             dictation::history::dictation_history_set_flag,

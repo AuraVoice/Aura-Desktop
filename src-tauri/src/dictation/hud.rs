@@ -283,9 +283,6 @@ fn sync_activation(window: &tauri::WebviewWindow, phase: HudPhase) {
     }
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
-fn sync_activation(_window: &tauri::WebviewWindow, _phase: HudPhase) {}
-
 /// Centre of a window in PHYSICAL screen pixels, which is what
 /// `monitor_from_point` expects. Used to put the HUD on the display the user is
 /// actually typing into rather than always on the primary one.
@@ -324,11 +321,6 @@ fn target_center(target: isize) -> Option<(f64, f64)> {
     let (x, y) = crate::macos_ax::focused_window_center(target as i32)?;
     let scale = crate::macos_window::primary_backing_scale();
     Some((x * scale, y * scale))
-}
-
-#[cfg(not(any(windows, target_os = "macos")))]
-fn target_center(_target: isize) -> Option<(f64, f64)> {
-    None
 }
 
 fn oriented_size(edge: NotchEdge, side_width: f64, side_height: f64) -> LogicalSize<f64> {

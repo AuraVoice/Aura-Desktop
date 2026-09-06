@@ -121,8 +121,11 @@ export function useDictationUpload(ownerUid: string | null, sharing: boolean): v
 
       // Deletions first, and regardless of `sharing`: withdrawing consent
       // creates an obligation to remove what was already sent, and that must
-      // not be blocked by the switch that created it being off.
-      for (let i = 0; i < MAX_PER_NIGHT && state.pendingDeletions > 0; i += 1) {
+      // not be blocked by the switch that created it being off. The count is a
+      // snapshot, so it bounds the loop rather than gating it - the real
+      // terminator is claimTraceDeletion running out of work.
+      const deletions = Math.min(MAX_PER_NIGHT, state.pendingDeletions);
+      for (let i = 0; i < deletions; i += 1) {
         if (cancelled) return;
         const traceId = await claimTraceDeletion(uid);
         if (!traceId) break;
@@ -139,7 +142,10 @@ export function useDictationUpload(ownerUid: string | null, sharing: boolean): v
 
       if (!sharing) return;
 
-      for (let sent = 0; sent < MAX_PER_NIGHT; sent += 1) {
+      // Bounded by what is actually queued as well as by the nightly ceiling,
+      // so an empty queue costs zero claim round trips.
+      const uploads = Math.min(MAX_PER_NIGHT, state.pendingUploads);
+      for (let sent = 0; sent < uploads; sent += 1) {
         if (cancelled) return;
         const lease = await claimTraceUpload(uid);
         if (!lease) return;

@@ -40,7 +40,7 @@
 //!
 //! Modelled on `interview_store.rs` (same encrypted-SQLite shape, same per-row
 //! AAD, same "a row that will not decrypt is skipped, never fatal" rule), but
-//! sealed under the DICTATION key from `vocab.rs`, never meeting's: "delete my
+//! sealed under the DICTATION key from `keystore.rs`, never meeting's: "delete my
 //! recordings" must not silently brick dictation.
 
 use std::path::PathBuf;
@@ -59,34 +59,9 @@ use crate::util::now_ms;
 // key, and the sample/FLAC path are all Windows-only, and every entry point
 // checks `ENCRYPTION_AVAILABLE` before it reaches one of these.
 
-#[cfg(any(windows, target_os = "macos"))]
 use crate::sealed_store::{seal, unseal};
 
-#[cfg(not(any(windows, target_os = "macos")))]
-fn seal(_key: &[u8; 32], _plaintext: &str, _aad: &str) -> Result<Vec<u8>, String> {
-    Err(UNAVAILABLE.to_string())
-}
-
-#[cfg(not(any(windows, target_os = "macos")))]
-fn unseal(_key: &[u8; 32], _sealed: &[u8], _aad: &str) -> Result<String, String> {
-    Err(UNAVAILABLE.to_string())
-}
-
-#[cfg(any(windows, target_os = "macos"))]
-use super::vocab::{dictation_dir, load_or_create_key};
-
-#[cfg(not(any(windows, target_os = "macos")))]
-fn dictation_dir(_app: &AppHandle) -> Result<PathBuf, String> {
-    Err(UNAVAILABLE.to_string())
-}
-
-#[cfg(not(any(windows, target_os = "macos")))]
-fn load_or_create_key(_app: &AppHandle) -> Result<[u8; 32], String> {
-    Err(UNAVAILABLE.to_string())
-}
-
-#[cfg(not(any(windows, target_os = "macos")))]
-const UNAVAILABLE: &str = "dictation history is unavailable on this platform";
+use super::keystore::{dictation_dir, load_or_create_key};
 
 const DATABASE_FILE: &str = "history.sqlite3";
 const CLIPS_DIR: &str = "clips";
@@ -138,7 +113,7 @@ pub struct DictationHistoryEntry {
     /// normal end state for an old dictation, not a failure.
     pub has_audio: bool,
     pub flagged: bool,
-    /// The transcript as it left ASR (after vocab corrections), present only
+    /// The transcript as it left ASR (before AI polish), present only
     /// when AI polish changed the text. None means the final text IS the raw.
     pub raw_text: Option<String>,
 }
@@ -206,6 +181,15 @@ fn open(app: &AppHandle) -> Result<Connection, String> {
     )
     .map_err(|e| e.to_string())?;
     conn.execute_batch(
+        // One canonical schema. There are no installs whose on-disk shape
+        // predates it, so there is nothing to migrate and no guarded ALTER to
+        // swallow a genuine error (a locked database reads exactly like a
+        // duplicate column when the result is discarded).
+        //
+        // The share_* columns live on the transcript row rather than in a
+        // second store because the row already IS the record being shared. A
+        // parallel index is what the retired trace subsystem did, and keeping
+        // two copies of every dictation in sync is what made it worth deleting.
         "CREATE TABLE IF NOT EXISTS transcripts (
             uid TEXT NOT NULL,
             id TEXT NOT NULL,
@@ -216,6 +200,16 @@ fn open(app: &AppHandle) -> Result<Connection, String> {
             flagged INTEGER NOT NULL DEFAULT 0,
             audio_path TEXT,
             audio_bytes INTEGER NOT NULL DEFAULT 0,
+            -- The transcript as it left ASR, stored only when polish changed it.
+            raw_text BLOB,
+            -- Sharing queue state. 0 ineligible, 1 pending, 2 uploaded, 3 failed.
+            share_state INTEGER NOT NULL DEFAULT 0,
+            share_attempts INTEGER NOT NULL DEFAULT 0,
+            share_next_attempt_ms INTEGER NOT NULL DEFAULT 0,
+            shared_at_ms INTEGER,
+            -- The id the server knows this row by. Not the row id: the backend
+            -- requires 24 lowercase hex and `new_id` produces 16.
+            share_trace_id TEXT,
             PRIMARY KEY (uid, id)
          );
          CREATE INDEX IF NOT EXISTS transcripts_recent
@@ -224,30 +218,6 @@ fn open(app: &AppHandle) -> Result<Connection, String> {
             ON transcripts (recorded_at_ms) WHERE audio_path IS NOT NULL;",
     )
     .map_err(|e| e.to_string())?;
-    // Nullable column added after v0.11.2: the raw transcript as it left ASR,
-    // stored only when AI polish changed it. CREATE TABLE IF NOT EXISTS is a
-    // no-op on an existing table, so the upgrade is this guarded ALTER; the
-    // only expected error is "duplicate column name" on an already-upgraded DB.
-    let _ = conn.execute_batch("ALTER TABLE transcripts ADD COLUMN raw_text BLOB;");
-    // Sharing state (share.rs). Same guarded-ALTER upgrade as raw_text above.
-    // These live on the transcript row rather than in a second store because
-    // the row already IS the record being shared; a parallel index was what the
-    // retired trace subsystem did, and keeping two copies of the same dictation
-    // in sync is the thing that made it worth deleting.
-    let _ = conn.execute_batch(
-        "ALTER TABLE transcripts ADD COLUMN share_state INTEGER NOT NULL DEFAULT 0;",
-    );
-    let _ = conn.execute_batch(
-        "ALTER TABLE transcripts ADD COLUMN share_attempts INTEGER NOT NULL DEFAULT 0;",
-    );
-    let _ = conn.execute_batch(
-        "ALTER TABLE transcripts ADD COLUMN share_next_attempt_ms INTEGER NOT NULL DEFAULT 0;",
-    );
-    let _ = conn.execute_batch("ALTER TABLE transcripts ADD COLUMN shared_at_ms INTEGER;");
-    // The id the server knows this row by. Not the row id: the backend requires
-    // 24 lowercase hex and `new_id` produces 16, while rows imported from the
-    // retired store already carry a 24-hex id that must be preserved.
-    let _ = conn.execute_batch("ALTER TABLE transcripts ADD COLUMN share_trace_id TEXT;");
     conn.execute_batch(
         // An uploaded row deleted locally leaves an obligation to delete the
         // server's copy. It outlives the row, so it cannot live on it.
@@ -269,78 +239,19 @@ fn open(app: &AppHandle) -> Result<Connection, String> {
 }
 
 /// The connection, for `share.rs`. Same reasoning as `open_for_import`.
-#[cfg(any(windows, target_os = "macos"))]
 pub(super) fn open_for_share(app: &AppHandle) -> Result<Connection, String> {
     open(app)
 }
 
 /// Clip path resolution, for `share.rs`.
-#[cfg(any(windows, target_os = "macos"))]
 pub(super) fn clip_path_for_share(app: &AppHandle, relative: &str) -> Result<PathBuf, String> {
     clip_path(app, relative)
 }
 
 /// The per-row AAD grammar, for `share.rs`. Exposed rather than re-derived so
 /// the two cannot drift: a mismatched AAD reads as corruption, not as a bug.
-#[cfg(any(windows, target_os = "macos"))]
 pub(super) fn share_row_aad(uid: &str, id: &str, slot: &str) -> String {
     row_aad(uid, id, slot)
-}
-
-/// The connection, for `import_traces.rs`. Exposed rather than duplicated so
-/// the migration cannot drift from the schema or the busy timeout.
-#[cfg(any(windows, target_os = "macos"))]
-pub(super) fn open_for_import(app: &AppHandle) -> Result<Connection, String> {
-    open(app)
-}
-
-/// Writes one migrated dictation, sealing it exactly as a freshly captured one
-/// is: same AAD grammar, same clip layout, same FLAC encode. `pcm` is None when
-/// the old clip was missing or unreadable, which lands the row as text only -
-/// the same `has_audio: false` state eviction produces.
-#[cfg(any(windows, target_os = "macos"))]
-#[allow(clippy::too_many_arguments)]
-pub(super) fn insert_imported(
-    app: &AppHandle,
-    conn: &Connection,
-    key: &[u8; 32],
-    uid: &str,
-    id: &str,
-    recorded_at_ms: i64,
-    text: &str,
-    duration_ms: i64,
-    pcm: Option<&[i32]>,
-) -> Result<(), String> {
-    let sealed_text = seal(key, text, &row_aad(uid, id, "text"))?;
-    let mut relative: Option<String> = None;
-    let mut audio_bytes: i64 = 0;
-    if let Some(pcm) = pcm {
-        match store_pcm(app, key, uid, id, pcm) {
-            Ok(written) => {
-                relative = Some(clip_relative(id));
-                audio_bytes = written;
-            }
-            Err(error) => warn!("dictation.history: imported clip was not saved: {error}"),
-        }
-    }
-    conn.execute(
-        "INSERT INTO transcripts (
-            uid, id, recorded_at_ms, word_count, duration_ms, text,
-            flagged, audio_path, audio_bytes, raw_text
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, NULL)",
-        params![
-            uid,
-            id,
-            recorded_at_ms,
-            super::usage::word_count(text) as i64,
-            duration_ms,
-            sealed_text,
-            relative,
-            audio_bytes,
-        ],
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(())
 }
 
 /// A 16-character random hex id. Random rather than sequential so a clip's
@@ -537,20 +448,6 @@ fn record(
     sweep(app, &conn, uid)
 }
 
-/// Encodes to FLAC, seals, and writes atomically. Returns the encrypted size,
-/// which is what the audio budget is measured in.
-#[cfg(not(any(windows, target_os = "macos")))]
-fn store_clip(
-    _app: &AppHandle,
-    _key: &[u8; 32],
-    _uid: &str,
-    _id: &str,
-    _samples: &[f32],
-) -> Result<i64, String> {
-    Err(UNAVAILABLE.to_string())
-}
-
-#[cfg(any(windows, target_os = "macos"))]
 fn store_clip(
     app: &AppHandle,
     key: &[u8; 32],
@@ -569,7 +466,6 @@ fn store_clip(
 /// here as f32 through `store_clip`; the trace import arrives with i16-derived
 /// samples it decoded from the old WAV. Both must produce byte-identical
 /// on-disk shape, so neither gets its own copy of this.
-#[cfg(any(windows, target_os = "macos"))]
 fn store_pcm(
     app: &AppHandle,
     key: &[u8; 32],
@@ -603,12 +499,6 @@ pub async fn dictation_history_list(
         return Ok(Vec::new());
     }
     tauri::async_runtime::spawn_blocking(move || {
-        // Migrates the retired trace store on first sight, before anything is
-        // read, so those dictations are simply present rather than being an
-        // opt-in the user has to discover. Idempotent and flag-guarded, so
-        // every later list pays one boolean.
-        #[cfg(windows)]
-        super::import_traces::run_once(&app, &uid);
         let key = load_or_create_key(&app)?;
         let conn = open(&app)?;
         sweep(&app, &conn, &uid)?;
@@ -692,12 +582,6 @@ pub async fn dictation_history_audio(
     .map_err(|e| e.to_string())?
 }
 
-#[cfg(not(any(windows, target_os = "macos")))]
-fn read_clip(_app: &AppHandle, _uid: &str, _id: &str) -> Result<Vec<u8>, String> {
-    Err(UNAVAILABLE.to_string())
-}
-
-#[cfg(any(windows, target_os = "macos"))]
 fn read_clip(app: &AppHandle, uid: &str, id: &str) -> Result<Vec<u8>, String> {
     let key = load_or_create_key(app)?;
     let conn = open(app)?;
@@ -775,25 +659,16 @@ pub async fn dictation_history_delete(
 /// Empties the history for one account, or for every account when `uid` is
 /// absent. Drops the clip tree wholesale rather than file by file.
 #[tauri::command]
-pub async fn dictation_history_clear(app: AppHandle, uid: Option<String>) -> Result<(), String> {
-    if !ENCRYPTION_AVAILABLE {
+pub async fn dictation_history_clear(app: AppHandle, uid: String) -> Result<(), String> {
+    if !ENCRYPTION_AVAILABLE || uid.is_empty() {
         return Ok(());
     }
     tauri::async_runtime::spawn_blocking(move || {
         let conn = open(&app)?;
-        match uid {
-            Some(id) if !id.is_empty() => {
-                let doomed = clip_paths(&conn, Some(&id))?;
-                conn.execute("DELETE FROM transcripts WHERE uid = ?1", params![id])
-                    .map_err(|e| e.to_string())?;
-                remove_clips(&app, &doomed);
-            }
-            _ => {
-                conn.execute("DELETE FROM transcripts", [])
-                    .map_err(|e| e.to_string())?;
-                drop_clip_tree(&app);
-            }
-        }
+        let doomed = clip_paths(&conn, Some(&uid))?;
+        conn.execute("DELETE FROM transcripts WHERE uid = ?1", params![uid])
+            .map_err(|e| e.to_string())?;
+        remove_clips(&app, &doomed);
         Ok(())
     })
     .await
@@ -932,12 +807,6 @@ fn remove_clips(app: &AppHandle, relatives: &[String]) {
     };
     for relative in relatives {
         let _ = std::fs::remove_file(dir.join(relative));
-    }
-}
-
-fn drop_clip_tree(app: &AppHandle) {
-    if let Ok(dir) = dictation_dir(app) {
-        let _ = std::fs::remove_dir_all(dir.join(CLIPS_DIR));
     }
 }
 

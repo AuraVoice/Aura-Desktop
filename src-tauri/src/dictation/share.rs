@@ -22,8 +22,6 @@
 //!    client asserts - so this module is the only thing standing between a
 //!    withdrawn opt-in and an upload.
 
-#![cfg(any(windows, target_os = "macos"))]
-
 use log::{info, warn};
 use rusqlite::{params, Connection};
 use serde::Serialize;
@@ -31,7 +29,7 @@ use sha2::{Digest, Sha256};
 use tauri::AppHandle;
 
 use super::history;
-use super::vocab::load_or_create_key;
+use super::keystore::load_or_create_key;
 use crate::crypto::decrypt_with_aad;
 use crate::sealed_store::unseal;
 use crate::util::now_ms;
@@ -93,29 +91,23 @@ pub struct TraceUploadLease {
     pub inserted_text: String,
     pub final_text: String,
     pub training_text: String,
-    pub edits: Vec<EditOp>,
+    /// Always empty. The backend requires the key (TracePayloadV2 is
+    /// `extra="forbid"`) but the history store records the text before and
+    /// after polish, not the operations between them, so there is nothing to
+    /// put in it and no typed element worth declaring.
+    pub edits: Vec<serde_json::Value>,
     pub label_source: String,
     pub label_quality: String,
     pub normalization_version: u32,
     pub consent_version: u32,
 }
 
-/// Present for wire compatibility. The history store records the text before and
-/// after polish, not the individual operations between them, so this is always
-/// empty today. The backend accepts an empty list.
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct EditOp {
-    pub class: String,
-    pub from: String,
-    pub to: String,
-    pub word_index: u32,
-}
-
+/// What the nightly pump needs to decide whether to do anything at all. The
+/// caller already knows whether sharing is on - it passed that in - so echoing
+/// it back would be a field nothing could learn from.
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SharePumpState {
-    pub sharing: bool,
     pub pending_uploads: i64,
     pub pending_deletions: i64,
 }
@@ -262,7 +254,6 @@ pub fn pump_state(app: &AppHandle, uid: &str, sharing: bool) -> Result<SharePump
         )
         .unwrap_or(0);
     Ok(SharePumpState {
-        sharing,
         pending_uploads,
         pending_deletions,
     })
@@ -543,4 +534,124 @@ pub fn resolve_deletion(app: &AppHandle, uid: &str, trace_id: &str) -> Result<()
     )
     .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+// ---------------------------------------------------------------- commands
+//
+// Every command is `async` (CLAUDE.md, "Main-thread blocking") and pushes its
+// SQLite and crypto work onto the blocking pool: a claim decrypts a transcript
+// and a whole FLAC clip, which is not work for the thread pumping the window's
+// messages.
+
+/// Whether sharing is authorized right now is passed in from React rather than
+/// read here, because the consent record lives in the frontend settings store.
+/// `generalSettings.dictationSharingActive` is the single place that decides
+/// it, version check included.
+#[tauri::command]
+pub async fn dictation_share_pump_state(
+    app: AppHandle,
+    uid: String,
+    sharing: bool,
+) -> Result<SharePumpState, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        if sharing {
+            // Cheap and idempotent: an already-queued row is not re-queued, so
+            // this is what folds a newly-eligible backlog in without needing a
+            // separate "sharing was just switched on" signal.
+            let _ = enqueue_backlog(&app, &uid);
+        }
+        pump_state(&app, &uid, sharing)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn dictation_claim_trace_upload(
+    app: AppHandle,
+    uid: String,
+) -> Result<Option<TraceUploadLease>, String> {
+    tauri::async_runtime::spawn_blocking(move || claim(&app, &uid))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// The FLAC body, raw over IPC so there is no base64 round trip, matching
+/// `dictation_history_audio`.
+#[tauri::command]
+pub async fn dictation_trace_upload_audio(
+    app: AppHandle,
+    uid: String,
+    trace_id: String,
+) -> Result<tauri::ipc::Response, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        audio_body(&app, &uid, &trace_id).map(tauri::ipc::Response::new)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn dictation_resolve_trace_upload(
+    app: AppHandle,
+    uid: String,
+    trace_id: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || resolve(&app, &uid, &trace_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn dictation_fail_trace_upload(
+    app: AppHandle,
+    uid: String,
+    trace_id: String,
+    retryable: bool,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || fail(&app, &uid, &trace_id, retryable))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn dictation_pause_trace_uploads(
+    app: AppHandle,
+    uid: String,
+    blocked_until_ms: i64,
+) -> Result<bool, String> {
+    tauri::async_runtime::spawn_blocking(move || pause_for_quota(&app, &uid, blocked_until_ms))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn dictation_claim_trace_deletion(
+    app: AppHandle,
+    uid: String,
+) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || claim_deletion(&app, &uid))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn dictation_resolve_trace_deletion(
+    app: AppHandle,
+    uid: String,
+    trace_id: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || resolve_deletion(&app, &uid, &trace_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Turning sharing off. Queues a server-side delete for everything already
+/// uploaded and empties the queue: withdrawal has to remove what was sent, not
+/// merely stop sending more.
+#[tauri::command]
+pub async fn dictation_revoke_trace_sharing(app: AppHandle, uid: String) -> Result<usize, String> {
+    tauri::async_runtime::spawn_blocking(move || revoke_all(&app, &uid))
+        .await
+        .map_err(|e| e.to_string())?
 }

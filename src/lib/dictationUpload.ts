@@ -12,19 +12,10 @@ import { auth } from "./firebase";
  * a second one.
  */
 
-/** Wire-compatible with the retired trace uploader: the backend still accepts
- * exactly this shape, and no edit operations are recorded today. */
-export interface EditOp {
-  class: "verbatim" | "casing" | "punctuation" | "disfluency" | "style";
-  from: string;
-  to: string;
-  wordIndex: number;
-}
-
 /** Exactly the metadata body the backend expects. Mirrors Rust's
  * `TraceUploadLease`, which is serialized straight into the request, and the
  * backend's `TracePayloadV2`, which is strict and forbids extra keys. */
-export interface TraceUploadLease {
+interface TraceUploadLease {
   traceId: string;
   schemaVersion: number;
   recordedAtMs: number;
@@ -39,7 +30,9 @@ export interface TraceUploadLease {
   insertedText: string;
   finalText: string;
   trainingText: string;
-  edits: EditOp[];
+  /** Always empty. Required by the backend, which forbids both extra and
+   * missing keys, but nothing records edit operations. */
+  edits: never[];
   labelSource: "observed_field";
   /** The only two labels a client can produce. "human_gold" is reviewer-only,
    * written server-side, so no client can assert its own data is gold. */
@@ -48,14 +41,13 @@ export interface TraceUploadLease {
   consentVersion: number;
 }
 
-export interface SharePumpState {
-  sharing: boolean;
+interface SharePumpState {
   pendingUploads: number;
   pendingDeletions: number;
 }
 
 /** A failed attempt, already classified into "try again later" vs "never". */
-export class TraceUploadError extends Error {
+class TraceUploadError extends Error {
   retryable: boolean;
   quotaResetAtMs: number | null;
 

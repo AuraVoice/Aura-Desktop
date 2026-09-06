@@ -42,17 +42,6 @@ pub const NONCE_LEN: usize = 12;
 /// this into an unconditional re-mint on any unwrap failure.
 const KEY_FILE_MAGIC: &[u8; 8] = b"AURAKW\x02\x00";
 
-/// Whether the key file at `path` predates `KEY_FILE_MAGIC`. On macOS that
-/// means `load_or_create_key_at` is about to discard it, so a feature holding
-/// companion files that cannot survive a failed decrypt (dictation's
-/// vocabulary, say) can drop them in the same breath.
-pub fn is_legacy_wrapped(path: &Path) -> bool {
-    match std::fs::read(path) {
-        Ok(stored) => !stored.starts_with(KEY_FILE_MAGIC),
-        Err(_) => false,
-    }
-}
-
 /// Loads the AES-256 key at `path`, minting and wrapping a fresh one on first
 /// use. A wrapped blob that no longer unwraps fails closed rather than being
 /// replaced: swapping the key would make everything sealed under it
