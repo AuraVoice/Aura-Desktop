@@ -105,11 +105,9 @@ function sourceDomain(source: ResearchActivitySource): string {
   return source.domain || domainFromUrl(source.finalUrl || source.url);
 }
 
-function SourceMark({ domain, small = false }: { domain: string; small?: boolean }) {
+function SourceMark({ domain, small = false, size, radius }: { domain: string; small?: boolean; size?: number; radius?: string }) {
   const clean = domain.replace(/^www\./, "");
-  return small
-    ? <SiteIcon host={clean} size={26} radius="7px" letters={1} />
-    : <SiteIcon host={clean} size={34} radius="9px" letters={1} />;
+  return <SiteIcon host={clean} size={size ?? (small ? 26 : 34)} radius={radius ?? (small ? "7px" : "9px")} letters={1} />;
 }
 
 function isLegacyParked(run: ResearchRun): boolean {
@@ -124,10 +122,14 @@ function isLegacyParked(run: ResearchRun): boolean {
   );
 }
 
-function researchTitle(run: ResearchRun): string {
+function researchHeadline(run: ResearchRun): string {
   const normalized = (run.plan.objective || run.request).replace(/\s+/g, " ").trim();
   const scopeBoundary = normalized.search(/\bresearch requirements?:/i);
-  const title = scopeBoundary > 0 ? normalized.slice(0, scopeBoundary).trim() : normalized;
+  return scopeBoundary > 0 ? normalized.slice(0, scopeBoundary).trim() : normalized;
+}
+
+function researchTitle(run: ResearchRun): string {
+  const title = researchHeadline(run);
   if (title.length <= 110) return title;
   const clipped = title.slice(0, 110);
   const wordBoundary = clipped.lastIndexOf(" ");
@@ -259,7 +261,7 @@ function ResearchActivityView({ run, activity }: { run: ResearchRun; activity: R
                         disabled={!target}
                         onClick={() => target && void openUrl(target).catch((err) => logError("ResearchPage: open live source", err))}
                       >
-                        <SourceMark domain={domain} />
+                        <SourceMark domain={domain} size={28} radius="8px" />
                         <span className="db-research-source-copy">
                           <strong>{source.title || domain}</strong>
                           <small>{domain} · {source.sourceClass.replace(/_/g, " ")}</small>
@@ -338,31 +340,34 @@ function PendingQuestionCard({ run, busy, onAnswer }: { run: ResearchRun; busy: 
         <span className="db-research-section-kicker">Needs your answer</span>
         <h2>{text}</h2>
         <p>The research is paused until you answer. Pick an option, type your own, or let Buddy proceed on the stated assumptions.</p>
-        {choices.length > 0 && (
-          <div className="db-research-plan-list">
-            {choices.map((choice, index) => (
-              <div key={choice}>
-                <span>{index + 1}</span>
-                <button type="button" className="db-research-secondary" disabled={busy} onClick={() => onAnswer(choice)}>{choice}</button>
-              </div>
-            ))}
+        <div className="db-research-plan-list">
+          {choices.map((choice, index) => (
+            <div key={choice}>
+              <span>{index + 1}</span>
+              <button type="button" className="db-research-secondary" disabled={busy} onClick={() => onAnswer(choice)}>{choice}</button>
+            </div>
+          ))}
+          <div className="db-research-choice-custom">
+            <span>{choices.length + 1}</span>
+            <div>
+              <input
+                type="text"
+                className="db-research-choice-input"
+                value={customAnswer}
+                placeholder="Type your own answer"
+                aria-label="Type your own answer"
+                disabled={busy}
+                onChange={(event) => setCustomAnswer(event.target.value)}
+                onKeyDown={(event) => {
+                  // busy must gate here too: a held Enter can fire again before
+                  // React re-renders the disabled attribute, double-POSTing the
+                  // answer.
+                  if (event.key === "Enter" && !busy && customAnswer.trim()) onAnswer(customAnswer.trim());
+                }}
+              />
+              {customAnswer.trim() !== "" && <button type="button" className="db-research-primary" disabled={busy} onClick={() => onAnswer(customAnswer.trim())}>Answer</button>}
+            </div>
           </div>
-        )}
-        <div className="db-research-command">
-          <input
-            type="text"
-            value={customAnswer}
-            placeholder="Or type an answer"
-            disabled={busy}
-            onChange={(event) => setCustomAnswer(event.target.value)}
-            onKeyDown={(event) => {
-              // busy must gate here too: a held Enter can fire again before
-              // React re-renders the disabled attribute, double-POSTing the
-              // answer.
-              if (event.key === "Enter" && !busy && customAnswer.trim()) onAnswer(customAnswer.trim());
-            }}
-          />
-          <button type="button" className="db-research-primary" disabled={busy || !customAnswer.trim()} onClick={() => onAnswer(customAnswer.trim())}>Answer</button>
         </div>
         {defaults.length > 0 && (
           <div className="db-research-assumptions">
@@ -577,7 +582,11 @@ function ResearchDetail({ runId, onBack, onChanged, onNewRequest }: { runId: str
   if (resource.loading) return <div className="db-research-detail-skeleton" aria-label="Loading research"><span /><span /><span /></div>;
   if (!run) return <PageError authExpired={resource.authExpired} onRetry={resource.reload} />;
   const legacyParked = isLegacyParked(run);
-  const title = researchTitle(run);
+  const title = researchHeadline(run);
+  // The header already prints the whole headline, so the disclosure only earns
+  // its place when the request carries something the headline dropped: a plan
+  // objective that restates it, or a "research requirements:" tail.
+  const originalRequest = run.request.replace(/\s+/g, " ").trim();
 
   return (
     <div className="db-page db-page-wide db-research-page">
@@ -591,7 +600,7 @@ function ResearchDetail({ runId, onBack, onChanged, onNewRequest }: { runId: str
       </div>
 
       <header className="db-research-run-head">
-        <div>{runStatus(run)}<h1 title={title}>{title}</h1><p>Requested {shortDateTime(run.createdAt)}</p>{title !== run.request.trim() && <details className="db-research-original-request"><summary>Original request</summary><p>{run.request}</p></details>}</div>
+        <div>{runStatus(run)}<h1 title={title}>{title}</h1><p>Requested {shortDateTime(run.createdAt)}</p>{originalRequest !== title && <details className="db-research-original-request"><summary>Original request</summary><p>{run.request}</p></details>}</div>
         {terminalStates.has(run.state) && <div className="db-research-run-summary"><span><strong>{run.sourceCount}</strong> sources</span><span><strong>{run.claimCount}</strong> claims</span></div>}
       </header>
 

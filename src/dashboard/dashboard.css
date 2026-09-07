@@ -2167,46 +2167,31 @@
 .db-research-run-summary {
   gap: 9px;
 }
-/* Glass pill, same recipe as `.db-research-starters button` further up. The
-   sheen needs the element to be a positioned, clipping box. */
+/* Navigation, not an action: plain text and a glyph, no glass box. The 44px
+   hit area from the shared button rule above is kept. */
 .db-research-back {
-  position: relative;
-  overflow: hidden;
-  padding: 0 18px;
-  border: 1px solid rgba(255, 255, 255, 0.82);
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
+  padding: 0 2px;
+  border: 0;
+  background: none;
   color: var(--research-ink);
-  -webkit-backdrop-filter: blur(18px) saturate(1.2);
-  backdrop-filter: blur(18px) saturate(1.2);
-}
-.db-research-back::after {
-  position: absolute;
-  z-index: 1;
-  top: -130%;
-  left: -42%;
-  width: 28%;
-  height: 360%;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    rgba(255, 255, 255, 0.12),
-    rgba(255, 255, 255, 0.72),
-    rgba(255, 255, 255, 0.12),
-    transparent
-  );
-  content: "";
-  pointer-events: none;
-  transform: translate3d(-220%, -28%, 0) rotate(-24deg);
 }
 .db-research-back:hover {
-  border-color: rgba(255, 255, 255, 0.92);
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.94), rgba(232, 244, 241, 0.66));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 8px 20px rgba(63, 86, 78, 0.09);
   color: var(--research-teal-dark);
 }
-.db-research-back:hover::after {
-  animation: db-glass-sheen 740ms cubic-bezier(0.22, 1, 0.36, 1);
+/* Same reasoning for the cancel control: it sits next to the plain-text
+   refresh state, so it reads as text rather than a second pill on this bar. */
+.db-research-detail-tools .db-research-secondary {
+  padding: 0 10px;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  color: #68746f;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+.db-research-detail-tools .db-research-secondary:hover:not(:disabled) {
+  background: none;
+  color: var(--research-ink);
 }
 /* The overflow trigger is the least important control on this bar, so it gets
    no resting box at all: just the glyph, with a translucent disc on hover. It
@@ -2244,7 +2229,7 @@
   letter-spacing: -0.025em;
   line-height: 1.25;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 3;
 }
 .db-research-run-head p {
   margin-top: 8px;
@@ -2347,6 +2332,10 @@
 .db-research-legacy > .db-research-primary {
   flex-shrink: 0;
 }
+.db-research-question h2 {
+  font-size: 15px;
+  line-height: 1.35;
+}
 .db-research-scope-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.55fr) minmax(280px, 0.65fr);
@@ -2394,6 +2383,39 @@
   padding-top: 3px;
   font-size: 15px;
   line-height: 1.5;
+}
+/* The clarification list holds pills, not paragraphs, so the number sits
+   centred against its pill instead of top-aligned to a first text line. */
+.db-research-question .db-research-plan-list > div {
+  align-items: center;
+}
+.db-research-question .db-research-choice-custom > div {
+  display: flex;
+  min-width: 0;
+  gap: 10px;
+  align-items: center;
+}
+.db-research-choice-input {
+  min-width: 0;
+  min-height: 44px;
+  flex: 1;
+  padding: 0 20px;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  border-radius: 999px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
+  color: var(--research-ink);
+  font-size: 14px;
+  font-weight: 650;
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  backdrop-filter: blur(18px) saturate(1.2);
+}
+.db-research-choice-input::placeholder {
+  color: #7c8783;
+  font-weight: 600;
+}
+.db-research-choice-custom .db-research-primary {
+  flex-shrink: 0;
 }
 .db-research-assumptions {
   display: flex;
@@ -2656,13 +2678,22 @@
   display: none;
 }
 .db-research-query-icon {
+  position: relative;
   display: grid;
   width: 32px;
   height: 32px;
   place-items: center;
-  border-radius: 9px;
-  background: rgba(71, 211, 180, 0.12);
   color: #63dabe;
+}
+.db-research-query-icon::before {
+  position: absolute;
+  inset: 1px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(74, 205, 175, 0.2), transparent 68%);
+  content: "";
+}
+.db-research-query-icon svg {
+  position: relative;
 }
 .db-research-query summary > span:nth-child(2) {
   display: flex;
@@ -2704,8 +2735,8 @@
 .db-research-source-row {
   display: grid;
   width: 100%;
-  min-height: 58px;
-  grid-template-columns: 34px minmax(0, 1fr) auto 16px;
+  min-height: 54px;
+  grid-template-columns: 28px minmax(0, 1fr) auto 16px;
   align-items: center;
   gap: 10px;
   padding: 8px 9px;
@@ -2719,6 +2750,27 @@
 }
 .db-research-source-row:hover {
   background: rgba(255, 255, 255, 0.045);
+}
+.db-research-source-row > svg {
+  color: #8aa49b;
+  opacity: 0.55;
+  transition: opacity 0.15s var(--db-ease), transform 0.15s var(--db-ease);
+}
+.db-research-source-row:hover > svg {
+  opacity: 1;
+  transform: translate(1px, -1px);
+}
+/* A favicon that ships its own coloured square would otherwise fill the whole
+   tile and read as a solid block against the dark card, so the artwork is
+   inset and the tile keeps its own rounding. The white tile stays: plenty of
+   favicons are dark glyphs on transparency and would vanish on a dark one.
+   :not(.is-mark) leaves the coloured monogram fallback alone. */
+.db-research-source-row .db-site-icon:not(.is-mark) {
+  padding: 3px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.28);
+}
+.db-research-source-row .db-site-icon img {
+  border-radius: 5px;
 }
 /* Source favicon, shared by the Research and Interview pages (SiteIcon.tsx).
    The bytes arrive from site_icons.rs as a blob URL because the CSP blocks
@@ -2977,18 +3029,14 @@
   transition: height 0.18s var(--db-ease);
 }
 .db-research-report-nav > button:hover {
-  background: rgba(255, 255, 255, 0.62);
   color: var(--research-ink);
 }
+/* The teal rule and the weight carry the active item; a glass pill around a
+   list of four words was more box than the state needed. */
 .db-research-report-nav > button.is-active {
-  border: 1px solid rgba(255, 255, 255, 0.82);
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 4px 12px rgba(63, 86, 78, 0.06);
   color: var(--research-teal-dark);
   font-size: 13.5px;
   font-weight: 750;
-  -webkit-backdrop-filter: blur(18px) saturate(1.2);
-  backdrop-filter: blur(18px) saturate(1.2);
 }
 .db-research-report-nav > button.is-active::before {
   height: 16px;
@@ -3011,7 +3059,7 @@
   margin-top: 11px;
   color: #26342f;
   font-family: var(--font-title, sans-serif);
-  font-size: 21px;
+  font-size: 15px;
   line-height: 1.55;
 }
 .db-research-report-meta {
@@ -3035,13 +3083,13 @@
 .db-research-report-section h2,
 .db-research-report-gaps h2,
 .db-research-report-sources h2 {
-  font-size: 23px;
+  font-size: 16px;
   letter-spacing: -0.025em;
 }
 .db-research-report-section p {
   margin-top: 13px;
   color: #394740;
-  font-size: 16px;
+  font-size: 14px;
   line-height: 1.75;
 }
 /* min-width, not width: source numbers run past 9 on a well-sourced brief and a
