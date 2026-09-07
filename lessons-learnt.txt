@@ -1,3 +1,27 @@
+2026-09-07  Research paywall dialog shipped with an invisible primary button
+
+Problem: the free-plan deep research dialog rendered its "See plans" button as a blank
+white pill (white text on the white glass panel), and a long saved question showed a
+half-sliced fourth line that could not be scrolled.
+
+Issue: two CSS traps. (1) .db-research-primary paints with var(--research-teal-dark),
+but those tokens are defined on .db-research-page, and DetailModal portals the dialog
+into .db-app, outside that subtree. The var() resolved to nothing, the background and
+border declarations became invalid at computed-value time and fell back to transparent,
+leaving only the literal box-shadow visible. The teal glyph went dark for the same
+reason, which made it look intentional. (2) .db-research-paywall-echo combined
+-webkit-line-clamp with vertical padding; overflow:hidden clips at the padding box, so
+the first clipped line leaked into the bottom padding as a sliced-off line of text.
+
+Solution: define the research tokens on .db-research-paywall itself, and replace the
+line clamp with max-height + overflow-y auto (the .db-app scrollbar rule keeps it
+chromeless).
+
+Justification: CLAUDE.md already warns that portaled elements lose the --db-* tokens;
+the same rule applies to any PAGE-scoped token family. Reusing a page-scoped class
+(.db-research-primary) inside a portal silently drops every var() it depends on, and
+line-clamp is only safe on elements with zero vertical padding or on an inner wrapper.
+
 2026-09-03  macOS dictation logged "Inserted" while the user's field received nothing
 
 Problem: on macOS every dictation transcribed fine, the log said

@@ -15,19 +15,16 @@ const HEADING = "Deep research is part of a paid plan";
  * dismissal, focus restore, and the exit animation. Only the panel's surface differs, via
  * the `panelClassName` hook DetailModal exposes for exactly this.
  *
- * `question` is echoed rather than discarded: the caller does NOT clear the composer when
- * it opens this, so deciding to upgrade never costs the user their typed question. */
+ * The typed question is deliberately NOT echoed in the dialog; the caller does not clear
+ * the composer when it opens this, so the question is still sitting there behind it. */
 export function ResearchPaywallDialog({
   open,
-  question,
   onClose,
 }: {
   open: boolean;
-  question: string;
   onClose: () => void;
 }) {
   const navigate = useNavigate();
-  const trimmed = question.trim();
 
   // Close FIRST. /billing is a settings route, and DashboardApp keeps the page underneath
   // mounted while the settings dialog is open (`<Routes location={settingsOpen ? mainPath
@@ -49,9 +46,6 @@ export function ResearchPaywallDialog({
         <span className="db-research-paywall-glyph" aria-hidden="true"><Telescope size={30} /></span>
         <h2>{HEADING}</h2>
         <p>Buddy reads real sources and cites every claim, which costs money to run. Your question is saved right here while you decide.</p>
-        {trimmed && (
-          <p className="db-research-paywall-echo" title={trimmed}>{trimmed}</p>
-        )}
         <div className="db-research-paywall-actions">
           <button type="button" className="db-research-primary" onClick={seePlans}>See plans</button>
           <button type="button" className="db-research-paywall-dismiss" onClick={onClose}>Not now</button>

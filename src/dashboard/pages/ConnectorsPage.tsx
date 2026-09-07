@@ -1,6 +1,6 @@
-import { RefreshCw } from "lucide-react";
+import { Check, CircleAlert, LoaderCircle, RefreshCw } from "lucide-react";
 import type { ComponentType } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type {
   GmailConnectorStatus,
   GoogleCalendarConnectorStatus,
@@ -12,6 +12,7 @@ import {
   NotionBrandIcon,
   SlackBrandIcon,
 } from "../components/connectorBrandIcons";
+import { DetailModal } from "../components/DetailModal";
 import {
   useConnectors,
   type ConnectorBanner,
@@ -45,6 +46,16 @@ export function ConnectorsPage() {
   // like a frozen screen.
   const busy = connectors.loading
     || (connectors.action !== null && !connectors.awaitingBrowser);
+  const banner = connectors.banner;
+  const clearBanner = connectors.clearBanner;
+
+  // Success sits center-screen now, so it dismisses itself; errors stay until
+  // the user closes them, and info lives only as long as the work it narrates.
+  useEffect(() => {
+    if (banner?.tone !== "success") return;
+    const timer = setTimeout(clearBanner, 4_000);
+    return () => clearTimeout(timer);
+  }, [banner, clearBanner]);
 
   return (
     <div className="db-page db-connectors-page">
@@ -118,63 +129,96 @@ export function ConnectorsPage() {
             }}
           />
 
-          {confirmDisconnect && (
-            <div
-              className="db-connector-banner is-confirm"
-              role="alertdialog"
-              aria-labelledby="connector-disconnect-title"
-            >
-              <div>
-                <strong id="connector-disconnect-title">Leave Buddy hanging?</strong>
-                <p>
-                  Are you sure you want to disconnect{" "}
-                  {confirmDisconnect === "calendar"
-                    ? "Google Calendar"
-                    : confirmDisconnect === "notion"
-                      ? "Notion"
-                      : "Gmail"}?
-                  Buddy will stop using it, but you can reconnect anytime.
-                </p>
-              </div>
-              <div className="db-connector-banner-actions">
-                <button
-                  type="button"
-                  className="db-secondary-btn"
-                  onClick={() => setConfirmDisconnect(null)}
-                >
-                  Keep connected
-                </button>
-                <button
-                  type="button"
-                  className="db-primary-btn"
-                  onClick={() => {
-                    const target = confirmDisconnect;
-                    setConfirmDisconnect(null);
-                    if (target === "calendar") {
-                      void connectors.disableCalendar();
-                    } else if (target === "notion") {
-                      void connectors.disableNotion();
-                    } else {
-                      void connectors.disableGmail();
-                    }
-                  }}
-                >
-                  Disconnect
-                </button>
-              </div>
-            </div>
-          )}
-
-          {confirmDisconnect === null && connectors.banner && (
-            <ActionBanner banner={connectors.banner} />
-          )}
-
           {COMING_SOON_CONNECTORS.map((connector) => (
             <ComingSoonConnector key={connector.id} {...connector} />
           ))}
         </section>
       )}
+
+      <DetailModal
+        open={confirmDisconnect !== null}
+        title="Leave Buddy hanging?"
+        onClose={() => setConfirmDisconnect(null)}
+        panelClassName="db-connector-dialog"
+      >
+        <div className="db-connector-dialog-body is-confirm">
+          <div>
+            <strong>Leave Buddy hanging?</strong>
+            <p>
+              Are you sure you want to disconnect{" "}
+              {confirmDisconnect === "calendar"
+                ? "Google Calendar"
+                : confirmDisconnect === "notion"
+                  ? "Notion"
+                  : "Gmail"}?
+              Buddy will stop using it, but you can reconnect anytime.
+            </p>
+          </div>
+          <div className="db-connector-dialog-actions">
+            <button
+              type="button"
+              className="db-secondary-btn"
+              onClick={() => setConfirmDisconnect(null)}
+            >
+              Keep connected
+            </button>
+            <button
+              type="button"
+              className="db-primary-btn"
+              onClick={() => {
+                const target = confirmDisconnect;
+                setConfirmDisconnect(null);
+                if (target === "calendar") {
+                  void connectors.disableCalendar();
+                } else if (target === "notion") {
+                  void connectors.disableNotion();
+                } else {
+                  void connectors.disableGmail();
+                }
+              }}
+            >
+              Disconnect
+            </button>
+          </div>
+        </div>
+      </DetailModal>
+
+      <StatusDialog
+        banner={confirmDisconnect === null ? banner : null}
+        onClose={clearBanner}
+      />
     </div>
+  );
+}
+
+/** Centered status dialog for connector activity. Dismissing it only hides the
+ * message: any enable/disable in flight, and the browser OAuth wait, carry on
+ * exactly as they did when this was a passive banner at the foot of the list. */
+function StatusDialog({
+  banner,
+  onClose,
+}: {
+  banner: ConnectorBanner | null;
+  onClose: () => void;
+}) {
+  return (
+    <DetailModal
+      open={banner !== null}
+      title="Connector status"
+      onClose={onClose}
+      panelClassName="db-connector-dialog"
+    >
+      {banner && (
+        <div className={`db-connector-dialog-body is-${banner.tone}`}>
+          <span className="db-connector-dialog-icon" aria-hidden>
+            {banner.tone === "info" && <LoaderCircle size={20} className="db-connector-dialog-spinner" />}
+            {banner.tone === "success" && <Check size={20} />}
+            {banner.tone === "error" && <CircleAlert size={20} />}
+          </span>
+          <p role={banner.tone === "error" ? "alert" : "status"}>{banner.message}</p>
+        </div>
+      )}
+    </DetailModal>
   );
 }
 
@@ -382,17 +426,6 @@ function ComingSoonConnector({
       </div>
       <span className="db-connector-coming-soon">Coming soon</span>
     </article>
-  );
-}
-
-function ActionBanner({ banner }: { banner: ConnectorBanner }) {
-  return (
-    <div
-      className={`db-connector-banner is-${banner.tone}`}
-      role={banner.tone === "error" ? "alert" : "status"}
-    >
-      <p>{banner.message}</p>
-    </div>
   );
 }
 

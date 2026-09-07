@@ -395,6 +395,13 @@ export function useConnectors(): ConnectorsState {
     failedMessage: "Notion stayed connected because the disconnect did not finish. Try again.",
   }), [runAction, applyNotion]);
 
+  // Stable identity: the page keys its success auto-close timer on this, and a
+  // per-render closure would restart that timer on every catalog poll.
+  const clearBanner = useCallback(() => {
+    clearBannerTimer();
+    setBanner(null);
+  }, [clearBannerTimer]);
+
   const handleOAuthCompletion = useCallback(async (rawUrl: string) => {
     const completion = parseConnectorOAuthCompletion(rawUrl);
     if (!completion || handledAttemptsRef.current.has(completion.attemptId)) return;
@@ -495,9 +502,6 @@ export function useConnectors(): ConnectorsState {
     disableGmail: disableGmailConnector,
     enableNotion: enableNotionConnector,
     disableNotion: disableNotionConnector,
-    clearBanner: () => {
-      clearBannerTimer();
-      setBanner(null);
-    },
+    clearBanner,
   };
 }

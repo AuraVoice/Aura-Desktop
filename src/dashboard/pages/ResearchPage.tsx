@@ -742,7 +742,7 @@ export function ResearchPage() {
 
       {startError && <div className="db-research-inline-error"><CircleAlert size={17} /><span>{startError}</span><button type="button" onClick={() => setStartError("")}>Dismiss</button></div>}
 
-      <ResearchPaywallDialog open={paywallOpen} question={request} onClose={() => setPaywallOpen(false)} />
+      <ResearchPaywallDialog open={paywallOpen} onClose={() => setPaywallOpen(false)} />
 
       {activeRuns.length > 0 && (
         <section className="db-research-active-runs">
