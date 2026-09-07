@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -1322,6 +1322,7 @@ export function InterviewPage() {
   const researchPanelTimer = useRef<number | null>(null);
   const persistenceRevision = useRef(0);
   const tabTransitionTimer = useRef<number | null>(null);
+  const tabsRef = useRef<HTMLDivElement | null>(null);
   const workspaceRef = useRef(workspace);
   workspaceRef.current = workspace;
   const currentInterview = workspace.interviews.find(
@@ -1430,6 +1431,25 @@ export function InterviewPage() {
     }, 300);
     return () => window.clearTimeout(timer);
   }, [persistenceReady, uid, workspace]);
+
+  // The tab pill is one sliding highlight, and the tabs are auto-width, so the
+  // highlight's position and width have to be measured rather than derived from
+  // an equal-track formula. Written straight onto the node so a resize or a font
+  // swap never costs a React render.
+  useLayoutEffect(() => {
+    const strip = tabsRef.current;
+    if (!strip) return;
+    const measure = () => {
+      const active = strip.querySelector<HTMLElement>("button.is-active");
+      if (!active) return;
+      strip.style.setProperty("--tab-x", `${active.offsetLeft - strip.clientLeft}px`);
+      strip.style.setProperty("--tab-w", `${active.offsetWidth}px`);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(strip);
+    return () => observer.disconnect();
+  }, [tab, history.length]);
 
   useEffect(() => () => {
     if (tabTransitionTimer.current !== null) window.clearTimeout(tabTransitionTimer.current);
@@ -1701,7 +1721,7 @@ export function InterviewPage() {
         )}
       </header>
 
-      <div className="db-interview-tabs" role="tablist" aria-label="Interview workspace" data-active={tab}>
+      <div className="db-interview-tabs" role="tablist" aria-label="Interview workspace" data-active={tab} ref={tabsRef}>
         <button
           type="button"
           id="interview-current-tab"
@@ -1711,7 +1731,7 @@ export function InterviewPage() {
           className={tab === "current" ? "is-active" : ""}
           onClick={() => switchTab("current")}
         >
-          <BriefcaseBusiness size={15} aria-hidden />
+          <BriefcaseBusiness size={17} aria-hidden />
           Current interview
         </button>
         <button
@@ -1723,7 +1743,7 @@ export function InterviewPage() {
           className={tab === "preparation" ? "is-active" : ""}
           onClick={() => switchTab("preparation")}
         >
-          <FileText size={15} aria-hidden />
+          <FileText size={17} aria-hidden />
           Preparation
           <span>{history.length}</span>
         </button>
@@ -1736,7 +1756,7 @@ export function InterviewPage() {
           className={tab === "sessions" ? "is-active" : ""}
           onClick={() => switchTab("sessions")}
         >
-          <History size={15} aria-hidden />
+          <History size={17} aria-hidden />
           Sessions
         </button>
       </div>
