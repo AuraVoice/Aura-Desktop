@@ -315,7 +315,8 @@ export function useConnectors(): ConnectorsState {
       "Notion is connected. Say where something on your screen should go and Buddy saves it there.",
     enableFailedMessage: "Notion could not connect just now. Nothing changed, so you can try again.",
     openingMessage: "Opening Notion so you can connect securely.",
-    waitingMessage: "Finish connecting Notion in your browser. Aura will reopen here when it is done.",
+    waitingMessage:
+      "In your browser, use Add pages and databases to pick your top-level pages. Notion only shares what you tick, and Aura reopens here when it is done.",
     openFailedMessage: "The secure Notion page could not open. Nothing changed, so you can try again.",
   }), [runEnable, applyNotion]);
 

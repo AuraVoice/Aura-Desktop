@@ -335,6 +335,16 @@ function NotionConnectorRow({
               : notion.lastError}
           </p>
         )}
+        {(connected || !notion?.lastError) && (
+          // Notion grants an integration a SET OF PAGES, never the workspace,
+          // so a user who ticks nothing on Notion's picker still lands on a
+          // green row whose every save silently resolves to nothing.
+          <p className="db-connector-hint">
+            {connected
+              ? "Aura can reach the pages you picked and anything inside them. A new top-level page has to be added from Notion's Connections menu."
+              : "Notion only shares the pages you tick. Choose your top-level pages there so Aura can reach everything inside them."}
+          </p>
+        )}
       </div>
       <div className="db-connector-row-controls">
         <ConnectorSwitch
