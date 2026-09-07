@@ -190,10 +190,16 @@ pub(super) fn open(app: &AppHandle) -> Result<Connection, String> {
     )
     .map_err(|e| e.to_string())?;
     conn.execute_batch(
-        // One canonical schema. There are no installs whose on-disk shape
-        // predates it, so there is nothing to migrate and no guarded ALTER to
-        // swallow a genuine error (a locked database reads exactly like a
-        // duplicate column when the result is discarded).
+        // One canonical schema for fresh installs. Tables written by earlier
+        // builds are brought forward by add_missing_transcript_columns below:
+        // CREATE TABLE IF NOT EXISTS no-ops on an existing table, so a database
+        // from a release that predates the share_* columns otherwise keeps its
+        // old shape and the partial index on share_state fails, taking every
+        // history command down with it. The migration consults
+        // pragma_table_info first, so a genuine ALTER failure still surfaces
+        // instead of being swallowed by a blindly-guarded batch (a locked
+        // database reads exactly like a duplicate column when the result is
+        // discarded).
         //
         // The share_* columns live on the transcript row rather than in a
         // second store because the row already IS the record being shared. A
@@ -243,6 +249,7 @@ pub(super) fn open(app: &AppHandle) -> Result<Connection, String> {
             ON transcripts (uid, recorded_at_ms) WHERE audio_path IS NOT NULL;",
     )
     .map_err(|e| e.to_string())?;
+    add_missing_transcript_columns(&conn)?;
     conn.execute_batch(
         // An uploaded row deleted locally leaves an obligation to delete the
         // server's copy. It outlives the row, so it cannot live on it.
@@ -290,6 +297,51 @@ pub(super) fn open(app: &AppHandle) -> Result<Connection, String> {
     )
     .map_err(|e| e.to_string())?;
     Ok(conn)
+}
+
+/// Columns added to `transcripts` after the first shipped schema, declared
+/// exactly as the canonical CREATE TABLE above declares them. ADD COLUMN gives
+/// every pre-existing row the DEFAULT, and those defaults are the safe ones:
+/// share_state 0 keeps old dictations ineligible for upload (sharing is a
+/// property observed at capture time, which nobody observed for them), while
+/// shareable 1 only matters once the pump itself marks a row pending.
+const ADDED_TRANSCRIPT_COLUMNS: &[(&str, &str)] = &[
+    ("raw_text", "raw_text BLOB"),
+    ("shareable", "shareable INTEGER NOT NULL DEFAULT 1"),
+    ("audio_sha256", "audio_sha256 TEXT"),
+    ("share_state", "share_state INTEGER NOT NULL DEFAULT 0"),
+    ("share_attempts", "share_attempts INTEGER NOT NULL DEFAULT 0"),
+    (
+        "share_next_attempt_ms",
+        "share_next_attempt_ms INTEGER NOT NULL DEFAULT 0",
+    ),
+    ("shared_at_ms", "shared_at_ms INTEGER"),
+    ("share_trace_id", "share_trace_id TEXT"),
+];
+
+/// Brings a table created by an older build up to the canonical shape. Reads
+/// the live column list first and alters only what is missing, so this is a
+/// no-op on a current database and a genuine ALTER failure still propagates.
+fn add_missing_transcript_columns(conn: &Connection) -> Result<(), String> {
+    let mut statement = conn
+        .prepare("SELECT name FROM pragma_table_info('transcripts')")
+        .map_err(|e| e.to_string())?;
+    let existing = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<std::collections::HashSet<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    for (name, declaration) in ADDED_TRANSCRIPT_COLUMNS {
+        if existing.contains(*name) {
+            continue;
+        }
+        conn.execute(
+            &format!("ALTER TABLE transcripts ADD COLUMN {declaration}"),
+            [],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 /// A 16-character random hex id. Random rather than sequential so a clip's

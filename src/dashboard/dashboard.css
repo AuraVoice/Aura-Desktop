@@ -7475,6 +7475,12 @@
 }
 /* CopyButton's compact variant is normally pinned to a corner; inside the
    row it is one item in the cluster like any other. */
+/* The stop square while a clip is playing. Lucide draws stroke-only, which read
+   as an empty box with no affordance; a solid red block says "this stops it". */
+.db-dictation-stop {
+  fill: #d0453c;
+  stroke: none;
+}
 .db-dictation-actions .db-copy-compact {
   position: static;
   width: 30px;

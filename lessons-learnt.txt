@@ -1,3 +1,32 @@
+2026-09-07  Dictation history failed to load on any database created before the share columns
+
+Problem: the Dictation page showed "couldn't load this right now" in a dev build while
+the installed release worked fine on the same machine, which made it look like a data
+sync or account problem. The log showed the real failure: every history command errored
+with "no such column: share_state" while creating the transcripts_share_queue index.
+
+Issue: history.rs's open() declared "one canonical schema" on the grounds that no
+install's on-disk shape predated it, and used CREATE TABLE IF NOT EXISTS with no
+migration path. That premise expired the moment a release shipped: the installed build
+created transcripts without the share_* columns, IF NOT EXISTS silently kept the old
+shape, and the partial index on share_state then failed, taking list/settings/all of
+open() down with it. Dev vs release only differed in which schema each binary expected;
+the same error was waiting for every beta user on the next release update.
+
+Solution: add_missing_transcript_columns() runs between the CREATE TABLE and the index
+batch. It reads pragma_table_info into a set and ALTERs in only the missing columns
+with the canonical declarations, so it is a no-op on current databases and a genuine
+ALTER failure still propagates (no blindly-guarded batch swallowing errors). Old rows
+get share_state 0 (ineligible for upload) and shareable 1, matching capture-time
+semantics.
+
+Justification: "no installs predate this schema" is a claim with an expiry date, and
+the expiry is the first release. Any CREATE TABLE IF NOT EXISTS schema that later
+grows a column needs a migration step the same day the column is added, and the
+pragma_table_info-then-ALTER shape keeps the original objection to guarded ALTERs
+satisfied. Also: an error that appears only in dev is not evidence the cause is dev
+tooling; here dev was simply the first binary with the newer schema to touch the file.
+
 2026-09-07  Research paywall dialog shipped with an invisible primary button
 
 Problem: the free-plan deep research dialog rendered its "See plans" button as a blank

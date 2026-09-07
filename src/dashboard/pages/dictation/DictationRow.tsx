@@ -91,7 +91,7 @@ export const DictationRow = memo(function DictationRow({
           {playback === "loading" ? (
             <Loader2 size={17} className="db-spin" />
           ) : playback === "playing" ? (
-            <Square size={16} />
+            <Square size={16} className="db-dictation-stop" />
           ) : (
             <Play size={17} />
           )}
