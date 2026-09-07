@@ -31,9 +31,9 @@ Check here before assuming anything about either.
 screenshots (`xcap`), Guide Mode (slower, no DXGI fast path), updater, autostart, deep links,
 plain notifications, atomic writes, dashboard data pages, at-rest encryption, the encrypted
 stores built on it (chat cache, interview sessions, saved images, screenshot store), the
-dictation ASR socket, dictation's vocabulary/consent/credential/usage/polish/history modules,
-the meeting engine, segment queue and evidence store, and the whole capture broker above its
-device layer.
+dictation ASR socket, dictation's keystore/consent/credential/scoped-token/share/usage/
+polish/history modules, the meeting engine, segment queue and evidence store, and the
+whole capture broker above its device layer.
 
 **Modules with a platform SEAM (both sides real, seam inside the owning file):**
 `crypto.rs` (`keywrap`), `audio_capture.rs` (`backend`: WASAPI vs a Core Audio process tap),
@@ -43,8 +43,8 @@ SendInput vs CGEvent), `dictation/hud.rs` (`sync_activation`, `target_center`),
 (`scan`: EnumWindows vs NSWorkspace + AX), `meeting/runtime_lease.rs` (named mutex vs flock),
 `uia/` (UIA walker vs an AX focus probe), `overlay.rs`, `win_focus.rs`, `window_util.rs`.
 
-**Windows-only, genuinely:** `audio_ducking.rs`, `toast.rs`, `dictation/import_traces.rs`,
-three of four `system_control.rs` verbs, and `interview.rs`. Everything else has a real macOS
+**Windows-only, genuinely:** `audio_ducking.rs`, `toast.rs`, three of four
+`system_control.rs` verbs, and `interview.rs`. Everything else has a real macOS
 implementation. `interview.rs` is the only one still gated wholesale, and only because nobody
 has un-gated it: it depends on the now-portable audio broker, and doing so is what would let
 `lib.rs`'s `cfg_attr(not(windows), allow(dead_code, ...))` disappear entirely.
@@ -95,7 +95,7 @@ the insert path stamps `kCGEventSourceUserData` with a marker the tap drops.
 only key WRAPPING differs (DPAPI on Windows, and on macOS a master key derived as
 `SHA-256(domain ‖ master.salt ‖ gethostuuid())`), and that lives in its `keywrap` submodule.
 Per-feature key files stay in the same place on both, so deleting the meeting captures
-directory still cannot brick the dictation vocabulary. Both implementations MUST fail closed:
+directory still cannot brick dictation's own store. Both implementations MUST fail closed:
 on macOS only a genuinely absent `master.salt` may mint a new one. Treating an unreadable salt
 as "no key" silently mints a replacement and makes every already-sealed row permanently
 unreadable while new writes look healthy.
@@ -164,7 +164,7 @@ about storage. The reversal is narrow and the invariants around it are not:
 
 - Text is AES-256-GCM in a BLOB column of `dictation/history.sqlite3`; audio is
   AES-256-GCM over FLAC under `dictation/clips/`. Both are sealed with the
-  DICTATION key (`vocab.rs`), never meeting's, so "delete my recordings" cannot
+  DICTATION key (`keystore.rs`), never meeting's, so "delete my recordings" cannot
   brick dictation. Nothing in this module is ever logged beyond counts, sizes,
   durations and outcomes.
 - **A password-field dictation is never recorded.** Aura already refuses to type
