@@ -41,13 +41,16 @@ export function listDictationHistory(uid: string): Promise<DictationHistoryEntry
 }
 
 /**
- * Decrypted FLAC bytes for one clip, as an object URL the caller owns and must
- * revoke. Raw bytes rather than a file path: what is on disk is ciphertext, so
- * the asset protocol would hand `<audio>` garbage.
+ * The decrypted clip for one dictation as an object URL the caller owns and
+ * must revoke. Raw bytes rather than a file path: what is on disk is
+ * ciphertext, so the asset protocol would hand `<audio>` garbage.
+ *
+ * WAV, not the stored FLAC: WKWebView cannot decode FLAC, so this played on
+ * Windows and failed on every Mac. The command transcodes on the way out.
  */
 export async function loadDictationAudioUrl(uid: string, id: string): Promise<string> {
   const raw = await invoke<ArrayBuffer>("dictation_history_audio", { uid, id });
-  return URL.createObjectURL(new Blob([new Uint8Array(raw)], { type: "audio/flac" }));
+  return URL.createObjectURL(new Blob([new Uint8Array(raw)], { type: "audio/wav" }));
 }
 
 export function setDictationFlag(uid: string, id: string, flagged: boolean): Promise<void> {

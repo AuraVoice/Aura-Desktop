@@ -642,11 +642,17 @@ pub async fn dictation_history_list(
     .map_err(|e| e.to_string())?
 }
 
-/// The decrypted FLAC bytes for one clip, raw over IPC so there is no base64
-/// round trip. The dashboard wraps them in a Blob and plays that. The asset
-/// protocol cannot be used, because what is on disk is ciphertext, and writing
-/// a decrypted temp file to make it work would put unowned plaintext audio on
-/// the very disk this module exists to keep it off.
+/// The decrypted clip for one dictation as a WAV, raw over IPC so there is no
+/// base64 round trip. The dashboard wraps it in a Blob and plays that. The
+/// asset protocol cannot be used, because what is on disk is ciphertext, and
+/// writing a decrypted temp file to make it work would put unowned plaintext
+/// audio on the very disk this module exists to keep it off.
+///
+/// WAV rather than the stored FLAC because the webview is what has to decode
+/// this, and WKWebView does not decode FLAC. WebView2 does, which is why
+/// playback worked on Windows and failed on macOS with nothing in any log.
+/// `dictation_history_export_audio` still writes the FLAC untouched: that one
+/// goes to the filesystem, where both platforms play it.
 #[tauri::command]
 pub async fn dictation_history_audio(
     app: AppHandle,
@@ -658,10 +664,58 @@ pub async fn dictation_history_audio(
     }
     tauri::async_runtime::spawn_blocking(move || {
         let plain = read_clip(&app, &uid, &id)?;
-        Ok(tauri::ipc::Response::new(plain))
+        Ok(tauri::ipc::Response::new(flac_to_wav(&plain)?))
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// One stored clip transcoded to 16-bit PCM in a RIFF/WAVE container.
+///
+/// The header is written by hand rather than pulling in a WAV crate: it is 44
+/// fixed bytes for uncompressed PCM, and the encoder that produced these files
+/// is `meeting::audio::encode_flac`, so the shape is known. Rate and channel
+/// count still come from the stream itself rather than being assumed, so a clip
+/// written by some later encoder setting does not silently play at the wrong
+/// speed.
+fn flac_to_wav(flac: &[u8]) -> Result<Vec<u8>, String> {
+    const BITS_PER_SAMPLE: u16 = 16;
+
+    let mut reader = claxon::FlacReader::new(std::io::Cursor::new(flac))
+        .map_err(|e| format!("flac open: {e:?}"))?;
+    let info = reader.streaminfo();
+    // Everything this module writes is 16-bit (`store_clip` -> `to_i16`). A
+    // wider stream would need shifting, not casting, so refuse it rather than
+    // truncate every sample into noise.
+    if info.bits_per_sample != u32::from(BITS_PER_SAMPLE) {
+        return Err(format!("flac bit depth: {}", info.bits_per_sample));
+    }
+    let channels = u16::try_from(info.channels).map_err(|_| "flac channels".to_string())?;
+    let block_align = channels * (BITS_PER_SAMPLE / 8);
+
+    let mut pcm = Vec::with_capacity(flac.len() * 2);
+    for sample in reader.samples() {
+        let sample = sample.map_err(|e| format!("flac decode: {e:?}"))?;
+        pcm.extend_from_slice(&(sample as i16).to_le_bytes());
+    }
+
+    let data_len = u32::try_from(pcm.len()).map_err(|_| "clip too large".to_string())?;
+    let mut wav = Vec::with_capacity(44 + pcm.len());
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(36 + data_len).to_le_bytes());
+    wav.extend_from_slice(b"WAVE");
+    wav.extend_from_slice(b"fmt ");
+    wav.extend_from_slice(&16_u32.to_le_bytes());
+    wav.extend_from_slice(&1_u16.to_le_bytes()); // PCM, uncompressed
+    wav.extend_from_slice(&channels.to_le_bytes());
+    wav.extend_from_slice(&info.sample_rate.to_le_bytes());
+    wav.extend_from_slice(&(info.sample_rate * u32::from(block_align)).to_le_bytes());
+    wav.extend_from_slice(&block_align.to_le_bytes());
+    wav.extend_from_slice(&BITS_PER_SAMPLE.to_le_bytes());
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&data_len.to_le_bytes());
+    wav.extend_from_slice(&pcm);
+    Ok(wav)
 }
 
 fn read_clip(app: &AppHandle, uid: &str, id: &str) -> Result<Vec<u8>, String> {

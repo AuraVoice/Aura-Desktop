@@ -275,3 +275,33 @@ Justification: grouping a media query with the rules it is conceptually about re
 is exactly how it stops working, because the cascade cares where a declaration is, not what it
 is near. This was caught only because it was looked at in a running window; tsc was clean,
 the braces balanced, and nothing about the source suggested the rule was inert.
+
+2026-09-06  dictation playback shipped with nothing anywhere that could decode it
+
+Problem: playing a saved dictation on macOS always failed with "The audio for that dictation
+could not be played." The same build played it on Windows. Everything the failure pointed at
+was healthy: the command was registered unconditionally, no cfg(windows) sat on it or anything
+it called, the clip decrypted, and the Blob was even given the correct audio/flac type, so it
+was not the untyped-blob trap that WebKit is better known for.
+
+Issue: clips are stored as FLAC and handed to the webview as FLAC, and nothing in the process
+decodes FLAC. flacenc is an encoder; there is no decoder in Cargo.toml, in Cargo.lock, or in
+package.json. So the decode was always the webview's job, and that only works where the webview
+can do it: WebView2 is Chromium and decodes FLAC, WKWebView does not. The platform split was
+never in our code, which is why grepping our code for it found nothing. Two things kept
+disguising it. "Extract audio" writes the same bytes to disk with a .flac extension and macOS
+plays that fine through Core Audio, so the storage looked healthy. And every other consumer of
+these bytes is an uploader that posts them to a server, where something else does the decoding.
+
+Solution: decode to 16-bit PCM with claxon and wrap it in a 44-byte RIFF/WAVE header inside
+dictation_history_audio, and change the Blob type to audio/wav. The conversion sits in the
+command rather than in read_clip, because read_clip also feeds the export, which must keep
+writing a real .flac. Storage is unchanged, so there is no migration and nothing on disk is
+re-encrypted. A clip that is not 16-bit is refused rather than cast, since that would need a
+shift and would otherwise turn every sample into noise silently.
+
+Justification: "which of our two platforms is this gated for" is the wrong first question when
+a feature works on one and not the other. Nothing was gated here. The capability difference was
+in a dependency neither platform's code mentions, and the module's own comments described the
+bytes as something the dashboard "wraps in a Blob and plays", which reads like a complete plan
+right up until you ask what performs the decode.

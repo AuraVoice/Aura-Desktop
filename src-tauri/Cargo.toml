@@ -77,6 +77,12 @@ aes-gcm = "0.10"
 # layer. Unconditional because both callers are.
 flacenc = "0.5"
 
+# FLAC decode for dictation playback (dictation/history.rs::flac_to_wav). The
+# webview has to decode whatever the playback command returns, and WKWebView
+# does not decode FLAC, so the clip is converted to WAV on the way out. Pure
+# Rust, no C deps, same reason as the encoder above. Storage stays FLAC.
+claxon = "0.4"
+
 # Dictation's cloud speech recognition (dictation/asr/deepgram.rs): one
 # WebSocket per hold to Deepgram's streaming endpoint. rustls, never native
 # OpenSSL, and deliberately the same rustls 0.23 / tokio-rustls 0.26 pair
