@@ -305,3 +305,43 @@ a feature works on one and not the other. Nothing was gated here. The capability
 in a dependency neither platform's code mentions, and the module's own comments described the
 bytes as something the dashboard "wraps in a Blob and plays", which reads like a complete plan
 right up until you ask what performs the decode.
+
+2026-09-06  a research run died with "meter unavailable" and the meter was fine
+
+Problem: a research request from the dashboard ended as COULD NOT FINISH with the message
+"meter unavailable", 0 sources, 0 claims. Nothing about the budget meter was wrong. The real
+cause was an entitlement whose trial had ended two weeks earlier, which is a case the product
+already has correct copy for ("Background research requires an active paid plan").
+
+Issue: three defects stacked, and each one hid the next. First, the entitlement gate is in
+credits.admit(), which nothing reaches until classify_plan has already been created and queued,
+so engine.start() happily admitted a run for a user with no research entitlement. The lapse was
+found one stage in, by entitlement_still_valid() inside _admit_stage. Second, that discovery
+called _degrade_to_partial, which routes classify_plan to synthesize; classify_plan is the stage
+that writes the plan synthesize must run against, so the run advanced to "synthesizing" with
+plan_version 0 and an empty plans subcollection. Every synthesize attempt then raised
+PlanReadUnavailable and ground to the attempt cap. Third, that exception was reported as
+FAIL_METER_UNAVAILABLE, the same code an unreadable budget ledger uses, so the run document, the
+logs and the audit events all named the wrong subsystem. The desktop had no copy for that code
+and its fallback printed code.replace(/_/g, " "), which is where the words came from. The one
+genuine infrastructure event in the whole timeline, a Firestore 409 cross-transaction contention
+between the classify_plan advance and the synthesize task 1.5 seconds later, cost a single retry
+and was pure noise, but it was the loudest thing in the logs and read as the cause.
+
+Solution: refuse at creation. handle_create now calls the existing resolve_entitlement and
+returns its own code and http_status (402 research_requires_paid), so nothing is written and no
+model call is queued. _degrade_to_partial takes the plan-presence its caller already resolved and
+terminates through fail_stage when there is none, which already commits FAILED for an
+evidence-free run and mints the terminal notification. PlanReadUnavailable gets its own code,
+plan_unavailable. On the desktop, researchApi throws a typed ResearchRequestError carrying the
+refusal code, the start handler renders that instead of "check your connection", and
+failureMessage covers every code the backend can stamp with a sentence fallback instead of the
+underscore strip.
+
+Justification: the investigation went at the budget ledger for what was a billing state, because
+one error code was doing two jobs. A stable failure enum is only worth having if each member
+names one subsystem. The second lesson is about fail-closed paths: degrading instead of failing
+is right when the run holds evidence, but a degrade that skips the stage producing its own
+prerequisite is not a graceful exit, it is a loop with a deadline, and it converted a clean
+refusal into an attempt-cap grind. The last one is the cheap one: a UI fallback that prints a
+machine identifier will eventually print it to a user, so it should read as a sentence.

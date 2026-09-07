@@ -3275,6 +3275,109 @@
 .db-research-detail-skeleton span:nth-child(3) {
   height: 360px;
 }
+/* Free-tier paywall dialog. Overrides .db-modal-panel's flat --db-surface fill and grey
+   border with the bright glass recipe, locally: every other modal in the app shares that
+   base class and is not in scope here. Narrower than a data modal because this is one
+   decision, not a panel of content. */
+.db-research-paywall {
+  width: min(460px, 100%);
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+}
+/* The shared head paints a divider under itself, which would cut the glass in half. Here
+   the head carries nothing but the close button, so it has no line to draw. */
+.db-research-paywall .db-modal-head::after {
+  display: none;
+}
+/* The title prop is passed only to name the dialog for screen readers (DetailModal maps it
+   to aria-label). The heading is rendered in the body instead, below the glyph, so the
+   head's visual copy is dropped and the close button flexes to the right on its own. */
+.db-research-paywall .db-modal-title {
+  display: none;
+}
+.db-research-paywall .db-modal-body {
+  padding-top: 0;
+}
+.db-research-paywall-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0 12px 12px;
+  text-align: center;
+}
+/* Bare glyph on the glass with a soft radial glow, no boxed chip behind it. */
+.db-research-paywall-glyph {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 16px;
+  color: var(--research-teal);
+}
+.db-research-paywall-glyph::before {
+  position: absolute;
+  z-index: -1;
+  width: 76px;
+  height: 76px;
+  background: radial-gradient(circle, rgba(22, 126, 110, 0.16), rgba(22, 126, 110, 0) 68%);
+  content: "";
+}
+.db-research-paywall-body h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.db-research-paywall-body p {
+  margin: 10px 0 0;
+  max-width: 34ch;
+  color: var(--db-text-dim);
+  font-size: 14px;
+  line-height: 1.55;
+}
+/* The question the user just typed, kept translucent so it does not punch an opaque hole
+   through the glass. Clamped rather than scrolled: it is a reminder, not a text field. */
+.db-research-paywall-echo {
+  display: -webkit-box;
+  overflow: hidden;
+  width: 100%;
+  max-width: none;
+  margin-top: 16px;
+  padding: 11px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.5);
+  color: var(--db-text);
+  font-size: 13px;
+  text-align: left;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+.db-research-paywall-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 22px;
+}
+.db-research-paywall-dismiss {
+  min-height: 44px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--db-text-dim);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.16s var(--db-ease), color 0.16s var(--db-ease);
+}
+.db-research-paywall-dismiss:hover {
+  background: rgba(255, 255, 255, 0.5);
+  color: var(--db-text);
+}
 @keyframes db-research-spin {
   to { transform: rotate(360deg); }
 }

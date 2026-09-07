@@ -37,8 +37,10 @@ import {
   type ResearchRun,
 } from "../../lib/researchApi";
 import { logError } from "../../lib/log";
+import { useEntitlementState } from "../../state/EntitlementProvider";
 import { EmptyState } from "../components/EmptyState";
 import { PageError } from "../components/PageError";
+import { ResearchPaywallDialog } from "../components/ResearchPaywallDialog";
 import { SiteIcon } from "../components/SiteIcon";
 import { RefreshIndicator } from "../components/RefreshIndicator";
 import { shortDateTime } from "../format";
@@ -600,7 +602,15 @@ export function ResearchPage() {
   const [request, setRequest] = useState("");
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState("");
+  const [paywallOpen, setPaywallOpen] = useState(false);
   const [exampleIndex, setExampleIndex] = useState(0);
+  const entitlement = useEntitlementState();
+  // Fail OPEN, the same predicate and for the same reason as VoicePickerCards: research is
+  // locked only once the shared entitlement is actually KNOWN to be free. `known` is false
+  // for a failed fetch with no cached copy in grace, and gating on `loaded` alone would put
+  // a paywall in front of a paying user on a network blip. The backend refuses a genuinely
+  // unentitled run anyway, so the open failure costs one rejected request, not a wrong sale.
+  const researchLocked = entitlement.known && entitlement.effectiveTier === "free";
   const typing = request.length > 0;
   useEffect(() => {
     if (typing) return;
@@ -633,6 +643,13 @@ export function ResearchPage() {
   const submit = async (event: React.FormEvent) => {
     event.preventDefault();
     if (!request.trim() || starting) return;
+    // Refuse before the network call, and deliberately WITHOUT clearing the composer, so
+    // deciding to upgrade never costs the user the question they just typed.
+    if (researchLocked) {
+      setStartError("");
+      setPaywallOpen(true);
+      return;
+    }
     setStarting(true);
     setStartError("");
     try {
@@ -643,8 +660,18 @@ export function ResearchPage() {
     } catch (err) {
       // A refusal the backend explained is not a connection problem, and telling a user
       // whose plan has lapsed to check their connection sends them to fix the wrong thing.
-      const refusal = err instanceof ResearchRequestError && err.code ? failureMessage(err.code) : "";
-      setStartError(refusal || "Buddy could not set up this research. Check your connection and try again.");
+      const code = err instanceof ResearchRequestError ? err.code : "";
+      if (code === "research_requires_paid") {
+        // The client thought this account was entitled and the server disagreed: a degraded
+        // entitlement read, or a plan that lapsed mid-session. Same answer as the local gate,
+        // so the user gets one explanation rather than two competing ones.
+        setPaywallOpen(true);
+      } else {
+        setStartError(
+          (code && failureMessage(code))
+          || "Buddy could not set up this research. Check your connection and try again.",
+        );
+      }
       logError("ResearchPage: start", err);
     } finally {
       setStarting(false);
@@ -666,6 +693,8 @@ export function ResearchPage() {
       </section>
 
       {startError && <div className="db-research-inline-error"><CircleAlert size={17} /><span>{startError}</span><button type="button" onClick={() => setStartError("")}>Dismiss</button></div>}
+
+      <ResearchPaywallDialog open={paywallOpen} question={request} onClose={() => setPaywallOpen(false)} />
 
       {activeRuns.length > 0 && (
         <section className="db-research-active-runs">
