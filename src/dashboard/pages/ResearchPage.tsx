@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   ArrowLeft,
@@ -17,7 +17,6 @@ import {
   RotateCcw,
   Search,
   ShieldCheck,
-  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
@@ -29,6 +28,7 @@ import {
   getResearchActivity,
   getResearchRun,
   listResearchRuns,
+  ResearchRequestError,
   startResearch,
   type ResearchActivity,
   type ResearchActivitySource,
@@ -69,6 +69,24 @@ const starterCopy: Record<string, string> = {
   "Investigate a company": "Investigate ",
   "Research a market": "Research the current market for ",
 };
+const rotatingExamples = [
+  {
+    eyebrow: "Compare two vendors",
+    placeholder: "Compare speech-to-text APIs for a Windows app, including current pricing, streaming latency, and privacy tradeoffs.",
+  },
+  {
+    eyebrow: "Size up a market",
+    placeholder: "How big is the AI note-taking market in 2026, who leads it, and where is pricing heading?",
+  },
+  {
+    eyebrow: "Check a company",
+    placeholder: "What does Cartesia actually sell, who funds them, and how do their voice models compare on latency?",
+  },
+  {
+    eyebrow: "Pressure-test a claim",
+    placeholder: "Is on-device speech recognition really more private than cloud APIs, and what does the evidence say?",
+  },
+];
 const progressSteps = ["searching", "reading", "verifying", "synthesizing"];
 
 type SelectedEvidence = ResearchEvidence & { claim: string };
@@ -119,13 +137,36 @@ function runStatus(run: ResearchRun) {
   return <StatusPill state={run.state} />;
 }
 
+/** Copy for the backend's stable failure enum (juno-backend research/fields.py).
+ *
+ * Every code the backend can put on a run needs a line here. The old fallback printed
+ * `code.replace(/_/g, " ")`, so an unmapped code reached the user as its own identifier:
+ * a run that died because its plan was never written showed the words "meter unavailable",
+ * which named the wrong subsystem and read as gibberish. The fallback is now a sentence,
+ * so a code added upstream degrades to vague rather than to nonsense. */
 function failureMessage(code: string): string {
   const messages: Record<string, string> = {
     research_requires_paid: "Background research requires an active paid plan.",
     research_cap_reached: "Today's research allowance has been used. Try again tomorrow.",
     cost_cap_reached: "The research spend limit stopped this run before a sourced brief was available.",
+    entitlement_lapsed: "Your plan ended while this research was running, so Buddy stopped before spending more.",
+    entitlement_unavailable: "Buddy could not confirm your plan just now. Try again in a moment.",
+    meter_unavailable: "Buddy could not confirm the research budget, so it stopped rather than spend blind.",
+    plan_unavailable: "Buddy lost the research plan for this run before it could gather anything.",
+    wall_clock_expired: "This research ran out of time before a sourced brief was ready.",
+    budget_exhausted: "This research used its whole budget before a sourced brief was ready.",
+    attempt_cap_exceeded: "Buddy retried this research as far as it could and it kept failing.",
+    no_source_found: "Buddy could not find sources it trusts for this question.",
+    provider_unavailable: "The search and reading services were unavailable for this run.",
+    source_policy_unmet: "The sources Buddy found did not meet its citation standard for this question.",
+    clarification_timeout: "This research needed an answer to continue and the question went unanswered.",
+    cancelled_by_user: "You cancelled this research.",
+    delivery_failed: "The brief was written but Buddy could not deliver it to your destination.",
   };
-  return messages[code] || (code ? code.replace(/_/g, " ") : "No usable evidence survived verification.");
+  if (messages[code]) return messages[code];
+  return code
+    ? "Buddy stopped this research before a sourced brief was ready."
+    : "No usable evidence survived verification.";
 }
 
 function StatusPill({ state }: { state: string }) {
@@ -530,6 +571,28 @@ function HistorySourceMarks({ run }: { run: ResearchRun }) {
   return <span className="db-research-history-marks">{domains.map((domain) => <SourceMark key={domain} domain={domain} small />)}{run.sourceCount > domains.length && <small>+{run.sourceCount - domains.length}</small>}</span>;
 }
 
+const ActiveRunRow = memo(function ActiveRunRow({ run, onOpen }: { run: ResearchRun; onOpen: (runId: string) => void }) {
+  return (
+    <button type="button" className="db-research-active-run" onClick={() => onOpen(run.runId)}>
+      <span className={`db-research-active-symbol${isLegacyParked(run) ? " is-legacy" : ""}`}>{isLegacyParked(run) ? <CircleAlert size={20} /> : <LoaderCircle size={20} />}</span>
+      <span>{runStatus(run)}<strong>{researchTitle(run)}</strong><small>{isLegacyParked(run) ? "This older request never started. Open it to restart." : run.state === "planning" ? "Building the research plan." : run.state === "queued" ? "Waiting for a research worker." : "Open to view committed queries and sources."}</small></span>
+      <span className="db-research-active-meta"><strong>{run.sourceCount}</strong><small>sources</small></span>
+      <ChevronRight size={18} />
+    </button>
+  );
+});
+
+const HistoryRow = memo(function HistoryRow({ run, onOpen }: { run: ResearchRun; onOpen: (runId: string) => void }) {
+  return (
+    <button type="button" onClick={() => onOpen(run.runId)}>
+      <span className={`db-research-history-icon is-${run.state}`}>{run.state === "ready" ? <CheckCircle2 size={19} /> : run.state === "partial" ? <CircleAlert size={19} /> : <BookOpen size={19} />}</span>
+      <span className="db-research-history-copy">{runStatus(run)}<strong>{researchTitle(run)}</strong><small>{shortDateTime(run.updatedAt || run.createdAt)}</small></span>
+      <HistorySourceMarks run={run} />
+      <ChevronRight size={17} />
+    </button>
+  );
+});
+
 export function ResearchPage() {
   const list = useDashboardResource("research", listResearchRuns, { freshnessMs: 2_000 });
   const [searchParams, setSearchParams] = useSearchParams();
@@ -537,11 +600,28 @@ export function ResearchPage() {
   const [request, setRequest] = useState("");
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState("");
+  const [exampleIndex, setExampleIndex] = useState(0);
+  const typing = request.length > 0;
+  useEffect(() => {
+    if (typing) return;
+    const timer = setInterval(() => setExampleIndex((index) => (index + 1) % rotatingExamples.length), 4500);
+    return () => clearInterval(timer);
+  }, [typing]);
   const runs = useMemo(() => list.data ?? [], [list.data]);
-  const activeRuns = runs.filter((run) => activeStates.has(run.state) || run.state === "awaiting_clarification");
-  const historyRuns = runs.filter((run) => !activeRuns.includes(run));
+  // One pass instead of two filters with a linear membership test, so the split
+  // stays O(n) and both lists keep the server's original order.
+  const { activeRuns, historyRuns } = useMemo(() => {
+    const active: ResearchRun[] = [];
+    const history: ResearchRun[] = [];
+    for (const run of runs) {
+      if (activeStates.has(run.state) || run.state === "awaiting_clarification") active.push(run);
+      else history.push(run);
+    }
+    return { activeRuns: active, historyRuns: history };
+  }, [runs]);
 
-  const openRun = (runId: string) => setSearchParams({ run: runId });
+  // Stable identity, otherwise the memo on the rows below never holds.
+  const openRun = useCallback((runId: string) => setSearchParams({ run: runId }), [setSearchParams]);
   const closeRun = () => setSearchParams({});
   const beginRelated = (value: string) => {
     closeRun();
@@ -561,7 +641,10 @@ export function ResearchPage() {
       openRun(run.runId);
       list.reload();
     } catch (err) {
-      setStartError("Buddy could not set up this research. Check your connection and try again.");
+      // A refusal the backend explained is not a connection problem, and telling a user
+      // whose plan has lapsed to check their connection sends them to fix the wrong thing.
+      const refusal = err instanceof ResearchRequestError && err.code ? failureMessage(err.code) : "";
+      setStartError(refusal || "Buddy could not set up this research. Check your connection and try again.");
       logError("ResearchPage: start", err);
     } finally {
       setStarting(false);
@@ -571,13 +654,15 @@ export function ResearchPage() {
   return (
     <div className="db-page db-page-wide db-research-page db-research-home">
       <section className="db-research-command">
-        <div className="db-research-command-copy"><span className="db-research-eyebrow"><Sparkles size={14} /> Background research</span><h1>What do you want to understand?</h1><p>Buddy turns an open question into a source-backed brief while you keep working.</p></div>
-        <form onSubmit={submit}>
-          <label htmlFor="research-request">Research request</label>
-          <textarea id="research-request" value={request} onChange={(event) => setRequest(event.target.value)} maxLength={2000} placeholder="Compare speech-to-text APIs for a Windows app, including current pricing, streaming latency, and privacy tradeoffs." />
-          <div className="db-research-composer-foot"><span>Research starts immediately and continues in the background.</span><button type="submit" className="db-research-primary" disabled={starting || !request.trim()}>{starting ? <LoaderCircle size={17} /> : <Search size={17} />} {starting ? "Starting" : "Start research"}</button></div>
-        </form>
-        <div className="db-research-starters" aria-label="Research starters">{starterPrompts.map((item) => <button key={item} type="button" onClick={() => { setRequest(starterCopy[item]); requestAnimationFrame(() => document.getElementById("research-request")?.focus()); }}>{item}<ChevronRight size={14} /></button>)}</div>
+        <div className="db-research-command-copy"><span className="db-research-eyebrow db-research-eyebrow-rotator"><span key={exampleIndex}>{rotatingExamples[exampleIndex].eyebrow}</span></span><h1>What do you want to understand?</h1><p>Buddy turns an open question into a source-backed brief while you keep working.</p></div>
+        <div className="db-research-composer-col">
+          {!typing && <div className="db-research-starters" aria-label="Research starters">{starterPrompts.map((item) => <button key={item} type="button" onClick={() => { setRequest(starterCopy[item]); requestAnimationFrame(() => document.getElementById("research-request")?.focus()); }}>{item}</button>)}</div>}
+          <form onSubmit={submit}>
+            <label htmlFor="research-request">Research request</label>
+            <textarea id="research-request" value={request} onChange={(event) => setRequest(event.target.value)} maxLength={2000} placeholder={rotatingExamples[exampleIndex].placeholder} />
+            <div className="db-research-composer-foot"><span>Research starts immediately and continues in the background.</span><button type="submit" className="db-research-primary" disabled={starting || !request.trim()}>{starting ? <LoaderCircle size={17} /> : <Search size={17} />} {starting ? "Starting" : "Start research"}</button></div>
+          </form>
+        </div>
       </section>
 
       {startError && <div className="db-research-inline-error"><CircleAlert size={17} /><span>{startError}</span><button type="button" onClick={() => setStartError("")}>Dismiss</button></div>}
@@ -585,14 +670,7 @@ export function ResearchPage() {
       {activeRuns.length > 0 && (
         <section className="db-research-active-runs">
           <div className="db-research-section-head"><div><span className="db-research-section-kicker">In progress</span><h2>Buddy is on it</h2></div><RefreshIndicator refreshing={list.refreshing} stale={list.stale} cachedAt={list.cachedAt} onRetry={list.reload} /></div>
-          {activeRuns.map((run) => (
-            <button type="button" key={run.runId} className="db-research-active-run" onClick={() => openRun(run.runId)}>
-              <span className={`db-research-active-symbol${isLegacyParked(run) ? " is-legacy" : ""}`}>{isLegacyParked(run) ? <CircleAlert size={20} /> : <LoaderCircle size={20} />}</span>
-              <span>{runStatus(run)}<strong>{researchTitle(run)}</strong><small>{isLegacyParked(run) ? "This older request never started. Open it to restart." : run.state === "planning" ? "Building the research plan." : run.state === "queued" ? "Waiting for a research worker." : "Open to view committed queries and sources."}</small></span>
-              <span className="db-research-active-meta"><strong>{run.sourceCount}</strong><small>sources</small></span>
-              <ChevronRight size={18} />
-            </button>
-          ))}
+          {activeRuns.map((run) => <ActiveRunRow key={run.runId} run={run} onOpen={openRun} />)}
         </section>
       )}
 
@@ -600,14 +678,7 @@ export function ResearchPage() {
         <div className="db-research-section-head"><div><span className="db-research-section-kicker">Library</span><h2>Past research</h2></div>{activeRuns.length === 0 && <RefreshIndicator refreshing={list.refreshing} stale={list.stale} cachedAt={list.cachedAt} onRetry={list.reload} />}</div>
         {list.error && !list.data ? <PageError authExpired={list.authExpired} onRetry={list.reload} /> : historyRuns.length === 0 ? <EmptyState Icon={BookOpen} heading="Your research library is empty" copy="Start with a question above. Finished briefs and their sources will stay here." /> : (
           <div className="db-research-history-list">
-            {historyRuns.map((run) => (
-              <button type="button" key={run.runId} onClick={() => openRun(run.runId)}>
-                <span className={`db-research-history-icon is-${run.state}`}>{run.state === "ready" ? <CheckCircle2 size={19} /> : run.state === "partial" ? <CircleAlert size={19} /> : <BookOpen size={19} />}</span>
-                <span className="db-research-history-copy">{runStatus(run)}<strong>{researchTitle(run)}</strong><small>{shortDateTime(run.updatedAt || run.createdAt)}</small></span>
-                <HistorySourceMarks run={run} />
-                <ChevronRight size={17} />
-              </button>
-            ))}
+            {historyRuns.map((run) => <HistoryRow key={run.runId} run={run} onOpen={openRun} />)}
           </div>
         )}
       </section>
