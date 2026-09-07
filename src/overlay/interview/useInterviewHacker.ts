@@ -93,6 +93,10 @@ export function isInterviewCaptureActive(phase: InterviewHackerPhase): boolean {
 interface SupportedCallPayload {
   supported: boolean;
   app: string | null;
+  /** "accessibility" when macOS is withholding the grant that lets Aura read
+   * window titles. Without it every check answers "no call" forever, which is
+   * indistinguishable from waiting, so the card has to say which one it is. */
+  blocker: string | null;
 }
 
 interface StatusPayload {
@@ -211,6 +215,14 @@ export interface InterviewHackerState {
    *  "teams-web"), so the card can draw the app's own mark. `callName` stays the
    *  humanized string for copy. */
   callApp: string | null;
+  /** Why the "checking" phase cannot succeed, rather than simply not having
+   *  found a call yet. Currently only "accessibility" (macOS grant missing). */
+  callBlocker: string | null;
+  /** True once the user has clicked through to the permission dialog, so the
+   *  button can switch to "again" wording the way ShortcutEditorDialog does. */
+  blockerAsked: boolean;
+  /** Raises the macOS Accessibility prompt. Only ever called from a click. */
+  requestCallAccess: () => void;
   history: InterviewExchange[];
   question: string;
   answer: string;
@@ -267,6 +279,8 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   const [phase, setPhase] = useState<InterviewHackerPhase>("idle");
   const [callName, setCallName] = useState<string | null>(null);
   const [callApp, setCallApp] = useState<string | null>(null);
+  const [callBlocker, setCallBlocker] = useState<string | null>(null);
+  const [blockerAsked, setBlockerAsked] = useState(false);
   // `resumeText`, not `resume`: `resume` is already the pause/resume action.
   const [resumeText, setResumeText] = useState<string | null>(null);
   const [attachingResume, setAttachingResume] = useState(false);
@@ -611,10 +625,20 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
             setCallName(callLabel(result.app));
             setCallApp(result.app);
             setMessage(null);
+            setCallBlocker(null);
             setPhase("preflight");
             return;
           }
-          setMessage("Waiting for Zoom, Teams, or Google Meet. Aura checks automatically.");
+          // A blocker means the check CANNOT come good, however long it runs, so
+          // "waiting for a call" would be a lie. Keep polling anyway: the grant
+          // can land while the card is open, and the next tick clears this by
+          // itself.
+          setCallBlocker(result.blocker ?? null);
+          setMessage(
+            result.blocker === "accessibility"
+              ? `Aura needs Accessibility to see which call you are in. Allow it in ${osName()} Settings.`
+              : "Waiting for Zoom, Teams, or Google Meet. Aura checks automatically.",
+          );
           timer = setTimeout(check, CALL_DETECTION_RETRY_MS);
         })
         .catch((error) => {
@@ -633,6 +657,17 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     };
   }, [phase, signedIn]);
 
+  // The user-initiated moment where raising the macOS dialog is correct. The
+  // polling check above deliberately never prompts, so this is the only path
+  // that can. The running check clears the blocker on its own once the grant
+  // lands, so there is nothing to set here.
+  const requestCallAccess = useCallback(() => {
+    setBlockerAsked(true);
+    invoke<boolean>("interview_request_accessibility").catch((error) =>
+      logError("Interview Companion: accessibility request", error),
+    );
+  }, []);
+
   // Closes the card from any phase that is not holding a live capture. Without
   // this the preflight was a dead end: it renders only "Start", the Stop button
   // is scoped to the capturing phases, and OverlayRoot suppresses chat and
@@ -650,6 +685,8 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     setReflection(null);
     setCallName(null);
     setCallApp(null);
+    setCallBlocker(null);
+    setBlockerAsked(false);
     setMessage(null);
     setErrorDetail(null);
     setPhase("idle");
@@ -1575,6 +1612,9 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     phase,
     callName,
     callApp,
+    callBlocker,
+    blockerAsked,
+    requestCallAccess,
     history,
     question,
     answer,

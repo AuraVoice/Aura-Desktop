@@ -475,3 +475,41 @@ a UI that does not exist, which is how the tray row became the only entry point 
 noticing. The third is that "nobody reported it" is not evidence of anything, but a counter of a
 user-intent event sitting at exactly zero across every session is, and it was already in the log
 the whole time.
+
+
+2026-09-07  Interview Companion was inert on macOS, and it presented as slowness
+
+Problem: Interview Companion on a Mac sat on "Waiting for Zoom, Teams, or Google Meet" while
+the user was already in a Google Meet call, then ended without ever transcribing anything. It
+read as a slow or flaky detector. It was neither. The feature did not exist on macOS:
+interview_supported_call hardcoded `let detected: Option<(String, String)> = None` and
+start_interview_hacker returned Err("Interview Companion currently requires Windows.").
+
+Issue: two independent things, and the second is what made the first invisible. interview.rs was
+gated wholesale on cfg(windows) despite containing ZERO `windows::` calls. Every dependency was
+already portable: the asr/ tree has no Win32 and no gates, audio_capture has a real macOS
+backend, and meeting::detect::find_meeting_window is un-gated with a working macOS scan. So the
+gate protected nothing. This is the same "gated for merely sitting downstream" mistake the repo
+has now made five times, after asr/, screenshot_store.rs, meeting/audio.rs, meeting/queue.rs and
+dictation/polish.rs. Second, the frontend polls interview_supported_call every 1.5s and treats
+`supported: false` as the ordinary "not in a call yet" answer, with no give-up and no error path.
+"This platform always answers no" and "you have not joined yet" were the same value, so an
+absent feature was indistinguishable from a patient one and nothing in the UI could ever say so.
+
+Solution: removed the gates rather than porting anything, which is what CLAUDE.md's own test
+prescribes. Added a `blocker` field to SupportedCallPayload so the two cases separate: on macOS
+window_titles returns empty without the Accessibility grant, by design, so without the grant
+detection can never come good and the card now says which of the two it is and offers the
+prompt. The status read passes is_trusted(false) and never prompts; a separate
+interview_request_accessibility command prompts at the user's click, matching dictation.
+
+Justification: the un-gating is provably safe for Windows because deleting cfg(windows) removes
+the cfg(not(windows)) STUB that shadowed the real code; Windows compiles the same bytes. The
+lesson that generalises is the second one: a polling check must be able to distinguish "not yet"
+from "not ever", or an unimplemented feature degrades into an infinite wait and gets reported as
+a performance problem, which is where the debugging time goes. A third, smaller finding: lib.rs
+claimed un-gating interview.rs "is what would let this attribute go entirely". It was tried, and
+it is false. The remaining dead code is uia/contract.rs (11), guide/capture/session.rs (8),
+win_focus.rs (4) and others, none of it interview's. The comment now lists the measured
+remainder instead of an assumption, because a stale claim in a comment costs the next person the
+same experiment.

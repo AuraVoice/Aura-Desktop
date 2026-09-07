@@ -1,17 +1,25 @@
-// What still needs this, now that dictation, meeting capture and the overlay
-// have real macOS implementations, is almost entirely `interview.rs`: it is
-// the last module gated wholesale on `cfg(windows)`, and its continuous-ASR
-// machinery (providers, sessions, the socket loop) is therefore dead code off
-// Windows. The rest is small and genuine: `chord.rs`'s Win-key and menu-mode
-// guards describe hazards that only exist on Windows, and `audio_ducking.rs`
-// and `toast.rs` are stubs.
+// `interview.rs` used to be the headline reason for this and no longer is: it
+// is un-gated and its continuous-ASR machinery now compiles and runs on macOS.
+// Removing the attribute was tried at that point and still fails, so the note
+// it used to carry ("un-gating interview.rs is what would let this go") was
+// wrong, and the real remainder is worth naming so the next attempt starts from
+// facts. What still needs it, measured rather than assumed:
+//
+//   uia/contract.rs           11  unconstructed variants, unused budget methods
+//   guide/capture/session.rs   8  unconstructed variants, unused helpers
+//   win_focus.rs               4  unread ForegroundGeneration field, imports
+//   screenshot_store.rs        3
+//   guide/capture/mod.rs       2
+//   one each: toast.rs, meeting/runtime_lease.rs, macos_window.rs,
+//   guide/mod.rs, events.rs, dictation/history.rs, dictation/chord.rs
+//
+// Most of that is genuinely reachable only on Windows, but some is plain dead
+// code that predates the port. Clearing it is a separate pass, per file.
 //
 // Only the two structural lints are silenced, and only off Windows. Do NOT
 // widen this list: macOS is a shipping target, so `unused_variables`,
 // `unused_mut` and `unreachable_code` are real signal in new macOS code and
-// must keep failing `clippy -- -D warnings` on the macos CI leg. Un-gating
-// interview.rs (it depends only on the now-portable audio broker) is what
-// would let this attribute go entirely.
+// must keep failing `clippy -- -D warnings` on the macos CI leg.
 #![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
 mod audio_ducking;
@@ -458,6 +466,7 @@ pub fn run() {
             dictation::history::dictation_history_settings,
             dictation::history::dictation_history_set_settings,
             interview::interview_supported_call,
+            interview::interview_request_accessibility,
             interview::start_interview_hacker,
             interview::pause_interview_hacker,
             interview::resume_interview_hacker,

@@ -10,12 +10,9 @@ use std::sync::{Mutex, mpsc};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
-#[cfg(windows)]
 use std::time::{Duration, Instant};
 
-#[cfg(windows)]
 use crate::audio_capture::{self, AudioSource, CaptureEvent, Delivery};
-#[cfg(windows)]
 use crate::dictation::asr::{
     self, AsrError, ContinuousAsrEvent, ContinuousAsrSession, ContinuousSessionConfig,
 };
@@ -28,21 +25,15 @@ const MAX_BRIEF_BYTES: usize = 128_000;
 // Generous next to the 12,000 characters the backend accepts, so a resume is
 // rejected by the extractor's own limit rather than truncated silently here.
 const MAX_RESUME_BYTES: usize = 64_000;
-#[cfg(windows)]
 const ENDPOINTING_MS: u16 = 300;
 // The interviewer stream waits longer before finalizing than the candidate
 // stream: a remote speaker pausing past the silence window splits one question
 // in two and the first half gets answered alone. The candidate stream stays
 // fast because its finals are what release an answer held during speech.
-#[cfg(windows)]
 const REMOTE_ENDPOINTING_MS: u16 = 500;
-#[cfg(windows)]
 const MAX_RECONNECTS: u8 = 10;
-#[cfg(windows)]
 const DEEPGRAM_RECONNECTS: u8 = 5;
-#[cfg(windows)]
 const MAX_RECONNECT_BACKOFF_SECS: u64 = 30;
-#[cfg(windows)]
 const SESSION_LIMIT: Duration = Duration::from_secs(2 * 60 * 60);
 
 enum RuntimeCommand {
@@ -57,14 +48,12 @@ struct TranscriptionCredentials {
     openai: String,
 }
 
-#[cfg(windows)]
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TranscriptionProvider {
     Deepgram,
     OpenAi,
 }
 
-#[cfg(windows)]
 impl TranscriptionProvider {
     fn credential(self, credentials: &TranscriptionCredentials) -> &str {
         match self {
@@ -105,6 +94,12 @@ pub struct InterviewHandle(
 pub struct SupportedCallPayload {
     supported: bool,
     app: Option<String>,
+    /// Why detection cannot succeed right now, as opposed to "no call yet".
+    /// `"accessibility"`: the macOS grant is missing, so `window_titles` reads
+    /// an empty list for every process and no title can ever match. Without
+    /// this the two cases are indistinguishable to the caller, and the card
+    /// waits forever on a check that cannot come good. `None` on Windows.
+    blocker: Option<&'static str>,
 }
 
 #[derive(Clone, Serialize)]
@@ -117,7 +112,6 @@ pub struct InterviewStatusPayload {
     reason: Option<String>,
 }
 
-#[cfg(windows)]
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum TranscriptSource {
@@ -125,7 +119,6 @@ enum TranscriptSource {
     Remote,
 }
 
-#[cfg(windows)]
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TranscriptPayload {
@@ -172,12 +165,13 @@ pub async fn interview_supported_call(app: AppHandle) -> Result<SupportedCallPay
         &app,
         crate::security::Operation::StartInterviewHacker,
     )?;
-    #[cfg(windows)]
+    // spawn_blocking on both platforms: this is a #[tauri::command], and the
+    // macOS scan reads every running app's accessibility window list, which is
+    // heavier than the Windows EnumWindows walk and must not run on the thread
+    // pumping window messages.
     let detected = tauri::async_runtime::spawn_blocking(crate::meeting::detect::find_meeting_window)
         .await
         .map_err(|_| "call detection failed".to_string())?;
-    #[cfg(not(windows))]
-    let detected: Option<(String, String)> = None;
     crate::security::recheck(
         &app,
         crate::security::Operation::StartInterviewHacker,
@@ -186,7 +180,35 @@ pub async fn interview_supported_call(app: AppHandle) -> Result<SupportedCallPay
     Ok(SupportedCallPayload {
         supported: detected.is_some(),
         app: detected.map(|(app_name, _)| app_name),
+        blocker: accessibility_blocker(),
     })
+}
+
+/// Read SILENTLY: a status read must never raise a TCC dialog, so this passes
+/// `prompt: false` the way dictation's own status refresh does. The prompt
+/// belongs to `interview_request_accessibility`, at the user's click.
+fn accessibility_blocker() -> Option<&'static str> {
+    #[cfg(target_os = "macos")]
+    if !crate::macos_ax::is_trusted(false) {
+        return Some("accessibility");
+    }
+    None
+}
+
+/// The user-initiated moment where prompting IS correct. Returns whether the
+/// grant is now held; macOS shows its dialog only the first time, and points at
+/// the Privacy & Security pane thereafter.
+#[tauri::command]
+pub async fn interview_request_accessibility(app: AppHandle) -> Result<bool, String> {
+    crate::security::authorize(
+        &app,
+        crate::security::Operation::StartInterviewHacker,
+    )?;
+    #[cfg(target_os = "macos")]
+    let granted = crate::macos_ax::is_trusted(true);
+    #[cfg(not(target_os = "macos"))]
+    let granted = true;
+    Ok(granted)
 }
 
 #[tauri::command]
@@ -206,50 +228,40 @@ pub async fn start_interview_hacker(
     // Recognition bias for this session, resolved on the desktop from the brief,
     // job description, and resume. The provider truncates to its own cap, so this
     // only drops blanks and bounds what a malformed caller can hand us.
-    #[cfg(windows)]
     let keyterms: Vec<String> = keyterms
         .unwrap_or_default()
         .into_iter()
         .filter(|term| !term.trim().is_empty())
         .take(asr::deepgram::MAX_KEYTERMS)
         .collect();
-    // No ASR session exists to bias on non-Windows, so there is nothing to cap.
-    #[cfg(not(windows))]
-    let _keyterms: Vec<String> = {
-        let _ = keyterms;
-        Vec::new()
-    };
     let cancel_generation = app.state::<InterviewHandle>().1.load(Ordering::Relaxed);
     let ticket = crate::security::authorize(
         &app,
         crate::security::Operation::StartInterviewHacker,
     )?;
-    #[cfg(windows)]
     let detected = tauri::async_runtime::spawn_blocking(crate::meeting::detect::find_meeting_window)
         .await
         .map_err(|_| "call detection failed".to_string())?;
-    #[cfg(not(windows))]
-    let detected: Option<(String, String)> = None;
     crate::security::recheck(
         &app,
         crate::security::Operation::StartInterviewHacker,
         &ticket,
     )?;
     let Some((app_name, _)) = detected else {
-        // Off Windows there is no call detection at all, so `detected` is
-        // always None and the "open a call first" line would be a lie to
-        // someone already sitting in a Zoom call. Give the real reason.
-        #[cfg(not(windows))]
-        return Err("Interview Companion currently requires Windows.".to_string());
-        #[cfg(windows)]
+        // A missing macOS Accessibility grant reads exactly like "no call":
+        // window_titles returns empty for every process, so no title can match.
+        // Saying "open a call first" to someone already sitting in one sends
+        // them looking in the wrong place.
+        if accessibility_blocker().is_some() {
+            return Err(
+                "Aura needs Accessibility to see which call you are in. Allow it, then try again."
+                    .to_string(),
+            );
+        }
         return Err("Open a supported Zoom, Teams, or Google Meet call first.".to_string());
     };
-    // Only the Windows tail below consumes these.
-    #[cfg(not(windows))]
-    let _ = &app_name;
 
     let handle = app.state::<InterviewHandle>();
-    #[cfg_attr(not(windows), allow(unused_mut))]
     let mut state = handle.0.lock().unwrap_or_else(|error| error.into_inner());
     if handle.1.load(Ordering::Relaxed) != cancel_generation {
         return Err("Interview Companion start was cancelled.".to_string());
@@ -257,9 +269,6 @@ pub async fn start_interview_hacker(
     if state.is_some() {
         return Err("Interview Companion is already active.".to_string());
     }
-    #[cfg(not(windows))]
-    return Err("Interview Companion currently requires Windows.".to_string());
-    #[cfg(windows)]
     {
         static NEXT_EPOCH: std::sync::atomic::AtomicU64 =
             std::sync::atomic::AtomicU64::new(0);
@@ -660,14 +669,12 @@ fn emit_status(
     );
 }
 
-#[cfg(windows)]
 struct Streams {
     capture: audio_capture::CaptureConsumer,
     candidate: Box<dyn ContinuousAsrSession>,
     remote: Box<dyn ContinuousAsrSession>,
 }
 
-#[cfg(windows)]
 fn open_streams(
     provider: TranscriptionProvider,
     credentials: &TranscriptionCredentials,
@@ -705,13 +712,11 @@ fn open_streams(
     })
 }
 
-#[cfg(windows)]
 fn reconnect_delay(next_attempt: u8) -> Duration {
     let exponent = next_attempt.saturating_sub(1).min(5);
     Duration::from_secs((1u64 << exponent).min(MAX_RECONNECT_BACKOFF_SECS))
 }
 
-#[cfg(windows)]
 fn close_streams(streams: &mut Option<Streams>) {
     if let Some(mut live) = streams.take() {
         live.candidate.cancel();
@@ -720,7 +725,6 @@ fn close_streams(streams: &mut Option<Streams>) {
     }
 }
 
-#[cfg(windows)]
 fn source_failure_code(source: TranscriptSource, error: AsrError) -> &'static str {
     match (source, error) {
         (TranscriptSource::Candidate, AsrError::NotAuthenticated) => "candidate_no_credential",
@@ -736,7 +740,6 @@ fn source_failure_code(source: TranscriptSource, error: AsrError) -> &'static st
     }
 }
 
-#[cfg(windows)]
 fn run_worker(
     app: AppHandle,
     mut credentials: TranscriptionCredentials,
@@ -1096,7 +1099,6 @@ fn run_worker(
     }
 }
 
-#[cfg(windows)]
 fn drain_asr(
     app: &AppHandle,
     session_id: &str,
@@ -1151,7 +1153,6 @@ fn drain_asr(
     None
 }
 
-#[cfg(windows)]
 #[allow(clippy::too_many_arguments)]
 fn emit_transcript(
     app: &AppHandle,
@@ -1203,7 +1204,6 @@ fn emit_transcript(
     );
 }
 
-#[cfg(windows)]
 fn to_i16(samples: &[f32]) -> Vec<i16> {
     samples
         .iter()

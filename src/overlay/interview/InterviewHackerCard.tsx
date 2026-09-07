@@ -348,6 +348,16 @@ export function InterviewHackerCard({
           </button>
         )}
 
+        {hacker.phase === "checking" && hacker.callBlocker === "accessibility" && (
+          <button
+            type="button"
+            className="interview-hacker-primary"
+            onClick={hacker.requestCallAccess}
+          >
+            {hacker.blockerAsked ? "Open System Settings again" : "Allow in System Settings"}
+          </button>
+        )}
+
         {hacker.phase === "error" && !active && (
           <button
             type="button"
