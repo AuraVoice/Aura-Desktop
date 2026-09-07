@@ -1,3 +1,41 @@
+2026-09-07  Dictation felt slow at both ends of a hold, and none of it was the platform
+
+Problem: three complaints about the same hold. The HUD took a beat to appear after the chord
+went down; when insertion failed, the transcript card showed up seconds before its Copy button;
+and the waveform kept rippling for about two seconds after both keys were released, as if the
+microphone were still open.
+
+Issue: all three were ordering, not budget. (1) handle_arm opened the capture device BEFORE
+run_utterance, so the AVAudioEngine cold start (the module header cites 50-300ms, and the
+platform reports are worse on a cold endpoint) sat in front of the pill the user was waiting
+for, and every frame it captured was thrown away by discard_pending anyway. (2) hud::publish
+emitted dictation-update from the worker thread and only then queued the set_size onto the main
+thread, so a card whose window still had the previous phase's height painted clipped
+(.dictation-message and .glass-surface both hide overflow) and the Copy button, the last row,
+was below the fold until the resize landed. That queue is not fast on macOS: place_window calls
+focused_window_center, three AX properties each bounded by MESSAGING_TIMEOUT_SECONDS 0.25, and
+show() plus the Listening publish ask the same question microseconds apart. (3) the microphone
+is genuinely released 80ms after the keys come up, but Transcribing and Inserted render the same
+active pill with the same canvas, and useDictationLevels' idle sway never rests: with level 0 it
+still oscillates, so the pill animated through FINAL_TIMEOUT and the 2200ms caption linger.
+
+Solution: open_capture moved out of handle_arm into run_utterance, after hud::show, which also
+restores the documented invariant that no device is opened for a signed-out user. publish now
+defers its emit into the main-thread closure, after place_window, for the phases that grow into
+a card (Error, Pending, Recovery, Consent) so the webview paints once at the right size; the
+pill phases still emit immediately. target_center memoises its AX answer for 500ms, which is the
+read, not the applied geometry, so the no-applied-cache rule is untouched. And the waveform
+freezes its sway when the hold is over instead of idling forever.
+
+Justification: the interesting part is that every measurement pointed at the platform and every
+fix was local. A device cold start is real and unavoidable, but paying it before the indicator
+rather than after is a choice. An AX read bounded by a timeout is a budget, but asking the same
+question three times in one phase change is not. And a waveform that keeps moving is a claim
+about hardware state: once the device is closed it is not a stylistic idle animation, it is
+wrong. Rule of thumb this leaves behind: anything the user is waiting to SEE goes before
+anything the user is waiting to WORK, and an event that changes a window's size belongs on the
+same thread hop as the resize.
+
 2026-09-07  Dictation history failed to load on any database created before the share columns
 
 Problem: the Dictation page showed "couldn't load this right now" in a dev build while

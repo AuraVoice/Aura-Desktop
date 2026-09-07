@@ -445,7 +445,7 @@ mod platform {
                     // dictates.
                     //
                     // Both the device and the socket start only once the FULL
-                    // chord is down (`handle_arm`). The WASAPI cold start and
+                    // chord is down (`run_utterance`). The WASAPI cold start and
                     // the TLS handshake both hide behind the 200 to 400ms a
                     // human takes before their first phoneme, and audio sent
                     // before the handshake completes is buffered rather than
@@ -615,9 +615,6 @@ mod platform {
         held: &mut Option<PendingPayload>,
         failed: &mut Option<FailedUtterance>,
     ) -> bool {
-        if capture.is_none() {
-            *capture = open_capture();
-        }
         // A panic inside one utterance must not take dictation down for the
         // rest of the session. The hook in logging.rs additionally refuses to
         // format a panic raised on this thread, so no payload that might carry
@@ -784,6 +781,17 @@ mod platform {
         // preference itself and no-ops when off. Never inline: enumerating
         // audio sessions would add COM latency to the top of every hold.
         crate::audio_ducking::mute_others(app);
+
+        // Opened HERE, after the pill is on screen, not before it. The device
+        // cold start is the single most expensive thing on this path (50 to
+        // 300ms on macOS, and a cold WASAPI endpoint can be worse), and it used
+        // to sit in front of the HUD, so the user pressed the chord and watched
+        // nothing happen for a beat. Nothing is lost by moving it: every frame
+        // the device buffers before `discard_pending` below is thrown away
+        // anyway, so the utterance still starts at the same instant.
+        if capture.is_none() {
+            *capture = open_capture();
+        }
 
         let Some(active_capture) = capture.as_mut() else {
             let shutting_down = drain_until_release(rx);

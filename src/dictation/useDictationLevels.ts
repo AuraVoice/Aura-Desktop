@@ -49,6 +49,7 @@ function paintVerticalLevel(
   level: number,
   now: number,
   staticFrame: boolean,
+  resting: boolean,
 ) {
   const count = Math.max(7, Math.min(27, Math.floor(height / 4) - DICTATION_EDGE_INSET_BARS * 2));
   const segmentHeight = clamp(
@@ -70,12 +71,14 @@ function paintVerticalLevel(
 
   for (let index = 0; index < count; index += 1) {
     const position = index / Math.max(1, count - 1);
-    const ripple = staticFrame ? 0.42 : (Math.sin(now / 40 + index * 1.72) + 1) / 2;
-    const travel = staticFrame ? 0.5 : (Math.sin(now / 56 - index * 0.9) + 1) / 2;
+    const ripple = staticFrame || resting ? 0.42 : (Math.sin(now / 40 + index * 1.72) + 1) / 2;
+    const travel = staticFrame || resting ? 0.5 : (Math.sin(now / 56 - index * 0.9) + 1) / 2;
     const envelope = 0.72 + 0.28 * Math.sin(position * Math.PI * 2.4 + 0.35);
     const energy = staticFrame
       ? 0.35
-      : Math.min(1, 0.1 + ripple * 0.16 + level * envelope * (0.62 + travel * 0.34));
+      : resting
+        ? 0.1
+        : Math.min(1, 0.1 + ripple * 0.16 + level * envelope * (0.62 + travel * 0.34));
     const segmentWidth = 1.3 + energy * Math.max(1, width - 2.4);
     const x = (width - segmentWidth) / 2;
     const y = startY + index * (segmentHeight + gap);
@@ -131,9 +134,17 @@ export function useDictationLevels(
     function draw(now: number, staticFrame = false) {
       const { width, height } = sizeCanvas(canvas, context);
       context.clearRect(0, 0, width, height);
+      // The hold is over: the microphone is already closed and the words are
+      // on their way to the field, so the surface has to stop looking like it
+      // is still hearing something. The sway below exists to tell a live but
+      // silent microphone from a dead one, and after the chord is up there is
+      // no open microphone for it to describe. Without this the bars kept
+      // rippling through the whole transcribe-and-caption tail, which reads as
+      // two seconds of recording that never happened.
+      const resting = !active && !staticFrame;
 
       if (vertical) {
-        paintVerticalLevel(context, width, height, currentLevel(now), now, staticFrame);
+        paintVerticalLevel(context, width, height, currentLevel(now), now, staticFrame, resting);
         return;
       }
 
@@ -149,7 +160,7 @@ export function useDictationLevels(
           // working one.
           const baseline = DICTATION_BASELINE[index];
           const floor = baseline * maxHalfHeight * 0.34;
-          const sway = 1 + 0.13 * Math.sin(now / 175 + index * 1.35);
+          const sway = resting ? 1 : 1 + 0.13 * Math.sin(now / 175 + index * 1.35);
           // Per-bar phase, so speech ripples across the cluster instead of
           // moving every bar as one block.
           const ripple = 0.48 + 0.52 * Math.sin(now / 42 + index * 1.75 + energy * 2.1);

@@ -67,6 +67,18 @@ const CONSENT_HEIGHT: f64 = 176.0;
 static LAST_TARGET: AtomicIsize = AtomicIsize::new(0);
 static IDLE_HOVERED: AtomicBool = AtomicBool::new(false);
 
+/// Last answer from the macOS `target_center` AX read, as (pid, centre, when).
+/// Short enough that re-docking or moving the target window between two holds
+/// still re-reads, long enough that the burst of placements one phase change
+/// produces asks the target application once instead of three times.
+#[cfg(target_os = "macos")]
+const TARGET_CENTER_TTL: std::time::Duration = std::time::Duration::from_millis(500);
+/// (pid, centre in physical pixels, when it was read).
+#[cfg(target_os = "macos")]
+type CachedCenter = (isize, (f64, f64), std::time::Instant);
+#[cfg(target_os = "macos")]
+static TARGET_CENTER: Mutex<Option<CachedCenter>> = Mutex::new(None);
+
 /// True while the Buddy agent overlay is visible. The overlay and this HUD are
 /// separate always-on-top windows that are never both on screen: at rest the
 /// notch wins and this pill stays hidden; for the length of a hold the HUD
@@ -111,6 +123,22 @@ pub enum HudPhase {
 /// the recovery card's Copy button, and the consent prompt's buttons.
 fn accepts_clicks(phase: HudPhase) -> bool {
     matches!(phase, HudPhase::Idle | HudPhase::Recovery | HudPhase::Consent)
+}
+
+/// Phases whose window grows into a caption card rather than staying a pill.
+///
+/// For these the DOM update has to WAIT for the resize. `.dictation-message`
+/// and `.glass-surface` both clip their overflow, so a card painted while the
+/// window is still pill-sized has its lower rows cut off, and the recovery
+/// card's Copy button is the last row. Publishing the event from the worker
+/// thread and queueing the `set_size` separately made that gap as long as
+/// whatever else was sitting on the main thread. Every other phase keeps or
+/// shrinks the footprint and can paint immediately.
+fn resizes_into_card(phase: HudPhase) -> bool {
+    matches!(
+        phase,
+        HudPhase::Error | HudPhase::Pending | HudPhase::Recovery | HudPhase::Consent
+    )
 }
 
 #[derive(Clone, Serialize)]
@@ -313,14 +341,35 @@ fn target_center(target: isize) -> Option<(f64, f64)> {
 /// result is scaled by the primary display's backing factor. That is the same
 /// approximation `bar_position` already lives with, and it only has to be good
 /// enough to pick the right display.
+///
+/// The read is memoised for `TARGET_CENTER_TTL` because it is the single most
+/// expensive thing on the main thread during a hold: three AX properties, each
+/// bounded by `macos_ax::MESSAGING_TIMEOUT_SECONDS` (0.25s), so up to 750ms per
+/// call against an app that answers slowly. `show` and the `Listening` publish
+/// that follows it are microseconds apart and ask the same question, and every
+/// later phase transition asks it again. This memoises the ANSWER, not the
+/// applied geometry: `place_window` still recomputes size and position from
+/// live overlay state every time, so the "no applied cache" rule in CLAUDE.md
+/// is untouched.
 #[cfg(target_os = "macos")]
 fn target_center(target: isize) -> Option<(f64, f64)> {
     if target <= 0 {
         return None;
     }
+    let now = std::time::Instant::now();
+    {
+        let cached = TARGET_CENTER.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((pid, center, read_at)) = *cached {
+            if pid == target && now.duration_since(read_at) < TARGET_CENTER_TTL {
+                return Some(center);
+            }
+        }
+    }
     let (x, y) = crate::macos_ax::focused_window_center(target as i32)?;
     let scale = crate::macos_window::primary_backing_scale();
-    Some((x * scale, y * scale))
+    let center = (x * scale, y * scale);
+    *TARGET_CENTER.lock().unwrap_or_else(|e| e.into_inner()) = Some((target, center, now));
+    Some(center)
 }
 
 fn oriented_size(edge: NotchEdge, side_width: f64, side_height: f64) -> LogicalSize<f64> {
@@ -544,14 +593,20 @@ pub fn publish(app: &AppHandle, mut update: HudUpdate) {
     // this window from `last_update()`, so it must already say this phase.
     // Any phase but Idle takes the edge from the notch; Idle hands it back.
     overlay::set_dictation_hold(app, phase != HudPhase::Idle);
-    if let Some(window) = app.get_webview_window(DICTATION_WINDOW) {
-        let _ = window.emit(crate::events::DICTATION_UPDATE, update);
+    let defer_emit = resizes_into_card(phase);
+    if !defer_emit {
+        if let Some(window) = app.get_webview_window(DICTATION_WINDOW) {
+            let _ = window.emit(crate::events::DICTATION_UPDATE, update.clone());
+        }
     }
     let handle = app.clone();
     let target = LAST_TARGET.load(Ordering::Relaxed);
     let _ = app.run_on_main_thread(move || {
         if let Some(window) = handle.get_webview_window(DICTATION_WINDOW) {
             place_window(&handle, &window, target, phase, has_caption);
+            if defer_emit {
+                let _ = window.emit(crate::events::DICTATION_UPDATE, update);
+            }
             let _ = window.set_ignore_cursor_events(!accepts_clicks(phase));
             prepare_activation(&window, phase);
             if !SUPPRESSED_BY_OVERLAY.load(Ordering::Relaxed) {
