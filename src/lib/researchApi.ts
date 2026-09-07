@@ -183,16 +183,43 @@ function mapRun(raw: RawResearchRun): ResearchRun {
   };
 }
 
+/** A refusal the backend explained, as opposed to a transport failure.
+ *
+ * The refusal codes are the same stable enum the run's own `failure_code` uses, so the
+ * caller renders one with the same copy table. Carrying the code matters because the
+ * refusals that matter most here are not connection problems: an entitlement that has
+ * lapsed answers 402 with `research_requires_paid`, and reporting that as "check your
+ * connection" sends the user to fix the one thing that is working. */
+export class ResearchRequestError extends Error {
+  constructor(readonly status: number, readonly code: string) {
+    super(`Research request failed (${status})`);
+    this.name = "ResearchRequestError";
+  }
+}
+
+/** The backend's refusal shape is `{"detail": {"code": "..."}}`. Best effort: a body
+ * that is missing, empty or not JSON leaves the code empty and the caller falls back to
+ * its generic copy, which is what every non-refusal failure should read as anyway. */
+async function refusalCode(response: Response): Promise<string> {
+  try {
+    const body = await response.json() as { detail?: { code?: unknown } };
+    const code = body?.detail?.code;
+    return typeof code === "string" ? code : "";
+  } catch {
+    return "";
+  }
+}
+
 async function request(path: string, init?: RequestInit): Promise<ResearchRun> {
   const response = await authFetch(path, init);
-  if (!response.ok) throw new Error(`Research request failed (${response.status})`);
+  if (!response.ok) throw new ResearchRequestError(response.status, await refusalCode(response));
   return mapRun(await response.json() as RawResearchRun);
 }
 
 /** Mutation variant of request: same mapping, hard deadline. */
 async function mutate(path: string, init: RequestInit): Promise<ResearchRun> {
   const response = await authFetchWithTimeout(path, init, MUTATION_TIMEOUT_MS);
-  if (!response.ok) throw new Error(`Research request failed (${response.status})`);
+  if (!response.ok) throw new ResearchRequestError(response.status, await refusalCode(response));
   return mapRun(await response.json() as RawResearchRun);
 }
 
