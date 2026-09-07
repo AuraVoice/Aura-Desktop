@@ -436,3 +436,42 @@ is right when the run holds evidence, but a degrade that skips the stage produci
 prerequisite is not a graceful exit, it is a loop with a deadline, and it converted a clean
 refusal into an attempt-cap grind. The last one is the cheap one: a UI fallback that prints a
 machine identifier will eventually print it to a user, so it should read as a sentence.
+
+
+2026-09-07  manual meeting capture was unreachable on macOS for its entire life
+
+Problem: on a Mac there was no way to record a call that is not on the calendar. The user tried,
+could not find it, and said so. The proof was not a report, it was the log: across every session
+in ~/Library/Logs/com.aura.desktop/Aura Desktop.log, going back to the first macOS run, there was
+not one capture-now-requested line. The tray menu carrying that action had never once been opened.
+
+Issue: two things had to be true at the same time, and neither was visible on its own. First, the
+tray's "Capture now" row had quietly become the ONLY user-facing way to start a manual capture.
+The dashboard has no start button, and KebabMenu.tsx, which used to carry a "Capture this call"
+row, is orphaned: nothing imports it any more, so that row does not render and grep for the copy
+still finds it, which is exactly the kind of hit that reads as "the path exists". Second, the tray
+was built with show_menu_on_left_click(false), inherited from the Flutter tray's
+onTrayIconMouseDown/RightMouseDown split, so the whole menu sat behind a right-click. That split is
+a Windows convention. A MacBook trackpad has no second button, macOS menu bar extras conventionally
+open their menu on a plain click, and every plain click here summoned Buddy instead. So the sole
+entry point to a shipped feature was behind a gesture the target platform's default input device
+does not have.
+
+Solution: show_menu_on_left_click(true) on both platforms, and the on_tray_icon_event left-click
+summon handler deleted rather than kept alongside it. Deleting is not cleanup: tray-icon 0.24.1's
+macOS mouseUp: emits Click { Left, Up } unconditionally (platform_impl/macos/mod.rs:349), which is
+precisely what that handler matched, so one click could have opened the menu and summoned Buddy
+both. AppKit's menu tracking usually swallows that up-event, but nothing in the source promises it.
+"Open Buddy" is the first menu row, so the summon costs one extra click instead of disappearing.
+Right-click is unaffected: tray-icon leaves menu_on_right_click at its true default and Tauri never
+overrides it.
+
+Justification: a feature is not shipped because the code path is complete, it is shipped when a
+user can reach it, and reachability is a per-platform property that porting does not carry across.
+The gesture was correct on Windows and impossible on macOS with the same line of code. The second
+lesson is that an orphaned component is worse than a deleted one: KebabMenu still holds the copy,
+the handler and the icon for a capture button, so every grep for that path found it and confirmed
+a UI that does not exist, which is how the tray row became the only entry point without anyone
+noticing. The third is that "nobody reported it" is not evidence of anything, but a counter of a
+user-intent event sitting at exactly zero across every session is, and it was already in the log
+the whole time.

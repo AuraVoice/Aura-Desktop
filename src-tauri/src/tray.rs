@@ -1,7 +1,7 @@
 use log::{error, info};
 use tauri::{
     menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
-    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    tray::TrayIconBuilder,
     AppHandle, Emitter, Manager, Wry,
 };
 
@@ -140,19 +140,18 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         // full-color icon would render as a solid silhouette under this flag.
         .icon_as_template(true)
         .menu(&menu)
-        // Menu only on right-click; left-click summons the overlay directly,
-        // matching the Flutter tray's onTrayIconMouseDown/RightMouseDown split.
-        .show_menu_on_left_click(false)
-        .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click {
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
-                ..
-            } = event
-            {
-                overlay::summon(tray.app_handle());
-            }
-        })
+        // A plain click opens the menu on both platforms. The inherited Flutter
+        // split (left summons, right opens the menu) put every tray action behind
+        // a right-click, and a Mac trackpad has no second button, so "Capture now"
+        // - the only way to record a call that is not on the calendar - needed a
+        // two-finger click and was never once opened in practice. "Open Buddy" is
+        // the first row, so the summon costs one extra click.
+        //
+        // There is deliberately no on_tray_icon_event summon alongside this:
+        // tray-icon's macOS mouseUp: emits Click { Left, Up } unconditionally, so
+        // a left-click handler would risk firing the summon on the very click that
+        // opened the menu.
+        .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id().as_ref() {
             OPEN_BUDDY => overlay::summon(app),
             OPEN_DASHBOARD => {
