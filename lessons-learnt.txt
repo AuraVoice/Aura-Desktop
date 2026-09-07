@@ -513,3 +513,41 @@ it is false. The remaining dead code is uia/contract.rs (11), guide/capture/sess
 win_focus.rs (4) and others, none of it interview's. The comment now lists the measured
 remainder instead of an assumption, because a stale claim in a comment costs the next person the
 same experiment.
+
+
+2026-09-07  the update button existed, in the one place nobody looks
+
+Problem: a user clicked "Check for updates" in Settings, was told "Update ready", and had no way
+to install it. Closing Settings revealed an update strip on the dashboard behind it, which they
+had never noticed. The updater itself was healthy the whole time: download, install, restart,
+the in-a-call defer and the read-only-bundle case were all implemented and working.
+
+Issue: the install action had exactly one home, a thin <section> banner wedged between TopBar and
+TrialBanner in DashboardApp, and the only affordance that talks about updates lives inside the
+Settings dialog that covers it. SettingsDialog.checkForUpdate sets a hint string and clears it
+after three seconds; that hint is text with no action on it, so "Update ready" was the end of the
+road rather than the start of one. Two correct pieces, connected by nothing.
+
+A second defect was found while fixing the first and would have reproduced it in a new form.
+.db-settings-scrim and .db-modal-scrim are BOTH z-index 100, so which full-screen scrim covers
+which is decided by DOM order alone. The natural way to reach an update dialog is the button
+inside Settings, so a dialog opened from there can render underneath the dialog that opened it.
+It happened to work only because DetailModal portals into .db-app and appends last.
+
+Solution: the dashboard banner became a centered DetailModal (UpdateDialog), reusing the
+ResearchPaywallDialog shape so the portal, Esc, scrim dismissal, focus restore and exit animation
+are not reimplemented. The scrim gets an explicit z-index 300 rather than inheriting a tie. The
+install state machine moved to src/lib/updateInstall.ts so the overlay notch banner and the new
+dialog drive one implementation. Two bugs were caught in review before they shipped: swapping
+between two DetailModal elements makes React reconcile them as one component, so the exit
+animation played while rendering the other mode's content, fixed by holding the closing mode in a
+ref; and the scrim and close button still called onClose while an install was in flight, when both
+buttons were already disabled for that reason.
+
+Justification: "the feature is implemented" and "a user can reach it" are different claims, and
+the gap between them is invisible to everyone who already knows where the button is. The general
+lesson is the same one the tray icon taught a day earlier: the entry point deserves as much
+review as the mechanism. The z-index finding generalises further. Two independent full-screen
+layers sharing one z-index is not a working design, it is an undecided one that happens to
+resolve correctly, and the first component that changes mount order turns it into a bug nobody
+can reproduce from reading either file.

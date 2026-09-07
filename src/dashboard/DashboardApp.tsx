@@ -50,7 +50,7 @@ import { logError } from "../lib/log";
 import { pruneSiteIcons } from "../lib/siteIconCache";
 import { useGeneralSettings } from "../state/useGeneralSettings";
 import { useUpdateReady } from "../overlay/useUpdateReady";
-import { UpdateBanner } from "../UpdateBanner";
+import { UpdateDialog } from "./components/UpdateDialog";
 import "./dashboard.css";
 
 // Routes with a real page today. Everything else falls back to the placeholder.
@@ -112,10 +112,9 @@ export function DashboardShell({ user, collapsed }: { user: User | null; collaps
           user={user}
           notifications={notifications}
         />
-        <UpdateBanner
+        <UpdateDialog
           version={updateReady.version}
           updatedVersion={updateReady.updatedNotice}
-          surface="dashboard"
         />
         <TrialBanner uid={user.uid} />
         <div className="db-content" ref={contentRef}>

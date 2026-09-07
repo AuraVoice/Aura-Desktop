@@ -7790,3 +7790,126 @@
 .db-spin {
   animation: db-spin 0.9s linear infinite;
 }
+
+/* Update prompt. Replaced the thin banner strip that used to sit between the
+   top bar and the trial banner, which was the only place the install button
+   existed and was hidden behind the Settings dialog people check for updates
+   from. Same glass recipe as .db-research-paywall so the two dialogs match. */
+.db-modal-panel.db-update-dialog {
+  /* DetailModal portals into .db-app, so page-scoped tokens do not reach here.
+     Same reason .db-research-paywall declares its own. */
+  --update-teal: #167e6e;
+  --update-teal-dark: #0c594e;
+  width: min(440px, 100%);
+  border-radius: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
+  backdrop-filter: blur(18px) saturate(1.2);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+}
+/* An update is app-wide, not page-scoped, so it is deliberately absent from the
+   padding-left rule that shifts the connector and paywall dialogs to center over
+   the content area. This one centers on the window.
+
+   The z-index is load bearing: .db-settings-scrim and .db-modal-scrim are both
+   z-index 100, so which covers which is decided by DOM order alone. The usual
+   way to reach this dialog is the "Check for updates" button INSIDE Settings,
+   so without this it can open underneath the dialog it was opened from. */
+.db-modal-scrim:has(> .db-update-dialog) {
+  z-index: 300;
+}
+/* The shared head paints a divider under itself, which would cut the glass in
+   half; here the head carries only the close button, so it has no line to draw.
+   The title prop is passed for the aria-label alone (DetailModal maps it), with
+   the heading rendered in the body under the glyph. */
+.db-update-dialog .db-modal-head::after,
+.db-update-dialog .db-modal-title {
+  display: none;
+}
+.db-update-dialog .db-modal-body {
+  padding-top: 0;
+}
+.db-update-dialog-body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0 12px 12px;
+  text-align: center;
+}
+/* Bare glyph on the glass with a soft radial glow, no boxed chip behind it. */
+.db-update-dialog-glyph {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 16px;
+  color: var(--update-teal);
+}
+.db-update-dialog-glyph::before {
+  position: absolute;
+  z-index: -1;
+  width: 76px;
+  height: 76px;
+  background: radial-gradient(circle, rgba(22, 126, 110, 0.16), rgba(22, 126, 110, 0) 68%);
+  content: "";
+}
+.db-update-dialog-body h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.db-update-dialog-body p {
+  margin: 10px 0 0;
+  max-width: 34ch;
+  color: var(--db-text-dim);
+  font-size: 14px;
+  line-height: 1.55;
+}
+.db-update-dialog-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 22px;
+}
+.db-update-dialog-primary {
+  display: inline-flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 20px;
+  border: 1px solid var(--update-teal-dark);
+  border-radius: 999px;
+  background: var(--update-teal-dark);
+  box-shadow: 0 5px 14px rgba(12, 89, 78, 0.18);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background 0.16s var(--db-ease), color 0.16s var(--db-ease);
+}
+.db-update-dialog-primary:hover:not(:disabled) {
+  background: #084b42;
+}
+.db-update-dialog-dismiss {
+  min-height: 44px;
+  padding: 0 18px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--db-text-dim);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.16s var(--db-ease), color 0.16s var(--db-ease);
+}
+.db-update-dialog-dismiss:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.5);
+  color: var(--db-text);
+}
+.db-update-dialog-primary:disabled,
+.db-update-dialog-dismiss:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
