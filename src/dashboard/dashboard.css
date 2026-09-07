@@ -462,17 +462,29 @@
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
 }
+/* Taken out of flow so it centres on the bar itself: the actions cluster is a
+   flex sibling, so `justify-content: center` would only centre the title in the
+   space the cluster leaves, which reads visibly off-centre. */
 .db-topbar-title {
+  position: absolute;
+  left: 50%;
   margin: 0;
+  max-width: 52%;
+  overflow: hidden;
   font-family: var(--font-title, system-ui, sans-serif);
-  font-weight: 600;
-  font-size: 25px;
+  font-weight: 700;
+  font-size: 28px;
   letter-spacing: -0.025em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translateX(-50%);
 }
 .db-topbar-actions {
   display: flex;
   align-items: center;
   gap: 8px;
+  margin-left: auto;
 }
 .db-icon-btn {
   position: relative;
@@ -1669,8 +1681,8 @@
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 0 16px;
-  border-radius: 10px;
+  padding: 0 20px;
+  border-radius: 999px;
   font-size: 14px;
   font-weight: 650;
   cursor: pointer;
@@ -1685,16 +1697,18 @@
 .db-research-primary:hover {
   background: #084b42;
 }
-.db-research-secondary,
-.db-research-back {
-  border: 1px solid var(--research-line);
-  background: rgba(255, 255, 255, 0.7);
+.db-research-secondary {
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
   color: var(--research-ink);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  backdrop-filter: blur(18px) saturate(1.2);
 }
-.db-research-secondary:hover,
-.db-research-back:hover {
-  border-color: #b8c2b8;
-  background: #fff;
+.db-research-secondary:hover {
+  border-color: rgba(255, 255, 255, 0.92);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.94), rgba(232, 244, 241, 0.66));
+  color: var(--research-teal-dark);
 }
 .db-research-primary:active,
 .db-research-secondary:active,
@@ -2143,13 +2157,11 @@
 /* Shared run header and controls */
 .db-research-detail-bar,
 .db-research-detail-tools,
-.db-research-run-head,
 .db-research-run-summary {
   display: flex;
   align-items: center;
 }
-.db-research-detail-bar,
-.db-research-run-head {
+.db-research-detail-bar {
   justify-content: space-between;
   gap: 18px;
 }
@@ -2157,61 +2169,73 @@
 .db-research-run-summary {
   gap: 9px;
 }
+/* Glass pill, same recipe as `.db-research-starters button` further up. The
+   sheen needs the element to be a positioned, clipping box. */
 .db-research-back {
-  padding: 0 10px;
-  border-color: transparent;
-  background: transparent;
-}
-.db-research-more {
   position: relative;
-}
-.db-research-more > button {
-  display: grid;
-  width: 44px;
-  height: 44px;
-  place-items: center;
-  border: 1px solid var(--research-line);
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.7);
+  overflow: hidden;
+  padding: 0 18px;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
   color: var(--research-ink);
-  cursor: pointer;
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  backdrop-filter: blur(18px) saturate(1.2);
 }
-.db-research-more > div {
+.db-research-back::after {
   position: absolute;
-  z-index: 5;
-  top: calc(100% + 6px);
-  right: 0;
-  width: 180px;
-  padding: 5px;
-  border: 1px solid var(--research-line);
-  border-radius: 11px;
-  background: #fff;
-  box-shadow: var(--db-shadow-pop);
+  z-index: 1;
+  top: -130%;
+  left: -42%;
+  width: 28%;
+  height: 360%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.12),
+    rgba(255, 255, 255, 0.72),
+    rgba(255, 255, 255, 0.12),
+    transparent
+  );
+  content: "";
+  pointer-events: none;
+  transform: translate3d(-220%, -28%, 0) rotate(-24deg);
 }
-.db-research-more > div button {
-  display: flex;
-  width: 100%;
-  min-height: 40px;
-  align-items: center;
-  gap: 8px;
-  padding: 0 10px;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--research-coral);
-  cursor: pointer;
+.db-research-back:hover {
+  border-color: rgba(255, 255, 255, 0.92);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.94), rgba(232, 244, 241, 0.66));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 8px 20px rgba(63, 86, 78, 0.09);
+  color: var(--research-teal-dark);
 }
-.db-research-more > div button:hover {
-  background: #fff0ee;
+.db-research-back:hover::after {
+  animation: db-glass-sheen 740ms cubic-bezier(0.22, 1, 0.36, 1);
 }
+/* The overflow trigger is the least important control on this bar, so it gets
+   no resting box at all: just the glyph, with a translucent disc on hover. It
+   comes from RowMenu, so only the sizing is set here. */
+.db-research-detail-tools .db-row-action {
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  color: #68746f;
+}
+.db-research-detail-tools .db-row-action:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.62);
+  color: var(--research-ink);
+}
+/* Block, not flex: the title stack centres on the full width while the counts
+   sit out of flow at the right edge, so centring is not thrown off by them. */
 .db-research-run-head {
-  align-items: flex-start;
+  position: relative;
+  display: block;
   padding-bottom: 20px;
-  border-bottom: 1px solid var(--research-line);
+  border-bottom: 1px solid rgba(63, 86, 78, 0.14);
 }
 .db-research-run-head > div:first-child {
   min-width: 0;
   max-width: 760px;
+  margin-inline: auto;
+  text-align: center;
 }
 .db-research-run-head h1 {
   display: -webkit-box;
@@ -2232,11 +2256,13 @@
 .db-research-original-request {
   max-width: 720px;
   margin-top: 10px;
+  margin-inline: auto;
   color: #68736e;
   font-size: 12px;
 }
 .db-research-original-request summary {
   width: fit-content;
+  margin-inline: auto;
   cursor: pointer;
   font-weight: 650;
 }
@@ -2247,10 +2273,16 @@
   padding: 11px 12px;
   border: 1px solid var(--research-line);
   border-radius: 9px;
-  background: #f7f8f5;
+  background: rgba(255, 255, 255, 0.55);
   color: #4f5a55;
   line-height: 1.55;
+  text-align: left;
   white-space: pre-wrap;
+}
+.db-research-run-summary {
+  position: absolute;
+  top: 0;
+  right: 0;
 }
 .db-research-run-summary span {
   display: flex;
@@ -2898,7 +2930,7 @@
 .db-research-report-layout {
   position: relative;
   display: grid;
-  grid-template-columns: 190px minmax(0, 720px) 150px;
+  grid-template-columns: 190px minmax(0, 720px) 170px;
   justify-content: space-between;
   gap: 28px;
   align-items: start;
@@ -2914,22 +2946,54 @@
 .db-research-report-nav .db-research-aside-label {
   margin-bottom: 9px;
 }
+/* A fixed min-height keeps the list from shifting when the active item grows. */
 .db-research-report-nav > button {
+  position: relative;
+  display: flex;
+  min-height: 34px;
+  align-items: center;
   overflow: hidden;
-  padding: 8px 10px;
+  padding: 0 10px 0 14px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 999px;
   background: transparent;
-  color: #68746f;
+  color: #7b867f;
   font-size: 12px;
+  font-weight: 550;
   text-align: left;
   text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
+  transition: color 0.15s var(--db-ease), font-size 0.15s var(--db-ease);
+}
+.db-research-report-nav > button::before {
+  position: absolute;
+  top: 50%;
+  left: 3px;
+  width: 3px;
+  height: 0;
+  border-radius: 999px;
+  background: var(--research-teal-dark);
+  content: "";
+  transform: translateY(-50%);
+  transition: height 0.18s var(--db-ease);
 }
 .db-research-report-nav > button:hover {
-  background: #edf2ee;
+  background: rgba(255, 255, 255, 0.62);
   color: var(--research-ink);
+}
+.db-research-report-nav > button.is-active {
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 4px 12px rgba(63, 86, 78, 0.06);
+  color: var(--research-teal-dark);
+  font-size: 13.5px;
+  font-weight: 750;
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  backdrop-filter: blur(18px) saturate(1.2);
+}
+.db-research-report-nav > button.is-active::before {
+  height: 16px;
 }
 .db-research-report {
   display: flex;
@@ -2938,9 +3002,12 @@
 }
 .db-research-report-summary {
   padding: 28px 30px;
-  border: 1px solid var(--research-line);
-  border-radius: 15px;
-  background: linear-gradient(135deg, #fafbf8, #f1f3ef);
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  border-radius: 22px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  backdrop-filter: blur(18px) saturate(1.2);
 }
 .db-research-report-summary > p {
   margin-top: 11px;
@@ -2965,7 +3032,7 @@
 .db-research-report-section {
   scroll-margin-top: 20px;
   padding: 28px 4px 25px;
-  border-bottom: 1px solid var(--research-line);
+  border-bottom: 1px solid rgba(63, 86, 78, 0.1);
 }
 .db-research-report-section h2,
 .db-research-report-gaps h2,
@@ -2979,24 +3046,35 @@
   font-size: 16px;
   line-height: 1.75;
 }
+/* min-width, not width: source numbers run past 9 on a well-sourced brief and a
+   fixed 19px box clipped them. */
 .db-research-citation {
   display: inline-grid;
-  width: 19px;
+  min-width: 19px;
   height: 19px;
   margin-left: 3px;
-  padding: 0;
+  padding: 0 5px;
   place-items: center;
-  border: 1px solid #cbd2cc;
-  border-radius: 5px;
-  background: #eef1ed;
-  color: #4f5b55;
-  font-size: 9px;
+  border: 1px solid rgba(22, 126, 110, 0.22);
+  border-radius: 999px;
+  background: var(--research-teal-soft);
+  color: var(--research-teal-dark);
+  font-size: 9.5px;
   font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
   vertical-align: super;
   cursor: pointer;
+  transition: background 0.14s var(--db-ease), box-shadow 0.14s var(--db-ease),
+    transform 0.12s var(--db-ease);
 }
 .db-research-citation:hover {
-  background: #dde2dd;
+  background: #c9e9e0;
+  box-shadow: 0 3px 8px rgba(12, 89, 78, 0.16);
+  transform: translateY(-1px);
+}
+.db-research-citation:active {
+  transform: translateY(0);
 }
 .db-research-report-gaps {
   scroll-margin-top: 20px;
@@ -3028,13 +3106,21 @@
   color: var(--research-amber);
 }
 .db-research-report-gaps > div button {
-  min-height: 32px;
-  border: 0;
-  background: transparent;
+  min-height: 34px;
+  padding: 0 14px;
+  border: 1px solid rgba(255, 255, 255, 0.78);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.62);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
   color: #7b5413;
-  font-size: 11px;
+  font-size: 11.5px;
   font-weight: 700;
+  white-space: nowrap;
   cursor: pointer;
+  transition: background 0.15s var(--db-ease);
+}
+.db-research-report-gaps > div button:hover {
+  background: rgba(255, 255, 255, 0.86);
 }
 .db-research-disclaimer {
   margin-top: 12px !important;
@@ -3050,16 +3136,21 @@
   display: grid;
   width: 100%;
   min-height: 62px;
-  grid-template-columns: 36px minmax(0, 1fr) 24px 18px;
+  grid-template-columns: 36px minmax(0, 1fr) 28px 18px;
   align-items: center;
   gap: 11px;
-  padding: 8px 4px;
+  padding: 8px 12px;
   border: 0;
-  border-bottom: 1px solid var(--research-line);
+  border-bottom: 1px solid rgba(63, 86, 78, 0.1);
+  border-radius: 14px;
   background: transparent;
   color: var(--research-ink);
   text-align: left;
   cursor: pointer;
+  transition: background 0.15s var(--db-ease);
+}
+.db-research-report-sources > button:hover {
+  background: rgba(255, 255, 255, 0.62);
 }
 .db-research-report-sources > button > span:nth-child(2) {
   display: flex;
@@ -3075,9 +3166,18 @@
   text-transform: capitalize;
 }
 .db-research-report-sources > button > span:nth-child(3) {
-  color: #59645f;
+  display: inline-grid;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  place-items: center;
+  border: 1px solid rgba(22, 126, 110, 0.22);
+  border-radius: 999px;
+  background: var(--research-teal-soft);
+  color: var(--research-teal-dark);
   font-size: 11px;
   font-weight: 750;
+  font-variant-numeric: tabular-nums;
 }
 .db-research-report-actions {
   position: sticky;
@@ -3086,23 +3186,57 @@
   gap: 7px;
 }
 .db-research-report-actions button {
+  position: relative;
   display: flex;
-  min-height: 40px;
+  min-height: 44px;
   align-items: center;
-  gap: 7px;
-  padding: 0 10px;
-  border: 1px solid var(--research-line);
-  border-radius: 9px;
-  background: rgba(255, 255, 255, 0.72);
-  color: #53605a;
-  font-size: 11px;
+  overflow: hidden;
+  gap: 9px;
+  padding: 0 16px;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  border-radius: 28px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
+  color: #4a5751;
+  font-size: 13px;
   font-weight: 650;
   text-align: left;
   cursor: pointer;
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  backdrop-filter: blur(18px) saturate(1.2);
+  transition: color 0.15s var(--db-ease), transform 0.12s var(--db-ease),
+    box-shadow 0.15s var(--db-ease);
+}
+.db-research-report-actions button svg {
+  flex-shrink: 0;
+  color: var(--research-teal-dark);
+}
+.db-research-report-actions button::after {
+  position: absolute;
+  z-index: 1;
+  top: -130%;
+  left: -42%;
+  width: 28%;
+  height: 360%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.12),
+    rgba(255, 255, 255, 0.72),
+    rgba(255, 255, 255, 0.12),
+    transparent
+  );
+  content: "";
+  pointer-events: none;
+  transform: translate3d(-220%, -28%, 0) rotate(-24deg);
 }
 .db-research-report-actions button:hover {
-  background: #fff;
-  color: var(--research-ink);
+  color: var(--research-teal-dark);
+  transform: translateY(-1px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 8px 20px rgba(63, 86, 78, 0.09);
+}
+.db-research-report-actions button:hover::after {
+  animation: db-glass-sheen 740ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 .db-research-source-drawer,
 .db-research-confirm {
@@ -3170,10 +3304,16 @@
   height: 40px;
   flex-shrink: 0;
   place-items: center;
-  border: 1px solid var(--research-line);
-  border-radius: 9px;
-  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.62);
+  color: #5a655f;
   cursor: pointer;
+  transition: background 0.15s var(--db-ease), color 0.15s var(--db-ease);
+}
+.db-research-drawer-head > button:hover {
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--research-ink);
 }
 .db-research-source-drawer h3 {
   margin-top: 10px;
@@ -3438,7 +3578,7 @@
   }
   .db-research-report-nav > button {
     flex-shrink: 0;
-    background: #edf2ee;
+    background: rgba(255, 255, 255, 0.55);
   }
   .db-research-report-actions {
     grid-column: 1;
@@ -3473,8 +3613,7 @@
   .db-research-history-source-count {
     display: none;
   }
-  .db-research-detail-bar,
-  .db-research-run-head {
+  .db-research-detail-bar {
     align-items: flex-start;
     flex-direction: column;
   }
@@ -3483,11 +3622,13 @@
     justify-content: flex-end;
   }
   .db-research-run-summary {
-    align-self: stretch;
-    justify-content: flex-start;
+    position: static;
+    justify-content: center;
+    margin-top: 14px;
+    gap: 22px;
   }
   .db-research-run-summary span {
-    align-items: flex-start;
+    align-items: center;
   }
   .db-research-scope-main,
   .db-research-clarification,

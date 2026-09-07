@@ -13,7 +13,6 @@ import {
   Clipboard,
   Globe2,
   LoaderCircle,
-  MoreHorizontal,
   RotateCcw,
   Search,
   ShieldCheck,
@@ -43,6 +42,7 @@ import { PageError } from "../components/PageError";
 import { ResearchPaywallDialog } from "../components/ResearchPaywallDialog";
 import { SiteIcon } from "../components/SiteIcon";
 import { RefreshIndicator } from "../components/RefreshIndicator";
+import { RowMenu } from "../components/RowMenu";
 import { shortDateTime } from "../format";
 import { useDashboardResource } from "../useDashboardResource";
 
@@ -380,6 +380,52 @@ function CitationButton({ number, evidence, claim, onSelect }: { number: number;
   return <button type="button" className="db-research-citation" onClick={() => onSelect({ ...evidence, claim })} aria-label={`Open source ${number}`}>{number}</button>;
 }
 
+/**
+ * Tracks which brief section is under the reading line so the side nav can show
+ * it. This is a position query rather than a visibility one: a short trailing
+ * section (Sources) never reaches the line, so the bottom of the scroll has to
+ * be pinned against the scroller regardless, which an IntersectionObserver
+ * cannot do on its own. Measurement is rAF-throttled and only reads a handful
+ * of rects, since a brief has a single-digit number of sections.
+ */
+function useActiveSection(sectionIds: string[]) {
+  const [activeId, setActiveId] = useState("");
+  // Joined so the effect re-runs on content change, not on every new array.
+  const idsKey = sectionIds.join("|");
+  useEffect(() => {
+    const ids = idsKey ? idsKey.split("|") : [];
+    if (ids.length === 0) return;
+    // `.db-content` is the app's `overflow-y: auto` scroller, not the window.
+    const scroller = document.querySelector<HTMLElement>(".db-content");
+    if (!scroller) return;
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
+      const bounds = scroller.getBoundingClientRect();
+      const readingLine = bounds.top + bounds.height * 0.22;
+      let current = ids[0];
+      for (const id of ids) {
+        const node = document.getElementById(id);
+        if (node && node.getBoundingClientRect().top <= readingLine) current = id;
+      }
+      if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 4) current = ids[ids.length - 1];
+      setActiveId(current);
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(measure);
+    };
+    measure();
+    scroller.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("resize", schedule);
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      scroller.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", schedule);
+    };
+  }, [idsKey]);
+  return activeId;
+}
+
 function BriefView({ run, onNewRequest }: { run: ResearchRun; onNewRequest: (request: string) => void }) {
   const [selected, setSelected] = useState<SelectedEvidence | null>(null);
   const [copied, setCopied] = useState(false);
@@ -390,6 +436,14 @@ function BriefView({ run, onNewRequest }: { run: ResearchRun; onNewRequest: (req
     return urls;
   }, [run.claims]);
   const sections = run.brief.sections ?? [];
+  const navItems = useMemo(() => {
+    const items = [{ id: "research-summary", label: "Summary" }];
+    (run.brief.sections ?? []).forEach((section, index) => items.push({ id: `research-section-${index}`, label: section.heading || `Finding ${index + 1}` }));
+    if (run.gaps.length > 0) items.push({ id: "research-gaps", label: "Open questions" });
+    items.push({ id: "research-sources", label: "Sources" });
+    return items;
+  }, [run.brief.sections, run.gaps.length]);
+  const activeSection = useActiveSection(useMemo(() => navItems.map((item) => item.id), [navItems]));
   const copyBrief = async () => {
     const text = [run.brief.executive_summary, ...sections.flatMap((section) => [section.heading, ...(section.statements ?? []).map((statement) => statement.text)])].filter(Boolean).join("\n\n");
     try {
@@ -409,10 +463,7 @@ function BriefView({ run, onNewRequest }: { run: ResearchRun; onNewRequest: (req
     <div className="db-research-report-layout">
       <nav className="db-research-report-nav" aria-label="Brief sections">
         <span className="db-research-aside-label">In this brief</span>
-        <button type="button" onClick={() => scrollToSection("research-summary")}>Summary</button>
-        {sections.map((section, index) => <button type="button" key={`${index}:${section.heading}`} onClick={() => scrollToSection(`research-section-${index}`)}>{section.heading || `Finding ${index + 1}`}</button>)}
-        {run.gaps.length > 0 && <button type="button" onClick={() => scrollToSection("research-gaps")}>Open questions</button>}
-        <button type="button" onClick={() => scrollToSection("research-sources")}>Sources</button>
+        {navItems.map((item) => <button type="button" key={item.id} className={item.id === activeSection ? "is-active" : undefined} aria-current={item.id === activeSection ? "true" : undefined} title={item.label} onClick={() => scrollToSection(item.id)}>{item.label}</button>)}
       </nav>
 
       <article className="db-research-report">
@@ -463,8 +514,8 @@ function BriefView({ run, onNewRequest }: { run: ResearchRun; onNewRequest: (req
       </article>
 
       <aside className="db-research-report-actions">
-        <button type="button" onClick={() => void copyBrief()}>{copied ? <Check size={16} /> : <Clipboard size={16} />} {copied ? "Copied" : "Copy brief"}</button>
-        <button type="button" onClick={() => onNewRequest(`Continue researching: ${run.request}`)}><RotateCcw size={16} /> Related research</button>
+        <button type="button" title="Copy the full brief text to the clipboard" onClick={() => void copyBrief()}>{copied ? <Check size={16} /> : <Clipboard size={16} />} {copied ? "Copied" : "Copy brief"}</button>
+        <button type="button" title="Start a new run that continues from this request" onClick={() => onNewRequest(`Continue researching: ${run.request}`)}><RotateCcw size={16} /> Research further</button>
       </aside>
 
       {selected && (
@@ -535,10 +586,7 @@ function ResearchDetail({ runId, onBack, onChanged, onNewRequest }: { runId: str
         <div className="db-research-detail-tools">
           <RefreshIndicator refreshing={resource.refreshing || activity.refreshing} stale={resource.stale} cachedAt={resource.cachedAt} onRetry={() => { resource.reload(); activity.reload(); }} />
           {(activeStates.has(run.state) || run.state === "awaiting_clarification") && !legacyParked && <button type="button" className="db-research-secondary" disabled={busy} onClick={() => void mutate(() => cancelResearch(run.runId))}><X size={15} /> Cancel</button>}
-          <div className="db-research-more">
-            <button type="button" onClick={() => setMenuOpen((open) => !open)} aria-label="More research actions" aria-expanded={menuOpen}><MoreHorizontal size={18} /></button>
-            {menuOpen && <div><button type="button" onClick={() => { setMenuOpen(false); setConfirmDelete(true); }}><Trash2 size={15} /> Delete research</button></div>}
-          </div>
+          <RowMenu open={menuOpen} onOpenChange={setMenuOpen} label="More research actions" items={[{ label: "Delete research", Icon: Trash2, danger: true, onSelect: () => setConfirmDelete(true) }]} />
         </div>
       </div>
 
