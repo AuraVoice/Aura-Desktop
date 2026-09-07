@@ -48,6 +48,10 @@ export interface ConnectorsState {
   loading: boolean;
   loadError: boolean;
   action: ConnectorAction | null;
+  /** True while the only thing in flight is the user's trip to the browser.
+   * That is not "busy": the page stays usable and the switch stays clickable
+   * so a second click restarts the flow. */
+  awaitingBrowser: boolean;
   banner: ConnectorBanner | null;
   reload: () => Promise<void>;
   enableCalendar: () => Promise<void>;
@@ -61,6 +65,34 @@ export interface ConnectorsState {
 }
 
 const OAUTH_EXPIRY_BANNER_MS = 3 * 60 * 1_000;
+/** How long the UI waits on the browser leg. Deliberately shorter than the
+ * backend's 10 minute attempt TTL: giving up locally costs nothing, because a
+ * completion arriving later is still accepted (handleOAuthCompletion only
+ * rejects a DIFFERENT pending attempt), while sitting in the waiting state for
+ * ten minutes left the whole page inert after one abandoned browser tab. */
+const OAUTH_WAIT_MS = 3 * 60 * 1_000;
+/** Success normally arrives on the deep link. This poll is the backstop for
+ * when the redirect never lands (browser closed right after Allow), which
+ * otherwise showed "still waiting" for a connection that already existed. */
+const OAUTH_POLL_MS = 10 * 1_000;
+
+const WAITING_ACTIONS = new Set<ConnectorAction>([
+  "waiting_for_google",
+  "waiting_for_gmail",
+  "waiting_for_notion",
+]);
+
+const PROVIDER_NAMES: Record<ConnectorName, string> = {
+  google_calendar: "Google",
+  gmail: "Google",
+  notion: "Notion",
+};
+
+const CONNECTED_MESSAGES: Record<ConnectorName, string> = {
+  google_calendar: "Google Calendar is connected. Buddy has the latest.",
+  gmail: "Gmail is connected. Buddy can now help send email when you ask.",
+  notion: "Notion is connected. Say where something on your screen should go and Buddy saves it there.",
+};
 
 export function useConnectors(): ConnectorsState {
   const [catalog, setCatalog] = useState<ConnectorsCatalog | null>(null);
@@ -70,6 +102,7 @@ export function useConnectors(): ConnectorsState {
   const [banner, setBanner] = useState<ConnectorBanner | null>(null);
   const bannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const oauthTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const oauthPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pendingOAuthRef = useRef<{ attemptId: string; connector: ConnectorName } | null>(null);
   const handledAttemptsRef = useRef(new Set<string>());
   const mountedRef = useRef(true);
@@ -86,6 +119,10 @@ export function useConnectors(): ConnectorsState {
       clearTimeout(oauthTimerRef.current);
       oauthTimerRef.current = null;
     }
+    if (oauthPollRef.current) {
+      clearInterval(oauthPollRef.current);
+      oauthPollRef.current = null;
+    }
     pendingOAuthRef.current = null;
   }, []);
 
@@ -96,22 +133,44 @@ export function useConnectors(): ConnectorsState {
   ) => {
     clearOAuthWait();
     pendingOAuthRef.current = { attemptId, connector };
-    const providerName = connector === "notion" ? "Notion" : "Google";
+    const providerName = PROVIDER_NAMES[connector];
+
+    oauthPollRef.current = setInterval(() => {
+      if (pendingOAuthRef.current?.attemptId !== attemptId) return;
+      void fetchConnectors().then((next) => {
+        if (!mountedRef.current) return;
+        if (pendingOAuthRef.current?.attemptId !== attemptId) return;
+        const connected: Record<ConnectorName, boolean> = {
+          google_calendar: next.googleCalendar.enabled,
+          gmail: next.gmail.enabled,
+          notion: next.notion.enabled,
+        };
+        setCatalog(next);
+        if (!connected[connector]) return;
+        // Claim the attempt so the deep link, if it ever turns up, does not
+        // replay a second "connected" banner over this one.
+        handledAttemptsRef.current.add(attemptId);
+        clearOAuthWait();
+        clearBannerTimer();
+        setAction(null);
+        setBanner({ tone: "success", message: CONNECTED_MESSAGES[connector] });
+      }).catch((err) => logError("useConnectors: OAuth wait poll", err));
+    }, OAUTH_POLL_MS);
+
     oauthTimerRef.current = setTimeout(() => {
-      oauthTimerRef.current = null;
-      pendingOAuthRef.current = null;
+      clearOAuthWait();
       if (!mountedRef.current) return;
       setAction(null);
       setBanner({
         tone: "info",
-        message: `The ${providerName} connection window expired. Nothing changed, so you can try again.`,
+        message: `Aura stopped waiting for ${providerName}. Turn it on again to reopen the browser.`,
       });
       bannerTimerRef.current = setTimeout(() => {
         if (mountedRef.current) setBanner(null);
         bannerTimerRef.current = null;
       }, OAUTH_EXPIRY_BANNER_MS);
-    }, Math.max(1, expiresInSeconds) * 1_000);
-  }, [clearOAuthWait]);
+    }, Math.min(Math.max(1, expiresInSeconds) * 1_000, OAUTH_WAIT_MS));
+  }, [clearBannerTimer, clearOAuthWait]);
 
   const applyCalendar = useCallback((calendar: GoogleCalendarConnectorStatus) => {
     if (!mountedRef.current) return;
@@ -163,7 +222,10 @@ export function useConnectors(): ConnectorsState {
     waitingMessage: string;
     openFailedMessage: string;
   }) => {
-    if (action) return;
+    // A browser wait is not real work, so it never blocks a new request: the
+    // click that lands during one is the user asking to start over.
+    if (action && !WAITING_ACTIONS.has(action)) return;
+    clearOAuthWait();
     clearBannerTimer();
     setAction(flow.enablingAction);
     setBanner({ tone: "info", message: flow.checkingMessage });
@@ -201,7 +263,7 @@ export function useConnectors(): ConnectorsState {
         setBanner({ tone: "error", message: flow.openFailedMessage });
       }
     }
-  }, [action, clearBannerTimer, waitForOAuth]);
+  }, [action, clearBannerTimer, clearOAuthWait, waitForOAuth]);
 
   /** The shared disable/refresh flow, same deduplication rationale. */
   const runAction = useCallback(async <Status,>(flow: {
@@ -214,7 +276,10 @@ export function useConnectors(): ConnectorsState {
     failedMessage: string;
     autoClearDoneMs?: number;
   }) => {
-    if (action) return;
+    // A browser wait is not real work, so it never blocks a new request: the
+    // click that lands during one is the user asking to start over.
+    if (action && !WAITING_ACTIONS.has(action)) return;
+    clearOAuthWait();
     clearBannerTimer();
     setAction(flow.actionName);
     setBanner({ tone: "info", message: flow.startMessage });
@@ -236,7 +301,7 @@ export function useConnectors(): ConnectorsState {
       setAction(null);
       setBanner({ tone: "error", message: flow.failedMessage });
     }
-  }, [action, clearBannerTimer]);
+  }, [action, clearBannerTimer, clearOAuthWait]);
 
   const enableCalendar = useCallback(() => runEnable({
     connector: "google_calendar",
@@ -346,7 +411,7 @@ export function useConnectors(): ConnectorsState {
     handledAttemptsRef.current.add(completion.attemptId);
     clearOAuthWait();
 
-    const providerName = completion.connector === "notion" ? "Notion" : "Google";
+    const providerName = PROVIDER_NAMES[completion.connector];
     if (completion.outcome !== "success") {
       if (!mountedRef.current) return;
       setAction(null);
@@ -368,16 +433,11 @@ export function useConnectors(): ConnectorsState {
         gmail: next.gmail.enabled,
         notion: next.notion.enabled,
       };
-      const connectedMessage: Record<ConnectorName, string> = {
-        google_calendar: "Google Calendar is connected. Buddy has the latest.",
-        gmail: "Gmail is connected. Buddy can now help send email when you ask.",
-        notion: "Notion is connected. Say where something on your screen should go and Buddy saves it there.",
-      };
       setAction(null);
       setBanner(connectedByName[completion.connector]
         ? {
             tone: "success",
-            message: connectedMessage[completion.connector],
+            message: CONNECTED_MESSAGES[completion.connector],
           }
         : {
             tone: "error",
@@ -425,6 +485,7 @@ export function useConnectors(): ConnectorsState {
     loading,
     loadError,
     action,
+    awaitingBrowser: action !== null && WAITING_ACTIONS.has(action),
     banner,
     reload,
     enableCalendar,

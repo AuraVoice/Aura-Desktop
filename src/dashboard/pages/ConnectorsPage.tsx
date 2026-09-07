@@ -40,7 +40,11 @@ export function ConnectorsPage() {
   const calendarConnected = calendar?.enabled === true;
   const gmailConnected = gmail?.enabled === true;
   const notionConnected = notion?.enabled === true;
-  const busy = connectors.loading || connectors.action !== null;
+  // A pending browser trip leaves every switch live: locking the page for the
+  // length of someone else's OAuth tab is what made an abandoned attempt look
+  // like a frozen screen.
+  const busy = connectors.loading
+    || (connectors.action !== null && !connectors.awaitingBrowser);
 
   return (
     <div className="db-page db-connectors-page">
