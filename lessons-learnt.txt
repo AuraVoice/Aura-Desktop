@@ -1,0 +1,277 @@
+2026-09-03  macOS dictation logged "Inserted" while the user's field received nothing
+
+Problem: on macOS every dictation transcribed fine, the log said
+`phase=insert ... role=unknown verdict=Unknown outcome=Inserted`, and no text appeared where
+the user was typing. The "Waiting for a text box" and "Focus changed" cards never showed
+either.
+
+Issue: the HUD window is swapped to AuraOverlayPanel, whose canBecomeKeyWindow is an
+unconditional YES so the main overlay's chat composer can take keys. tao's set_visible(true)
+on macOS is makeKeyAndOrderFront:, so every hud show() made the HUD the KEY window without
+activating Aura. NSWorkspace.frontmostApplication was unchanged, so the focus-changed guard
+passed; the AX probe saw Aura's own pid and returned Unknown ("type anyway"); the CGEvents
+landed in the HUD's own webview. The sync_activation doc comment claimed the panel "CANNOT
+steal focus no matter which phase", which was exactly backwards, and role=unknown was the
+only visible symptom.
+
+Solution: a second class, AuraAccessoryPanel (a subclass of AuraOverlayPanel so the reassert
+path's is_kind_of check leaves it alone), whose canBecomeKeyWindow reads a grant register.
+The HUD grants itself only for Recovery and Consent, in a pre-show step (prepare_activation)
+because show() is what takes key; revoking while the panel is key calls orderOut: so keyboard
+routing returns to the user's app. The Blocked recovery message now names Secure Keyboard
+Entry on macOS instead of "runs as administrator".
+
+Justification: "non-activating" and "cannot become key" are different properties on macOS,
+and the one that protects dictation is the second. When a comment asserts an invariant about
+focus, find the call that could violate it (here tao's show) before trusting it. A log line
+saying a probe found our OWN process is a red flag, not an Unknown to type through.
+
+2026-09-03  macOS dictation reported "keyboard listener unavailable, restart" on every Mac
+
+Problem: dictation did nothing on macOS, and Settings > Dictation told the user to restart
+Aura, which changed nothing.
+
+Issue: two halves. (1) The macOS CGEventTap callback ran the chord state machine but never
+forwarded its signals to the dictation worker, and the tap was not even built when the voice
+trigger was a registered chord, which became the macOS default in 1d671de. (2) The dictation
+status folds in the RAW voice-toggle listener status, and on macOS that raw status is the
+double-tap listener's "not installed" reason even when the chord trigger is working fine, so
+dictation inherited a misleading generic "restart" message with the double-tap text buried in
+a "(Details: ...)" suffix.
+
+Solution: the macOS tap callback is now a step-for-step twin of the Windows hook (stale-key
+reconcile, signal forwarding, Escape cancel, injected-event filter via INJECTED_EVENT_MARKER).
+The tap is built whenever Input Monitoring is granted; the prompt is raised only when the user
+turns dictation on, or at launch when dictation is already on or a double-tap trigger is bound.
+Dictation status checks the TCC grant itself and names the real blocker (`inputMonitoring` or
+`relaunch`) so the Dictation page can offer "Allow in System Settings" / "Restart Aura".
+
+Justification: a status message must name the thing the user can actually change. Reusing
+another feature's failure text because it happens to share a thread produced advice that was
+wrong on every Mac. When a module reads a sibling's status, check that the sibling's reason
+describes the SAME feature before surfacing it.
+
+2026-09-03  APPLE_API_KEY_P8 was added during the very run that needed it, and stayed empty
+
+Problem: the v0.13.1 tag build failed with "APPLE_API_KEY_P8 is missing from the production
+environment" minutes after the secret had been saved in GitHub, while a workflow_dispatch
+preflight started around the same time passed the identical step.
+
+Issue: the macOS job declares needs: windows, so it reads no secret until the twenty minute
+Windows job has finished. The tag run reached the p8 step at 00:00:07 and the preflight
+reached it at about 00:01, and the secret landed in that one minute gap. A run resolves each
+secret when the step referencing it starts, not when the run is queued, so a secret added
+while a run is in flight applies to nothing already running, including a job whose log still
+shows no steps because it is still waiting on another job.
+
+Solution: nothing in the workflow is at fault and nothing there was changed. Re-cut the tag,
+and confirm the value first with a plain preflight dispatch, which exercises the same p8 write
+and the whole Apple smoke test in about forty seconds.
+
+Justification: "I already added the secret" and "the build that failed could see the secret"
+are different claims whenever one job waits on another. Compare the timestamp on the failing
+step against the moment the secret was saved before going looking for a fault in the config.
+
+2026-09-03  a 90 minute cap killed notarytool mid-submission and erased the only evidence
+
+Problem: the first full macOS release build compiled and signed cleanly, then emitted nothing
+for 69 minutes and died on the job timeout. The log ended at "Notarizing" with no submission
+id, no status and no error, leaving nothing to separate a slow notary from a rejected upload
+from one that never reached Apple at all.
+
+Issue: two things compounded. Tauri runs notarytool submit --wait and does not stream its
+output, so nothing appears until it returns. The job's timeout-minutes was 90 against a build
+that already takes seventeen, leaving about seventy for a step Apple can sit on for longer,
+and hitting the cap terminated notarytool as an orphan process, so the run reported "The
+operation was canceled" instead of any notarization result. The smoke test did already call
+notarytool history, the one command that names a submission's real state, but sent it to
+/dev/null.
+
+Solution: timeout-minutes raised to 180, and the smoke test now prints notarytool history
+rather than discarding it, so a forty second preflight dispatch reports whether an earlier
+submission was Accepted, Invalid, In Progress, or never arrived. That listing immediately
+named the real cause: the submission had reached Apple fine and was still In Progress more
+than three hours later. Apple holds submissions it does not recognise for in depth analysis,
+and this was the very first notarization this Developer ID had ever sent, so there was
+nothing to recognise. Nothing in the config was wrong.
+
+Justification: a timeout that kills the tool you are trying to observe turns a diagnosable
+failure into a blank log. When a step's only output arrives at the end, size the cap for the
+slowest case and keep a cheap out of band way to read the state afterwards. Output from a
+command run purely to prove a credential is worth keeping; it is already the diagnostic.
+The wider point is that no timeout value fixes this one: a first submission can be held for
+hours or days, which is longer than any CI job should live, so the first notarization from a
+new signing identity has to be proven outside the release path before a tag depends on it.
+
+Resolution, 2026-09-04: that submission reached Accepted about six hours after it was sent,
+with nothing changed and nothing resubmitted. So the cost of a first notarization from a new
+Developer ID is hours of waiting, not a fix, and every submission after it is the usual two
+to twenty minutes. Read notarytool history before spending a tag, once.
+
+
+2026-09-04  The onboarding hotkey tour stopped accepting the shortcut after five minutes
+
+Problem: on the "Talk to Buddy" tour step, pressing Ctrl + Option + V did nothing. The card
+still read "Press it now", the Ctrl tile lit up but Option and V never did, and the step
+never advanced no matter how many times the chord was pressed.
+
+Issue: two separate faults with the same symptom. The first is the one that actually blocked
+the step. begin_hotkey_test arms a test with a 300 second deadline so a webview that dies
+without calling end_hotkey_test cannot swallow a global shortcut forever, and
+prune_hotkey_tests drops it silently when that passes. Nothing on the React side knew: once
+armed, testReady stayed true for the life of the screen. The app log shows exactly this,
+signed in at 20:12 UTC and the chord finally pressed at 23:13, by which point hotkeys::handle
+found no armed test, fell through to emit_toggle, and useNotchGesture logged "ignored during
+pointing" because the onboarding tail suppresses the summon gesture. Ten presses in six
+seconds, all of them correct, all of them dropped. The second fault is cosmetic and macOS
+only: isDisplayedKeyHeld mapped "Ctrl", "Alt", "Shift" but keys_for labels macOS modifiers
+"Option" and "Cmd", so those tiles could never light. (V cannot light either, because a
+Carbon-registered hotkey consumes the key before the webview sees it; the pass path lights
+every tile at once, which is what the design relies on.)
+
+Solution: the tour re-arms with the SAME owner every 120s while its screen is showing, which
+only pushes the deadline out and never stacks a second test, and clears that interval in the
+effect cleanup. TEST_TIMEOUT now carries a comment naming the re-arm interval so shortening
+one without the other is visibly wrong. isDisplayedKeyHeld also accepts "Option" and "Cmd".
+
+Justification: a safety timeout that exists for a dead webview must be refreshed by a live
+one, or "the UI still says it is listening" and "the native side stopped listening" drift
+apart with nothing on screen to say so. A heartbeat keeps the original property intact: stop
+refreshing and it still expires. Reading the app log was what settled it - the emit_toggle
+and "ignored during pointing" lines prove the press reached Rust and was not intercepted,
+which no amount of staring at the arming code could have told apart from "the shortcut never
+fired at all".
+
+2026-09-05  the install guard relaunched itself 121 times and the app never opened
+
+Problem: installing 0.14.1 from the website left the app permanently stuck. No window, no
+crash, no error. Double-clicking Aura Desktop inside the mounted disk image did nothing
+visible, for five minutes and counting. The only sign anything was happening at all was in
+the log, one pair of lines every two and a half seconds, forever:
+"install guard: running translocated, clearing quarantine on the real bundle" then
+"install guard: moved to Applications, relaunching". A complete, valid, codesign-clean
+0.14.1 was sitting in /Applications the whole time. The guard never once pointed at it.
+
+Issue: macos_install.rs branched on the FACT of translocation and assumed the resolved
+origin was an already-installed app that had merely kept its quarantine attribute, which is
+the update case it was written for. On a first install the origin is the read-only disk
+image, and there the quarantine is a MOUNT flag, not an xattr on the bundle:
+
+  /dev/disk7s1 on /Volumes/Aura Desktop (hfs, read-only, quarantine, ...)
+  xattr -p com.apple.quarantine "/Volumes/Aura Desktop/Aura Desktop.app"
+    -> No such xattr    (exit 1)
+
+So clear_quarantine ran xattr -d against a read-only filesystem (failed, warn only), then
+asked xattr -p whether the attribute was still there, got "no", and returned true. It had
+removed nothing because there was nothing to remove, and it reported success. relaunch_and_exit
+then reopened the /Volumes path, macOS translocated it again because the mount is still
+flagged, and the guard came straight back round. The success signal and the actual question
+were never the same question.
+
+Solution: branch on where the ORIGIN lives, not on whether the launch was translocated.
+Installed origin keeps the repair path unchanged. An origin on the disk image or in Downloads
+now falls through to the existing move_to_applications copy, silently, since macOS has
+already made that launch useless for updates. Added a stamp file under Application Support
+that caps the guard at one relaunch per 60 seconds: a relaunch that lands straight back shows
+the "drag it in yourself" alert and RETURNS instead of exiting, so the app still opens and is
+usable. clear_quarantine and repair_translocated both grew a comment saying what they cannot
+be asked.
+
+Justification: the loop was not a missing case so much as a predicate that could not fail.
+"Does this bundle carry com.apple.quarantine" and "will this bundle be translocated again"
+look like the same question and are not, and the one place they diverge is the exact place a
+first install lands. Fixing only the branch would have left the next such divergence free to
+spin the same way, which is why the relaunch cap went in alongside it and deliberately does
+not exit: an app that opens without self-update beats an app that never opens. Worth noting
+the guard itself is not the mistake - the same log carries
+"install_pending_update: install failed: Read-only file system (os error 30)" from the build
+before it, which is the failure it exists to prevent.
+
+2026-09-05  the loop-breaker fired on the successful install it was meant to protect
+
+Problem: caught in review, before shipping. The relaunch cap added above ran as the FIRST
+thing in ensure_in_applications, before working out whether anything was actually wrong. The
+happy path writes the stamp, sleeps two seconds and reopens, so the newly installed app came
+up about three seconds later, saw a fresh stamp, and greeted a correct install sitting in
+/Applications with an error log, a Sentry warning and a modal reading "Aura cannot update
+itself from here". Every successful first install would have shown it.
+
+Issue: a stamp that means "we relaunched" was being read as if it meant "we relaunched and it
+did not work". Those are only the same question once you know the app is STILL misplaced,
+which is exactly the check the breaker was sitting in front of.
+
+Solution: resolve the bundle state first. Installed and not translocated returns immediately
+and never looks at the stamp; only a launch that still needs fixing consults it. Two other
+findings from the same review went in alongside: the silent disk-image copy asks for
+confirmation whenever /Applications already holds a copy, because move_to_applications deletes
+the destination and compares no versions, so opening an old disk image would have silently
+downgraded and destroyed a newer install; and the new asset behind include_bytes! was still
+untracked, which compiles locally and fails on any clean checkout, the same
+untracked-file-never-ships trap the Aura-Web auth page hit.
+
+Justification: guards that abort early are the easy ones to put in the wrong place, because
+the failing path gets tested and the succeeding path does not. Ordering the check after the
+"is anything actually wrong" question costs nothing and makes the false positive impossible
+rather than unlikely. Worth noting none of the three were compile errors: cargo check and
+clippy were clean the whole time.
+
+2026-09-06  virtualizing the dictation list hid the row menu behind the rows
+
+Problem: opening a row's overflow menu on the Dictation page showed only its bottom sliver.
+The first two items were invisible and the destructive item was cut off. It looked like the
+scroll container was clipping the menu, which sent the first look in the wrong direction.
+
+Issue: it was paint order, not clipping. Windowing wraps every row in an element carrying
+position:absolute plus transform:translateY, and transform creates a stacking context, so the
+panel's z-index:20 was resolved INSIDE its own row's wrapper and could never rise above the
+next one. The wrappers are positioned siblings at z-index:auto, so they paint in tree order and
+every following row painted over the menu, each one opaque with its own backdrop-filter, which
+is a second stacking context one level further in. The pre-virtualization design had solved
+this by accident: one day card wrapped a whole day's rows, so one stacking context covered all
+of them, and the comment explaining why that card was deliberately not overflow:hidden survived
+on CSS that no longer matches anything. Switching the panel to position:fixed in place would
+not have helped either, since transform and backdrop-filter ancestors are both containing
+blocks for fixed children.
+
+Two more defects from the same commit came out of the same trace. The virtualizer's scroll
+element never scrolled, because nothing from .db-dictation-page down had a definite height, so
+scrollHeight equalled clientHeight and getVirtualItems returned every row: the 400,000-node
+hang the commit set out to fix was still there. And every row became the only child of its own
+wrapper, so the adjacent-sibling divider rule could never match and every row matched
+:only-child, losing the dividers and rounding all four corners of each one.
+
+Solution: portal the panel into .db-app and place it from the trigger's rect, anchored by right
+so the panel width never has to be measured and the old right-edge alignment survives; dismiss
+it on scroll, since a fixed panel no longer travels with its row. Give the layout a real height
+chain so the list scrolls itself, and re-key the dividers and radii onto the is-first/is-last
+classes the same commit had already added to the wrapper.
+
+Justification: a stacking context is invisible in the DOM and in the styles panel, and
+transform is added for layout reasons by people who are not thinking about z-index at all. Any
+popover that has to escape its row is one refactor away from being trapped, so the fix belongs
+in the popover (leave the subtree) rather than in a z-index that the next transformed ancestor
+will quietly defeat.
+
+2026-09-06  a media query placed above the rule it overrides silently did nothing
+
+Problem: the height chain added above shipped with a responsive branch that capped the settings
+rail at 40vh when the layout stacks. On a window narrower than 1080px the dictation list showed
+no history at all and the search field rendered on top of the rail card.
+
+Issue: the cap sat in a media query written next to the layout rules it belonged with, at line
+6983, while the base .db-dictation-rail rule setting max-height:100% is at 7315. Same
+specificity, later in the file, so the base rule won and the media query was dead text. The
+rail then grew to the full page height, the auto grid row took all of it, the list row
+collapsed to zero through its minmax(0, 1fr), and the toolbar overflowed the zero-height box
+and painted over the rail. One dead declaration produced two symptoms that looked unrelated,
+and neither of them looked like a cascade problem.
+
+Solution: move the stacked-layout reset below every base rule it overrides. It also caps the
+list with max-height rather than turning its overflow off, so the list keeps a definite height
+and the virtualizer keeps windowing at narrow widths instead of falling back to mounting
+everything.
+
+Justification: grouping a media query with the rules it is conceptually about reads better and
+is exactly how it stops working, because the cascade cares where a declaration is, not what it
+is near. This was caught only because it was looked at in a running window; tsc was clean,
+the braces balanced, and nothing about the source suggested the rule was inert.
