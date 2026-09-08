@@ -580,3 +580,49 @@ review as the mechanism. The z-index finding generalises further. Two independen
 layers sharing one z-index is not a working design, it is an undecided one that happens to
 resolve correctly, and the first component that changes mount order turns it into a bug nobody
 can reproduce from reading either file.
+
+================================================================================
+2026-09-07  Launch at login pointed at a dev binary for four days, and nothing repaired it
+
+Problem: after a macOS restart the app came up wrong. Screen capture was denied, and an update
+prompt offered a version it never installed. It looked like the app had failed to launch. It had
+not. launchd fired the login item exactly as configured; the login item just named the wrong
+binary: /Users/varun/Aura-Desktop/src-tauri/target/debug/aura-desktop, written on 2026-09-03.
+The tell was in one log file. Same identifier, same path, two different versions:
+"found 0.15.0 -> 0.15.5" at boot, "found 0.15.4 -> 0.15.5" on a manual launch minutes later. A
+dev build is ad-hoc signed, so TCC treats it as a different app and every grant is missing, and
+its updater cannot replace a bundle it is not running from.
+
+Issue: two defects, and the second is the one that made it last. lib.rs guards the automatic path
+with !cfg!(debug_assertions), but the tray toggle and the Settings row reach autostart::set
+directly, unguarded, so a `tauri dev` session could write its own current_exe() into the entry.
+Then apply() only acted on a state change, `if current != enable`, and asked
+tauri-plugin-autostart's is_enabled() what the current state was. That call cannot answer the
+question being asked of it. In auto-launch 0.5.0 the macOS arm is
+`Ok(self.get_file().exists())`, a bare existence check on ~/Library/LaunchAgents/<name>.plist,
+and the Windows arm looks the Run value up by NAME. Neither ever compares the stored program
+path. So a wrong entry read as "already enabled", the write was skipped, and the entry survived
+three reinstalls and two updates untouched. The module's own doc comment claimed it "repairs the
+entry if a cleanup tool stripped it", which is true only for a missing entry.
+
+Solution: apply() re-asserts the entry whenever it should be on, `if enable || current`, rather
+than only on a transition. Both backends overwrite in place (fs::File::create truncates the
+plist, set_value overwrites the Run value), so this is idempotent and corrects a wrong path as a
+side effect. Disabling still skips when no entry exists, because the crate treats that as an
+error, which is what the original short-circuit was actually protecting. A cfg!(debug_assertions)
+early return was added to apply() itself rather than to its callers, so the tray toggle, the
+Settings row and anything added later are all covered by one guard. Deliberately no plist parsing
+and no registry read: reading the path back would have meant winreg or an unsafe RegGetValueW on
+Windows, and the Windows tree cannot be cross-compiled from a Mac, so that would have been
+unverifiable code bought for nothing.
+
+Justification: the short-circuit was not wrong about caching, it was wrong about what its cache
+meant. "An entry exists" and "the entry points at me" are different claims, and a boolean named
+is_enabled invites you to conflate them. The same shape as the optimistic-cache rule already in
+CLAUDE.md: state that stands in for a side effect has to be checked against the side effect, not
+against itself. Two consequences worth carrying. Verify a third-party predicate by reading its
+implementation before building a skip on top of it, since both arms here were two lines and both
+were weaker than the name promised. And note that the fix makes "whichever copy runs last owns
+the login item" literally true, which is correct with one install and a coin flip with two: a
+second /Applications bundle sharing the identifier reintroduces the same symptom by a different
+route, so the duplicate had to go as part of the fix, not as tidying.
