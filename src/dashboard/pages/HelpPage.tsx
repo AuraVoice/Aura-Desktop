@@ -1,4 +1,6 @@
 import { useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import { discordInviteUrl } from "../../lib/copy";
 import { sendFeedback } from "../../lib/feedback";
 import { logError } from "../../lib/log";
 import { osName } from "../../lib/platformKeys";
@@ -6,6 +8,7 @@ import {
   SettingsPageLayout,
   SettingsSection,
 } from "../components/SettingsPageLayout";
+import { DiscordIcon } from "../components/DiscordIcon";
 
 export function HelpPage() {
   const [sending, setSending] = useState(false);
@@ -36,6 +39,24 @@ export function HelpPage() {
         </div>
         <button type="button" className="db-primary-btn" onClick={() => void openFeedback()} disabled={sending}>
           {sending ? "Opening email..." : sent ? "Email opened" : "Send feedback"}
+        </button>
+      </div>
+
+      <div className="db-panel db-help db-help-discord">
+        <div>
+          <span className="db-eyebrow">Community</span>
+          <h3>Join the Aura Discord</h3>
+          <p>Ask questions, see what is coming next, and talk to the people building Aura.</p>
+        </div>
+        <button
+          type="button"
+          className="db-discord-btn"
+          onClick={() =>
+            void openUrl(discordInviteUrl).catch((err) => logError("HelpPage: open discord", err))
+          }
+        >
+          <DiscordIcon size={16} />
+          Join Discord
         </button>
       </div>
 

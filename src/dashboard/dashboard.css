@@ -171,6 +171,9 @@
   animation-duration: 1.4s !important;
   animation-iteration-count: infinite !important;
 }
+.db-app.db-reduce-motion .db-nav-help-word {
+  animation-duration: 1s !important;
+}
 
 /* ── Sidebar ─────────────────────────────────────────────────────────── */
 .db-sidebar {
@@ -403,6 +406,92 @@
   padding-inline: 0;
   border-width: 0;
   opacity: 0;
+}
+
+/* Help entry that alternates between "Get help" and "Join Discord"
+   (components/HelpDiscordNavLink.tsx). The words and icons crossfade, and on
+   every change the same light sweep the Beta pill carries (PolishedPill.css)
+   runs once across the row, top left to bottom right. The animation is bound
+   to the phase attribute, and the phase-specific name is what restarts it. */
+.db-nav-item-help {
+  --discord: #5865f2;
+  position: relative;
+}
+.db-nav-item-help[data-phase="discord"]:hover:not(.db-nav-item-active) {
+  background: rgba(88, 101, 242, 0.1);
+}
+.db-nav-help-icons {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  flex-shrink: 0;
+}
+.db-nav-help-icons > .db-nav-icon {
+  grid-area: 1 / 1;
+  opacity: 0;
+  transform: scale(0.7);
+  transition: opacity 260ms var(--db-ease), transform 380ms var(--db-ease),
+    color 260ms var(--db-ease);
+}
+.db-nav-item-help[data-phase="help"] .db-nav-help-icon-help,
+.db-nav-item-help[data-phase="discord"] .db-nav-help-icon-discord {
+  opacity: 1;
+  transform: none;
+}
+.db-nav-help-icon-discord {
+  color: var(--discord);
+}
+.db-nav-item-active .db-nav-help-icon-discord {
+  color: #fff;
+}
+.db-nav-help-labels {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  line-height: 1.2;
+}
+.db-nav-help-word {
+  grid-area: 1 / 1;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 260ms var(--db-ease), transform 380ms var(--db-ease);
+}
+.db-nav-item-help[data-phase="help"] .db-nav-help-word-help,
+.db-nav-item-help[data-phase="discord"] .db-nav-help-word-discord {
+  opacity: 1;
+  transform: none;
+}
+/* The Beta pill's flash, opposite colours, clipped to the letters: the word's
+   fill is a gradient with one bright band, and on every change the band runs
+   through the glyphs left to right. No bar, no box for it to end at. */
+.db-nav-help-word {
+  --word-ink: var(--db-text);
+  --word-shine: #7c86f5;
+  background: linear-gradient(100deg, var(--word-ink) 40%, var(--word-shine) 50%, var(--word-ink) 60%);
+  background-size: 220% 100%;
+  background-position: 0% 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.db-nav-item-active .db-nav-help-word {
+  --word-ink: #fff;
+  --word-shine: rgba(32, 35, 42, 0.7);
+}
+.db-nav-item-help[data-flipped][data-phase="discord"] .db-nav-help-word-discord {
+  animation: db-nav-help-shine-a 1000ms cubic-bezier(0.22, 0.61, 0.36, 1) 120ms both;
+}
+.db-nav-item-help[data-flipped][data-phase="help"] .db-nav-help-word-help {
+  animation: db-nav-help-shine-b 1000ms cubic-bezier(0.22, 0.61, 0.36, 1) 120ms both;
+}
+@keyframes db-nav-help-shine-a {
+  from { background-position: 100% 0; }
+  to { background-position: 0% 0; }
+}
+@keyframes db-nav-help-shine-b {
+  from { background-position: 100% 0; }
+  to { background-position: 0% 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -3797,6 +3886,70 @@
   cursor: wait;
   opacity: 0.65;
 }
+/* Community panel on Help: bright glass with the hover sheen sweep. */
+.db-settings-page .db-help-discord {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 236, 252, 0.6));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  backdrop-filter: blur(18px) saturate(1.2);
+}
+.db-help-discord::after {
+  position: absolute;
+  z-index: 1;
+  top: -130%;
+  left: -42%;
+  width: 28%;
+  height: 360%;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.12),
+    rgba(255, 255, 255, 0.72),
+    rgba(255, 255, 255, 0.12),
+    transparent
+  );
+  content: "";
+  pointer-events: none;
+  transform: translate3d(-220%, -28%, 0) rotate(-24deg);
+}
+.db-help-discord:hover::after {
+  animation: db-glass-sheen 740ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.db-discord-btn {
+  position: relative;
+  z-index: 2;
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border: none;
+  border-radius: 999px;
+  background: #5865f2;
+  color: #fff;
+  font-family: var(--font-body, system-ui, sans-serif);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 6px 16px rgba(88, 101, 242, 0.28);
+  transition: background 0.15s var(--db-ease), transform 0.18s var(--db-ease),
+    box-shadow 0.18s var(--db-ease);
+}
+.db-discord-btn:hover {
+  background: #4752c4;
+  transform: translateY(-1px);
+  box-shadow: 0 10px 22px rgba(88, 101, 242, 0.34);
+}
+.db-discord-btn:active {
+  transform: scale(0.98);
+}
+.db-discord-btn:focus-visible {
+  outline: 2px solid var(--db-teal);
+  outline-offset: 2px;
+}
 
 /* ── Account ─────────────────────────────────────────────────────────── */
 .db-account {
@@ -6120,6 +6273,8 @@
 .db-settings-page .db-help .db-primary-btn {
   flex: 0 0 auto;
   margin: 0;
+  padding: 10px 16px;
+  border-radius: 999px;
 }
 .db-settings-info-list {
   padding: 0;

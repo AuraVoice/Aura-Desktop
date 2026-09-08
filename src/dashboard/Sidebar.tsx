@@ -1,6 +1,7 @@
 import { NavLink, useLocation } from "react-router-dom";
 import iconUrl from "../assets/icons/Aura-Icon.png";
 import { PolishedPill } from "../components/PolishedPill";
+import { HelpDiscordNavLink } from "./components/HelpDiscordNavLink";
 import {
   footerNavItems,
   primaryNavItems,
@@ -42,7 +43,11 @@ export function Sidebar({ collapsed }: SidebarProps) {
           <SettingsIcon size={20} className="db-nav-icon" aria-hidden />
           <span className="db-nav-label">{settingsNavItem.label}</span>
         </NavLink>
-        {footerNavItems.map((item) => <SidebarLink key={item.to} item={item} collapsed={collapsed} />)}
+        {footerNavItems.map((item) => (
+          item.to === "/help"
+            ? <HelpDiscordNavLink key={item.to} collapsed={collapsed} />
+            : <SidebarLink key={item.to} item={item} collapsed={collapsed} />
+        ))}
       </div>
     </aside>
   );

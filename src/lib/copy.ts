@@ -7,6 +7,8 @@ export const getAuraAppUrl = "https://auravoiceapp.com/app";
 export const privacyUrl = "https://auravoiceapp.com/privacy";
 export const termsUrl = "https://auravoiceapp.com/terms";
 export const webAuthUrl = "https://auravoiceapp.com/auth";
+// Permanent server invite (expiry Never, no use limit) or it stops working in 7 days.
+export const discordInviteUrl = "https://discord.gg/REPLACE_ME";
 // Opens Google Calendar's new-event composer directly (the connected calendar
 // is Google), for the agenda card's empty-state "Create event" action.
 export const createEventUrl = "https://calendar.google.com/calendar/u/0/r/eventedit";
