@@ -5,7 +5,7 @@ import { DiscordIcon } from "./DiscordIcon";
 
 type Phase = "help" | "discord";
 
-const DWELL_MS = 2500;
+const DWELL_MS = 4000;
 
 /** The sidebar's Help entry, rolling between "Get help" and "Join Discord".
  * Both words lead to the Help page, where the Discord invite lives; the roll
