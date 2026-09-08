@@ -78,7 +78,7 @@ export function DetailModal({
     >
       <div
         ref={panelRef}
-        className={`db-modal-panel${closing ? " db-modal-panel-out" : ""}${panelClassName ? ` ${panelClassName}` : ""}`}
+        className={`db-modal-panel ph-no-capture${closing ? " db-modal-panel-out" : ""}${panelClassName ? ` ${panelClassName}` : ""}`}
         role="dialog"
         aria-modal="true"
         aria-label={title}

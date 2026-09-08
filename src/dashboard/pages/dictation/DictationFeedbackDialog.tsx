@@ -82,7 +82,7 @@ export function DictationFeedbackDialog({
         disabled={busy}
         onClick={onClose}
       />
-      <div className="db-local-confirm-panel db-dictation-feedback">
+      <div className="db-local-confirm-panel db-dictation-feedback ph-no-capture">
         <h2 id={titleId}>Report a bad transcription</h2>
         <p>What did Aura get wrong? A specific word or phrase helps most.</p>
         <textarea

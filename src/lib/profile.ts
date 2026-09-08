@@ -1,5 +1,5 @@
 import { Store } from "@tauri-apps/plugin-store";
-import { authFetch, AuthRequiredError } from "./api";
+import { authFetchWithTimeout, AuthRequiredError } from "./api";
 import { aliasAnonymousToUser, setPersonProperties } from "./analytics";
 import { auth as firebaseAuth } from "./firebase";
 import {
@@ -46,6 +46,7 @@ const desktopLastSignInMethodKey = "desktop_last_sign_in_method";
 const desktopLastSignInStatusKey = "desktop_last_sign_in_status";
 const desktopLastSignInAtKey = "desktop_last_sign_in_at";
 const MAX_PENDING_EVENTS = 50;
+const PROFILE_SYNC_TIMEOUT_MS = 10_000;
 
 /** Returns the per-install anonymous id, generating and persisting one on first
  * call. Used as the PostHog distinct_id for pre-sign-in attribution capture so
@@ -160,11 +161,11 @@ export async function syncProfileToBackend(profile: {
       payload.role = profile.role?.id ?? null;
       payload.role_other = profile.role?.other ?? null;
     }
-    const response = await authFetch("/devices/profile", {
+    const response = await authFetchWithTimeout("/devices/profile", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload),
-    });
+    }, PROFILE_SYNC_TIMEOUT_MS);
     if (!response.ok) {
       logError("profile: syncProfileToBackend", `HTTP ${response.status}`);
       return false;

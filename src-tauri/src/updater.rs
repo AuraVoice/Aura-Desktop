@@ -6,7 +6,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
-use crate::{meeting, overlay, tray};
+use crate::{events, meeting, overlay, tray};
 
 /// How often the long-running app re-checks the feed after the startup check.
 /// This app autostarts and then lives for days, so a startup-only check would
@@ -76,7 +76,7 @@ async fn check_once(app: &AppHandle, auto_install: bool) {
     let updater = match app.updater() {
         Ok(updater) => updater,
         Err(e) => {
-            error!("update check: updater unavailable: {e}");
+            report_failure(app, "check_failed", None, format!("update check: updater unavailable: {e}"));
             return;
         }
     };
@@ -98,14 +98,47 @@ async fn check_once(app: &AppHandle, auto_install: bool) {
                 "update check: found {} -> {}, downloading",
                 update.current_version, update.version
             );
+            emit_check_result(app, "available", Some(update.version.clone()));
             match update.download(|_, _| {}, || {}).await {
                 Ok(bytes) => handle_downloaded(app, update, bytes, auto_install),
-                Err(e) => error!("update check: download failed: {e}"),
+                Err(e) => report_failure(
+                    app,
+                    "download_failed",
+                    Some(update.version.clone()),
+                    format!("update check: download failed: {e}"),
+                ),
             }
         }
-        Ok(None) => info!("update check: already up to date"),
-        Err(e) => error!("update check: failed: {e}"),
+        Ok(None) => {
+            info!("update check: already up to date");
+            emit_check_result(app, "up_to_date", None);
+        }
+        Err(e) => report_failure(app, "check_failed", None, format!("update check: failed: {e}")),
     }
+}
+
+/// Mirrored by `UpdateCheckResult` in src/lib/telemetryInit.ts, which turns
+/// it into the desktop_update_available / desktop_update_check_failed
+/// analytics events (deduped there, since the six-hour loop repeats).
+#[derive(Clone, Serialize)]
+struct UpdateCheckResult {
+    outcome: &'static str,
+    version: Option<String>,
+}
+
+fn emit_check_result(app: &AppHandle, outcome: &'static str, version: Option<String>) {
+    if let Err(e) = app.emit(crate::events::UPDATE_CHECK_RESULT, UpdateCheckResult { outcome, version }) {
+        error!("update check: failed to emit update-check-result: {e}");
+    }
+}
+
+/// A broken feed used to be log-only, which made a systematically failing
+/// update invisible until someone wrote in. Every failure now also reaches
+/// Sentry as a warning, with the same text as the log line.
+fn report_failure(app: &AppHandle, outcome: &'static str, version: Option<String>, message: String) {
+    error!("{message}");
+    sentry::capture_message(&message, sentry::Level::Warning);
+    emit_check_result(app, outcome, version);
 }
 
 /// Background checks park the update and announce it: tray item plus the
@@ -121,6 +154,9 @@ fn handle_downloaded(app: &AppHandle, update: Update, bytes: Vec<u8>, auto_insta
         && !crate::interview::is_active(app)
     {
         info!("update check: installing v{} at startup", update.version);
+        // On Windows install() exits the process without RunEvent::Exit, so
+        // the launch bookkeeping is closed out first and reopened on failure.
+        crate::telemetry::startup_marker::clean_exit(app);
         match update.install(&bytes) {
             // On Windows this line is unreachable: install() launches the
             // NSIS installer and exits the process, and the installer's /R
@@ -133,7 +169,12 @@ fn handle_downloaded(app: &AppHandle, update: Update, bytes: Vec<u8>, auto_insta
             // macOS specifically can fail here when the bundle isn't
             // user-writable and the admin prompt is denied - fall back to
             // the visible notice instead of failing silently.
-            Err(e) => error!("update check: startup install failed, falling back to notice: {e}"),
+            Err(e) => {
+                crate::telemetry::startup_marker::resume_running(app);
+                let message = format!("update check: startup install failed, falling back to notice: {e}");
+                error!("{message}");
+                sentry::capture_message(&message, sentry::Level::Warning);
+            }
         }
     }
 
@@ -182,6 +223,7 @@ pub fn install_pending_update(app: &AppHandle) -> Result<bool, String> {
             // Written before install because on Windows install() never
             // returns - there is no "after" in which to write it.
             write_just_updated_marker(app, &update.version);
+            crate::telemetry::startup_marker::clean_exit(app);
             match update.install(&bytes) {
                 Ok(()) => {
                     info!("install_pending_update: installed, relaunch to apply");
@@ -189,7 +231,10 @@ pub fn install_pending_update(app: &AppHandle) -> Result<bool, String> {
                 }
                 Err(e) => {
                     remove_just_updated_marker(app);
-                    error!("install_pending_update: install failed: {e}");
+                    crate::telemetry::startup_marker::resume_running(app);
+                    let message = format!("install_pending_update: install failed: {e}");
+                    error!("{message}");
+                    sentry::capture_message(&message, sentry::Level::Warning);
                     match read_only_bundle_hint(&e) {
                         // Put this one back. Re-downloading would fail in
                         // exactly the same place, and the banner asks the user

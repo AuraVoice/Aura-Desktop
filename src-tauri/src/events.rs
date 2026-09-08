@@ -32,6 +32,7 @@ pub const DICTATION_LEVEL: &str = "dictation-level";
 pub const DICTATION_STATUS_CHANGED: &str = "dictation-status-changed";
 /// Final transcript for a hold aimed at the chat composer. Payload is the text.
 pub const DICTATION_COMPOSER_INSERT: &str = "dictation-composer-insert";
+pub const DICTATION_HOLD_COMPLETED: &str = "dictation-hold-completed";
 
 // meeting
 pub const MEETING_CAPTURE_STATE: &str = "meeting-capture-state";
@@ -53,6 +54,7 @@ pub const OPEN_INTERVIEW_HACKER_REQUESTED: &str = "open-interview-hacker-request
 // updater.rs, toast.rs, connector_oauth.rs, dashboard.rs, status_pill.rs
 pub const UPDATE_READY: &str = "update-ready";
 pub const UPDATE_DISMISSED: &str = "update-dismissed";
+pub const UPDATE_CHECK_RESULT: &str = "update-check-result";
 pub const NOTIFICATION_TOAST_ACTIVATED: &str = "notification-toast-activated";
 pub const CONNECTOR_OAUTH_COMPLETE: &str = "connector-oauth-complete";
 pub const DASHBOARD_NAVIGATE: &str = "dashboard-navigate";

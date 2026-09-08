@@ -111,6 +111,17 @@ pub use platform::{
     signal, start, DictationHandle,
 };
 
+/// Read by telemetry.rs for the heartbeat: the same silent health check the
+/// Dictation page polls, without a status refresh.
+pub fn status_with_listener_health(app: &tauri::AppHandle, handle: &DictationHandle) -> DictationStatus {
+    with_listener_health(app, handle.status())
+}
+
+/// Whether the worker thread has been observed to be gone (heartbeat).
+pub fn worker_lost() -> bool {
+    platform::worker_lost()
+}
+
 /// Whether the user has turned dictation on. Read by `voice_toggle_key::start`
 /// on macOS to decide if the Input Monitoring prompt is owed at launch: the
 /// event tap serves dictation, so the grant is only demanded of someone who
@@ -291,7 +302,7 @@ mod platform {
     }
 
     /// Whether the worker has been observed to be unreachable.
-    pub(super) fn worker_lost() -> bool {
+    pub(crate) fn worker_lost() -> bool {
         WORKER_LOST.load(Ordering::SeqCst)
     }
 
@@ -345,6 +356,8 @@ mod platform {
     }
 
     pub fn start(app: AppHandle) -> DictationHandle {
+        // A crash mid-hold leaves the marker behind; nothing is held now.
+        crate::telemetry::clear_stale_hold_marker();
         let (tx, rx) = std::sync::mpsc::channel::<Message>();
         if CHORD_TX.set(tx).is_err() {
             return DictationHandle {
@@ -551,6 +564,57 @@ mod platform {
         category: &'static str,
     }
 
+    /// Mirrored by `DictationHoldCompleted` in src/App.tsx, which turns it
+    /// into the dictation_hold_completed analytics event. The HUD window
+    /// sends no analytics of its own, so the main window reports on its
+    /// behalf. Enum outcome, duration and a word-count bucket only; the
+    /// payload never carries text.
+    #[derive(Clone, serde::Serialize)]
+    struct HoldCompleted {
+        outcome: &'static str,
+        hold_ms: u64,
+        word_bucket: &'static str,
+        polished: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error_category: Option<&'static str>,
+    }
+
+    impl HoldCompleted {
+        fn from_outcome(outcome: &InsertOutcome, hold_ms: u64, words: u64, polished: bool) -> Self {
+            let outcome = match outcome {
+                InsertOutcome::Inserted => "inserted",
+                InsertOutcome::Blocked => "blocked",
+                InsertOutcome::FocusChanged => "focus_changed",
+                InsertOutcome::KeysHeld => "keys_held",
+                InsertOutcome::PasswordField => "password_field",
+                InsertOutcome::NoTextField => "no_text_field",
+            };
+            let word_bucket = match words {
+                0 => "0",
+                1..=5 => "1-5",
+                6..=20 => "6-20",
+                21..=60 => "21-60",
+                _ => "60+",
+            };
+            Self { outcome, hold_ms, word_bucket, polished, error_category: None }
+        }
+
+        fn failed(category: &'static str) -> Self {
+            Self {
+                outcome: "failed",
+                hold_ms: 0,
+                word_bucket: "0",
+                polished: false,
+                error_category: Some(category),
+            }
+        }
+    }
+
+    fn emit_hold_completed(app: &AppHandle, payload: HoldCompleted) {
+        use tauri::Emitter;
+        let _ = app.emit_to("main", crate::events::DICTATION_HOLD_COMPLETED, payload);
+    }
+
     fn hold_failure(
         app: &AppHandle,
         generation: u64,
@@ -563,6 +627,7 @@ mod platform {
             "dictation: phase=failure failure={category} frames={}",
             samples.len()
         );
+        emit_hold_completed(app, HoldCompleted::failed(category));
         finish_with(
             app,
             generation,
@@ -819,6 +884,10 @@ mod platform {
 
         hud::show(app, target);
         hud::publish(app, HudUpdate::new(HudPhase::Listening));
+        // From here until finish_with, transcript text may be in memory on
+        // this thread; the marker keeps a native crash report from carrying
+        // it (see telemetry.rs).
+        crate::telemetry::dictation_hold_started();
         // Fire-and-forget onto the ducking worker thread; it reads the user's
         // preference itself and no-ops when off. Never inline: enumerating
         // audio sessions would add COM latency to the top of every hold.
@@ -1184,6 +1253,15 @@ mod platform {
             );
             outcome
         };
+        emit_hold_completed(
+            app,
+            HoldCompleted::from_outcome(
+                &outcome,
+                hold_ms as u64,
+                usage::word_count(&final_text),
+                raw_for_history.is_some(),
+            ),
+        );
 
         // Local history (history.rs). The one call site, placed here because
         // this is the last point at which both the final text and the captured
@@ -1293,6 +1371,10 @@ mod platform {
         // the waveform has to be told the hold is over. Without it the bars
         // would hold their last spike for the whole caption linger.
         hud::publish_level(app, 0.0);
+        // Same argument for the crash-report gate: the pending path (text
+        // still held, waiting for a text box) never comes through here, so
+        // the marker stays up exactly as long as the words do.
+        crate::telemetry::dictation_hold_ended();
         let phase = update.phase;
         hud::publish(app, update);
         // Same "one place every terminal path funnels through" argument as the

@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { signOut } from "firebase/auth";
 import { auth } from "./firebase";
+import { resetTelemetryIdentity, trackEvent } from "./analytics";
 import { clearDashboardCache } from "./dashboardCache";
 import { flushInterviewWorkspaceWrites } from "./interviewWorkspace";
 import { clearInterviewSessions } from "./interviewSessions";
@@ -68,10 +69,15 @@ async function performSignOut(): Promise<void> {
 
 /** One sign-out path for dashboard, tray, and hotkey requests. Concurrent
  * requests share the same operation so token cleanup cannot race itself. */
-export function signOutSession(): Promise<void> {
+export function signOutSession(reason: "user" | "hotkey" | "expired" = "user"): Promise<void> {
   if (activeSignOut) return activeSignOut;
-  activeSignOut = performSignOut().finally(() => {
-    activeSignOut = null;
-  });
+  // Sent under the departing uid, before Firebase clears it; the identity
+  // reset after sign-out is what keeps later events off that account.
+  trackEvent("desktop_signed_out", { reason });
+  activeSignOut = performSignOut()
+    .then(() => resetTelemetryIdentity())
+    .finally(() => {
+      activeSignOut = null;
+    });
   return activeSignOut;
 }

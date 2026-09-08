@@ -130,7 +130,7 @@ function ConversationDetail({
   return (
     <div className="db-detail">
       <p className="db-detail-meta db-conversation-time">{shortDateTime(startedAt)}</p>
-      <div className="db-detail-transcript">
+      <div className="db-detail-transcript ph-no-capture">
         {detail.loading && <p className="db-muted">Loading transcript…</p>}
         {detail.error && <p className="db-muted">Transcript unavailable.</p>}
         {detail.data?.raw_turns?.length

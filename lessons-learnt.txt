@@ -632,3 +632,39 @@ Problem: Double-Ctrl left a silent Buddy visible and repeated toggles did not cl
 Issue: Debug builds bypassed single-instance protection. The Windows incident log showed release and dev listeners responding to each gesture, taking opposite start/stop actions, with concurrent voice-token requests for the same participant. Cloud Run confirmed paired successful token requests; LiveKit recorded publisher channel closures. The voice-error toast also omitted the required silent argument, hiding the failure notice.
 Solution: Apply the existing cross-platform single-instance plugin to debug builds too, print explicit dev-launch guidance, identify startup by PID/version/build mode, supply the sound setting to both overlay toast calls, and clear ended-call UI before asynchronous disconnect can overlap a new call.
 Justification: One process must own global voice input. Compilation cannot detect competing installed/dev instances or prove macOS runtime behavior; voice verification must include stop during connect and second launches on both platforms. Existing voice tests and local compiler checks are separate from installed-app proof.
+================================================================================
+2026-09-08  posthog-js in a CSP-locked webview: two settings that silently turn replay off
+
+Problem: moving desktop analytics from the hand-rolled /capture POST to posthog-js, with session
+replay for the beta. The desktop CSP is script-src 'self', so the recorder cannot be lazy-loaded
+from us-assets.i.posthog.com the way the SDK does by default. The obvious fix, bundling it and
+setting disable_external_dependency_loading, compiles and captures events fine, and replay just
+never starts, with nothing in any console.
+
+Issue: two separate things. First, session replay only begins once the SDK has seen its remote
+config, and with external loading disabled the SDK falls back to fetching that config as JSON
+from the SAME assets host it was told not to load scripts from. That is a connect-src fetch, not
+a script, so it needs its own CSP entry (https://us-assets.i.posthog.com in connect-src); without
+it the config request is blocked and replay waits forever. Second, advanced_disable_flags (which
+looked like a harmless "we do not use feature flags" switch) also suppresses the /flags round
+trip that carries the recording verdict, so setting it disables replay outright. Neither failure
+logs anything at the default level.
+
+Solution: import posthog-js/dist/module.full.no-external (recorder, web vitals and the rest
+bundled in one entry, verified by grepping the built file for __PosthogExtensions__.rrweb), keep
+disable_external_dependency_loading on, add us-assets.i.posthog.com to connect-src in both csp
+and devCsp, and leave advanced_disable_flags at its default. Everything else replay-shaped is
+pinned in analytics.ts (maskAllInputs, maskTextSelector "*", blockSelector .ph-no-capture,
+replay disabled in the dictation and status-pill windows, a before_send that returns null for
+every event from the dictation window). Also verified from the SDK source rather than the docs:
+bootstrap.distinctID with isIdentifiedID false re-registers that id on EVERY init, even over a
+previously identified uid, which is what makes "install id while signed out, uid after
+identify()" deterministic here; and posthog.reset() clears the stored consent when
+opt_out_capturing_by_default is set, so the sign-out path has to opt back in afterwards.
+
+Justification: the SDK's docs describe the happy path where scripts load from its CDN; every
+one of the four behaviours above was only visible in the shipped bundle's source. Same rule as
+the 2026-09-07 autostart entry: read the implementation of a third-party predicate before
+building on its name. The verification step for replay is now explicit in the plan (open the
+dashboard, check the recording list shows masked frames), because "events arrive" proves
+nothing about it.

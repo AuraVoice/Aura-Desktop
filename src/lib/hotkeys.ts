@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { trackEvent } from "./analytics";
 import { altLabel, isMac, osName, superLabel } from "./platformKeys";
 
 export interface HotkeyBinding {
@@ -84,8 +85,15 @@ export function loadDoubleTapPermission(): Promise<DoubleTapPermission> {
   return invoke<DoubleTapPermission>("voice_toggle_key_permission");
 }
 
-export function requestDoubleTapPermission(): Promise<DoubleTapPermission> {
-  return invoke<DoubleTapPermission>("voice_toggle_key_request_permission");
+export async function requestDoubleTapPermission(): Promise<DoubleTapPermission> {
+  const result = await invoke<DoubleTapPermission>("voice_toggle_key_request_permission");
+  trackEvent("desktop_permission_result", {
+    permission: "input_monitoring",
+    granted: result.granted,
+    needs_relaunch: result.needsRelaunch,
+    surface: "double_tap_request",
+  });
+  return result;
 }
 
 const MODIFIER_CODES = [

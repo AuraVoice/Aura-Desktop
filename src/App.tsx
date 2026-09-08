@@ -1,13 +1,12 @@
 import { useEffect, type ReactNode } from "react";
-import { Store } from "@tauri-apps/plugin-store";
 import { AuthProvider, useAuth } from "./state/AuthProvider";
 import { EntitlementProvider } from "./state/EntitlementProvider";
 import { OverlayRoot } from "./overlay/OverlayRoot";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { initializeAcquisitionAnalytics } from "./lib/acquisitionAnalytics";
-import { desktopConsentAcceptedKey, overlayStorePath } from "./lib/copy";
-import { initSentryIfEnabled } from "./lib/sentry";
-import { logError } from "./lib/log";
+import { trackEvent } from "./lib/analytics";
+import { DICTATION_HOLD_COMPLETED } from "./lib/ipcEvents";
+import { useTauriEvent } from "./lib/useTauriEvent";
 import "./App.css";
 
 /** Bridges the overlay window's auth into the shared entitlement source. Sits
@@ -24,20 +23,29 @@ function OverlayEntitlement({ children }: { children: ReactNode }) {
   );
 }
 
+/** Mirrors dictation/mod.rs DictationHoldCompleted: enum outcome, duration
+ * and a word-count bucket. Never carries text; the HUD window itself sends no
+ * analytics at all, so the main window reports the hold on its behalf. */
+interface DictationHoldCompleted {
+  outcome: string;
+  hold_ms: number;
+  word_bucket: string;
+  polished?: boolean;
+  error_category?: string | null;
+}
+
 function App() {
   useEffect(() => {
+    // The consent gate, Sentry and the SDK boot in main.tsx for every window;
+    // this window additionally owns the launch/install events and outbox.
     void initializeAcquisitionAnalytics();
-    // Covers every launch, not just first-run: OnboardingFlow (which flips
-    // this itself the moment consent is accepted) never mounts again once a
-    // user is signed in, so a returning signed-in user's telemetry state has
-    // to come from somewhere that always runs - this effect.
-    Store.load(overlayStorePath)
-      .then(async (store) => {
-        const accepted = await store.get<boolean>(desktopConsentAcceptedKey);
-        if (accepted === true) initSentryIfEnabled(true);
-      })
-      .catch((err) => logError("App: load telemetry consent", err));
   }, []);
+
+  useTauriEvent<DictationHoldCompleted>(
+    DICTATION_HOLD_COMPLETED,
+    (payload) => trackEvent("dictation_hold_completed", { ...payload }),
+    "App: dictation-hold-completed",
+  );
 
   return (
     <ErrorBoundary>

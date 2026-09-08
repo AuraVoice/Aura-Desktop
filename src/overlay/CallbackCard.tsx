@@ -16,7 +16,7 @@ export function CallbackCard({ card }: { card: CallbackCardState }) {
   const { line, chips, expanded, deleteFailedId } = card;
 
   return (
-    <GlassSurface className="callback-card" draggable={false}>
+    <GlassSurface className="callback-card ph-no-capture" draggable={false}>
       <div className="callback-card-inner">
         <div className="callback-card-header">
           <span className="callback-card-title">{copyStrings.title}</span>

@@ -160,7 +160,7 @@ export function DraftCard({
       : MESSAGE_REFINE_CHIPS;
 
   return (
-    <GlassSurface className="draft-card" draggable={false}>
+    <GlassSurface className="draft-card ph-no-capture" draggable={false}>
       <div className="draft-card-inner" ref={innerRef}>
         <div className={`draft-card-header${refineFailed ? " draft-card-header-error" : ""}`}>
           <span className="draft-card-title">{title}</span>

@@ -1,4 +1,4 @@
-import { authFetch, AuthRequiredError } from "./api";
+import { authFetchWithTimeout, AuthRequiredError } from "./api";
 import { trackEvent } from "./analytics";
 import { logError } from "./log";
 
@@ -45,9 +45,11 @@ export function reportGuideUsage(report: GuideUsageReport): void {
   void postGuideUsageToBackend(report);
 }
 
+const GUIDE_USAGE_TIMEOUT_MS = 10_000;
+
 async function postGuideUsageToBackend(report: GuideUsageReport): Promise<void> {
   try {
-    const response = await authFetch("/devices/guide-usage", {
+    const response = await authFetchWithTimeout("/devices/guide-usage", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -60,7 +62,7 @@ async function postGuideUsageToBackend(report: GuideUsageReport): Promise<void> 
         steps_received: report.stepsReceived,
         agent_timeouts: report.agentTimeouts,
       }),
-    });
+    }, GUIDE_USAGE_TIMEOUT_MS);
     if (!response.ok) {
       logError("guideUsage: reportGuideUsage", `HTTP ${response.status}`);
     }

@@ -765,7 +765,7 @@ export function ChatSlot({
         <History aria-hidden="true" />
       </BarIconButton>
 
-      <GlassSurface className="chat-slot-surface" draggable={false}>
+      <GlassSurface className="chat-slot-surface ph-no-capture" draggable={false}>
         <div className={`chat-slot-inner${chipVisible ? " has-chip" : ""}`} ref={cardRef}>
         <header className="chat-slot-header">
           <BarIconButton

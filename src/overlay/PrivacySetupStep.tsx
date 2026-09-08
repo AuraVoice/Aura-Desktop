@@ -84,9 +84,11 @@ export function PrivacySetupStep({
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       stream.getTracks().forEach((track) => track.stop());
       setMicrophoneStatus("granted");
+      trackEvent("desktop_permission_result", { permission: "microphone", granted: true, surface: "privacy_setup" });
     } catch (err) {
       logError("PrivacySetupStep: microphone permission", err);
       setMicrophoneStatus("denied");
+      trackEvent("desktop_permission_result", { permission: "microphone", granted: false, surface: "privacy_setup" });
     }
   }
 

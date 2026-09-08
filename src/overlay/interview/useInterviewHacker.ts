@@ -663,9 +663,15 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   // lands, so there is nothing to set here.
   const requestCallAccess = useCallback(() => {
     setBlockerAsked(true);
-    invoke<boolean>("interview_request_accessibility").catch((error) =>
-      logError("Interview Companion: accessibility request", error),
-    );
+    invoke<boolean>("interview_request_accessibility")
+      .then((granted) =>
+        trackEvent("desktop_permission_result", {
+          permission: "accessibility",
+          granted,
+          surface: "interview_companion",
+        }),
+      )
+      .catch((error) => logError("Interview Companion: accessibility request", error));
   }, []);
 
   // Closes the card from any phase that is not holding a live capture. Without

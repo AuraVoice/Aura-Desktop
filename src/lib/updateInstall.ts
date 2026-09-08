@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { update as copy } from "./copy";
 import { logError } from "./log";
+import { trackEvent } from "./analytics";
 
 /** Shared by the overlay notch banner (UpdateBanner) and the dashboard's
  * centered dialog (UpdateDialog). Both surfaces drive the same install, so the
@@ -13,14 +14,23 @@ const READ_ONLY_BUNDLE = "bundle-read-only";
 
 export async function install(version: string, setPhase: (phase: InstallPhase) => void) {
   setPhase("installing");
+  trackEvent("desktop_update_install_started", { version });
   try {
     const installed = await invoke<boolean>("install_update");
-    if (installed) return;
+    if (installed) {
+      // The process restarts right after this; the SDK flushes what it can.
+      trackEvent("desktop_update_install_result", { version, phase: "installing" });
+      return;
+    }
     const pending = await invoke<string | null>("pending_update_version");
-    setPhase(pending === version ? "deferred" : "failed");
+    const phase: InstallPhase = pending === version ? "deferred" : "failed";
+    trackEvent("desktop_update_install_result", { version, phase });
+    setPhase(phase);
   } catch (err) {
     logError("UpdateBanner: install update", err);
-    setPhase(err === READ_ONLY_BUNDLE ? "blocked" : "failed");
+    const phase: InstallPhase = err === READ_ONLY_BUNDLE ? "blocked" : "failed";
+    trackEvent("desktop_update_install_result", { version, phase });
+    setPhase(phase);
   }
 }
 

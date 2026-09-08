@@ -6,6 +6,7 @@ import { fetchVoiceToken, VoiceCapError, type VoiceSessionMode } from "../lib/vo
 import { AuthRequiredError, routeToDashboardForExpiredSession } from "../lib/api";
 import { logError, logInfo } from "../lib/log";
 import { trackEvent } from "../lib/analytics";
+import { normalizedErrorCode } from "../lib/acquisitionAnalytics";
 import { micCaptureFailedCode, voiceCapReachedCode, voiceErrorMessageForCode } from "../lib/voiceErrorCopy";
 import { shouldArmInitialAgentSilenceWatchdog } from "./voiceSessionTiming";
 import { startRealtimeLeg, type RealtimeActivity } from "../lib/realtime";
@@ -641,14 +642,17 @@ export function useVoiceBar() {
     });
 
     const prepared = (async () => {
+      // Which step a failed start died in, for voice_start_failed below.
+      let startStage: "token" | "connect" = "token";
+      const tokenRequestedAt = Date.now();
       try {
         logInfo("useVoiceBar: prepareSession", "requesting voice token");
-        const tokenRequestedAt = Date.now();
         const voiceToken = await fetchVoiceToken(sessionModeRef.current, bridgedRef.current);
         reportRealtimeBridgeCapability(voiceToken.realtime_bridge_enabled !== false);
         const { token, url, room: roomName } = voiceToken;
         const tokenMs = Date.now() - tokenRequestedAt;
         lastTokenMsRef.current = tokenMs;
+        startStage = "connect";
         if (!sessionStillWanted()) {
           await newRoom.disconnect().catch((disconnectErr) =>
             logError("useVoiceBar: cancelled after token fetch", disconnectErr),
@@ -714,6 +718,11 @@ export function useVoiceBar() {
           return;
         }
         logError("useVoiceBar: prepareSession", err);
+        trackEvent("voice_start_failed", {
+          stage: startStage,
+          error_code: normalizedErrorCode(err, "unknown"),
+          token_ms: Date.now() - tokenRequestedAt,
+        });
         enterErrorState(null, "Couldn't start the call. Give it another shot in a sec?");
       }
     })();

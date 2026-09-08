@@ -61,6 +61,7 @@ mod screenshot_store;
 mod sealed_store;
 mod security;
 mod sentry_setup;
+mod telemetry;
 mod site_icons;
 mod status_pill;
 mod system_control;
@@ -274,6 +275,12 @@ pub fn run() {
     // Held for the whole process lifetime (run() doesn't return until the app
     // exits) - dropping it early would flush and disable the client.
     let _sentry_guard = sentry_setup::init();
+    telemetry::mark_started();
+    // Must sit before the builder: the crash reporter child is this same
+    // binary relaunched, and it exits inside init_minidump, so it never
+    // reaches single-instance (which would hand it to the running app and
+    // kill it), the log file, or a window. See telemetry.rs.
+    telemetry::init_minidump(&_sentry_guard);
 
     let mut builder = tauri::Builder::default();
 
@@ -382,6 +389,8 @@ pub fn run() {
             updater::install_update,
             updater::check_for_update,
             updater::pending_update_version,
+            telemetry::diagnostics_snapshot,
+            telemetry::startup_marker::startup_diagnostics_snapshot,
             updater::pending_update_banner_version,
             updater::dismiss_update_banner,
             updater::just_updated_version,
@@ -511,6 +520,9 @@ pub fn run() {
             // a thread, a hook or a window up when that happens.
             #[cfg(target_os = "macos")]
             macos_install::ensure_in_applications();
+
+            telemetry::attach_process_tags(app.handle());
+            telemetry::startup_marker::begin(app.handle());
 
             app.manage(connector_oauth::ConnectorOAuthState::default());
 
@@ -694,6 +706,9 @@ pub fn run() {
                 if let Some(queue) = app.try_state::<screenshot_store::PersistenceQueue>() {
                     queue.drain_for_shutdown();
                 }
+                // A deliberate exit; the next launch must not count it as a
+                // crash (telemetry::startup_marker).
+                telemetry::startup_marker::clean_exit(app);
             }
             // Clicking the Dock icon. Without this the icon is decoration: the
             // app has no ordinary window for macOS to bring back, so the click

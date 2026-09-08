@@ -3,7 +3,7 @@
 // The Rust side mirrors these strings in src-tauri/src/events.rs; keep the
 // two files in lockstep. The names are wire contract: both sides compile
 // happily with a one-character drift, and the listener just silently never
-// fires. The last three names are JS-originated (no Rust twin).
+// fires. The JS-originated block at the end has no Rust twin.
 
 // overlay.rs
 export const OVERLAY_CHANGED = "overlay-changed";
@@ -31,6 +31,7 @@ export const DICTATION_LEVEL = "dictation-level";
 export const DICTATION_STATUS_CHANGED = "dictation-status-changed";
 // Final transcript for a hold aimed at the chat composer. Payload is the text.
 export const DICTATION_COMPOSER_INSERT = "dictation-composer-insert";
+export const DICTATION_HOLD_COMPLETED = "dictation-hold-completed";
 
 // meeting
 export const MEETING_CAPTURE_STATE = "meeting-capture-state";
@@ -52,6 +53,7 @@ export const OPEN_INTERVIEW_HACKER_REQUESTED = "open-interview-hacker-requested"
 // updater.rs, toast.rs, connector_oauth.rs, dashboard.rs, status_pill.rs
 export const UPDATE_READY = "update-ready";
 export const UPDATE_DISMISSED = "update-dismissed";
+export const UPDATE_CHECK_RESULT = "update-check-result";
 export const NOTIFICATION_TOAST_ACTIVATED = "notification-toast-activated";
 export const CONNECTOR_OAUTH_COMPLETE = "connector-oauth-complete";
 export const DASHBOARD_NAVIGATE = "dashboard-navigate";
@@ -61,6 +63,7 @@ export const STATUS_PILL_UPDATE = "status-pill-update";
 export const START_VOICE_REQUESTED = "start-voice-requested";
 export const DESKTOP_ONBOARDING_COMPLETED = "desktop-onboarding-completed";
 export const DESKTOP_NOTIFICATION_LOCAL = "desktop-notification-local";
+export const TELEMETRY_CONSENT_CHANGED = "telemetry-consent-changed";
 
 // Shared payload types for events consumed in more than one place, so every
 // listener agrees with the Rust struct rather than re-typing the shape.

@@ -45,6 +45,7 @@ import { useDashboardNotifications } from "./useDashboardNotifications";
 import { navSections, navTitles } from "./navConfig";
 import { desktopOnboardingSeenForUidKey, overlayStorePath } from "../lib/copy";
 import { logError } from "../lib/log";
+import { trackPageView } from "../lib/analytics";
 import { pruneSiteIcons } from "../lib/siteIconCache";
 import { useGeneralSettings } from "../state/useGeneralSettings";
 import { useUpdateReady } from "../overlay/useUpdateReady";
@@ -93,6 +94,12 @@ export function DashboardShell({ user, collapsed }: { user: User | null; collaps
     contentRef.current.scrollTop = 0;
     contentRef.current.scrollLeft = 0;
   }, [mainPath]);
+
+  // Page views for the hash router: the webview URL never changes, so the
+  // route is reported explicitly. Settings dialogs count as their own path.
+  useEffect(() => {
+    trackPageView(location.pathname);
+  }, [location.pathname]);
 
   if (!user) return null;
 

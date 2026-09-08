@@ -54,6 +54,15 @@ interface UseChatSessionOptions {
  * does, this drops to the retained-raw-turn count and gains a character budget. */
 const HISTORY_SEND_LIMIT = 30;
 
+/** Coarse size bucket for chat_message_sent, so message length is measurable
+ * without the message. */
+function lengthBucket(length: number): string {
+  if (length <= 20) return "1-20";
+  if (length <= 100) return "21-100";
+  if (length <= 500) return "101-500";
+  return "500+";
+}
+
 function historyFrom(messages: ChatMessage[], excludedTurnId?: string): ChatHistoryEntry[] {
   return messages
     .filter((message) => message.turnId !== excludedTurnId)
@@ -921,6 +930,14 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
         cacheRowsFor([...messagesRef.current, bubble], conversationId),
       );
     }
+    // Counts and buckets only; the text never leaves through analytics.
+    if (history.length === 0) {
+      trackEvent("chat_session_started", { conversation_id: conversationIdRef.current });
+    }
+    trackEvent("chat_message_sent", {
+      length_bucket: lengthBucket(trimmed.length),
+      history_len: history.length,
+    });
     void runTurn(clientMessageId, trimmed, history, true);
     return true;
   }, [limitReached, messages, runTurn, sending]);

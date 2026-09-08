@@ -61,7 +61,7 @@ export const DictationRow = memo(function DictationRow({
     : "The audio for this dictation is no longer stored";
 
   return (
-    <div className={active ? "db-dictation-row is-active" : "db-dictation-row"}>
+    <div className={active ? "db-dictation-row is-active ph-no-capture" : "db-dictation-row ph-no-capture"}>
       <span className="db-dictation-time">{timeOfDay(entry.recordedAtMs)}</span>
       <div className="db-dictation-text-cell">
         <button

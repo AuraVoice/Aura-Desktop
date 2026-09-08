@@ -28,6 +28,7 @@
     "lucide-react": "^1.25.0",
     "mammoth": "^1.12.1",
     "pdfjs-dist": "^6.2.108",
+    "posthog-js": "^1.428.6",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-markdown": "10.1.0",

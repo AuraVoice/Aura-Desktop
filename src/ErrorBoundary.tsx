@@ -6,6 +6,10 @@ import { captureException } from "./lib/sentry";
 
 interface Props {
   children: ReactNode;
+  /** "silent" renders nothing on error (for the transparent HUD windows,
+   * which must never draw a card over another app); the default glass card
+   * offers a restart. Both log and report the error. */
+  variant?: "glass" | "silent";
 }
 
 interface State {
@@ -29,6 +33,7 @@ export class ErrorBoundary extends Component<Props, State> {
 
   render() {
     if (!this.state.error) return this.props.children;
+    if (this.props.variant === "silent") return null;
     return (
       <GlassSurface className="error-boundary">
         <p className="error-boundary-heading">Something went wrong.</p>

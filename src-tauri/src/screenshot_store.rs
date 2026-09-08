@@ -27,7 +27,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-use log::{info, warn};
+use log::{error, info, warn};
 use tauri::{AppHandle, Manager};
 
 use crate::util::{lock, now_ms_u64};
@@ -101,7 +101,9 @@ impl PersistenceQueue {
             .name("aura-screenshot-persist".into())
             .spawn(move || worker_loop(worker_app, worker_inner))
         {
-            warn!("screenshot store: persistence worker failed to start: {e}");
+            let message = format!("screenshot store: persistence worker failed to start: {e}");
+            error!("{message}");
+            sentry::capture_message(&message, sentry::Level::Error);
         }
         Self { inner }
     }

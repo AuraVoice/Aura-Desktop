@@ -55,7 +55,7 @@ export function MeetingNotesCard({ card }: { card: MeetingNotesState }) {
   const retryable = activity?.retryable === true || doc?.retryable === true;
 
   return (
-    <GlassSurface className="meeting-notes-card" draggable={false}>
+    <GlassSurface className="meeting-notes-card ph-no-capture" draggable={false}>
       <div className="meeting-notes-card-inner">
         <div className="meeting-notes-card-header">
           <span className="meeting-notes-card-title">{copy.cardTitle}</span>

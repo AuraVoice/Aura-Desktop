@@ -45,7 +45,7 @@ export function DashboardCard({
   const card = (
     <button
       type="button"
-      className={`db-card2${tall ? " db-card2-tall" : ""}`}
+      className={`db-card2 ph-no-capture${tall ? " db-card2-tall" : ""}`}
       style={style}
       onClick={() => onOpen(model.id)}
     >

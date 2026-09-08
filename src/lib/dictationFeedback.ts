@@ -1,6 +1,7 @@
 import { getFirestore, doc, setDoc } from "firebase/firestore";
 import { app as firebaseApp, auth } from "./firebase";
 import packageJson from "../../package.json";
+import { trackEvent } from "./analytics";
 import { platformTag } from "./platformKeys";
 
 /**
@@ -67,4 +68,5 @@ export async function sendDictationFeedback(input: DictationFeedbackInput): Prom
     duration_ms: input.durationMs,
     word_count: input.wordCount,
   });
+  trackEvent("feedback_submitted", { kind: "dictation", has_log_tail: false });
 }

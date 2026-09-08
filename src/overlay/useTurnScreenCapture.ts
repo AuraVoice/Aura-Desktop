@@ -241,6 +241,13 @@ export function useTurnScreenCapture(
           : "Couldn't capture this turn.",
       );
       reportUnavailable(reason);
+      if (reason === "permission_denied") {
+        trackEvent("desktop_permission_result", {
+          permission: "screen_recording",
+          granted: false,
+          surface: "turn_capture",
+        });
+      }
       // Failed captures used to be invisible in telemetry; only the local log
       // file knew. One failure event per failed turn fixes that.
       trackEvent("turn_context_upload", {

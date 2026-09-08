@@ -1,12 +1,11 @@
 import { getVersion } from "@tauri-apps/api/app";
 import { Store } from "@tauri-apps/plugin-store";
 import {
-  setAnonymousDistinctId,
   setAnalyticsSuperProperties,
-  setTelemetryEnabled,
   trackEvent,
   trackEventWithResult,
 } from "./analytics";
+import type { AnalyticsEvent } from "./analyticsEvents";
 import {
   desktopConsentAcceptedKey,
   overlayStorePath,
@@ -25,6 +24,7 @@ import {
   recordDesktopOnboardingEvent,
   rememberDesktopSignIn,
 } from "./profile";
+import { enableTelemetryAfterConsent, telemetryReady } from "./telemetryInit";
 
 const installObservedSentKey = "desktop_install_observed_sent";
 const onboardingStepSentKeyPrefix = "desktop_onboarding_step_sent";
@@ -44,10 +44,13 @@ type StartupContext = {
 
 let startupContext: StartupContext | null = null;
 
+/** "Sent" here means accepted into the SDK's retry queue (see
+ * trackEventWithResult); the flag is written only then, so a launch where
+ * consent or the SDK was not ready retries on the next one. */
 async function sendOnce(
   store: Store,
   sentKey: string,
-  event: string,
+  event: AnalyticsEvent,
   properties?: Record<string, unknown>,
 ): Promise<void> {
   if (await store.get<boolean>(sentKey)) return;
@@ -58,6 +61,9 @@ async function sendOnce(
 
 async function recordStartup(): Promise<void> {
   try {
+    // The SDK, consent gate and Sentry boot in telemetryInit.ts for every
+    // window; wait for that so the launch events below are not dropped.
+    await telemetryReady();
     const store = await Store.load(overlayStorePath);
     const [appVersion, existingFirstStart, previousVersion] = await Promise.all([
       getVersion().catch(() => "unknown"),
@@ -73,7 +79,6 @@ async function recordStartup(): Promise<void> {
     await store.set(lastStartedVersionKey, appVersion);
 
     const anonId = await getOrCreateAnonId(store);
-    setAnonymousDistinctId(anonId);
     const metadata = await collectDesktopMetadata(store, anonId);
     setAnalyticsSuperProperties(posthogSafeMetadata(metadata));
     startupContext = {
@@ -86,7 +91,6 @@ async function recordStartup(): Promise<void> {
 
     const consentAccepted = await store.get<boolean>(desktopConsentAcceptedKey);
     if (consentAccepted !== true) return;
-    setTelemetryEnabled(true);
     await flushStartupEvents();
   } catch (err) {
     logError("acquisitionAnalytics: recordStartup", err);
@@ -100,7 +104,7 @@ export function initializeAcquisitionAnalytics(): Promise<void> {
 
 export async function telemetryConsentAccepted(): Promise<void> {
   await initializeAcquisitionAnalytics();
-  setTelemetryEnabled(true);
+  await enableTelemetryAfterConsent();
   await flushStartupEvents();
 }
 

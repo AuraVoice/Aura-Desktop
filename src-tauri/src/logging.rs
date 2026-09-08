@@ -103,19 +103,20 @@ pub(crate) fn read_redacted_log_tail(
     app: &tauri::AppHandle,
     count: usize,
 ) -> Result<Vec<String>, String> {
-    // Matches tauri-plugin-log's own LogDir{file_name: None} naming:
-    // <app_log_dir>/<product name>.log.
-    let file_name = format!("{}.log", app.package_info().name);
-    let path = app
-        .path()
-        .app_log_dir()
-        .map_err(|e| e.to_string())?
-        .join(file_name);
+    let path = log_file_path(app).ok_or_else(|| "log directory unavailable".to_string())?;
     let bytes = read_tail_bytes(&path, MAX_LOG_BYTES)?;
     Ok(tail_lines(&bytes, count.min(MAX_LOG_LINES))
         .into_iter()
         .map(|line| crate::redact::redact_line(&line))
         .collect())
+}
+
+/// Matches tauri-plugin-log's own LogDir{file_name: None} naming:
+/// <app_log_dir>/<product name>.log. Also read by telemetry.rs for the
+/// heartbeat's log size.
+pub(crate) fn log_file_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    let file_name = format!("{}.log", app.package_info().name);
+    app.path().app_log_dir().ok().map(|dir| dir.join(file_name))
 }
 
 /// At most `budget` bytes from the end of the file. When the read starts

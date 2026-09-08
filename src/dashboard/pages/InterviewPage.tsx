@@ -951,7 +951,7 @@ function InterviewHistoryPanel({
   onDelete: (interviewId: string) => void;
 }) {
   return (
-    <section id="interview-preparation-panel" className="db-interview-history" role="tabpanel" aria-labelledby="interview-preparation-tab">
+    <section id="interview-preparation-panel" className="db-interview-history ph-no-capture" role="tabpanel" aria-labelledby="interview-preparation-tab">
       <div className="db-interview-section-head">
         <div>
           <span className="db-interview-eyebrow">Saved preparation</span>
@@ -1136,7 +1136,7 @@ function InterviewSessionsPanel({ uid }: { uid: string | null }) {
   return (
     <section
       id="interview-sessions-panel"
-      className="db-interview-history"
+      className="db-interview-history ph-no-capture"
       role="tabpanel"
       aria-labelledby="interview-sessions-tab"
     >
@@ -1702,7 +1702,7 @@ export function InterviewPage() {
           onDelete={(interviewId) => void deleteInterview(interviewId)}
         />
       ) : currentInterview ? (
-        <div id="interview-current-panel" className="db-interview-current-panel" role="tabpanel" aria-labelledby="interview-current-tab">
+        <div id="interview-current-panel" className="db-interview-current-panel ph-no-capture" role="tabpanel" aria-labelledby="interview-current-tab">
       <InterviewSteps
         company={input.company}
         hasResearch={Boolean(research)}

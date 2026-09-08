@@ -34,7 +34,7 @@ use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use log::warn;
+use log::{error, warn};
 
 use super::contract::{QualityReason, StructuredContext};
 use super::focus::FocusProbe;
@@ -88,7 +88,9 @@ impl UiaWorker {
             .name("aura-uia".into())
             .spawn(move || worker_loop(rx, worker_busy))
         {
-            warn!("uia: worker thread failed to start: {e}");
+            let message = format!("uia: worker thread failed to start: {e}");
+            error!("{message}");
+            sentry::capture_message(&message, sentry::Level::Error);
         }
         Self {
             requests: Mutex::new(tx),

@@ -16,7 +16,6 @@ import {
 } from "../lib/acquisitionAnalytics";
 import { trackEvent } from "../lib/analytics";
 import { recordDesktopOnboardingEvent } from "../lib/profile";
-import { initSentryIfEnabled } from "../lib/sentry";
 import { logError, logInfo } from "../lib/log";
 import { webAuthCopy } from "../lib/webAuthCopy";
 import iconUrl from "../assets/icons/Aura-Icon.png";
@@ -120,7 +119,6 @@ export function OnboardingFlow() {
           "telemetry_consent_accepted",
         );
         await trackOnboardingStepCompleted("consent");
-        initSentryIfEnabled(true);
         setConsentAccepted(true);
       } catch (err) {
         logError("OnboardingFlow: persist consent", err);

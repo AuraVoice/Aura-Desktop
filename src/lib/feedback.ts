@@ -3,21 +3,14 @@ import { getVersion } from "@tauri-apps/api/app";
 import { platform, version as osVersion } from "@tauri-apps/plugin-os";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { logError } from "./log";
+import { trackEvent } from "./analytics";
 
 const FEEDBACK_EMAIL = "support@auravoiceapp.com";
 const LOG_LINE_COUNT = 40;
 
-// Matches Firebase ID/refresh tokens and LiveKit JWTs (both are long
-// dot-separated base64url segments), plus common key=value shapes that might
-// carry one, before any log content leaves the machine. Deliberately broad
-// (would also redact a plain long base64 string that isn't actually a token)
-// - over-redacting a log line is harmless, under-redacting a real token isn't.
-const TOKEN_PATTERN = /[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g;
-const KEY_VALUE_TOKEN_PATTERN = /((?:token|refreshToken|idToken|access_token)["']?\s*[:=]\s*["']?)[^\s"',}]+/gi;
+import { redactSecrets } from "./redact";
 
-export function redactSecrets(text: string): string {
-  return text.replace(TOKEN_PATTERN, "[redacted]").replace(KEY_VALUE_TOKEN_PATTERN, "$1[redacted]");
-}
+export { redactSecrets };
 
 interface FeedbackContext {
   appVersion: string;
@@ -62,4 +55,5 @@ export async function sendFeedback(overlayState: string): Promise<void> {
   )}&body=${encodeURIComponent(body)}`;
 
   await openUrl(mailtoUrl);
+  trackEvent("feedback_submitted", { kind: "general", has_log_tail: logTail.length > 0 });
 }

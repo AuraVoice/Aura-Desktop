@@ -205,7 +205,7 @@ function MeetingDetail({
   };
 
   return (
-    <div className="db-meeting-detail">
+    <div className="db-meeting-detail ph-no-capture">
       <div className="db-meeting-detail-bar">
         <button type="button" className="db-meeting-back" onClick={onBack}>
           <ArrowLeft size={17} /> Back to meetings

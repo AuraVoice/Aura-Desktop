@@ -98,7 +98,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useTauriEvent(
     SIGN_OUT_REQUESTED,
     () => {
-      signOutSession().catch((err) => {
+      signOutSession("hotkey").catch((err) => {
         logError("AuthProvider: sign-out-requested", err);
       });
     },

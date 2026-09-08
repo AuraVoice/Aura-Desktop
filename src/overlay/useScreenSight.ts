@@ -13,6 +13,7 @@ import {
   type ScreenSightArmedPayload,
 } from "../lib/ipcEvents";
 import { validateAgentDataMessage } from "../lib/agentData";
+import { trackEvent } from "../lib/analytics";
 import { logError } from "../lib/log";
 import {
   asArrayBuffer,
@@ -125,6 +126,9 @@ export function useScreenSight(room: Room | null, status: VoiceSessionStatus) {
       armedRef.current = next;
       setArmed(next);
       capturedThisTurnRef.current = false;
+      // Every trigger lands here (hotkey, tray, UI, voice end), so this is the
+      // one place the toggle is counted. Rust does not say which trigger.
+      if (next !== wasArmed) trackEvent("screen_sight_toggled", { armed: next });
       if (next && !wasArmed && isSessionLive(statusRef.current)) {
         void captureAndSend("armed");
       }
