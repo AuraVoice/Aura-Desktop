@@ -28,6 +28,8 @@ import remarkGfm from "remark-gfm";
 import { BarIconButton } from "./BarIconButton";
 import { GlassSurface } from "./GlassSurface";
 import { logError } from "../lib/log";
+import { DICTATION_UPDATE, type DictationUpdatePayload } from "../lib/ipcEvents";
+import { useTauriEvent } from "../lib/useTauriEvent";
 import type { ChatScreenState } from "./useChatScreenCapture";
 import "./ChatSlot.css";
 
@@ -554,6 +556,14 @@ export function ChatSlot({
   // stays up for the whole window so the user is never looking at the previous
   // conversation's transcript while believing they opened another one.
   const [awaitingSelection, setAwaitingSelection] = useState(false);
+  // A dictation hold aimed at this composer keeps the overlay visible and the
+  // HUD suppressed (hud.rs edge_wanted), so the chip below is the only
+  // feedback the user gets. Cleared by the lingered Idle publish from Rust;
+  // no timer here.
+  const [dictation, setDictation] = useState<DictationUpdatePayload | null>(null);
+  useTauriEvent<DictationUpdatePayload>(DICTATION_UPDATE, (update) => {
+    setDictation(update.ownTarget && update.phase !== "idle" ? update : null);
+  });
   const trimmedMessage = message.trim();
   const bodyRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
@@ -842,6 +852,16 @@ export function ChatSlot({
           ))}
           </div>
         </div>
+
+        {dictation && dictation.phase !== "inserted" && dictation.phase !== "consent" && (
+          <div className="chat-dictation-chip" role="status">
+            {dictation.phase === "listening" && <span>Listening</span>}
+            {dictation.phase === "transcribing" && <span>Transcribing</span>}
+            {(dictation.phase === "error" || dictation.phase === "recovery" || dictation.phase === "pending") && (
+              <span>{dictation.message ?? "Dictation failed. Nothing was typed."}</span>
+            )}
+          </div>
+        )}
 
         {chipVisible && (
           <div className="chat-screen-chip">

@@ -1298,9 +1298,11 @@ pub fn set_voice_active(app: &AppHandle, active: bool) {
 /// hold is live a presented Bar is hidden and the HUD draws in its place; when
 /// it ends the Bar comes back exactly as it was, chat slot included, because
 /// `presentation` never changed. A live voice call keeps the notch (it carries
-/// the call), so the request is refused and the HUD stays suppressed. Both
-/// directions land in `apply_result`, the one place either window is shown or
-/// hidden.
+/// the call), so the request is refused and the HUD stays suppressed. A hold
+/// that targets one of Aura's own windows never asks at all (`edge_wanted` in
+/// hud.rs): hiding the Bar would hide the chat composer the insert is typing
+/// into. Both directions land in `apply_result`, the one place either window
+/// is shown or hidden.
 pub(crate) fn set_dictation_hold(app: &AppHandle, active: bool) {
     let Some(handle) = state_handle(app) else {
         return;

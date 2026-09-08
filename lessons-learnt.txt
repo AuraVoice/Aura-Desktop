@@ -1,3 +1,32 @@
+2026-09-07  Dictating into the chat composer hid the chat and guaranteed the insert failed
+
+Problem: with the chat card open and the composer focused, starting the dictation hold hid the
+whole overlay window, the HUD took its edge, and on release the words never arrived: the HUD
+showed "Focus changed, so nothing was typed." Same on both platforms, since the path is shared.
+
+Issue: the edge-borrowing contract ("the overlay and the HUD are never both on screen") was
+written for foreign targets and had no notion of WHO the hold was typing into. hud::show and
+every hud::publish called overlay::set_dictation_hold unconditionally, whose only refusal was
+voice_active; with presentation Bar that made effectively_hidden() true, apply_result called
+window.hide() on the very window the insert needed focused, foreground moved, and insert_text's
+first guard could only ever return FocusChanged. The failure was silent by construction: every
+individual piece behaved exactly as documented.
+
+Solution: a phase-aware self-target exemption at the single choke point. hud::show stamps
+TARGET_IS_SELF (Windows compares the target HWND against every webview window's handle, which
+sidesteps the WebView2 child-process pid trap; macOS compares the pid insert::foreground_window
+already returns against our own), and both set_dictation_hold call sites route through
+edge_wanted(phase): a self-targeted hold never asks for the edge, except Consent, which is
+interactive and must be seen. The overlay stays visible, SUPPRESSED_BY_OVERLAY keeps the HUD
+hidden, focus never moves, and insert.rs types into the composer with zero changes (the focus
+probe already returns Unknown for our own process, and Unknown types). Feedback moved into a
+chat-card chip driven by a new ownTarget field on the broadcast dictation-update event.
+
+Justification: the fix is expressed as the caller never asking rather than a new refusal inside
+set_dictation_hold, which preserves the one-choke-point invariant the module header promises.
+The general rule this leaves behind: any arbitration between two surfaces has to know when one
+surface IS the other's target, or the arbitration itself becomes the failure.
+
 2026-09-07  Dictation felt slow at both ends of a hold, and none of it was the platform
 
 Problem: three complaints about the same hold. The HUD took a beat to appear after the chord

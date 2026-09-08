@@ -65,6 +65,12 @@ const CONSENT_HEIGHT: f64 = 176.0;
 /// change can re-place the HUD on the right display without the worker having
 /// to thread the target through every publish.
 static LAST_TARGET: AtomicIsize = AtomicIsize::new(0);
+/// True while the current hold is dictating into one of Aura's own windows
+/// (the chat composer, the dashboard). Set once per utterance in `show` from
+/// `is_own_window`, cleared by `show_idle`, and read by `edge_wanted`: a
+/// self-targeted hold must NOT borrow the notch edge, because hiding the Bar
+/// hides the very window the insert needs focused.
+static TARGET_IS_SELF: AtomicBool = AtomicBool::new(false);
 static IDLE_HOVERED: AtomicBool = AtomicBool::new(false);
 
 /// Last answer from the macOS `target_center` AX read, as (pid, centre, when).
@@ -125,6 +131,22 @@ fn accepts_clicks(phase: HudPhase) -> bool {
     matches!(phase, HudPhase::Idle | HudPhase::Recovery | HudPhase::Consent)
 }
 
+/// Whether this phase should borrow the notch edge from the Bar. A hold that
+/// targets Aura's own window keeps the overlay visible (the insert needs its
+/// focus, and the chat card renders its own listening chip), so it never takes
+/// the edge; the consent question is the one exception because it must be seen
+/// and clicked. `Pending` cannot occur for a self target: the focus probe
+/// refuses to judge our own process and `Unknown` types.
+fn edge_wanted(phase: HudPhase) -> bool {
+    if phase == HudPhase::Idle {
+        return false;
+    }
+    if !TARGET_IS_SELF.load(Ordering::Relaxed) {
+        return true;
+    }
+    phase == HudPhase::Consent
+}
+
 /// Phases whose window grows into a caption card rather than staying a pill.
 ///
 /// For these the DOM update has to WAIT for the resize. `.dictation-message`
@@ -155,6 +177,11 @@ pub struct HudUpdate {
     /// orientation. Stamped by `publish` from live overlay state rather than at
     /// construction, so no call site has to know about it.
     pub edge: &'static str,
+    /// True when this hold is dictating into one of Aura's own windows. The
+    /// chat composer renders its own listening chip from this, since the HUD
+    /// stays suppressed behind the visible overlay. Stamped by `publish` like
+    /// `edge`.
+    pub own_target: bool,
 }
 
 /// The last update published, so a webview that was created moments ago can ask
@@ -180,6 +207,7 @@ impl HudUpdate {
             message: None,
             chord_label: super::chord::DICTATION_CHORD.label(),
             edge: NotchEdge::default().as_stored(),
+            own_target: false,
         }
     }
 
@@ -372,6 +400,25 @@ fn target_center(target: isize) -> Option<(f64, f64)> {
     Some(center)
 }
 
+/// True when `target` is one of Aura's own windows (main overlay, dashboard,
+/// or this HUD). Windows compares the target HWND against every webview
+/// window's real top-level handle, which is exact and sidesteps the WebView2
+/// child-process pid trap; on macOS the target token is already a pid (see
+/// `insert::foreground_window`), so it compares against our own.
+#[cfg(windows)]
+fn is_own_window(app: &AppHandle, target: isize) -> bool {
+    target != 0
+        && app
+            .webview_windows()
+            .values()
+            .any(|w| w.hwnd().is_ok_and(|h| h.0 as isize == target))
+}
+
+#[cfg(target_os = "macos")]
+fn is_own_window(_app: &AppHandle, target: isize) -> bool {
+    target != 0 && target == std::process::id() as isize
+}
+
 fn oriented_size(edge: NotchEdge, side_width: f64, side_height: f64) -> LogicalSize<f64> {
     match edge {
         NotchEdge::Top | NotchEdge::Bottom => LogicalSize::new(side_height, side_width),
@@ -485,9 +532,12 @@ fn place_window(app: &AppHandle, window: &tauri::WebviewWindow, target: isize, p
 /// silently create one.
 pub fn show(app: &AppHandle, target: isize) {
     LAST_TARGET.store(target, Ordering::Relaxed);
+    TARGET_IS_SELF.store(is_own_window(app, target), Ordering::Relaxed);
     // Take the edge from the notch first: the overlay's hidden branch is what
-    // lifts the suppression the guarded show() below checks.
-    overlay::set_dictation_hold(app, true);
+    // lifts the suppression the guarded show() below checks. A self-targeted
+    // hold never asks (see `edge_wanted`): the overlay stays visible, the HUD
+    // stays suppressed, and the insert keeps its focused window.
+    overlay::set_dictation_hold(app, edge_wanted(HudPhase::Listening));
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
         if let Err(e) = build_window(&handle) {
@@ -511,6 +561,8 @@ pub fn show(app: &AppHandle, target: isize) {
 /// of Arm.
 pub fn show_idle(app: &AppHandle) {
     IDLE_HOVERED.store(false, Ordering::Relaxed);
+    // The resting pill targets nothing.
+    TARGET_IS_SELF.store(false, Ordering::Relaxed);
     overlay::set_dictation_hold(app, false);
     let mut update = HudUpdate::new(HudPhase::Idle);
     update.edge = overlay::snapshot(app).notch_edge.as_stored();
@@ -586,13 +638,16 @@ pub fn hide(app: &AppHandle) {
 pub fn publish(app: &AppHandle, mut update: HudUpdate) {
     IDLE_HOVERED.store(false, Ordering::Relaxed);
     update.edge = overlay::snapshot(app).notch_edge.as_stored();
+    update.own_target =
+        update.phase != HudPhase::Idle && TARGET_IS_SELF.load(Ordering::Relaxed);
     let phase = update.phase;
     let has_caption = !update.text.is_empty();
     *LAST_UPDATE.lock().unwrap_or_else(|e| e.into_inner()) = Some(update.clone());
     // After LAST_UPDATE is written: lifting the suppression places and shows
     // this window from `last_update()`, so it must already say this phase.
-    // Any phase but Idle takes the edge from the notch; Idle hands it back.
-    overlay::set_dictation_hold(app, phase != HudPhase::Idle);
+    // Any phase but Idle takes the edge from the notch; Idle hands it back,
+    // and a self-targeted hold never asks in the first place (`edge_wanted`).
+    overlay::set_dictation_hold(app, edge_wanted(phase));
     let defer_emit = resizes_into_card(phase);
     if !defer_emit {
         if let Some(window) = app.get_webview_window(DICTATION_WINDOW) {

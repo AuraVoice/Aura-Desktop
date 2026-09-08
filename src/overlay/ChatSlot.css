@@ -793,6 +793,43 @@
   cursor: default;
 }
 
+/* Dictation aimed at this composer keeps the overlay on screen and the HUD
+   suppressed, so this chip is the only listening/transcribing feedback. Same
+   row recipe as the screen chip so the slot grows by the same fixed height. */
+.chat-dictation-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  box-sizing: border-box;
+  height: 40px;
+  margin: 0 12px;
+  padding: 5px 10px;
+  border: 1px solid var(--db-border, var(--glass-border-flat));
+  border-radius: 10px;
+  color: var(--db-text-dim, var(--glass-text-dim));
+  font: 11px/1.3 var(--font-body);
+}
+
+.chat-dictation-chip::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--db-teal, var(--glass-accent));
+  animation: chat-dictation-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes chat-dictation-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-dictation-chip::before {
+    animation: none;
+  }
+}
+
 /* What is about to be sent, shown before it is sent. The thumbnail is the whole
    point of the chip: the user should never have to trust a label about which
    screen Aura is looking at. */

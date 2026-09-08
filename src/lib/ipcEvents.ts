@@ -75,3 +75,23 @@ export interface GuideArmedPayload {
 export interface ScreenSightArmedPayload {
   armed: boolean;
 }
+
+// Mirrors dictation/hud.rs HudUpdate (rename_all = "camelCase"). Consumed by
+// the dictation HUD window and, when ownTarget is true, by the chat composer's
+// listening chip: the emit broadcasts to every window.
+export interface DictationUpdatePayload {
+  phase:
+    | "idle"
+    | "listening"
+    | "transcribing"
+    | "inserted"
+    | "error"
+    | "recovery"
+    | "pending"
+    | "consent";
+  text: string;
+  message?: string;
+  chordLabel: string;
+  edge: "top" | "bottom" | "left" | "right";
+  ownTarget: boolean;
+}
