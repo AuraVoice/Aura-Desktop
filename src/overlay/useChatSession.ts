@@ -589,6 +589,34 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
     let terminalFrameSeen = false;
     let errorFrameSeen = false;
 
+    // End-to-end turn latency, mirroring the mobile contract in
+    // lib/presentation/viewmodels/chat_viewmodel.dart so ONE ops query serves
+    // both platforms (the ops Desktop tab read n/a because nothing here ever
+    // timed a successful turn).
+    //
+    // TTFT is the first NON-EMPTY text_delta: not a thinking delta, not a tool
+    // or status frame, not the stream opening. Those arrive earlier and would
+    // report a first-token time the user never saw.
+    const turnStartedAt = Date.now();
+    let firstTextAtMs: number | null = null;
+    let latencyTracked = false;
+
+    // Emitted for every terminal path, not just success. A success-only view
+    // hides the slow turns that died and flatters the tail; `outcome` lets a
+    // query take the done-only cut when it wants one. Fire-and-forget, so it
+    // never sits in front of the user's next frame.
+    const trackTurnLatency = (outcome: string) => {
+      if (latencyTracked) return;
+      latencyTracked = true;
+      const totalMs = Date.now() - turnStartedAt;
+      trackEvent("chat_e2e_latency", {
+        ttft_ms: firstTextAtMs ?? totalMs,
+        total_ms: totalMs,
+        agent_type: "general",
+        outcome,
+      });
+    };
+
     setMessages((current) => [
       ...current.filter((message) => message.turnId !== clientMessageId || message.role === "user"),
       {
@@ -642,6 +670,7 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
 
     const handleDone = (metadata: ChatDoneMetadata) => {
       terminalFrameSeen = true;
+      trackTurnLatency("done");
       finishAssistantText();
       markUser("sent");
       if (metadata.reminder) {
@@ -663,6 +692,9 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
     const handleFrame = (frame: ChatStreamFrame) => {
       switch (frame.type) {
         case "text_delta":
+          if (firstTextAtMs === null && frame.delta.length > 0) {
+            firstTextAtMs = Date.now() - turnStartedAt;
+          }
           setMessages((current) => current.map((message) =>
             message.id === assistantId ? { ...message, text: message.text + frame.delta } : message,
           ));
@@ -759,10 +791,12 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
             state: "complete",
             kind: "limit",
           });
+          trackTurnLatency("limit");
           break;
         case "error":
           terminalFrameSeen = true;
           errorFrameSeen = true;
+          trackTurnLatency("error");
           trackEvent("chat_turn_failed", { reason: "error_frame" });
           captureException(new Error("Desktop chat returned an error frame"), {
             feature: "desktop_text_chat",
@@ -818,6 +852,9 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
     } catch (err) {
       if (controller.signal.aborted && !enabledRef.current) return;
       const reason = chatFailureReason(err);
+      // An aborted-but-still-enabled turn can finish in the background, so it is
+      // `pending` rather than a failure, matching the mobile client's split.
+      trackTurnLatency(controller.signal.aborted ? "pending" : reason);
       trackEvent("chat_turn_failed", { reason });
       captureException(err instanceof Error ? err : new Error(reason), {
         feature: "desktop_text_chat",
