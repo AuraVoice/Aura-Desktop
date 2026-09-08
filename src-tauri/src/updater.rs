@@ -6,7 +6,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::{Update, UpdaterExt};
 
-use crate::{events, meeting, overlay, tray};
+use crate::{meeting, overlay, tray};
 
 /// How often the long-running app re-checks the feed after the startup check.
 /// This app autostarts and then lives for days, so a startup-only check would
