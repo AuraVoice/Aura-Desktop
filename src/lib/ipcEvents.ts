@@ -32,6 +32,8 @@ export const DICTATION_STATUS_CHANGED = "dictation-status-changed";
 // Final transcript for a hold aimed at the chat composer. Payload is the text.
 export const DICTATION_COMPOSER_INSERT = "dictation-composer-insert";
 export const DICTATION_HOLD_COMPLETED = "dictation-hold-completed";
+// The chord found no usable transcription credential; mint one now.
+export const DICTATION_CREDENTIAL_NEEDED = "dictation-credential-needed";
 
 // meeting
 export const MEETING_CAPTURE_STATE = "meeting-capture-state";

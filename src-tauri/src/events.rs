@@ -33,6 +33,9 @@ pub const DICTATION_STATUS_CHANGED: &str = "dictation-status-changed";
 /// Final transcript for a hold aimed at the chat composer. Payload is the text.
 pub const DICTATION_COMPOSER_INSERT: &str = "dictation-composer-insert";
 pub const DICTATION_HOLD_COMPLETED: &str = "dictation-hold-completed";
+/// The chord found no usable transcription credential. Asks the overlay's
+/// credential pump to mint one now rather than on its own timer.
+pub const DICTATION_CREDENTIAL_NEEDED: &str = "dictation-credential-needed";
 
 // meeting
 pub const MEETING_CAPTURE_STATE: &str = "meeting-capture-state";

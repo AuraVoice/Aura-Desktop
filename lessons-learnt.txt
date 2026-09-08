@@ -668,3 +668,33 @@ the 2026-09-07 autostart entry: read the implementation of a third-party predica
 building on its name. The verification step for replay is now explicit in the plan (open the
 dashboard, check the recording list shows masked frames), because "events arrive" proves
 nothing about it.
+================================================================================
+2026-09-08  Dictation failed on the first press after a long idle: the credential timer lives in a webview
+
+Problem: after the Mac had been idle or asleep, the first chord hold showed "Dictation credential
+unavailable. Nothing was typed." and the second hold a few seconds later worked. Reproduced six
+times in one day's log, always the same shape: last refresh, a gap, phase=failure
+failure=unavailable, and a state=stored line ONE second after the failure.
+
+Issue: two clocks were wrong. The transcription token is minted for 300s and refreshed by a
+setTimeout in the always-hidden overlay webview (useCredentialPump.ts). WebKit stalls those
+timers through system sleep and throttles them while the window is hidden, so the token was
+dead for anything from minutes to hours before the timer fired, and Rust had no way to ask for
+one: it failed the hold, and the timer then happened to run. Separately, ScopedToken measured
+expiry with Instant, which on macOS is CLOCK_UPTIME_RAW and does not advance during sleep, so a
+token minted before a two hour nap still looked fresh to Rust after it while the provider had
+long since expired it; that path surfaced as the different "could not sign in to transcription"
+caption.
+
+Solution: ScopedToken keeps expiry as SystemTime, the clock the issuer actually uses. When the
+chord finds no credential while signed in, run_utterance emits dictation-credential-needed to
+the overlay, shows the listening pill, and waits up to three seconds for the token while still
+honouring release and cancel; the pump listens for that event and mints immediately unless a
+mint is already in flight. Release before it lands says "Dictation was reconnecting. Hold the
+keys and try again."; a timeout keeps the old caption.
+
+Justification: a hidden webview's timer is not a scheduler for anything a native code path
+depends on, and Instant is not a wall clock on macOS. The log already carried the whole story
+(the stored line landing a second after the failure) but nothing read it that way until the
+failures were lined up against the refresh cadence. The verification is behavioural: sleep the
+Mac past the token's life, wake, press once, and the first hold must transcribe.

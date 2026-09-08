@@ -199,6 +199,16 @@ mod platform {
     const SIGN_IN_REASON: &str = "Sign in to use dictation.";
     const UNAVAILABLE_REASON: &str = "Dictation credential unavailable. Try again shortly.";
     const UNAVAILABLE_HUD: &str = "Dictation credential unavailable. Nothing was typed.";
+    /// The chord came up while a fresh credential was still on its way.
+    const RECONNECTING_HUD: &str = "Dictation was reconnecting. Hold the keys and try again.";
+    /// How long a hold waits for the overlay to mint a credential when the
+    /// press found none. The pump refreshes on a webview timer, and that timer
+    /// stalls whenever the machine sleeps or the hidden overlay is throttled,
+    /// so after a long idle the first press used to find an expired token and
+    /// fail outright while the re-mint landed about a second later. Asking for
+    /// one and waiting this long turns that failure into a short delay.
+    const CREDENTIAL_WAIT: Duration = Duration::from_millis(3000);
+    const CREDENTIAL_POLL: Duration = Duration::from_millis(50);
     /// `InsertOutcome::Blocked` names a different OS mechanism per platform
     /// (see insert.rs), so the sentence has to as well.
     #[cfg(windows)]
@@ -858,28 +868,58 @@ mod platform {
         // Preflight 2: the credential. Checked before the device so a signed
         // out user never lights the Windows microphone indicator for an
         // utterance that was never going to be transcribed.
-        let Some(token) = credential::usable() else {
-            let signed_in = crate::security::current_uid(app).is_some();
-            let shutting_down = drain_until_release(rx);
-            hud::show(app, target);
-            hold_failure(
-                app,
-                generation,
-                failed,
-                Vec::new(),
-                if signed_in {
-                    "unavailable"
-                } else {
-                    AsrError::NotAuthenticated.category()
-                },
-                if signed_in {
-                    UNAVAILABLE_HUD
-                } else {
-                    AsrError::NotAuthenticated.hud_message()
-                },
-            );
-            refresh_status(app, status);
-            return shutting_down;
+        let token = match credential::usable() {
+            Some(token) => token,
+            None if crate::security::current_uid(app).is_some() => {
+                // Signed in but the token has lapsed: the overlay's refresh
+                // timer did not fire in time (sleep, or a throttled hidden
+                // webview). Ask it to mint now and give it a moment, with the
+                // HUD already up so the press visibly registered.
+                info!("dictation: phase=preflight credential=missing action=requested");
+                let _ = app.emit_to("main", crate::events::DICTATION_CREDENTIAL_NEEDED, ());
+                hud::show(app, target);
+                hud::publish(app, HudUpdate::new(HudPhase::Listening));
+                match await_credential(rx) {
+                    Awaited::Token(token) => token,
+                    Awaited::Shutdown => return true,
+                    Awaited::Released => {
+                        info!("dictation: phase=preflight credential=missing outcome=released");
+                        hold_failure(
+                            app,
+                            generation,
+                            failed,
+                            Vec::new(),
+                            "unavailable",
+                            RECONNECTING_HUD,
+                        );
+                        refresh_status(app, status);
+                        return false;
+                    }
+                    Awaited::TimedOut => {
+                        // Caption first, then wait out the hold: the pill has
+                        // said "listening" for three seconds already, so the
+                        // user needs to know why nothing is happening now.
+                        info!("dictation: phase=preflight credential=missing outcome=timeout");
+                        hold_failure(app, generation, failed, Vec::new(), "unavailable", UNAVAILABLE_HUD);
+                        refresh_status(app, status);
+                        return drain_until_release(rx);
+                    }
+                }
+            }
+            None => {
+                let shutting_down = drain_until_release(rx);
+                hud::show(app, target);
+                hold_failure(
+                    app,
+                    generation,
+                    failed,
+                    Vec::new(),
+                    AsrError::NotAuthenticated.category(),
+                    AsrError::NotAuthenticated.hud_message(),
+                );
+                refresh_status(app, status);
+                return shutting_down;
+            }
         };
 
         hud::show(app, target);
@@ -1343,6 +1383,38 @@ mod platform {
         };
         finish_with(app, generation, update, linger);
         shutting_down
+    }
+
+    enum Awaited {
+        Token(String),
+        /// The chord came up before a credential arrived.
+        Released,
+        TimedOut,
+        Shutdown,
+    }
+
+    /// Waits up to `CREDENTIAL_WAIT` for the overlay to push a credential,
+    /// while still honouring the chord: a release or cancel ends the wait the
+    /// same way it ends a hold.
+    fn await_credential(rx: &Receiver<Message>) -> Awaited {
+        let deadline = Instant::now() + CREDENTIAL_WAIT;
+        loop {
+            match rx.recv_timeout(CREDENTIAL_POLL) {
+                Ok(Message::Shutdown) => return Awaited::Shutdown,
+                Ok(Message::Chord(ChordSignal::Release))
+                | Ok(Message::Chord(ChordSignal::Cancel)) => return Awaited::Released,
+                Ok(Message::Chord(_)) => {}
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => return Awaited::Shutdown,
+            }
+            if let Some(token) = credential::usable() {
+                info!("dictation: phase=preflight credential=arrived");
+                return Awaited::Token(token);
+            }
+            if Instant::now() >= deadline {
+                return Awaited::TimedOut;
+            }
+        }
     }
 
     /// Consumes signals until the hold ends, for the failure paths that have

@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { logError } from "../lib/log";
 
 /**
@@ -29,6 +30,13 @@ import { logError } from "../lib/log";
  *    keep dictation alive through a blip, so only the cleanup path clears.
  *  - leave a credential behind on sign-out, where it would outlive the session
  *    that was allowed to have it.
+ *
+ * The timer is not enough on its own. It lives in the hidden overlay webview,
+ * and that webview's timers stall while the machine sleeps and get throttled
+ * while the window is hidden, so after a long idle the token had been dead for
+ * an hour before the timer fired. `kickEvent` is Rust's way of saying "I need
+ * one right now": the chord found no credential, so the pump mints immediately
+ * instead of waiting for a timer that may not be coming.
  */
 
 /** Refresh at this fraction of a token's life. */
@@ -50,6 +58,7 @@ export function useCredentialPump(
   ownerUid: string | null,
   cycle: () => Promise<PumpOutcome>,
   clear: () => Promise<unknown>,
+  kickEvent?: string,
 ): void {
   // Guards against a cycle scheduled by a previous uid landing after a sign-out
   // or a user switch.
@@ -73,8 +82,10 @@ export function useCredentialPump(
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     let cancelled = false;
+    let inFlight = false;
 
     const run = async () => {
+      inFlight = true;
       // The cycle is supplied by the caller, so this cannot assume it never
       // throws. Without the catch, one rejection means no timer is scheduled and
       // the pump is dead for the rest of the session, silently, with the
@@ -86,6 +97,7 @@ export function useCredentialPump(
         logError("useCredentialPump: cycle threw", err);
         outcome = { nextDelayMs: RETRY_DELAY_MS };
       }
+      inFlight = false;
       // A cycle that started before a sign-out or a user switch must not
       // schedule work for, or on behalf of, the session that replaced it.
       if (cancelled || generationRef.current !== generation) return;
@@ -96,8 +108,29 @@ export function useCredentialPump(
 
     void run();
 
+    // Rust asked for a credential now. A mint already in flight will land on
+    // its own, so only an idle pump starts one; either way the scheduled
+    // refresh is dropped because the cycle that runs will schedule the next.
+    let unlisten: (() => void) | undefined;
+    let unlistenCancelled = false;
+    if (kickEvent) {
+      listen(kickEvent, () => {
+        if (cancelled || inFlight) return;
+        if (timer !== undefined) clearTimeout(timer);
+        timer = undefined;
+        void run();
+      })
+        .then((fn) => {
+          if (unlistenCancelled) fn();
+          else unlisten = fn;
+        })
+        .catch((err) => logError("useCredentialPump: listen", err));
+    }
+
     return () => {
       cancelled = true;
+      unlistenCancelled = true;
+      unlisten?.();
       if (timer !== undefined) clearTimeout(timer);
       void Promise.resolve(clearRef.current()).catch((err) =>
         logError("useCredentialPump: clear", err),

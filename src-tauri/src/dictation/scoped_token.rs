@@ -16,7 +16,7 @@
 //! - The log line carries the TTL and nothing else. Never the token, never its
 //!   length, never a prefix.
 
-use std::time::{Duration, Instant};
+use std::time::{Duration, SystemTime};
 
 /// Refuse a token this close to its expiry. The handshake itself takes tens of
 /// milliseconds, but the user may hold the chord for a while before speaking,
@@ -26,7 +26,11 @@ const EXPIRY_MARGIN: Duration = Duration::from_secs(10);
 
 struct Held {
     token: String,
-    expires_at: Instant,
+    /// Wall clock, not `Instant`. The issuer's expiry is wall-clock time, and
+    /// `Instant` stops ticking while the machine sleeps (CLOCK_UPTIME_RAW on
+    /// macOS), so a token minted before a two hour nap looked fresh here
+    /// while the provider had long since let it die.
+    expires_at: SystemTime,
 }
 
 pub struct ScopedToken {
@@ -47,7 +51,7 @@ impl ScopedToken {
     pub fn set(&mut self, token: String, ttl: Duration) {
         self.held = Some(Held {
             token,
-            expires_at: Instant::now() + ttl,
+            expires_at: SystemTime::now() + ttl,
         });
         log::info!("{}: state=stored ttl_s={}", self.label, ttl.as_secs());
     }
@@ -67,7 +71,7 @@ impl ScopedToken {
         let expired = self
             .held
             .as_ref()
-            .is_some_and(|held| Instant::now() + EXPIRY_MARGIN >= held.expires_at);
+            .is_some_and(|held| SystemTime::now() + EXPIRY_MARGIN >= held.expires_at);
         if expired {
             self.held = None;
             return None;
