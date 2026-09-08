@@ -5564,6 +5564,140 @@
   max-width: none;
 }
 
+/* History: the pill strip sits at the top and each section renders under it,
+   spaced like the interview workspace. */
+.db-history-page {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 18px;
+}
+
+/* Sliding tab strip (components/SlidingTabs.tsx), shared by History and the
+   Interview Companion. The highlight is one `::before` bar whose position and
+   width the component measures onto `--tab-x` / `--tab-w`. */
+.db-tab-strip {
+  position: relative;
+  display: inline-flex;
+  align-self: center;
+  align-items: center;
+  gap: 3px;
+  padding: 4px;
+  border: 1px solid color-mix(in srgb, var(--db-border) 74%, white 26%);
+  border-radius: 999px;
+  background: color-mix(in srgb, color-mix(in srgb, var(--db-bg) 62%, transparent) 88%, white 12%);
+  box-shadow: 0 8px 24px rgba(18, 28, 27, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.58);
+  -webkit-backdrop-filter: blur(16px) saturate(1.08);
+  backdrop-filter: blur(16px) saturate(1.08);
+}
+
+.db-tab-strip::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  top: 4px;
+  bottom: 4px;
+  left: 0;
+  width: var(--tab-w, 0px);
+  transform: translateX(var(--tab-x, 4px));
+  border: 0;
+  border-radius: 999px;
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--db-teal) 26%, var(--db-surface)),
+    color-mix(in srgb, var(--db-teal) 15%, var(--db-surface))
+  );
+  box-shadow: 0 4px 12px rgba(31, 111, 96, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.62);
+  transition: transform 320ms var(--db-ease), width 320ms var(--db-ease);
+}
+
+.db-tab-strip > button {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 40px;
+  padding: 0 16px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--db-text-dim);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: color 240ms var(--db-ease);
+}
+
+.db-tab-strip > button.is-active {
+  color: var(--db-text);
+}
+
+.db-tab-strip > button.is-active > span {
+  background: color-mix(in srgb, var(--db-teal-deep-a) 18%, transparent);
+  color: var(--db-text);
+}
+
+.db-tab-strip > button > span {
+  display: grid;
+  place-items: center;
+  min-width: 21px;
+  height: 21px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--db-text) 7%, transparent);
+  color: var(--db-text-dim);
+  font-size: 11px;
+}
+
+.db-tab-strip > button:focus-visible {
+  outline: 2px solid var(--db-teal);
+  outline-offset: 2px;
+}
+
+/* The panel under the strip fades out, swaps, then fades in. */
+.db-tab-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 18px;
+  width: 100%;
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  transform-origin: top center;
+  transition: opacity 210ms ease-out, transform 320ms var(--db-ease);
+  will-change: opacity, transform;
+}
+
+.db-tab-stage.is-exiting {
+  opacity: 0;
+  transform: translateY(-8px) scale(0.995);
+  transition-duration: 170ms;
+}
+
+.db-tab-stage.is-entering {
+  opacity: 0;
+  transform: translateY(12px) scale(0.995);
+  transition: none;
+}
+
+.db-history-page .db-tab-stage > [role="tabpanel"] {
+  width: 100%;
+}
+
+@media (max-width: 720px) {
+  .db-tab-strip {
+    display: flex;
+    width: 100%;
+    box-sizing: border-box;
+  }
+
+  .db-tab-strip > button {
+    flex: 1;
+  }
+}
+
 /* Settings dialog */
 .db-settings-scrim {
   position: absolute;
@@ -6063,25 +6197,44 @@
 
 /* Range chips */
 .db-chips {
+  position: relative;
   display: inline-flex;
   gap: 4px;
   padding: 4px;
   border: 1px solid var(--db-border);
-  border-radius: 12px;
+  border-radius: 999px;
   background: var(--db-surface);
   box-shadow: var(--db-shadow-sm);
 }
+/* The dark fill is one bar that glides to the selected chip (RangeChips.tsx
+   measures --chip-x / --chip-w) instead of snapping from chip to chip. */
+.db-chips::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  top: 4px;
+  bottom: 4px;
+  left: 0;
+  width: var(--chip-w, 0px);
+  transform: translateX(var(--chip-x, 4px));
+  border-radius: 999px;
+  background: var(--db-active);
+  box-shadow: 0 3px 10px rgba(32, 35, 42, 0.22);
+  transition: transform 300ms var(--db-ease), width 300ms var(--db-ease);
+}
 .db-chip {
+  position: relative;
+  z-index: 1;
   border: none;
   background: transparent;
   color: var(--db-text-dim);
   font-family: var(--font-body, system-ui, sans-serif);
   font-size: 13px;
   font-weight: 600;
-  padding: 6px 12px;
-  border-radius: 8px;
+  padding: 6px 13px;
+  border-radius: 999px;
   cursor: pointer;
-  transition: background 0.15s var(--db-ease), color 0.15s var(--db-ease),
+  transition: background 0.15s var(--db-ease), color 0.22s var(--db-ease),
     transform 0.12s var(--db-ease);
 }
 .db-chip:hover {
@@ -6089,12 +6242,16 @@
   background: var(--db-hover);
 }
 .db-chip:active {
-  transform: scale(0.97);
+  transform: scale(0.95);
 }
 .db-chip-active,
 .db-chip-active:hover {
-  background: var(--db-active);
+  background: transparent;
   color: #fff;
+}
+.db-chip:focus-visible {
+  outline: 2px solid var(--db-teal);
+  outline-offset: 2px;
 }
 
 /* Segmented choice - same family as the chips above, sized for a label plus a

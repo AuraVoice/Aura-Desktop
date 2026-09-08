@@ -41,7 +41,7 @@ function archiveToCard(archive: HistoryArchive): CardModel {
   };
 }
 
-export function ConversationsPage() {
+export function ConversationsPanel() {
   const [range, setRange] = useState<RangeKey>("3d");
   const since = sinceFromRange(range);
   const res = useDashboardResource<HistorySessions>(
@@ -65,7 +65,7 @@ export function ConversationsPage() {
       : null;
 
   return (
-    <div className="db-page db-page-wide">
+    <>
       <div className="db-page-toolbar">
         <RangeChips value={range} onChange={setRange} />
         <RefreshIndicator
@@ -112,7 +112,7 @@ export function ConversationsPage() {
           />
         ) : null}
       </DetailModal>
-    </div>
+    </>
   );
 }
 

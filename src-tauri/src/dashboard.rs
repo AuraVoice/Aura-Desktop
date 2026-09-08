@@ -16,9 +16,7 @@ pub const DASHBOARD_WINDOW: &str = "dashboard";
 
 const DASHBOARD_ROUTES: &[&str] = &[
     "/home",
-    "/conversations",
-    "/drafts",
-    "/saved",
+    "/history",
     "/meetings",
     "/research",
     "/insights",

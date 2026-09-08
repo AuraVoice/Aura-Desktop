@@ -3,9 +3,7 @@ import { logError } from "./log";
 
 export type DashboardRoute =
   | "/home"
-  | "/conversations"
-  | "/drafts"
-  | "/saved"
+  | "/history"
   | "/meetings"
   | "/research"
   | "/insights"

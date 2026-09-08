@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
 import {
@@ -42,6 +42,7 @@ import {
 } from "../../lib/interviewHackerApi";
 import { DetailModal } from "../components/DetailModal";
 import { SegmentedChoice } from "../components/SegmentedChoice";
+import { SlidingTabs, useTabStage } from "../components/SlidingTabs";
 import { SiteIcon } from "../components/SiteIcon";
 import {
   RESUME_ACCEPT,
@@ -87,7 +88,6 @@ const EMPTY_INPUT: InterviewPreparationInput = {
 };
 
 type InterviewPageTab = "current" | "preparation" | "sessions";
-type InterviewTabTransition = "idle" | "exiting" | "entering";
 
 const UPDATED_AT_FORMATTER = new Intl.DateTimeFormat(undefined, {
   month: "short",
@@ -951,7 +951,7 @@ function InterviewHistoryPanel({
   onDelete: (interviewId: string) => void;
 }) {
   return (
-    <section id="interview-history-panel" className="db-interview-history" role="tabpanel" aria-labelledby="interview-history-tab">
+    <section id="interview-preparation-panel" className="db-interview-history" role="tabpanel" aria-labelledby="interview-preparation-tab">
       <div className="db-interview-section-head">
         <div>
           <span className="db-interview-eyebrow">Saved preparation</span>
@@ -1305,9 +1305,7 @@ export function InterviewPage() {
   const { user } = useAuth();
   const uid = user?.uid ?? null;
   const [workspace, setWorkspace] = useState<InterviewWorkspace>(createInterviewWorkspace);
-  const [tab, setTab] = useState<InterviewPageTab>("current");
-  const [renderedTab, setRenderedTab] = useState<InterviewPageTab>("current");
-  const [tabTransition, setTabTransition] = useState<InterviewTabTransition>("idle");
+  const stage = useTabStage<InterviewPageTab>("current");
   const [persistenceReady, setPersistenceReady] = useState(false);
   const [researchingIds, setResearchingIds] = useState<Set<string>>(() => new Set());
   const [buildingIds, setBuildingIds] = useState<Set<string>>(() => new Set());
@@ -1321,8 +1319,6 @@ export function InterviewPage() {
   const researchAbortRef = useRef<AbortController | null>(null);
   const researchPanelTimer = useRef<number | null>(null);
   const persistenceRevision = useRef(0);
-  const tabTransitionTimer = useRef<number | null>(null);
-  const tabsRef = useRef<HTMLDivElement | null>(null);
   const workspaceRef = useRef(workspace);
   workspaceRef.current = workspace;
   const currentInterview = workspace.interviews.find(
@@ -1347,9 +1343,7 @@ export function InterviewPage() {
     persistenceRevision.current += 1;
     setPersistenceReady(false);
     setWorkspace(createInterviewWorkspace());
-    setTab("current");
-    setRenderedTab("current");
-    setTabTransition("idle");
+    stage.jumpTo("current");
     setResearchingIds(new Set());
     setBuildingIds(new Set());
     setSavingIds(new Set());
@@ -1404,8 +1398,7 @@ export function InterviewPage() {
       }
       setWorkspace(restoredWorkspace);
       const restoredTab = restoredActiveInterviewId ? "current" : restoredHasHistory ? "preparation" : "current";
-      setTab(restoredTab);
-      setRenderedTab(restoredTab);
+      stage.jumpTo(restoredTab);
       setPersistenceReady(true);
     })().catch((err) => {
       logError("InterviewPage: load local workspace", err);
@@ -1432,27 +1425,7 @@ export function InterviewPage() {
     return () => window.clearTimeout(timer);
   }, [persistenceReady, uid, workspace]);
 
-  // The tab pill is one sliding highlight, and the tabs are auto-width, so the
-  // highlight's position and width have to be measured rather than derived from
-  // an equal-track formula. Written straight onto the node so a resize or a font
-  // swap never costs a React render.
-  useLayoutEffect(() => {
-    const strip = tabsRef.current;
-    if (!strip) return;
-    const measure = () => {
-      const active = strip.querySelector<HTMLElement>("button.is-active");
-      if (!active) return;
-      strip.style.setProperty("--tab-x", `${active.offsetLeft - strip.clientLeft}px`);
-      strip.style.setProperty("--tab-w", `${active.offsetWidth}px`);
-    };
-    measure();
-    const observer = new ResizeObserver(measure);
-    observer.observe(strip);
-    return () => observer.disconnect();
-  }, [tab, history.length]);
-
   useEffect(() => () => {
-    if (tabTransitionTimer.current !== null) window.clearTimeout(tabTransitionTimer.current);
     researchAbortRef.current?.abort();
     if (researchPanelTimer.current !== null) window.clearTimeout(researchPanelTimer.current);
   }, []);
@@ -1509,31 +1482,9 @@ export function InterviewPage() {
   const canResearch = Boolean(currentInterview) && input.company.trim().length > 0 && !researching;
   const canBuild = Boolean(currentInterview && research) && !building;
 
-  function switchTab(nextTab: InterviewPageTab) {
-    if (nextTab === tab && tabTransition === "idle") return;
-    if (tabTransitionTimer.current !== null) window.clearTimeout(tabTransitionTimer.current);
-    setTab(nextTab);
-    const reduceMotion = document.querySelector(".db-app")?.classList.contains("db-reduce-motion")
-      || window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (reduceMotion) {
-      setRenderedTab(nextTab);
-      setTabTransition("idle");
-      return;
-    }
-    setTabTransition("exiting");
-    tabTransitionTimer.current = window.setTimeout(() => {
-      setRenderedTab(nextTab);
-      setTabTransition("entering");
-      tabTransitionTimer.current = window.setTimeout(() => {
-        setTabTransition("idle");
-        tabTransitionTimer.current = null;
-      }, 24);
-    }, 170);
-  }
-
   function createNewInterview() {
     if (currentInterview && !hasInterviewContent(currentInterview)) {
-      switchTab("current");
+      stage.switchTab("current");
       return;
     }
     const interview = createInterviewRecord();
@@ -1544,14 +1495,14 @@ export function InterviewPage() {
     }));
     setPendingDeleteId(null);
     setError("");
-    switchTab("current");
+    stage.switchTab("current");
   }
 
   function openInterview(interviewId: string) {
     setWorkspace((current) => ({ ...current, currentInterviewId: interviewId }));
     setPendingDeleteId(null);
     setError("");
-    switchTab("current");
+    stage.switchTab("current");
   }
 
   async function deleteInterview(interviewId: string) {
@@ -1721,52 +1672,24 @@ export function InterviewPage() {
         )}
       </header>
 
-      <div className="db-interview-tabs" role="tablist" aria-label="Interview workspace" data-active={tab} ref={tabsRef}>
-        <button
-          type="button"
-          id="interview-current-tab"
-          role="tab"
-          aria-controls="interview-current-panel"
-          aria-selected={tab === "current"}
-          className={tab === "current" ? "is-active" : ""}
-          onClick={() => switchTab("current")}
-        >
-          <BriefcaseBusiness size={17} aria-hidden />
-          Current interview
-        </button>
-        <button
-          type="button"
-          id="interview-preparation-tab"
-          role="tab"
-          aria-controls="interview-history-panel"
-          aria-selected={tab === "preparation"}
-          className={tab === "preparation" ? "is-active" : ""}
-          onClick={() => switchTab("preparation")}
-        >
-          <FileText size={17} aria-hidden />
-          Preparation
-          <span>{history.length}</span>
-        </button>
-        <button
-          type="button"
-          id="interview-sessions-tab"
-          role="tab"
-          aria-controls="interview-sessions-panel"
-          aria-selected={tab === "sessions"}
-          className={tab === "sessions" ? "is-active" : ""}
-          onClick={() => switchTab("sessions")}
-        >
-          <History size={17} aria-hidden />
-          Sessions
-        </button>
-      </div>
+      <SlidingTabs
+        tabs={[
+          { value: "current", label: "Current interview", Icon: BriefcaseBusiness },
+          { value: "preparation", label: "Preparation", Icon: FileText, count: history.length },
+          { value: "sessions", label: "Sessions", Icon: History },
+        ]}
+        value={stage.tab}
+        onChange={stage.switchTab}
+        ariaLabel="Interview workspace"
+        idPrefix="interview"
+      />
 
-      <div className={`db-interview-tab-stage is-${tabTransition}`}>
+      <div className={`db-tab-stage is-${stage.transition}`}>
       {error && <div className="db-interview-error">{error}</div>}
 
-      {renderedTab === "sessions" ? (
+      {stage.renderedTab === "sessions" ? (
         <InterviewSessionsPanel uid={uid} />
-      ) : renderedTab === "preparation" ? (
+      ) : stage.renderedTab === "preparation" ? (
         <InterviewHistoryPanel
           interviews={history}
           activeInterviewId={workspace.activeInterviewId}

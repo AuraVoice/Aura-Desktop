@@ -39,31 +39,6 @@
   width: 100%;
 }
 
-.db-interview-tab-stage {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 18px;
-  width: 100%;
-  opacity: 1;
-  transform: translateY(0) scale(1);
-  transform-origin: top center;
-  transition: opacity 210ms ease-out, transform 320ms var(--db-ease);
-  will-change: opacity, transform;
-}
-
-.db-interview-tab-stage.is-exiting {
-  opacity: 0;
-  transform: translateY(-8px) scale(0.995);
-  transition-duration: 170ms;
-}
-
-.db-interview-tab-stage.is-entering {
-  opacity: 0;
-  transform: translateY(12px) scale(0.995);
-  transition: none;
-}
-
 .db-interview-new-button {
   display: inline-flex;
   flex: 0 0 auto;
@@ -84,82 +59,7 @@
   cursor: pointer;
 }
 
-.db-interview-tabs {
-  position: relative;
-  display: inline-flex;
-  align-self: center;
-  align-items: center;
-  gap: 3px;
-  padding: 4px;
-  border: 1px solid var(--interview-glass-border);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--interview-glass-soft) 88%, white 12%);
-  box-shadow: 0 8px 24px rgba(18, 28, 27, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.58);
-  backdrop-filter: blur(16px) saturate(1.08);
-}
-
-.db-interview-tabs::before {
-  content: "";
-  position: absolute;
-  z-index: 0;
-  top: 4px;
-  bottom: 4px;
-  left: 0;
-  width: var(--tab-w, 0px);
-  transform: translateX(var(--tab-x, 4px));
-  border: 0;
-  border-radius: 999px;
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--db-teal) 26%, var(--db-surface)),
-    color-mix(in srgb, var(--db-teal) 15%, var(--db-surface))
-  );
-  box-shadow: 0 4px 12px rgba(31, 111, 96, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.62);
-  transition: transform 320ms var(--db-ease), width 320ms var(--db-ease);
-}
-
-.db-interview-tabs > button {
-  position: relative;
-  z-index: 1;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  min-height: 40px;
-  padding: 0 16px;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--db-text-dim);
-  font: inherit;
-  font-size: 14px;
-  font-weight: 650;
-  cursor: pointer;
-  transition: color 240ms var(--db-ease);
-}
-
-.db-interview-tabs > button.is-active {
-  color: var(--db-text);
-}
-
-.db-interview-tabs > button.is-active > span {
-  background: color-mix(in srgb, var(--db-teal-deep-a) 18%, transparent);
-  color: var(--db-text);
-}
-
-.db-interview-tabs > button > span {
-  display: grid;
-  place-items: center;
-  min-width: 21px;
-  height: 21px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--db-text) 7%, transparent);
-  color: var(--db-text-dim);
-  font-size: 11px;
-}
-
 .db-interview-new-button:focus-visible,
-.db-interview-tabs > button:focus-visible,
 .db-interview-history button:focus-visible {
   outline: 2px solid var(--db-teal);
   outline-offset: 2px;
@@ -1098,16 +998,6 @@
   .db-interview-new-button {
     width: 100%;
     margin-bottom: 0;
-  }
-
-  .db-interview-tabs {
-    display: flex;
-    width: 100%;
-    box-sizing: border-box;
-  }
-
-  .db-interview-tabs > button {
-    flex: 1;
   }
 
   .db-interview-grid-two {

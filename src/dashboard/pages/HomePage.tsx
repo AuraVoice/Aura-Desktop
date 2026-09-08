@@ -28,6 +28,7 @@ import { useGeneralSettings } from "../../state/useGeneralSettings";
 import { AnimatedHotkeyGuide } from "../AnimatedHotkeyGuide";
 import { DataView } from "../DataView";
 import { count, duration, relativeTime } from "../format";
+import { historyPath } from "./HistoryPage";
 import { useAsyncData } from "../useAsyncData";
 import { useDashboardResource, type ResourceHandle } from "../useDashboardResource";
 
@@ -230,7 +231,7 @@ function UpNext({
           <div className="db-hero-up-next-time">SAVED FOR LATER</div>
           <h3>{slide.item.title}</h3>
           <p>{slide.item.subtitle || "A recent item you asked Aura to keep."}</p>
-          <button type="button" onClick={() => { window.location.hash = "/saved"; }}>
+          <button type="button" onClick={() => { window.location.hash = historyPath("saved"); }}>
             View saved item
           </button>
         </div>
@@ -309,11 +310,11 @@ function TodayBriefing({
           type="button"
           onClick={() =>
             navigate(
-              resumeItem?.kind === "draft"
-                ? "/drafts"
+              historyPath(resumeItem?.kind === "draft"
+                ? "drafts"
                 : resumeItem?.kind === "saved"
-                  ? "/saved"
-                  : "/conversations",
+                  ? "saved"
+                  : "conversations"),
             )
           }
         >
@@ -404,7 +405,7 @@ export function HomePage() {
         <section className="db-panel db-recent">
           <div className="db-panel-head">
             <h3 className="db-panel-title">Recent activity</h3>
-            <button type="button" className="db-link" onClick={() => navigate("/conversations")}>
+            <button type="button" className="db-link" onClick={() => navigate(historyPath("conversations"))}>
               View all
             </button>
           </div>
@@ -423,11 +424,11 @@ export function HomePage() {
                     className="db-list-item db-list-item-button"
                     key={item.id}
                     onClick={() =>
-                      navigate(item.kind === "voice"
-                        ? "/conversations"
+                      navigate(historyPath(item.kind === "voice"
+                        ? "conversations"
                         : item.kind === "draft"
-                          ? "/drafts"
-                          : "/saved")
+                          ? "drafts"
+                          : "saved"))
                     }
                   >
                     <div className="db-list-meta">

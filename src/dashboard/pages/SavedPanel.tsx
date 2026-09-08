@@ -32,7 +32,7 @@ function stripImageUrls(saves: RawScreenSave[]): RawScreenSave[] {
   return saves.map((s) => ({ ...s, image_url: null }));
 }
 
-export function SavedPage() {
+export function SavedPanel() {
   const res = useDashboardResource<RawScreenSave[]>(
     "screen-saves",
     (signal) => getScreenSaves(signal),
@@ -77,7 +77,7 @@ export function SavedPage() {
     (typeof document !== "undefined" && document.querySelector(".db-app")) || document.body;
 
   return (
-    <div className="db-page db-page-full">
+    <>
       <div className="db-page-toolbar db-page-toolbar-end">
         <RefreshIndicator
           refreshing={res.refreshing}
@@ -171,6 +171,6 @@ export function SavedPage() {
           </div>,
           zoomTarget,
         )}
-    </div>
+    </>
   );
 }

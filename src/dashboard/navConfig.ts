@@ -1,8 +1,6 @@
 import {
   Home,
-  AudioLines,
-  FileText,
-  Bookmark,
+  History,
   Video,
   LineChart,
   Settings,
@@ -26,9 +24,7 @@ export interface NavItem {
  * dialog launcher, while mobile and help stay pinned to the sidebar bottom. */
 export const primaryNavItems: NavItem[] = [
   { to: "/home", label: "Home", Icon: Home },
-  { to: "/conversations", label: "Conversations", Icon: AudioLines },
-  { to: "/drafts", label: "Drafts", Icon: FileText },
-  { to: "/saved", label: "Saved", Icon: Bookmark },
+  { to: "/history", label: "History", Icon: History },
   { to: "/meetings", label: "Meetings", Icon: Video, beta: true },
   { to: "/interview", label: "Interview", Icon: Briefcase, beta: true },
   { to: "/research", label: "Research", Icon: Search, beta: true },

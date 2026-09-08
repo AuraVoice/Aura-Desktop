@@ -17,13 +17,11 @@ import { TopBar } from "./TopBar";
 import { DashboardTitleBar } from "./DashboardTitleBar";
 import { SettingsDialog, settingsRoutes } from "./SettingsDialog";
 import { HomePage } from "./pages/HomePage";
-import { ConversationsPage } from "./pages/ConversationsPage";
-import { SavedPage } from "./pages/SavedPage";
+import { HistoryPage } from "./pages/HistoryPage";
 import { MeetingsPage } from "./pages/MeetingsPage";
 import { AccountPage } from "./pages/AccountPage";
 import { BillingPage } from "./pages/BillingPage";
 import { ConnectorsPage } from "./pages/ConnectorsPage";
-import { DraftsPage } from "./pages/DraftsPage";
 import { HelpPage } from "./pages/HelpPage";
 import { MobileAppPage } from "./pages/MobileAppPage";
 import { ComingSoonPage } from "./pages/ComingSoonPage";
@@ -56,9 +54,7 @@ import "./dashboard.css";
 // Routes with a real page today. Everything else falls back to the placeholder.
 export const dashboardPages: Record<string, ReactElement> = {
   "/home": <HomePage />,
-  "/conversations": <ConversationsPage />,
-  "/drafts": <DraftsPage />,
-  "/saved": <SavedPage />,
+  "/history": <HistoryPage />,
   "/meetings": <MeetingsPage />,
   "/interview": <InterviewPage />,
   "/research": <ResearchPage />,

@@ -27,7 +27,7 @@ function draftToCard(draft: RawDraft): CardModel {
   };
 }
 
-export function DraftsPage() {
+export function DraftsPanel() {
   const res = useDashboardResource<RawDraft[]>("drafts", (signal) => getDrafts(signal));
   const [selected, setSelected] = useState<string | null>(null);
 
@@ -36,7 +36,7 @@ export function DraftsPage() {
   const selectedDraft = selected ? drafts.find((d) => d.draft_id === selected) ?? null : null;
 
   return (
-    <div className="db-page db-page-wide">
+    <>
       <div className="db-page-toolbar db-page-toolbar-end">
         <RefreshIndicator
           refreshing={res.refreshing}
@@ -93,6 +93,6 @@ export function DraftsPage() {
           </div>
         )}
       </DetailModal>
-    </div>
+    </>
   );
 }

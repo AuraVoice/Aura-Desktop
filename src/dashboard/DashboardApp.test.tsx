@@ -33,9 +33,7 @@ vi.mock("react-router-dom", () => ({
   useSearchParams: () => [new URLSearchParams(), vi.fn()],
 }));
 vi.mock("./pages/HomePage", () => ({ HomePage: () => <div>home</div> }));
-vi.mock("./pages/ConversationsPage", () => ({ ConversationsPage: () => <div>conversations</div> }));
-vi.mock("./pages/DraftsPage", () => ({ DraftsPage: () => <div>drafts</div> }));
-vi.mock("./pages/SavedPage", () => ({ SavedPage: () => <div>saved</div> }));
+vi.mock("./pages/HistoryPage", () => ({ HistoryPage: () => <div>history</div> }));
 vi.mock("./pages/UsagePage", () => ({ UsagePage: () => <div>usage</div> }));
 vi.mock("./pages/AccountPage", () => ({ AccountPage: () => <div>account</div> }));
 vi.mock("./pages/BillingPage", () => ({ BillingPage: () => <div>billing</div> }));
@@ -59,7 +57,7 @@ afterEach(() => {
 describe("DashboardApp", () => {
   it("routes every local sidebar page to a real page", () => {
     expect(Object.keys(dashboardPages)).toEqual(
-      expect.arrayContaining(["/drafts", "/billing", "/connectors", "/mobile", "/help"]),
+      expect.arrayContaining(["/history", "/billing", "/connectors", "/mobile", "/help"]),
     );
   });
 

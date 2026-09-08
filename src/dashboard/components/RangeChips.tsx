@@ -1,3 +1,5 @@
+import { useLayoutEffect, useRef } from "react";
+
 /** Time-range filter for Conversations, mirroring the web dashboard's chips.
  * The selected range maps to the `?since=` query on GET /history/sessions
  * ("all" omits it). */
@@ -36,8 +38,27 @@ export function RangeChips({
   value: RangeKey;
   onChange: (range: RangeKey) => void;
 }) {
+  const stripRef = useRef<HTMLDivElement | null>(null);
+
+  // The active fill is one sliding bar behind the chips; measure the selected
+  // chip so the bar glides between labels of different widths.
+  useLayoutEffect(() => {
+    const strip = stripRef.current;
+    if (!strip) return;
+    const measure = () => {
+      const active = strip.querySelector<HTMLElement>(".db-chip-active");
+      if (!active) return;
+      strip.style.setProperty("--chip-x", `${active.offsetLeft - strip.clientLeft}px`);
+      strip.style.setProperty("--chip-w", `${active.offsetWidth}px`);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(strip);
+    return () => observer.disconnect();
+  }, [value]);
+
   return (
-    <div className="db-chips" role="tablist" aria-label="Time range">
+    <div className="db-chips" role="tablist" aria-label="Time range" ref={stripRef}>
       {RANGE_ORDER.map((range) => (
         <button
           key={range}
