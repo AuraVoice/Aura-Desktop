@@ -70,11 +70,34 @@ pub fn set(app: &AppHandle, enable: bool) {
 }
 
 fn apply(app: &AppHandle, enable: bool) {
+    // A dev build must never own the login item. `current_exe()` there is
+    // target/debug/aura-desktop inside the repo, and the entry the plugin
+    // writes outlives the `tauri dev` session that wrote it, so the next
+    // reboot starts a stale debug binary instead of the installed app: an
+    // ad-hoc code identity with none of the TCC grants, offering an update it
+    // cannot install. lib.rs already keeps apply_startup_policy out of debug
+    // builds, but the tray toggle and the Settings row reach `set` directly,
+    // and that is the door it actually came through on 2026-09-03.
+    if cfg!(debug_assertions) {
+        tray::sync_autostart_item(app, is_enabled(app));
+        return;
+    }
+
     let autolaunch = app.autolaunch();
-    // Skip the no-op case rather than calling disable() on a missing entry,
-    // which the underlying auto-launch crate reports as an error.
     let current = autolaunch.is_enabled().unwrap_or(false);
-    if current != enable {
+    // Enabling re-asserts the entry on every start, not just on a state
+    // change. `is_enabled` answers "is there an entry", never "does that
+    // entry still point at THIS binary": on macOS it is a bare existence
+    // check on ~/Library/LaunchAgents/<name>.plist, on Windows a lookup of
+    // the Run value by name. So a plist left behind by a `tauri dev` run read
+    // as "already enabled", the old `if current != enable` short-circuit
+    // skipped the write, and the login item stayed pointed at target/debug
+    // through every reinstall and every update until a reboot finally ran it
+    // (2026-09-07). Both backends overwrite their entry in place, so
+    // re-asserting is idempotent and repairs a wrong path as a side effect.
+    // Disabling still needs the guard: the crate reports disable() on a
+    // missing entry as an error.
+    if enable || current {
         let action = if enable { "enable" } else { "disable" };
         let result = if enable {
             autolaunch.enable()
@@ -82,7 +105,13 @@ fn apply(app: &AppHandle, enable: bool) {
             autolaunch.disable()
         };
         match result {
-            Ok(()) => info!("autostart: launch at login {action}d"),
+            // Only a real transition is worth a line; the re-assert above
+            // runs every start and would otherwise log on every launch.
+            Ok(()) => {
+                if current != enable {
+                    info!("autostart: launch at login {action}d");
+                }
+            }
             Err(e) => {
                 // A silent failure here looks like "the app randomly stopped
                 // starting with Windows" to a beta tester - report it, not
