@@ -453,15 +453,41 @@ fn remove_legacy_screenshots(base_dir: &Path) -> Result<bool, String> {
     Ok(true)
 }
 
+/// Raises the macOS Screen Recording prompt, once per process, when the user
+/// arms Screen Sight (`security::emit_screen_sight_armed`).
+///
+/// The prompt is one-shot per app identity and macOS ignores every later
+/// call, so it is only ever raised here, at a moment the user can connect it
+/// to what they just did; the capture path below never requests. Without a
+/// request the app never appears in System Settings > Screen Recording at
+/// all, and the only way in is the list's "+" button. A fresh grant applies
+/// after a relaunch, which the preflight error below already says.
+#[cfg(target_os = "macos")]
+pub(crate) fn request_screen_capture_access_once() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static ASKED: AtomicBool = AtomicBool::new(false);
+    if ASKED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    tauri::async_runtime::spawn_blocking(|| {
+        if objc2_core_graphics::CGPreflightScreenCaptureAccess() {
+            return;
+        }
+        let granted = objc2_core_graphics::CGRequestScreenCaptureAccess();
+        info!("screenshot: Screen Recording requested on arm (granted now: {granted})");
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn request_screen_capture_access_once() {}
+
 /// Fails loudly when macOS has not granted Screen Recording.
 ///
 /// Without this the denial is invisible rather than fatal: CoreGraphics does
 /// not error, it returns a frame containing only the desktop wallpaper and this
 /// app's own windows. The capture "succeeds" and the wrong image is what
-/// reaches the model. Preflight only, never request - the prompt is one-shot
-/// per app identity and macOS ignores every later call, so asking here would
-/// burn it silently in the background instead of at a moment the user can
-/// connect to what they just clicked.
+/// reaches the model. Preflight only here; the one request lives in
+/// `request_screen_capture_access_once` above.
 #[cfg(target_os = "macos")]
 fn screen_capture_permitted() -> Result<(), String> {
     if objc2_core_graphics::CGPreflightScreenCaptureAccess() {

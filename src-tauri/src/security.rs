@@ -445,6 +445,11 @@ struct ArmedPayload {
 /// regardless of trigger (hotkey, native command, voice end, sign-out). JS
 /// mirrors this instead of owning a competing boolean.
 pub(crate) fn emit_screen_sight_armed(app: &AppHandle, armed: bool) {
+    // Arming is the one moment the user can connect a Screen Recording prompt
+    // to what they just did, so it is the only place the request is raised.
+    if armed {
+        crate::screenshot::request_screen_capture_access_once();
+    }
     if let Err(e) = app.emit(crate::events::SCREEN_SIGHT_ARMED, ArmedPayload { armed }) {
         log::error!("security: failed to emit screen-sight-armed: {e}");
     }
