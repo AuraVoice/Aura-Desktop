@@ -338,6 +338,10 @@ export function useVoiceBar() {
     // user's toggle. Muting and disconnecting are best-effort cleanups after
     // that boundary, not prerequisites for it.
     setVoiceActive(false);
+    setStatus("disconnected");
+    setAssistantCaption("");
+    setErrorMessage(null);
+    setLastErrorCode(null);
     activeRoom?.localParticipant
       .setMicrophoneEnabled(false)
       .catch((err) => logError("useVoiceBar: endSession disable microphone", err));
@@ -346,10 +350,6 @@ export function useVoiceBar() {
     } catch (err) {
       logError("useVoiceBar: endSession disconnect", err);
     }
-    setStatus("disconnected");
-    setAssistantCaption("");
-    setErrorMessage(null);
-    setLastErrorCode(null);
   }, [clearWatchdogs, teardownBridge]);
 
   // Transport-only half of session start: token fetch, room creation, and

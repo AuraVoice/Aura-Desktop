@@ -30,6 +30,8 @@ pub const AURA_TOGGLE: &str = "aura-toggle";
 pub const DICTATION_UPDATE: &str = "dictation-update";
 pub const DICTATION_LEVEL: &str = "dictation-level";
 pub const DICTATION_STATUS_CHANGED: &str = "dictation-status-changed";
+/// Final transcript for a hold aimed at the chat composer. Payload is the text.
+pub const DICTATION_COMPOSER_INSERT: &str = "dictation-composer-insert";
 
 // meeting
 pub const MEETING_CAPTURE_STATE: &str = "meeting-capture-state";

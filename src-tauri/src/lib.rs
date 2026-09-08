@@ -277,13 +277,12 @@ pub fn run() {
 
     let mut builder = tauri::Builder::default();
 
-    // Release-only: dev and installed builds share the same com.aura.desktop
-    // single-instance key, and autostart keeps the installed app alive in the
-    // tray. Registering this in a debug build makes `npm run tauri dev`
-    // forward its launch to that old instance and exit - the panel that pops
-    // up is the installed binary, not the code being worked on (cost a full
-    // debugging cycle to spot; see lessons-learnt.txt 2026-07-08).
-    if !cfg!(debug_assertions) {
+    // Dev and installed builds must share ownership: two keyboard listeners
+    // toggle independent overlays and connect with the same voice identity.
+    // Quit the installed app before development, rather than bypassing this.
+    if cfg!(debug_assertions) {
+        eprintln!("Aura dev: single-instance protection is enabled. Quit any running Aura app before starting dev; otherwise this launch opens that existing app and exits.");
+    }
         builder = builder.plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if args.iter().any(|arg| arg.starts_with("aura://")) {
                 return;
@@ -295,7 +294,6 @@ pub fn run() {
                 overlay::summon(app);
             }
         }));
-    }
 
     builder = builder
         .plugin(logging::plugin())
@@ -442,6 +440,8 @@ pub fn run() {
             dictation::dictation_clear_credential,
             dictation::dictation_hud_state,
             dictation::dictation_set_hud_hovered,
+            dictation::dictation_set_composer_focused,
+            dictation::dictation_set_chat_open,
             // registered ahead of UI: dictation vocabulary management has no
             // frontend invoke yet
             dictation::share::dictation_share_pump_state,
@@ -504,6 +504,7 @@ pub fn run() {
         ])
         .setup(|app| {
             logging::install_panic_hook();
+            log::info!("runtime: pid={} version={} debug={}", std::process::id(), app.package_info().version, cfg!(debug_assertions));
 
             // First, and before anything is started: it can exit the process
             // to relaunch from /Applications, and nothing below should have
@@ -571,9 +572,8 @@ pub fn run() {
             let handle = app.handle().clone();
 
             // A failed registration means some other process already holds
-            // the hotkey system-wide - during local dev that's the installed
-            // release build sitting in the desktop tray (it autostarts), for an end
-            // user it's any other app that claimed the combo first. Either
+            // the hotkey system-wide, such as another app that claimed the
+            // combo first. Either
             // way it must not abort setup: the app is still fully usable
             // through the tray, while panicking here kills it at every boot
             // with nothing on screen (this exact panic reached Sentry from a real install).

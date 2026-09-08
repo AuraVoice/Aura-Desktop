@@ -28,7 +28,12 @@ import remarkGfm from "remark-gfm";
 import { BarIconButton } from "./BarIconButton";
 import { GlassSurface } from "./GlassSurface";
 import { logError } from "../lib/log";
-import { DICTATION_UPDATE, type DictationUpdatePayload } from "../lib/ipcEvents";
+import { invoke } from "@tauri-apps/api/core";
+import {
+  DICTATION_COMPOSER_INSERT,
+  DICTATION_UPDATE,
+  type DictationUpdatePayload,
+} from "../lib/ipcEvents";
 import { useTauriEvent } from "../lib/useTauriEvent";
 import type { ChatScreenState } from "./useChatScreenCapture";
 import "./ChatSlot.css";
@@ -570,6 +575,37 @@ export function ChatSlot({
   const composerRef = useRef<HTMLTextAreaElement>(null);
   const stickToBottomRef = useRef(true);
   const maxMessageLength = MAX_MESSAGE_LENGTH[lane];
+
+  // A hold that began while this composer was focused delivers its transcript
+  // here rather than as injected keystrokes (Rust emits it once the transcript
+  // is final). Insert at the caret so it behaves like typing, then refocus.
+  useTauriEvent<string>(DICTATION_COMPOSER_INSERT, (text) => {
+    if (!text) return;
+    const el = composerRef.current;
+    const start = el?.selectionStart ?? message.length;
+    const end = el?.selectionEnd ?? message.length;
+    const next = message.slice(0, start) + text + message.slice(end);
+    setMessage(next.slice(0, maxMessageLength));
+    requestAnimationFrame(() => {
+      const caret = Math.min(start + text.length, maxMessageLength);
+      composerRef.current?.focus();
+      composerRef.current?.setSelectionRange(caret, caret);
+    });
+  });
+
+  // Tell Rust the chat slot is on screen: a hold that targets the overlay
+  // itself routes its transcript here instead of injecting keystrokes, even
+  // when the composer does not hold focus. On unmount clear both flags (the
+  // focus one may never see a blur if the chat closes while focused), so a
+  // stale true can never misroute a later hold into a composer that is no
+  // longer on screen.
+  useEffect(() => {
+    void invoke("dictation_set_chat_open", { open: true });
+    return () => {
+      void invoke("dictation_set_chat_open", { open: false });
+      void invoke("dictation_set_composer_focused", { focused: false });
+    };
+  }, []);
   // Near the cap the count moves inside the field, so the textarea has to give
   // up room on the right for it.
   const counterVisible = message.length > COUNTER_THRESHOLD[lane];
@@ -853,15 +889,14 @@ export function ChatSlot({
           </div>
         </div>
 
-        {dictation && dictation.phase !== "inserted" && dictation.phase !== "consent" && (
-          <div className="chat-dictation-chip" role="status">
-            {dictation.phase === "listening" && <span>Listening</span>}
-            {dictation.phase === "transcribing" && <span>Transcribing</span>}
-            {(dictation.phase === "error" || dictation.phase === "recovery" || dictation.phase === "pending") && (
+        {dictation &&
+          (dictation.phase === "error" ||
+            dictation.phase === "recovery" ||
+            dictation.phase === "pending") && (
+            <div className="chat-dictation-chip" role="status">
               <span>{dictation.message ?? "Dictation failed. Nothing was typed."}</span>
-            )}
-          </div>
-        )}
+            </div>
+          )}
 
         {chipVisible && (
           <div className="chat-screen-chip">
@@ -908,6 +943,12 @@ export function ChatSlot({
               placeholder={limitReached ? "Daily chat limit reached" : "Message Aura"}
               disabled={composerDisabled}
               onChange={(event) => setMessage(event.target.value)}
+              onFocus={() => {
+                void invoke("dictation_set_composer_focused", { focused: true });
+              }}
+              onBlur={() => {
+                void invoke("dictation_set_composer_focused", { focused: false });
+              }}
               onKeyDown={(event) => {
                 // First Escape only drops focus and keeps the draft text. It must
                 // not reach the overlay's window-level Escape handler, which

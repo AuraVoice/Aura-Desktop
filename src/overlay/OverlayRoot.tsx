@@ -207,10 +207,11 @@ export function OverlayRoot() {
           action: null,
           title: "Aura",
           body: screenContextConsent.enabledNotice,
+          silent: !generalSettings.dictationSounds,
         }),
       )
       .catch((err) => logError("OverlayRoot: enable voice screen context", err));
-  }, []);
+  }, [generalSettings.dictationSounds]);
   const dismissScreenContextRequest = useCallback(() => {
     setScreenContextRequested(false);
   }, []);
@@ -456,8 +457,9 @@ export function OverlayRoot() {
       action: null,
       title: "Aura",
       body: notice,
+      silent: !generalSettings.dictationSounds,
     }).catch((err) => logError("OverlayRoot: overlay notice toast", err));
-  }, [voiceError, shortcutReason, captureNotice, NOTICE_RETOAST_COOLDOWN_MS]);
+  }, [voiceError, shortcutReason, captureNotice, NOTICE_RETOAST_COOLDOWN_MS, generalSettings.dictationSounds]);
 
   const unreadCount = notifications.unreadCount;
   useEffect(() => {

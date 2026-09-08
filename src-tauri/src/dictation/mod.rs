@@ -106,7 +106,10 @@ impl DictationStatus {
     }
 }
 
-pub use platform::{is_holding_text, signal, start, DictationHandle};
+pub use platform::{
+    chat_slot_open, composer_focused, is_holding_text, set_chat_slot_open, set_composer_focused,
+    signal, start, DictationHandle,
+};
 
 /// Whether the user has turned dictation on. Read by `voice_toggle_key::start`
 /// on macOS to decide if the Input Monitoring prompt is owed at launch: the
@@ -132,7 +135,7 @@ mod platform {
     use std::time::{Duration, Instant};
 
     use log::{error, info, warn};
-    use tauri::AppHandle;
+    use tauri::{AppHandle, Emitter};
 
     use super::asr::{self, AsrError, AsrEvent, SessionConfig};
     use super::audio::{self, Capture};
@@ -301,6 +304,45 @@ mod platform {
 
     static HOLDING_PENDING: std::sync::atomic::AtomicBool =
         std::sync::atomic::AtomicBool::new(false);
+
+    /// True while the overlay chat composer holds keyboard focus, reported from
+    /// React (`dictation_set_composer_focused`). A hold that begins while this
+    /// is set is aimed at the chat box: `hud::show` keeps the overlay visible
+    /// for it, and the insert step delivers the final text straight into the
+    /// composer via DICTATION_COMPOSER_INSERT instead of injecting keystrokes.
+    /// The keystroke path can't be trusted here: an always-on-top overlay has
+    /// usually lost the OS foreground to the app behind it by the time the user
+    /// finishes speaking, so SendInput would land there (or on the chat's own
+    /// non-editable body, seen as `role=Pane`).
+    static COMPOSER_FOCUSED: AtomicBool = AtomicBool::new(false);
+
+    /// Read by `hud::show` and the insert step to route a hold into the chat.
+    pub fn composer_focused() -> bool {
+        COMPOSER_FOCUSED.load(Ordering::Relaxed)
+    }
+
+    /// Set from React on composer focus/blur (and forced false when the chat
+    /// closes), so a stale `true` can never misroute a later hold.
+    pub fn set_composer_focused(focused: bool) {
+        COMPOSER_FOCUSED.store(focused, Ordering::Relaxed);
+    }
+
+    /// True while the chat slot is mounted at all, reported from React
+    /// (`dictation_set_chat_open`). Coarser than COMPOSER_FOCUSED: an open
+    /// chat is THE dictation sink for every hold, regardless of which window
+    /// the OS calls foreground, because the always-on-top overlay rarely owns
+    /// focus and routing on the foreground target sent holds into whichever
+    /// app sat behind the chat. `hud::show` keeps the overlay up for such a
+    /// hold and the insert step routes into the composer.
+    static CHAT_SLOT_OPEN: AtomicBool = AtomicBool::new(false);
+
+    pub fn chat_slot_open() -> bool {
+        CHAT_SLOT_OPEN.load(Ordering::Relaxed)
+    }
+
+    pub fn set_chat_slot_open(open: bool) {
+        CHAT_SLOT_OPEN.store(open, Ordering::Relaxed);
+    }
 
     pub fn start(app: AppHandle) -> DictationHandle {
         let (tx, rx) = std::sync::mpsc::channel::<Message>();
@@ -1006,8 +1048,13 @@ mod platform {
         }
         // Release the device now. The rest of this function is waiting on the
         // network, and the Windows microphone indicator must not stay lit
-        // through it.
-        active_capture.stop();
+        // through it. Drop it out of the slot rather than only stopping it:
+        // the slot is reused across holds (`if capture.is_none()` above), and a
+        // merely-stopped Capture is never restarted, so the NEXT hold would
+        // read a dead stream and capture pure silence. Taking it here forces
+        // the next hold to open a fresh, started device. Drop still calls
+        // stop(), so the indicator clears exactly as before.
+        let _ = capture.take();
 
         // The utterance was silent. Nothing to finalize, and no reason to pay
         // for a round trip or show a failure: releasing without speaking is a
@@ -1106,18 +1153,37 @@ mod platform {
         };
         let final_text = polish_result.unwrap_or(corrected);
 
-        // Asked here, at the last possible moment, because this is the only
-        // point at which "where would these keystrokes go" has its final
-        // answer. Bounded and fails open; see uia/focus.rs.
-        let probe = crate::uia::probe_focus(app);
-        let outcome = insert::insert_text(&final_text, target, probe.verdict);
-        info!(
-            "dictation: phase=insert hold_ms={hold_ms} frames={captured_frames} chars={} role={} \
-             verdict={:?} outcome={outcome:?}",
-            final_text.chars().count(),
-            probe.role,
-            probe.verdict
-        );
+        // While the chat slot is open, it IS the dictation sink, no matter
+        // which window the OS calls foreground: the overlay is always-on-top
+        // but rarely owns focus, so routing on the foreground target sent
+        // holds into whatever app sat behind the chat (or into the chat's own
+        // non-editable `role=Pane` body, which swallows keystrokes while
+        // SendInput still reports success). Hand the text to React, which
+        // drops it into the composer at the caret and refocuses it. To
+        // dictate into another app, close the chat first.
+        let outcome = if composer_focused() || chat_slot_open() {
+            let _ = app.emit(crate::events::DICTATION_COMPOSER_INSERT, final_text.clone());
+            info!(
+                "dictation: phase=insert hold_ms={hold_ms} frames={captured_frames} chars={} \
+                 sink=composer outcome=Inserted",
+                final_text.chars().count()
+            );
+            InsertOutcome::Inserted
+        } else {
+            // Asked here, at the last possible moment, because this is the only
+            // point at which "where would these keystrokes go" has its final
+            // answer. Bounded and fails open; see uia/focus.rs.
+            let probe = crate::uia::probe_focus(app);
+            let outcome = insert::insert_text(&final_text, target, probe.verdict);
+            info!(
+                "dictation: phase=insert hold_ms={hold_ms} frames={captured_frames} chars={} \
+                 role={} verdict={:?} outcome={outcome:?}",
+                final_text.chars().count(),
+                probe.role,
+                probe.verdict
+            );
+            outcome
+        };
 
         // Local history (history.rs). The one call site, placed here because
         // this is the last point at which both the final text and the captured
@@ -1464,6 +1530,22 @@ pub fn dictation_hud_state() -> hud::HudUpdate {
 #[tauri::command]
 pub fn dictation_set_hud_hovered(app: tauri::AppHandle, hovered: bool) {
     hud::set_hovered(&app, hovered);
+}
+
+/// React reports chat-composer focus so a hold started there is delivered into
+/// the composer rather than typed into whatever the OS calls foreground.
+#[tauri::command]
+pub fn dictation_set_composer_focused(focused: bool) {
+    set_composer_focused(focused);
+}
+
+/// React reports the chat slot mounting/unmounting so that every hold while
+/// the chat is open delivers into the composer, wherever OS focus sits
+/// (keystroke injection went to the app behind the chat, or vanished at the
+/// chat's own non-editable body).
+#[tauri::command]
+pub fn dictation_set_chat_open(open: bool) {
+    set_chat_slot_open(open);
 }
 
 pub(crate) fn show_hud(app: &tauri::AppHandle) {

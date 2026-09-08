@@ -29,6 +29,8 @@ export const AURA_TOGGLE = "aura-toggle";
 export const DICTATION_UPDATE = "dictation-update";
 export const DICTATION_LEVEL = "dictation-level";
 export const DICTATION_STATUS_CHANGED = "dictation-status-changed";
+// Final transcript for a hold aimed at the chat composer. Payload is the text.
+export const DICTATION_COMPOSER_INSERT = "dictation-composer-insert";
 
 // meeting
 export const MEETING_CAPTURE_STATE = "meeting-capture-state";

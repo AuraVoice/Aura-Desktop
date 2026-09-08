@@ -204,6 +204,13 @@ CSP's `connect-src`.
 
 Dev loop - ask first, the user runs these and reports back (see Working style):
 
+Quit the running Aura app before `npm run tauri dev` on Windows or macOS. Debug
+and release builds share single-instance protection: a second launch opens the
+existing app and exits. Never bypass this for development; two global listeners
+toggle separate overlays and compete for the same LiveKit participant identity.
+For voice changes, verify summon, speech, stop during connection, rapid stop/start,
+and second-launch behavior on both installed platforms before claiming runtime parity.
+
 | Command | Does |
 |---|---|
 | `npm run dev` | Vite dev server only, no native window |

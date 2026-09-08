@@ -532,7 +532,14 @@ fn place_window(app: &AppHandle, window: &tauri::WebviewWindow, target: isize, p
 /// silently create one.
 pub fn show(app: &AppHandle, target: isize) {
     LAST_TARGET.store(target, Ordering::Relaxed);
-    TARGET_IS_SELF.store(is_own_window(app, target), Ordering::Relaxed);
+    // An open chat slot (or a focused composer) also counts as "our own
+    // window": the hold is aimed at the chat box, so the overlay must stay up
+    // even though the OS foreground may already have drifted off it (see
+    // `set_composer_focused` / `set_chat_slot_open`).
+    TARGET_IS_SELF.store(
+        is_own_window(app, target) || super::composer_focused() || super::chat_slot_open(),
+        Ordering::Relaxed,
+    );
     // Take the edge from the notch first: the overlay's hidden branch is what
     // lifts the suppression the guarded show() below checks. A self-targeted
     // hold never asks (see `edge_wanted`): the overlay stays visible, the HUD
