@@ -120,6 +120,46 @@ knows which OS this is: key labels (Ctrl/Win vs the macOS symbols), `deviceNoun`
 `osName`, the backend and analytics platform tags, and the System Settings deep links. Adding a
 platform-varying string means adding it there, not branching at the call site.
 
+The same rule crosses the repo boundary, and that half is easier to miss. What Buddy
+SAYS about a desktop feature comes from `juno-backend`'s product knowledge catalog
+(`services/product_knowledge/content/product_knowledge_v1.json`), where every entry
+carries a `platforms` list that `catalog.py` applies as a HARD filter against the
+client's `X-Aura-Platform` header. An entry tagged `["windows"]` is invisible to a Mac
+user, and retrieval does not fall silent when that happens - it returns the next best
+neighbour, so "how do I use dictation" answered with how to END A CALL and "how do I
+record a meeting" with a privacy policy. Shipping a desktop shortcut, renaming a
+dashboard page, or porting a feature to macOS means updating that entry in the sibling
+repo, with both key legends in the answer text; nothing in this repo will fail if you
+forget.
+
+## Screen Sight: "never pressed" is not "off"
+
+The Screen Sight shortcut (one `Control+Alt+KeyS` accelerator in `hotkeys.rs`, which
+renders as Ctrl+Alt+S on Windows and Control+Option+S on macOS) flips
+`screen_sight_armed`, and `useStatusPillEvents.ts` renders that bit as the status pill.
+Per-turn voice capture is NOT gated on it, and must not be: that bit defaults false, so
+gating on it directly blinds every user who has never touched the shortcut. The gate is
+`screen_sight_choice: Option<bool>` in `security.rs`, where `None` means never pressed
+and only `Some(false)` denies.
+
+- **`toggle_armed` is the only writer.** The auto-disarms in `set_voice(false)` and
+  `arm_guide` deliberately do not touch it: a call ending, or Guide Mode taking the
+  screen, is not the user asking Buddy to stop looking, and treating it as one leaves
+  every later call silently blind. `session_changed` clears it on revoke so one account's
+  decision never governs the next, and switching the `voiceScreenContext` setting back on
+  clears it as the newer opt-in.
+- **Gate at `Operation::CaptureTurnScreen`, never in the React hook.** Both legs of a
+  turn authorize under that one operation - the JPEG (`screenshot.rs`) and the
+  accessibility tree (`uia/mod.rs`) - so a JS-side gate stops the screenshot and leaves
+  Buddy reading the window's control tree and describing the screen anyway.
+- **A deliberate off is not a capture failure.** `useTurnScreenCapture` suppresses its
+  "Couldn't capture this turn" notice for this one denial; without that it toasts on
+  every spoken turn for as long as the user leaves it off.
+- The denial string is a cross-repo contract: `Denied::ScreenSightOff`'s Display text is
+  matched by `reasonForCaptureError` and published as `screen_sight_off`, which must stay
+  in `juno-backend`'s closed `UNAVAILABLE_REASONS` vocabulary. An unknown reason there
+  degrades to `capture_failed` rather than breaking, so the desktop may ship first.
+
 ## Optimistic "applied" caches
 
 A cache that represents "this side effect already happened" (`OverlayState.applied`, the single `AppliedBounds` snapshot in `overlay.rs`) must be written **after** the side effect succeeds, never before. Writing it optimistically means one failed resize/show call permanently desyncs the cache from reality, and every later trigger (hotkey, tray click, second-instance launch) trusts the stale cache and silently no-ops instead of retrying. This exact bug froze the Flutter sibling's desktop overlay from ever showing a window after a first-boot failure - don't reintroduce it here.

@@ -698,3 +698,43 @@ depends on, and Instant is not a wall clock on macOS. The log already carried th
 (the stored line landing a second after the failure) but nothing read it that way until the
 failures were lined up against the refresh cadence. The verification is behavioural: sleep the
 Mac past the token's life, wake, press once, and the first hold must transcribe.
+================================================================================
+2026-09-09  Screen Sight said "off" and Buddy kept watching: the hotkey flipped a bit nothing read
+
+Problem: pressing the Screen Sight shortcut showed the "Screen Sight off" status pill, and Buddy
+kept describing the screen on every spoken turn and kept saying so out loud. Identical on Windows
+and macOS. Asked about the shortcut, Buddy did not know it existed and offered a macOS terminal
+command instead.
+
+Issue: two separate breaks that looked like one. The hotkey flips screen_sight_armed, which the
+pill renders, but Operation::CaptureTurnScreen never read it - only the legacy useScreenSight path
+(CaptureScreen) did, and that path is not what feeds a modern voice turn. Shared code, so both
+platforms broke identically. The naive fix is a trap: screen_sight_armed defaults false, so gating
+on it directly would have blinded every user who never touches the shortcut. Separately, the
+product knowledge catalog in juno-backend had no entry for the shortcut at all, and the nearest
+entry (how_to.desktop_settings) was tagged platforms:["windows"], which catalog.py applies as a
+hard filter against X-Aura-Platform. A filtered-out entry does not produce silence, it produces
+the next best neighbour: on macOS "how do I use dictation" resolved to how_to.end_voice_desktop
+(how to hang up) and "how do I record a meeting" to privacy.background_listening.
+
+Solution: a separate screen_sight_choice: Option<bool> written ONLY by toggle_armed, where None
+means never pressed and only Some(false) denies, checked by one added branch in
+Operation::CaptureTurnScreen. Gating there rather than in the React hook is what covers both legs
+of a turn, since uia/mod.rs authorizes under the same operation - a JS-only gate would have
+stopped the screenshot and left Buddy reading the accessibility tree. The denial publishes a new
+screen_sight_off reason into juno-backend's closed vocabulary, and useTurnScreenCapture suppresses
+its "Couldn't capture this turn" toast for that one reason so a deliberate off is not reported as
+a failure every turn. On the content side, a new how_to.desktop_screen_sight entry carries both
+key legends, and desktop_settings, desktop_dashboard, desktop_dictation and desktop_meetings were
+re-tagged for macOS with their Windows-specific copy rewritten (desktop_dictation had a hardcoded
+Ctrl+Win; chord.rs derives Ctrl+Cmd on macOS from the same constant).
+
+Justification: an "armed" bit written by four different callers (hotkey, command, call end,
+sign-out) cannot express the user's own decision, and reusing it would have made ending a call
+silently blind the next one. Two existing security.rs tests were already red before any of this
+(left: ScreenContextDisabled, right: VoiceInactive) because the voice_screen_context_enabled gate
+was inserted ahead of assertions nobody re-ran - CI runs cargo check and clippy but never cargo
+test, so a red assertion can sit indefinitely; one of those two is precisely the guard on
+"untouched means on". Verification for the catalog half is a before/after retrieval probe on both
+platform values, not a test: the Windows results must come back byte-identical while the macOS
+ones change.

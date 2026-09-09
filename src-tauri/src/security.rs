@@ -64,6 +64,14 @@ pub struct SecurityState {
     session: Session,
     voice_active: bool,
     screen_sight_armed: bool,
+    /// The user's OWN Screen Sight decision, written only by `toggle_armed`.
+    /// `None` until they press the shortcut or the button, which is why an
+    /// untouched install keeps capturing turn screens under the
+    /// `voiceScreenContext` setting alone. The auto-disarms in `set_voice` and
+    /// `arm_guide` deliberately do NOT write it: a call ending, or Guide Mode
+    /// taking the screen, is not the user asking Buddy to stop looking, and
+    /// treating it as one would leave every later call silently blind.
+    screen_sight_choice: Option<bool>,
     guide_armed: bool,
     /// Mirror of the React `voiceScreenContext` setting, pushed on load and on
     /// every change. The privacy gate used to live only in React (the hook was
@@ -169,6 +177,7 @@ pub enum Denied {
     StaleAuth,
     StaleGuide,
     ScreenContextDisabled,
+    ScreenSightOff,
 }
 
 impl fmt::Display for Denied {
@@ -182,6 +191,7 @@ impl fmt::Display for Denied {
             Denied::StaleAuth => "denied: session changed while the operation was in flight",
             Denied::StaleGuide => "denied: Guide session changed while the operation was in flight",
             Denied::ScreenContextDisabled => "denied: screen context sharing is off in settings",
+            Denied::ScreenSightOff => "denied: screen sight is switched off",
         };
         f.write_str(reason)
     }
@@ -198,6 +208,9 @@ impl SecurityState {
             Operation::CaptureTurnScreen => {
                 if !self.voice_screen_context_enabled {
                     return Err(Denied::ScreenContextDisabled);
+                }
+                if self.screen_sight_switched_off() {
+                    return Err(Denied::ScreenSightOff);
                 }
                 if self.guide_armed {
                     return Err(Denied::ModeConflict);
@@ -350,6 +363,8 @@ impl SecurityState {
                 self.screen_sight_armed = false;
                 disarmed = true;
             }
+            // One account's Screen Sight decision must never govern the next.
+            self.screen_sight_choice = None;
             guide_disarmed = self.disarm_guide();
         }
         SessionTransition {
@@ -390,12 +405,29 @@ impl SecurityState {
         }
     }
 
+    /// Whether the user has explicitly switched Screen Sight off, and so
+    /// whether this turn's screen may reach the model at all. The one place
+    /// that question is answered: `CaptureTurnScreen` covers BOTH legs of a
+    /// turn, the JPEG (`screenshot.rs`) and the accessibility tree (`uia`), so
+    /// a turn denied here leaks neither pixels nor control names.
+    ///
+    /// `None` (never toggled) is deliberately not "off": the armed bit starts
+    /// false, so reading it directly would blind every user who has never
+    /// touched the shortcut.
+    fn screen_sight_switched_off(&self) -> bool {
+        self.screen_sight_choice == Some(false)
+    }
+
     /// Flips the armed bit. `None` means refused (signed out).
     pub fn toggle_armed(&mut self) -> Option<bool> {
         if self.authorize(Operation::ArmScreenSight).is_err() {
             return None;
         }
         self.screen_sight_armed = !self.screen_sight_armed;
+        // The ONLY writer of the user's choice. The status pill renders this
+        // same flip, so what the user is shown and what the capture path
+        // enforces cannot drift apart.
+        self.screen_sight_choice = Some(self.screen_sight_armed);
         Some(self.screen_sight_armed)
     }
 
@@ -428,6 +460,12 @@ impl SecurityState {
 
     pub fn set_voice_screen_context(&mut self, enabled: bool) {
         self.voice_screen_context_enabled = enabled;
+        // Switching the setting back on in Settings is a fresh, newer opt-in.
+        // Without this, a shortcut press from an hour ago would keep every
+        // turn blind while the setting reads "on", with no way to tell why.
+        if enabled {
+            self.screen_sight_choice = None;
+        }
     }
 
     pub fn note_capture(&mut self, at_ms: i64) {
@@ -755,13 +793,19 @@ mod tests {
 
     #[test]
     fn turn_screen_capture_needs_voice_but_not_armed() {
-        let s = signed_in();
+        // The voiceScreenContext setting is the outermost gate and defaults
+        // off, so it has to be on for any later denial to be reachable.
+        let mut s = signed_in();
+        s.set_voice_screen_context(true);
         assert_eq!(
             s.authorize(Operation::CaptureTurnScreen).unwrap_err(),
             Denied::VoiceInactive
         );
 
-        let s = in_voice_session();
+        // Never having touched Screen Sight is NOT "switched off": the armed
+        // bit is false here and turn capture must still be authorized.
+        let mut s = in_voice_session();
+        s.set_voice_screen_context(true);
         assert!(s.authorize(Operation::CaptureTurnScreen).is_ok());
         assert!(!s.screen_sight_armed);
     }
@@ -962,6 +1006,9 @@ mod tests {
     #[test]
     fn guide_arm_is_atomic_with_screen_sight_exclusion() {
         let mut s = armed_in_voice_session();
+        // Turn capture is gated on the setting before Guide is considered, so
+        // it must be on for the mode conflict below to be the denial reached.
+        s.set_voice_screen_context(true);
         let (epoch, screen_sight_cleared) = s.arm_guide().unwrap();
         assert!(screen_sight_cleared);
         assert!(s.guide_armed);

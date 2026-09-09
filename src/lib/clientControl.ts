@@ -74,6 +74,7 @@ export async function publishOutputMode(room: Room, control: OutputModeControl):
  * capture_failed on the receiving side. */
 export type ScreenContextUnavailableReason =
   | "screen_context_disabled"
+  | "screen_sight_off"
   | "permission_denied"
   | "mode_conflict"
   | "signed_out"

@@ -78,6 +78,9 @@ function reasonForCaptureError(message: string): ScreenContextUnavailableReason 
   if (message.startsWith("denied: screen context sharing is off")) {
     return "screen_context_disabled";
   }
+  if (message.startsWith("denied: screen sight is switched off")) {
+    return "screen_sight_off";
+  }
   if (message.startsWith("denied: another screen capture mode")) return "mode_conflict";
   if (message.startsWith("denied: no signed-in session")) return "signed_out";
   return "capture_failed";
@@ -235,11 +238,18 @@ export function useTurnScreenCapture(
       const reason = reasonForCaptureError(message);
       // The macOS permission error carries the exact actionable instruction;
       // throwing it away for a generic line left users with nothing to do.
-      showNotice(
-        reason === "permission_denied"
-          ? message.slice("permission_denied:".length).trim()
-          : "Couldn't capture this turn.",
-      );
+      //
+      // Screen Sight being off is the one denial that is not a failure: the
+      // user just switched it off and the status pill already said so, so a
+      // "couldn't capture" toast on every spoken turn would be both wrong and
+      // relentless. The worker is still told below.
+      if (reason !== "screen_sight_off") {
+        showNotice(
+          reason === "permission_denied"
+            ? message.slice("permission_denied:".length).trim()
+            : "Couldn't capture this turn.",
+        );
+      }
       reportUnavailable(reason);
       if (reason === "permission_denied") {
         trackEvent("desktop_permission_result", {
