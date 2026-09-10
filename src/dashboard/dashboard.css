@@ -5626,28 +5626,14 @@
 .db-connector-dialog-spinner {
   animation: db-research-spin 0.9s linear infinite;
 }
-.db-connector-dialog-body.is-confirm {
-  flex-direction: column;
-  align-items: stretch;
-  gap: 16px;
-}
-.db-connector-dialog-body.is-confirm strong {
-  display: block;
-  margin-bottom: 4px;
-  font-size: 14px;
-}
-.db-connector-dialog-body.is-confirm p {
-  color: var(--db-text-dim);
-}
-.db-connector-dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-.db-connector-dialog-actions .db-primary-btn,
-.db-connector-dialog-actions .db-secondary-btn {
-  min-height: 34px;
-  padding-inline: 13px;
+/* The disconnect confirmation reuses the update dialog's body and pill buttons
+   (.db-update-dialog-body, -actions, -primary, -dismiss) so the two read as one
+   dialog family. Those button rules take their teal from the update panel's
+   custom properties, so the confirm panel declares the same two here. */
+.db-modal-panel.db-connector-dialog.is-confirm {
+  --update-teal: #167e6e;
+  --update-teal-dark: #0c594e;
+  width: min(440px, 100%);
 }
 .db-connectors-load-error {
   display: flex;
@@ -8148,23 +8134,6 @@
   align-items: center;
   padding: 0 12px 12px;
   text-align: center;
-}
-/* Bare glyph on the glass with a soft radial glow, no boxed chip behind it. */
-.db-update-dialog-glyph {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  margin-bottom: 16px;
-  color: var(--update-teal);
-}
-.db-update-dialog-glyph::before {
-  position: absolute;
-  z-index: -1;
-  width: 76px;
-  height: 76px;
-  background: radial-gradient(circle, rgba(22, 126, 110, 0.16), rgba(22, 126, 110, 0) 68%);
-  content: "";
 }
 .db-update-dialog-body h2 {
   margin: 0;

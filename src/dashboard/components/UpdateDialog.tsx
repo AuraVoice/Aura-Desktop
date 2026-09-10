@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { Download } from "lucide-react";
 import { update as copy } from "../../lib/copy";
 import { dismiss, install, messageFor, type InstallPhase } from "../../lib/updateInstall";
 import { DetailModal } from "./DetailModal";
@@ -92,9 +91,6 @@ export function UpdateDialog({
       panelClassName="db-update-dialog"
     >
       <div className="db-update-dialog-body">
-        <span className="db-update-dialog-glyph" aria-hidden="true">
-          <Download size={30} />
-        </span>
         <h2>{heading}</h2>
         {shown.mode === "prompt" && (
           <>

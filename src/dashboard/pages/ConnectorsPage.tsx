@@ -139,32 +139,23 @@ export function ConnectorsPage() {
         open={confirmDisconnect !== null}
         title="Leave Buddy hanging?"
         onClose={() => setConfirmDisconnect(null)}
-        panelClassName="db-connector-dialog"
+        panelClassName="db-connector-dialog is-confirm"
       >
-        <div className="db-connector-dialog-body is-confirm">
-          <div>
-            <strong>Leave Buddy hanging?</strong>
-            <p>
-              Are you sure you want to disconnect{" "}
-              {confirmDisconnect === "calendar"
-                ? "Google Calendar"
-                : confirmDisconnect === "notion"
-                  ? "Notion"
-                  : "Gmail"}?
-              Buddy will stop using it, but you can reconnect anytime.
-            </p>
-          </div>
-          <div className="db-connector-dialog-actions">
+        <div className="db-update-dialog-body">
+          <h2>Leave Buddy hanging?</h2>
+          <p>
+            Are you sure you want to disconnect{" "}
+            {confirmDisconnect === "calendar"
+              ? "Google Calendar"
+              : confirmDisconnect === "notion"
+                ? "Notion"
+                : "Gmail"}?
+            Buddy will stop using it, but you can reconnect anytime.
+          </p>
+          <div className="db-update-dialog-actions">
             <button
               type="button"
-              className="db-secondary-btn"
-              onClick={() => setConfirmDisconnect(null)}
-            >
-              Keep connected
-            </button>
-            <button
-              type="button"
-              className="db-primary-btn"
+              className="db-update-dialog-primary"
               onClick={() => {
                 const target = confirmDisconnect;
                 setConfirmDisconnect(null);
@@ -178,6 +169,13 @@ export function ConnectorsPage() {
               }}
             >
               Disconnect
+            </button>
+            <button
+              type="button"
+              className="db-update-dialog-dismiss"
+              onClick={() => setConfirmDisconnect(null)}
+            >
+              Keep connected
             </button>
           </div>
         </div>
