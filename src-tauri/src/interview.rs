@@ -247,19 +247,14 @@ pub async fn start_interview_hacker(
         crate::security::Operation::StartInterviewHacker,
         &ticket,
     )?;
-    let Some((app_name, _)) = detected else {
-        // A missing macOS Accessibility grant reads exactly like "no call":
-        // window_titles returns empty for every process, so no title can match.
-        // Saying "open a call first" to someone already sitting in one sends
-        // them looking in the wrong place.
-        if accessibility_blocker().is_some() {
-            return Err(
-                "Aura needs Accessibility to see which call you are in. Allow it, then try again."
-                    .to_string(),
-            );
-        }
-        return Err("Open a supported Zoom, Teams, or Google Meet call first.".to_string());
-    };
+    // Detection only labels the session (the "Call" widget, app_name in status
+    // events); it must not gate Start. A recruiter platform outside the
+    // Zoom/Teams/Meet table, a missing macOS Accessibility grant, or a call
+    // whose title doesn't match the detector's substring table would otherwise
+    // block someone already sitting in a real interview with no way through.
+    let app_name = detected
+        .map(|(app_name, _)| app_name)
+        .unwrap_or_else(|| "call".to_string());
 
     let handle = app.state::<InterviewHandle>();
     let mut state = handle.0.lock().unwrap_or_else(|error| error.into_inner());

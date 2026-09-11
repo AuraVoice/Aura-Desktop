@@ -844,7 +844,15 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
         acceptNativeEventsRef.current = false;
         logError("Interview Companion: start", error);
         setPhase("error");
-        const message = error instanceof Error ? error.message : "Interview Companion could not start.";
+        // Tauri rejects a Rust `Result<T, String>` command with the raw string,
+        // not an Error instance, so `error instanceof Error` alone drops every
+        // reason start_interview_hacker actually returns.
+        const message =
+          error instanceof Error
+            ? error.message
+            : typeof error === "string"
+              ? error
+              : "Interview Companion could not start.";
         setMessage(message);
         setErrorDetail(`Start error: ${message}`);
       });
