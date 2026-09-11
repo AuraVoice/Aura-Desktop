@@ -42,6 +42,12 @@ const REOPEN_BACKOFF: Duration = Duration::from_millis(500);
 // the reopen budget. Without this, a device that opens cleanly and then errors
 // on its first read resets the counter on every cycle and never gives up.
 const STREAM_STABLE_AFTER: Duration = Duration::from_secs(5);
+// A microphone stream that reads cleanly but hands back no packets for this
+// long is dead without saying so (a device torn down under sleep or lock can
+// go quiet instead of erroring). Shared-mode capture delivers silence as
+// packets, so a real open stream never starves. Loopback is exempt: it is
+// silent whenever nothing renders.
+const MIC_STALL_AFTER: Duration = Duration::from_secs(15);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AudioSource {
@@ -421,10 +427,30 @@ fn capture_thread(
         );
 
         let mut last_device_check = Instant::now();
+        let mut last_frame_at = Instant::now();
         loop {
             if cancellation.load(Ordering::Relaxed) {
                 stream.stop();
                 break 'lifetime;
+            }
+            if source == AudioSource::Microphone && last_frame_at.elapsed() >= MIC_STALL_AFTER {
+                warn!(
+                    "audio.capture: source={} delivered nothing for {:?}, reopening",
+                    source_name(source),
+                    MIC_STALL_AFTER,
+                );
+                stream.stop();
+                publish(generation, CaptureEvent::DeviceRebound { source });
+                if !backoff_before_reopen(
+                    source,
+                    generation,
+                    &cancellation,
+                    &mut reopen_attempts,
+                    stream_started.elapsed(),
+                ) {
+                    break 'lifetime;
+                }
+                continue 'lifetime;
             }
             // One drain takes EVERY frame the source has queued, so captured
             // speech is never replaced by alignment zeros.
@@ -457,6 +483,7 @@ fn capture_thread(
                 publish(generation, CaptureEvent::Glitch { source });
             }
             if !samples.is_empty() {
+                last_frame_at = Instant::now();
                 publish(
                     generation,
                     CaptureEvent::Frame(PcmFrame {

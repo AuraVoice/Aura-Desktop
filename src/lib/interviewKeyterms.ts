@@ -19,8 +19,10 @@
 
 import type { InterviewBrief, InterviewBriefClaim } from "./interviewBrief";
 
-/** Deepgram's cap. Mirrors `MAX_KEYTERMS` in dictation/asr/deepgram.rs; the
- *  Rust side truncates too, so this is a budget rather than a safety limit. */
+/** Mirrors `MAX_KEYTERMS` in dictation/asr/deepgram.rs; the Rust side
+ *  truncates too, so this is a budget rather than a safety limit. Deepgram's
+ *  own ceiling is 500 tokens across the list and its guidance is 20-50
+ *  focused terms, so fifty entries of up to four words each stays inside it. */
 export const MAX_INTERVIEW_KEYTERMS = 50;
 
 /**
@@ -86,10 +88,20 @@ const STOPWORDS = new Set([
   "built", "build", "cut", "led", "ran", "made", "used", "own", "owned",
   "designed", "created", "shipped", "wrote", "added", "familiarity", "strong",
   "excellent", "proven", "track", "record", "bonus", "nice",
+  // Resume boilerplate. Capitalised in every CV, said by no interviewer.
+  "university", "college", "institute", "school", "bachelor", "bachelors",
+  "master", "masters", "science", "degree", "skills", "education", "summary",
+  "january", "february", "march", "april", "may", "june", "july", "august",
+  "september", "october", "november", "december", "present",
 ]);
 
+const TITLE_CASE = /^[A-Z][a-z]+$/;
+/** Longest phrase kept whole. Product and company names run two to four
+ *  words; anything longer is a sentence that happened to be capitalised. */
+const PHRASE_MAX_WORDS = 4;
+
 /**
- * A token worth boosting.
+ * A token worth boosting on its own.
  *
  * Kept deliberately loose on shape and strict on length: acronyms (RAG),
  * mixed case product names (GraphQL, PyTorch), dotted and plus forms (.NET,
@@ -107,10 +119,63 @@ function isDistinctive(token: string): boolean {
   return /[A-Z]/.test(token) || /\d/.test(token) || /[+.#/]/.test(token);
 }
 
-/** Splits free text into candidate tokens, keeping internal +, ., #, / and -
- *  so that C++, .NET, CI/CD and Node.js survive intact. */
+/** Whether a token can sit inside a multi-word name. Looser than
+ *  `isDistinctive` on purpose: the "AI" in "Vertex AI" and the "DB" in
+ *  "Oracle DB" are two letters, and the phrase is what Deepgram matches. */
+function isNameShaped(token: string): boolean {
+  if (token.length < 2 || token.length > 32 || /^\d/.test(token)) return false;
+  if (STOPWORDS.has(token.toLocaleLowerCase())) return false;
+  return /[A-Z]/.test(token) || /\d/.test(token) || /[+.#/]/.test(token);
+}
+
+/**
+ * Splits free text into keyterm candidates: multi-word names kept whole
+ * ("Google Cloud Run", "Vertex AI", "Acme Robotics") and single tokens
+ * otherwise, with internal +, ., #, / and - preserved so that C++, .NET,
+ * CI/CD and Node.js survive intact.
+ *
+ * Two rules do the work. Adjacent name-shaped tokens separated by nothing but
+ * whitespace form one phrase, because Deepgram matches phrases and the split
+ * halves ("Cloud", "Run") bias ordinary speech instead. A Title-case word that
+ * opens a sentence is dropped: that capital is punctuation, not vocabulary,
+ * and it is where "Strong", "Experience" and "Bachelor" were getting in.
+ */
 function tokenize(text: string): string[] {
-  return text.match(/[A-Za-z0-9][A-Za-z0-9+.#/-]*/g) ?? [];
+  const out: string[] = [];
+  const pattern = /[A-Za-z0-9][A-Za-z0-9+.#/-]*/g;
+  let run: string[] = [];
+  let lastEnd = -1;
+  const flush = () => {
+    if (run.length === 0) return;
+    if (run.length === 1) {
+      if (isDistinctive(run[0])) out.push(run[0]);
+    } else {
+      out.push(run.slice(0, PHRASE_MAX_WORDS).join(" "));
+    }
+    run = [];
+  };
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    const token = match[0].replace(/[.\-/]+$/, "");
+    // The gap is measured from the trimmed token, so the period the pattern
+    // swallowed after "LiveKit." still separates it from the next sentence.
+    const gap = lastEnd < 0 ? "" : text.slice(lastEnd, match.index);
+    lastEnd = match.index + token.length;
+    if (token.length === 0) continue;
+    // Text start is not a sentence boundary: the company and role fields are
+    // names, and their first word is the one that matters.
+    const sentenceInitial = /[.!?:;\n]/.test(gap);
+    const adjacent = run.length > 0 && /^\s+$/.test(gap);
+    if (!adjacent) flush();
+    if (!isNameShaped(token)) {
+      flush();
+      continue;
+    }
+    if (sentenceInitial && TITLE_CASE.test(token)) continue;
+    run.push(token);
+  }
+  flush();
+  return out;
 }
 
 function claimText(claims: InterviewBriefClaim[]): string {
@@ -125,13 +190,11 @@ function claimText(claims: InterviewBriefClaim[]): string {
  */
 function take(into: Map<string, string>, text: string, budget: number): void {
   let spent = 0;
-  for (const token of tokenize(text)) {
+  for (const term of tokenize(text)) {
     if (spent >= budget || into.size >= MAX_INTERVIEW_KEYTERMS) return;
-    const trimmed = token.replace(/[.\-/]+$/, "");
-    if (!isDistinctive(trimmed)) continue;
-    const key = trimmed.toLocaleLowerCase();
+    const key = term.toLocaleLowerCase();
     if (into.has(key)) continue;
-    into.set(key, trimmed);
+    into.set(key, term);
     spent += 1;
   }
 }

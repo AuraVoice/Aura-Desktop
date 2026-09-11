@@ -143,6 +143,15 @@ export async function saveInterviewSession(
   await invoke("interview_session_save", { uid, session });
 }
 
+/** Upsert the running session (`ended_at_ms` must be 0) so a crash keeps
+ *  everything up to the last checkpoint. Best-effort, like save. */
+export async function checkpointInterviewSession(
+  uid: string,
+  session: InterviewSessionRecord,
+): Promise<void> {
+  await invoke("interview_session_checkpoint", { uid, session });
+}
+
 export async function listInterviewSessions(
   uid: string,
 ): Promise<InterviewSessionSummary[]> {

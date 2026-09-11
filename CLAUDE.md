@@ -233,6 +233,36 @@ hardcoded to alarm slugs. Writing directly is what keeps this shippable without
 a separate `juno-backend` deploy; it needed `firestore.googleapis.com` in the
 CSP's `connect-src`.
 
+## Interview Companion: Start is never gated, and the store is crash-safe
+
+Two invariants in `src-tauri/src/interview.rs`, `src/overlay/interview/useInterviewHacker.ts`
+and `src-tauri/src/interview_store.rs` that a reasonable-looking edit could undo:
+
+- **Nothing may stop `start_interview_hacker` from starting.** Call detection
+  (`meeting/detect.rs`, Zoom/Teams/Meet only) is opportunistic labelling for the
+  "Call" widget; recruiters use platforms it has never heard of, and a candidate
+  already in the call has no other way through. The frontend dropped its gate first
+  and the Rust command kept one for weeks, rejecting every attempt on an unknown
+  platform with a message the card then swallowed as a generic error (2026-09-11).
+  Do not add a lease check, a detection check, or any other precondition here;
+  the only legitimate `Err`s are a missing credential and a Start/Stop race.
+- **Tauri rejects `Result<T, String>` commands with the bare string.** An
+  `error instanceof Error` guard on an `invoke` catch discards every Rust reason.
+  Use `errorText` in the hook, or check `typeof error === "string"`.
+- **Failure is loud, never frozen.** The worker runs under `catch_unwind` and emits
+  `stopped/worker_panic`; the capture broker reopens a microphone that goes silent
+  for 15s (`MIC_STALL_AFTER`, mic only: loopback is silent whenever nothing
+  renders); Start has a 20s deadline and the credential mint 15s; the card is
+  warned 5 minutes before the 2-hour stop; "Retry transcription" mints a fresh
+  token before resuming when the worker is parked on a rejected one.
+- **`ended_at_ms = 0` means open.** The card checkpoints the running session every
+  30s with that sentinel, and Stop's save closes it. Every store read and write
+  first finalises open rows that are NOT the worker's live session
+  (`interview::active_session_id`) to their last turn, and the list hides rows
+  still at 0. A checkpoint that lands after Stop writes nothing, because the
+  session upsert only matches an open row. No column was made nullable, so no
+  migration and no change to the frozen AAD grammar.
+
 ## Desktop notifications
 
 `src/lib/desktopNotifications.ts` is the ONE broker every producer calls (local Rust/JS events and backend events polled from the outbox). It owns the durable inbox, dedup, permission, and the toast-once guarantee (delivered ids persist across restart, so a relaunch never replays a toast). Two non-obvious rules:

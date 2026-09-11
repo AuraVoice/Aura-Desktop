@@ -88,6 +88,7 @@ export type AnalyticsEvent =
   | "interview_companion_session_started"
   | "interview_companion_session_ended"
   | "interview_companion_turn_latency"
+  | "interview_companion_answer_mode"
   | "interview_companion_first_answer_text"
   | "interview_companion_answer_completed"
   | "interview_companion_question_decision"

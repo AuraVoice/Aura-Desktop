@@ -505,6 +505,7 @@ pub fn run() {
             interview::stop_interview_hacker,
             interview::save_interview_reflection,
             interview_store::interview_session_save,
+            interview_store::interview_session_checkpoint,
             interview_store::interview_sessions_list,
             interview_store::interview_session_load,
             interview_store::interview_session_delete,

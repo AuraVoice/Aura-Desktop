@@ -802,6 +802,8 @@ export function OverlayRoot() {
         <InterviewHackerControlBar
           expanded={!interviewHackerHidden}
           onToggle={() => setInterviewHackerHidden((hidden) => !hidden)}
+          answerMode={interviewHacker.answerMode}
+          onAnswerModeChange={interviewHacker.setAnswerMode}
           onStop={
             isInterviewCaptureActive(interviewHacker.phase) || interviewHacker.phase === "error"
               ? interviewHacker.stop

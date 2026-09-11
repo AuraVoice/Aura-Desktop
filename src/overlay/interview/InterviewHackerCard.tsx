@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import iconUrl from "../../assets/icons/Aura-Icon.png";
 import { logError } from "../../lib/log";
 import { GlassSurface } from "../GlassSurface";
 import { ChevronDownIcon, DocumentIcon, DownArrowIcon, MicIcon, MicOffIcon, StopSquareIcon, UploadArrowIcon } from "../icons";
@@ -9,7 +8,7 @@ import { useMicPreflightLevel } from "./useMicPreflightLevel";
 import { RESUME_ACCEPT } from "../../lib/resumeText";
 import { PLANNED_MINUTES_OPTIONS, ROUND_KIND_OPTIONS } from "../../lib/interviewPolicy";
 import { isInterviewCaptureActive } from "./useInterviewHacker";
-import type { InterviewExchange, InterviewHackerState } from "./useInterviewHacker";
+import type { AnswerMode, InterviewExchange, InterviewHackerState } from "./useInterviewHacker";
 import "./InterviewHackerCard.css";
 
 // The overlay is always-on-top by a static, once-at-creation setting (see
@@ -320,17 +319,33 @@ export function InterviewHackerControlBar({
   expanded,
   onToggle,
   onStop,
+  answerMode,
+  onAnswerModeChange,
 }: {
   expanded: boolean;
   onToggle: () => void;
   onStop: () => void;
+  answerMode: AnswerMode;
+  onAnswerModeChange: (mode: AnswerMode) => void;
 }) {
+  const manual = answerMode === "manual";
   return (
     <GlassSurface className="interview-hacker-control-bar">
       <div className="interview-hacker-control-inner">
-        <div className="interview-hacker-aura-mark" aria-label="Aura">
-          <img src={iconUrl} alt="" />
-        </div>
+        <button
+          type="button"
+          className="interview-hacker-mode-toggle"
+          onClick={() => onAnswerModeChange(manual ? "auto" : "manual")}
+          role="switch"
+          aria-checked={manual}
+          aria-label={manual ? "Manual answers. Switch to Auto" : "Auto answers. Switch to Manual"}
+          title={manual
+            ? "Manual: everything the interviewer says collects until you press Answer now"
+            : "Auto: Aura answers each question it hears"}
+        >
+          <span data-active={!manual}>Auto</span>
+          <span data-active={manual}>Manual</span>
+        </button>
         <button
           type="button"
           className="interview-hacker-visibility-button"
@@ -460,6 +475,11 @@ export function InterviewHackerCard({
               <CallSource app={hacker.callApp} name={hacker.callName} />
               <BriefSource hacker={hacker} />
             </div>
+            {/* On speakers the interviewer's voice enters the mic, reads as the
+                candidate talking, and gets dropped as crosstalk or held. */}
+            <p className="interview-hacker-preflight-hint">
+              Use headphones so the interviewer's voice stays out of your mic.
+            </p>
             <input
               ref={resumeFileRef}
               type="file"
@@ -608,7 +628,9 @@ export function InterviewHackerCard({
               )}
               {threadIsEmpty && (
                 <div className="interview-hacker-thread-empty">
-                  Questions and answers appear here.
+                  {hacker.answerMode === "manual"
+                    ? "Everything the interviewer says collects here. Press Answer now when you want an answer."
+                    : "Questions and answers appear here."}
                 </div>
               )}
             </div>
@@ -636,19 +658,19 @@ export function InterviewHackerCard({
           <div className="interview-hacker-answer-actions">
             <button
               type="button"
-              disabled={!hacker.questionPending || hacker.phase !== "listening"}
+              className={hacker.answerMode === "manual" ? "is-primary" : undefined}
+              disabled={hacker.phase !== "listening" || !(hacker.questionPending || hacker.canSuggest)}
               onClick={hacker.sendNow}
-              title="Answer what has been said so far, without waiting"
+              title={hacker.answerMode === "manual"
+                ? "Send everything collected so far"
+                : "Answer what has been said so far, without waiting"}
             >
               Answer now
             </button>
-            <button type="button" disabled={!hacker.canSuggest || hacker.candidateSpeaking} onClick={hacker.suggest}>Suggest</button>
-            <button type="button" disabled={!hacker.answer || hacker.candidateSpeaking} onClick={hacker.shorter}>Shorter</button>
-            <button type="button" disabled={!hacker.answer || hacker.candidateSpeaking} onClick={hacker.anotherExample}>Another example</button>
-            <button type="button" disabled={!hacker.answer || hacker.candidateSpeaking} onClick={hacker.moreTechnical}>More technical</button>
+            <button type="button" disabled={!hacker.answer} onClick={hacker.shorter}>Shorter</button>
             <button
               type="button"
-              disabled={!hacker.canSuggest || hacker.candidateSpeaking || hacker.capturingScreen || hacker.phase !== "listening"}
+              disabled={!hacker.canSuggest || hacker.capturingScreen || hacker.phase !== "listening"}
               onClick={hacker.screenSight}
             >
               {hacker.capturingScreen ? "Looking..." : "Screen Sight"}

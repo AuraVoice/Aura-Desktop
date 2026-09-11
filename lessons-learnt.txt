@@ -1,3 +1,38 @@
+2026-09-11  Interview Companion refused to start on a real recruiter call, ten times, with one word
+
+Problem: Interview Companion started fine in a dry run before the interview and failed on every
+one of about ten attempts once the real call was live, showing only a generic error. The call ran
+on the recruiter's own platform. The candidate went in with nothing.
+
+Issue: two breaks stacked. start_interview_hacker (interview.rs) still returned Err("Open a
+supported Zoom, Teams, or Google Meet call first.") whenever meeting/detect.rs found no window,
+and that detector knows exactly three apps by process name plus title substring. The frontend had
+already dropped its own gate (openPreflight's comment: detection is labelling, "never a
+precondition") but the Rust command kept the old contract, so the two sides disagreed and only
+the Rust side had teeth. The dry run passed because a matching window happened to be open, or the
+same rejection was read as "not on a call yet". Then useInterviewHacker's start().catch did
+`error instanceof Error ? error.message : "Interview Companion could not start."`; Tauri rejects a
+Result<T, String> command with the bare string, so the one message that named the cause was
+replaced by the generic one on every attempt.
+
+Solution: detection now only picks the session label (app_name falls back to "call") and never
+returns Err; the catch reads string rejections. A resilience pass followed in the same change:
+catch_unwind around the worker with a stopped/worker_panic event, a mic-only 15s frame-starvation
+watchdog in the capture broker, 20s Start and 15s mint deadlines, a 5-minute warning before the
+2-hour stop, pause/resume errors surfaced, "Retry transcription" minting a fresh token when the
+worker is parked on a rejected one, and 30s session checkpoints with an ended_at_ms = 0 sentinel
+that reads finalise to the last turn (never the live session).
+
+Justification: a companion for interviews must never decide the interview is not happening. Two
+candidate fixes were rejected as new gates: a runtime-lease check (runtime_lease.rs documents
+that dev and installed builds coexist on purpose, and WASAPI is opened shared) and a "no
+transcript for N seconds" watchdog (every thinking pause would trip it; mic frame starvation is
+the honest signal because shared-mode capture delivers silence as packets, and loopback is
+excluded because it is legitimately quiet whenever nothing renders). The sentinel avoids making
+ended_at_ms nullable, so the frozen AAD grammar and every existing row are untouched.
+
+---
+
 2026-09-07  Dictating into the chat composer hid the chat and guaranteed the insert failed
 
 Problem: with the chat card open and the composer focused, starting the dictation hold hid the

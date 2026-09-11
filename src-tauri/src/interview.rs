@@ -35,6 +35,9 @@ const MAX_RECONNECTS: u8 = 10;
 const DEEPGRAM_RECONNECTS: u8 = 5;
 const MAX_RECONNECT_BACKOFF_SECS: u64 = 30;
 const SESSION_LIMIT: Duration = Duration::from_secs(2 * 60 * 60);
+// The hard stop below is abrupt by nature; this is how much notice the card
+// gets to say so before it lands.
+const SESSION_LIMIT_WARNING: Duration = Duration::from_secs(5 * 60);
 
 enum RuntimeCommand {
     Pause,
@@ -360,6 +363,14 @@ fn snapshot_locked(active: &ActiveInterview) -> InterviewStatusPayload {
 #[tauri::command]
 pub fn interview_hacker_status(app: AppHandle) -> InterviewStatusPayload {
     snapshot(&app.state::<InterviewHandle>())
+}
+
+/// The session the worker is running right now, if any. The store uses it to
+/// tell a live checkpointed session from one a crash left open.
+pub fn active_session_id(app: &AppHandle) -> Option<String> {
+    let handle = app.try_state::<InterviewHandle>()?;
+    let state = handle.0.lock().unwrap_or_else(|error| error.into_inner());
+    state.as_ref().map(|active| active.session_id.clone())
 }
 
 #[tauri::command]
@@ -737,14 +748,68 @@ fn source_failure_code(source: TranscriptSource, error: AsrError) -> &'static st
 
 fn run_worker(
     app: AppHandle,
-    mut credentials: TranscriptionCredentials,
+    credentials: TranscriptionCredentials,
     keyterms: Vec<String>,
     session_id: String,
     app_name: String,
     epoch: u64,
     commands: mpsc::Receiver<RuntimeCommand>,
 ) {
+    // A panic anywhere in the loop must still release the handle and tell the
+    // card, or the session stays "active" forever with nothing listening. The
+    // streams clean themselves up on unwind (every member cancels in Drop).
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        run_worker_loop(
+            app.clone(),
+            credentials,
+            keyterms,
+            session_id.clone(),
+            app_name.clone(),
+            epoch,
+            commands,
+        )
+    }));
+    let stop_reason = match outcome {
+        Ok(reason) => reason,
+        Err(_) => {
+            log::error!("interview.companion: worker panicked epoch={epoch}");
+            Some("worker_panic")
+        }
+    };
+    let handle = app.state::<InterviewHandle>();
+    let mut state = handle.0.lock().unwrap_or_else(|error| error.into_inner());
+    let owned = state.as_ref().is_some_and(|active| active.epoch == epoch);
+    if owned {
+        *state = None;
+    }
+    drop(state);
+    if owned {
+        if let Some(reason) = stop_reason {
+            let _ = app.emit(
+                STATUS_EVENT,
+                InterviewStatusPayload {
+                    phase: "stopped".to_string(),
+                    session_id: Some(session_id),
+                    epoch: Some(epoch),
+                    app: Some(app_name),
+                    reason: Some(reason.to_string()),
+                },
+            );
+        }
+    }
+}
+
+fn run_worker_loop(
+    app: AppHandle,
+    mut credentials: TranscriptionCredentials,
+    keyterms: Vec<String>,
+    session_id: String,
+    app_name: String,
+    epoch: u64,
+    commands: mpsc::Receiver<RuntimeCommand>,
+) -> Option<&'static str> {
     let started_at = Instant::now();
+    let mut limit_warned = false;
     let mut provider = if credentials.deepgram.trim().is_empty() {
         TranscriptionProvider::OpenAi
     } else {
@@ -801,6 +866,29 @@ fn run_worker(
         if started_at.elapsed() >= SESSION_LIMIT {
             stop_reason = Some("session_limit");
             break;
+        }
+        if !limit_warned && started_at.elapsed() >= SESSION_LIMIT - SESSION_LIMIT_WARNING {
+            limit_warned = true;
+            // Re-emit whatever phase the card is in: the warning is a reason,
+            // not a state change, and emit_status writes the phase back.
+            let phase = app
+                .try_state::<InterviewHandle>()
+                .and_then(|handle| {
+                    let state = handle.0.lock().unwrap_or_else(|error| error.into_inner());
+                    state
+                        .as_ref()
+                        .filter(|active| active.epoch == epoch)
+                        .map(|active| active.phase.clone())
+                })
+                .unwrap_or_else(|| "listening".to_string());
+            emit_status(
+                &app,
+                &phase,
+                Some(&session_id),
+                Some(epoch),
+                Some(&app_name),
+                Some("session_limit_warning"),
+            );
         }
         while let Ok(command) = commands.try_recv() {
             match command {
@@ -1071,27 +1159,7 @@ fn run_worker(
     }
 
     close_streams(&mut streams);
-    let handle = app.state::<InterviewHandle>();
-    let mut state = handle.0.lock().unwrap_or_else(|error| error.into_inner());
-    let owned = state.as_ref().is_some_and(|active| active.epoch == epoch);
-    if owned {
-        *state = None;
-    }
-    drop(state);
-    if owned {
-        if let Some(reason) = stop_reason {
-            let _ = app.emit(
-                STATUS_EVENT,
-                InterviewStatusPayload {
-                    phase: "stopped".to_string(),
-                    session_id: Some(session_id),
-                    epoch: Some(epoch),
-                    app: Some(app_name),
-                    reason: Some(reason.to_string()),
-                },
-            );
-        }
-    }
+    stop_reason
 }
 
 fn drain_asr(

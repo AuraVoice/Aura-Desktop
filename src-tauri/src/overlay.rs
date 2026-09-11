@@ -43,7 +43,7 @@ const CARD_CROSS: f64 = 380.0;
 const INTERVIEW_HACKER_WIDTH: f64 = 720.0;
 // Must agree with InterviewHackerCard.css (.interview-hacker-control-bar
 // width/height) and NotchBar.css's 52px interview grid rows + 8px row-gap.
-const INTERVIEW_CONTROL_WIDTH: f64 = 228.0;
+const INTERVIEW_CONTROL_WIDTH: f64 = 280.0;
 const INTERVIEW_CONTROL_HEIGHT: f64 = 52.0;
 const INTERVIEW_CONTROL_GAP: f64 = 8.0;
 // Gap between the notch and an open card (matches the CSS grid gap).

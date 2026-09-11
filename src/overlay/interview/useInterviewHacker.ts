@@ -40,10 +40,12 @@ import {
 import { loadInterviewWorkspace, type InterviewWorkspaceRecord } from "../../lib/interviewWorkspace";
 import { interviewKeyterms } from "../../lib/interviewKeyterms";
 import {
+  checkpointInterviewSession,
   saveInterviewSession,
   saveInterviewReflection,
   type InterviewSessionRecord,
 } from "../../lib/interviewSessions";
+import { AuthRequiredError, TimeoutError } from "../../lib/api";
 import { useAuth } from "../../state/AuthProvider";
 import {
   DEFAULT_PLANNED_MINUTES,
@@ -59,7 +61,16 @@ import { buildSelfPitch, type SelfPitch } from "../../lib/selfPitch";
 import { toBase64 } from "../../lib/chatScreenCapture";
 import { asArrayBuffer, parseCapturedFrame } from "../../lib/screenFrame";
 import { trackEvent } from "../../lib/analytics";
-import { logError } from "../../lib/log";
+import { logError, logInfo } from "../../lib/log";
+
+/** Tauri rejects Rust `Result<T, String>` commands with the bare string. */
+function errorText(error: unknown): string {
+  return error instanceof Error
+    ? error.message
+    : typeof error === "string"
+      ? error
+      : String(error);
+}
 
 /** One answered question, kept so the card can show the whole conversation
  * rather than only the turn in flight. Memory-only, same lifetime as the
@@ -130,6 +141,12 @@ const PANEL_ASSEMBLY_MS = 150;
 // provider's silence endpointing, so it waits longer for its continuation than
 // a punctuated one. Smart formatting is on, so punctuation is dependable.
 const INCOMPLETE_HOLD_MS = 700;
+// Manual mode collects the interviewer's speech until the user sends it. A
+// long monologue is trimmed from the front, at a sentence boundary, so the
+// paragraph on screen and in the prompt stays readable and bounded.
+const MANUAL_PARAGRAPH_MAX_CHARS = 2_000;
+
+export type AnswerMode = "auto" | "manual";
 // While a pending question's speaker is demonstrably still talking (interims
 // keep arriving), the flush waits for their next final instead of firing.
 const INTERIM_EXTEND_MS = 1_200;
@@ -137,6 +154,11 @@ const PACING_TICK_MS = 1_000;
 const PITCH_COLLAPSE_AFTER_ACCEPTED = 2;
 const ECHO_WINDOW_MS = 2_500;
 const MAX_CREDENTIAL_RETRIES = 3;
+// Tauri's invoke has no deadline of its own. Past this, Start is treated as
+// failed and cancelled rather than left on "Starting..." indefinitely.
+const START_TIMEOUT_MS = 20_000;
+// Live-session checkpoint cadence: a crash loses at most this much.
+const CHECKPOINT_EVERY_MS = 30_000;
 // Cosmetic-only since Start no longer waits on this (see openPreflight), so
 // the poll can afford to be slower than a gate would need. It used to run
 // only until the user reached "preflight"; now it runs for as long as
@@ -180,6 +202,17 @@ function mergeRemoteTurns(
     speakerOverlap: Boolean(current.speakerOverlap || next.speakerOverlap),
     finalWordAtMs: next.finalWordAtMs ?? current.finalWordAtMs ?? null,
   };
+}
+
+/** Drops whole leading sentences until the text fits the manual-mode cap. */
+function trimParagraphFront(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  const overflow = text.slice(0, text.length - maxChars);
+  const boundary = overflow.search(/[.?!]\s+\S*$/);
+  const cut = boundary >= 0
+    ? overflow.length - overflow.slice(boundary).replace(/^[.?!]\s+/, "").length
+    : overflow.length;
+  return text.slice(cut).trimStart();
 }
 
 /** Per-turn latency stamps, one object per evaluation. Promoted into
@@ -265,6 +298,10 @@ export interface InterviewHackerState {
    *  Answer now action has something to send. */
   questionPending: boolean;
   sendNow: () => void;
+  /** Auto answers every turn the gate accepts; Manual collects everything the
+   *  interviewer says into one paragraph until sendNow. Always Auto at Start. */
+  answerMode: AnswerMode;
+  setAnswerMode: (mode: AnswerMode) => void;
   capturingScreen: boolean;
   /** What Aura saw on the last screen it was shown, for the current answer. */
   screenNote: string | null;
@@ -286,10 +323,7 @@ export interface InterviewHackerState {
   pause: () => void;
   resume: () => void;
   stop: () => void;
-  suggest: () => void;
   shorter: () => void;
-  anotherExample: () => void;
-  moreTechnical: () => void;
   screenSight: () => void;
   reflect: () => void;
   saveReflection: () => void;
@@ -319,6 +353,13 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
   const [interimQuestion, setInterimQuestion] = useState("");
+  const [answerMode, setAnswerModeState] = useState<AnswerMode>("auto");
+  // Read by the transcript listener, which is set up once and cannot close
+  // over the state value.
+  const answerModeRef = useRef<AnswerMode>("auto");
+  // Installed by the listener effect: re-arms or clears the pending merge
+  // window when the mode flips mid-session.
+  const applyAnswerModeRef = useRef<((mode: AnswerMode) => void) | null>(null);
   const [brief, setBrief] = useState<InterviewBrief | null>(null);
   const [candidateSpeaking, setCandidateSpeaking] = useState(false);
   const [capturingScreen, setCapturingScreen] = useState(false);
@@ -432,7 +473,8 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   }>>([]);
   const assemblyRef = useRef<{
     turn: InterviewTranscriptTurn;
-    timer: ReturnType<typeof setTimeout>;
+    // null while manual mode holds the paragraph: nothing flushes it but the user.
+    timer: ReturnType<typeof setTimeout> | null;
     queuedAtMs: number;
   } | null>(null);
   const turnTimingRef = useRef<TurnTiming | null>(null);
@@ -441,6 +483,11 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   const credentialTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const credentialRetryRef = useRef(0);
   const credentialRefreshInFlightRef = useRef(false);
+  // True while the worker is parked on a rejected token. "Retry transcription"
+  // must mint before it resumes, or it resumes with the same dead token.
+  const credentialBlockedRef = useRef(false);
+  const checkpointRef = useRef<(() => void) | null>(null);
+  const lastCheckpointRef = useRef("");
   const rotateCredentialRef = useRef<(() => void) | null>(null);
   const metricsRef = useRef<SessionMetrics | null>(null);
   const candidateSpeakingRef = useRef(false);
@@ -478,7 +525,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     activeAnswerActionRef.current = null;
     evaluationsRef.current.forEach((controller) => controller.abort());
     evaluationsRef.current.clear();
-    if (assemblyRef.current) clearTimeout(assemblyRef.current.timer);
+    if (assemblyRef.current?.timer) clearTimeout(assemblyRef.current.timer);
     assemblyRef.current = null;
     turnTimingRef.current = null;
     lastRemoteInterimRef.current = null;
@@ -500,6 +547,10 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     acceptedSequenceRef.current = 0;
     credentialRetryRef.current = 0;
     credentialRefreshInFlightRef.current = false;
+    credentialBlockedRef.current = false;
+    lastCheckpointRef.current = "";
+    answerModeRef.current = "auto";
+    setAnswerModeState("auto");
     candidateSpeakingRef.current = false;
     frozenDeltasRef.current = "";
     replaceAfterSpeechRef.current = false;
@@ -565,7 +616,9 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       frozen_hold_ms: timing.frozenHoldMs,
       total_ms: Math.max(0, timing.visibleAtMs - base),
     };
-    console.info("[interview-latency]", JSON.stringify(breakdown));
+    // Durable log, not the console: the console is gone the moment the
+    // interview is, and this line is the only per-turn split that exists.
+    logInfo("interview-latency", JSON.stringify(breakdown));
     trackEvent("interview_companion_turn_latency", breakdown);
   }, []);
 
@@ -649,6 +702,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
           || identityRef.current.epoch !== identity.epoch
         ) return;
         credentialRetryRef.current = 0;
+        credentialBlockedRef.current = false;
         if (metricsRef.current) metricsRef.current.credentialRotations += 1;
         trackEvent("interview_companion_credential_rotation", { outcome: "success" });
         armCredentialRefresh(credential.expiresInSeconds);
@@ -672,7 +726,8 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
             rotateCredentialRef.current?.();
           }, (2 ** (credentialRetryRef.current - 1)) * 1_000);
         } else {
-          setMessage("Transcription credentials could not be refreshed. Restart Interview Companion.");
+          credentialBlockedRef.current = true;
+          setMessage("Transcription credentials could not be refreshed. Use Retry transcription, or restart Interview Companion.");
           setErrorDetail("Error code: credential_refresh_failed. Automatic credential retries were exhausted.");
         }
       });
@@ -757,9 +812,19 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   // is scoped to the capturing phases, and OverlayRoot suppresses chat and
   // swallows Escape while the card is up, so opening it from the tray and then
   // leaving the call left nothing on screen that could dismiss it.
+  const setAnswerMode = useCallback((mode: AnswerMode) => {
+    if (answerModeRef.current === mode) return;
+    answerModeRef.current = mode;
+    setAnswerModeState(mode);
+    applyAnswerModeRef.current?.(mode);
+    trackEvent("interview_companion_answer_mode", { mode });
+  }, []);
+
   const dismiss = useCallback(() => {
     preflightAttemptRef.current += 1;
     startAttemptRef.current += 1;
+    answerModeRef.current = "auto";
+    setAnswerModeState("auto");
     reflectionRequestRef.current?.abort();
     reflectionRequestRef.current = null;
     savingReflectionRef.current = false;
@@ -793,21 +858,38 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     setPhase("starting");
     setMessage(null);
     setErrorDetail(null);
+    let startInvoked = false;
     mintInterviewCredential()
       .then((credential) => {
         if (startAttemptRef.current !== attempt) return null;
-        return invoke<StatusPayload>("start_interview_hacker", {
-          accessToken: credential.accessToken,
-          openaiAccessToken: credential.openaiAccessToken,
-          // Frozen for the session: Deepgram takes keyterms as query parameters
-          // when the socket opens and cannot be re-biased mid-stream.
-          keyterms: interviewKeyterms({
-            brief: briefRef.current,
-            resumeText: resumeTextRef.current,
-            company: prepInputRef.current?.company,
-            role: prepInputRef.current?.role,
-            jobDescription: prepInputRef.current?.jobDescription,
-          }),
+        startInvoked = true;
+        return new Promise<StatusPayload>((resolve, reject) => {
+          const deadline = setTimeout(
+            () => reject(new TimeoutError(`start timed out after ${START_TIMEOUT_MS}ms`)),
+            START_TIMEOUT_MS,
+          );
+          invoke<StatusPayload>("start_interview_hacker", {
+            accessToken: credential.accessToken,
+            openaiAccessToken: credential.openaiAccessToken,
+            // Frozen for the session: Deepgram takes keyterms as query parameters
+            // when the socket opens and cannot be re-biased mid-stream.
+            keyterms: interviewKeyterms({
+              brief: briefRef.current,
+              resumeText: resumeTextRef.current,
+              company: prepInputRef.current?.company,
+              role: prepInputRef.current?.role,
+              jobDescription: prepInputRef.current?.jobDescription,
+            }),
+          }).then(
+            (status) => {
+              clearTimeout(deadline);
+              resolve(status);
+            },
+            (error: unknown) => {
+              clearTimeout(deadline);
+              reject(error);
+            },
+          );
         }).then((status) => ({ status, credential }));
       })
       .then((started) => {
@@ -844,48 +926,93 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
         acceptNativeEventsRef.current = false;
         logError("Interview Companion: start", error);
         setPhase("error");
+        const timedOutInStart = error instanceof TimeoutError && startInvoked;
+        if (timedOutInStart) {
+          // The command may still be running. Stop bumps the cancel generation,
+          // so a start still in flight returns "cancelled", and a session it
+          // already created is torn down rather than left listening unseen.
+          startAttemptRef.current += 1;
+          void invoke("stop_interview_hacker").catch((stopError) =>
+            logError("Interview Companion: stop after start timeout", stopError),
+          );
+        }
         // Tauri rejects a Rust `Result<T, String>` command with the raw string,
         // not an Error instance, so `error instanceof Error` alone drops every
         // reason start_interview_hacker actually returns.
-        const message =
+        const raw =
           error instanceof Error
             ? error.message
             : typeof error === "string"
               ? error
               : "Interview Companion could not start.";
+        const message = timedOutInStart
+          ? "Interview Companion took too long to start. Check your connection and try again."
+          : error instanceof TimeoutError
+            ? "Aura's transcription service took too long to respond. Check your connection and try again."
+            : error instanceof AuthRequiredError
+              ? "Your sign-in expired. Sign in again, then retry."
+              : error instanceof TypeError
+                ? "Aura could not reach its transcription service. Check your connection and try again."
+                : raw;
         setMessage(message);
-        setErrorDetail(`Start error: ${message}`);
+        setErrorDetail(`Start error: ${raw}`);
       });
   }, [armCredentialRefresh, phase, plannedMinutes, roundKind]);
 
   const pause = useCallback(() => {
-    invoke("pause_interview_hacker").catch((error) =>
-      logError("Interview Companion: pause", error),
-    );
+    invoke("pause_interview_hacker").catch((error) => {
+      logError("Interview Companion: pause", error);
+      setMessage("Aura could not pause transcription.");
+      setErrorDetail(`Pause error: ${errorText(error)}`);
+    });
   }, []);
 
+  // Also the card's "Retry transcription". When the worker is parked on a
+  // rejected token, resuming as-is would reconnect with that same token and
+  // fail the same way, so a fresh one is minted and applied first.
   const resume = useCallback(() => {
-    invoke("resume_interview_hacker").catch((error) =>
-      logError("Interview Companion: resume", error),
-    );
-  }, []);
+    const identity = credentialBlockedRef.current ? identityRef.current : null;
+    const blocked = identity !== null;
+    if (blocked) setMessage("Refreshing transcription credentials...");
+    const recover = identity
+      ? mintInterviewCredential().then((credential) =>
+        invoke("update_interview_hacker_credential", {
+          sessionId: identity.sessionId,
+          epoch: identity.epoch,
+          accessToken: credential.accessToken,
+          openaiAccessToken: credential.openaiAccessToken,
+        }).then(() => {
+          credentialRetryRef.current = 0;
+          credentialBlockedRef.current = false;
+          armCredentialRefresh(credential.expiresInSeconds);
+        }))
+      : Promise.resolve();
+    recover
+      .then(() => invoke("resume_interview_hacker"))
+      .catch((error) => {
+        logError("Interview Companion: resume", error);
+        setMessage(blocked
+          ? "Aura could not refresh the transcription credential. Check your connection and retry."
+          : "Aura could not resume transcription.");
+        setErrorDetail(`Resume error: ${errorText(error)}`);
+      });
+  }, [armCredentialRefresh]);
 
-  // Writes the finished session to the local encrypted store, once, on Stop.
-  // The whole session is already in memory, so this keeps disk IO off the live
-  // answer path; a crash before Stop loses only that one session.
-  const persistCurrentSession = useCallback(() => {
+  // The session as the store takes it. Everything is already in memory, so
+  // building this costs nothing on the live answer path.
+  const buildSessionRecord = useCallback((endedAtMs: number): { uid: string; record: InterviewSessionRecord } | null => {
     const uid = user?.uid;
     const identity = identityRef.current;
     const metrics = metricsRef.current;
-    if (!uid || !identity || !metrics) return;
+    if (!uid || !identity || !metrics) return null;
     const turns = reflectionTurnsRef.current;
     const exchanges = exchangesIncludingLive();
-    if (turns.length === 0 && exchanges.length === 0) return;
+    if (turns.length === 0 && exchanges.length === 0) return null;
     const brief = briefRef.current;
     const record: InterviewSessionRecord = {
       session_id: identity.sessionId,
       started_at_ms: metrics.startedAtMs,
-      ended_at_ms: Date.now(),
+      ended_at_ms: endedAtMs,
       round_kind: roundKindRef.current,
       company: brief?.company?.text ?? null,
       role: brief?.role?.text ?? null,
@@ -903,10 +1030,46 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
         unverified: exchange.unverified,
       })),
     };
-    void saveInterviewSession(uid, record).catch((error) =>
+    return { uid, record };
+  }, [user?.uid, exchangesIncludingLive]);
+
+  // Writes the finished session to the local encrypted store on Stop. The
+  // periodic checkpoint below has usually written most of it already; this is
+  // what closes the row.
+  const persistCurrentSession = useCallback(() => {
+    const built = buildSessionRecord(Date.now());
+    if (!built) return;
+    void saveInterviewSession(built.uid, built.record).catch((error) =>
       logError("Interview Companion: save session", error),
     );
-  }, [user?.uid, exchangesIncludingLive]);
+  }, [buildSessionRecord]);
+
+  // Upserts the running session so a crash keeps everything up to the last
+  // tick. Skipped when nothing changed since the previous checkpoint.
+  const checkpointCurrentSession = useCallback(() => {
+    const built = buildSessionRecord(0);
+    if (!built) return;
+    const { record } = built;
+    const fingerprint = `${record.turns.length}:${record.exchanges.length}:${
+      record.exchanges.reduce((total, exchange) => total + exchange.question.length + exchange.answer.length, 0)
+    }`;
+    if (fingerprint === lastCheckpointRef.current) return;
+    lastCheckpointRef.current = fingerprint;
+    void checkpointInterviewSession(built.uid, record).catch((error) => {
+      lastCheckpointRef.current = "";
+      logError("Interview Companion: checkpoint session", error);
+    });
+  }, [buildSessionRecord]);
+  checkpointRef.current = checkpointCurrentSession;
+
+  // One stable interval for the whole signed-in lifetime; it no-ops without a
+  // session. Keying it on the callback instead would restart the timer on
+  // every state change and starve the checkpoint during a busy interview.
+  useEffect(() => {
+    if (!signedIn) return;
+    const timer = setInterval(() => checkpointRef.current?.(), CHECKPOINT_EVERY_MS);
+    return () => clearInterval(timer);
+  }, [signedIn]);
 
   const stop = useCallback(() => {
     startAttemptRef.current += 1;
@@ -1340,7 +1503,10 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
                 : {}),
             });
           }
-          if (candidateSpeakingRef.current) {
+          // Only an automatic answer waits behind the candidate's own voice. A
+          // clicked one (Answer now, Shorter, Screen Sight) is an explicit ask
+          // and lands while they read.
+          if (candidateSpeakingRef.current && action === "automatic") {
             if (timing.frozenAtMs === null) timing.frozenAtMs = Date.now();
             frozenDeltasRef.current += frame.delta;
           } else {
@@ -1539,7 +1705,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     const flushRemoteTurn = (action: InterviewAnswerAction = "automatic") => {
       const pending = assemblyRef.current;
       if (!pending) return;
-      clearTimeout(pending.timer);
+      if (pending.timer !== null) clearTimeout(pending.timer);
       assemblyRef.current = null;
       setQuestionPending(false);
       const recentTurns = recentRef.current;
@@ -1559,13 +1725,46 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
         ? assemblyMsRef.current
         : Math.max(assemblyMsRef.current, INCOMPLETE_HOLD_MS);
 
+    // Manual mode: one paragraph, any speaker, no timer. It leaves only when
+    // the user sends it, so the next automatic-mode rule (a different speaker
+    // flushes the previous question) does not apply.
+    const collectManualTurn = (turn: InterviewTranscriptTurn) => {
+      const pending = assemblyRef.current;
+      if (pending?.timer) clearTimeout(pending.timer);
+      const merged = pending ? mergeRemoteTurns(pending.turn, turn) : turn;
+      const text = trimParagraphFront(merged.text, MANUAL_PARAGRAPH_MAX_CHARS);
+      assemblyRef.current = {
+        turn: { ...merged, text },
+        timer: null,
+        queuedAtMs: pending?.queuedAtMs ?? Date.now(),
+      };
+      setQuestionPending(true);
+      setInterimQuestion(text);
+    };
+
+    applyAnswerModeRef.current = (mode: AnswerMode) => {
+      const pending = assemblyRef.current;
+      if (!pending) return;
+      if (pending.timer !== null) clearTimeout(pending.timer);
+      if (mode === "manual") {
+        pending.timer = null;
+        setInterimQuestion(pending.turn.text);
+        return;
+      }
+      pending.timer = setTimeout(flushRemoteTurn, flushDelayFor(pending.turn.text));
+    };
+
     const queueRemoteTurn = (turn: InterviewTranscriptTurn) => {
+      if (answerModeRef.current === "manual") {
+        collectManualTurn(turn);
+        return;
+      }
       const pending = assemblyRef.current;
       if (pending) {
         const sameSpeaker = (pending.turn.remoteSpeakerId ?? null)
           === (turn.remoteSpeakerId ?? null);
         if (sameSpeaker) {
-          clearTimeout(pending.timer);
+          if (pending.timer !== null) clearTimeout(pending.timer);
           const merged = mergeRemoteTurns(pending.turn, turn);
           assemblyRef.current = {
             turn: merged,
@@ -1617,6 +1816,10 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
         if (reason === "session_limit") {
           setPhase("error");
           setMessage("Interview Companion stopped after the two-hour session limit. Start it again to continue.");
+        } else if (reason === "worker_panic") {
+          setPhase("error");
+          setMessage("Transcription stopped unexpectedly. Start Interview Companion again.");
+          setErrorDetail("Error code: worker_panic. The transcription worker crashed and was cleaned up.");
         } else {
           setPhase("idle");
         }
@@ -1635,9 +1838,13 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       setCallApp(status.app);
       setPhase(status.phase);
       if (status.reason === "credential_expired") {
+        credentialBlockedRef.current = true;
         setMessage("Refreshing transcription credentials...");
         setErrorDetail("Error code: credential_expired. Aura is refreshing the transcription credential automatically.");
         rotateCredentialRef.current?.();
+      } else if (status.reason === "session_limit_warning") {
+        setMessage("Interview Companion stops automatically in 5 minutes (two-hour session limit).");
+        setErrorDetail(null);
       } else if (status.reason === "device_switch" || status.reason?.endsWith("_device_switch")) {
         if (metricsRef.current) metricsRef.current.deviceSwitches += 1;
         trackEvent("interview_companion_recovery", { kind: "device_switch" });
@@ -1741,24 +1948,32 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
 
       if (!turn.isFinal) {
         if (turn.text.trim()) {
-          setInterimQuestion(turn.text);
           lastRemoteInterimRef.current = turn;
           setQuestionPending(true);
+          const pending = assemblyRef.current;
+          if (answerModeRef.current === "manual") {
+            // Show what Answer now would send: the collected paragraph plus
+            // the words still arriving.
+            setInterimQuestion(
+              pending ? `${pending.turn.text} ${turn.text}`.trim() : turn.text,
+            );
+            return;
+          }
+          setInterimQuestion(turn.text);
           // The speaker is demonstrably still talking, so a pending flush from
           // their earlier fragment waits for the final this interim precedes.
-          const pending = assemblyRef.current;
           if (
             pending
             && (pending.turn.remoteSpeakerId ?? null) === (turn.remoteSpeakerId ?? null)
           ) {
-            clearTimeout(pending.timer);
+            if (pending.timer !== null) clearTimeout(pending.timer);
             pending.timer = setTimeout(flushRemoteTurn, INTERIM_EXTEND_MS);
           }
         }
         return;
       }
       if (!turn.text.trim() || isEchoOrRepeat(turn)) return;
-      setInterimQuestion(turn.text);
+      if (answerModeRef.current !== "manual") setInterimQuestion(turn.text);
       queueRemoteTurn(turn);
     })
       .then((unlisten) => {
@@ -1769,15 +1984,17 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
 
     return () => {
       disposed = true;
-      if (assemblyRef.current) clearTimeout(assemblyRef.current.timer);
+      if (assemblyRef.current?.timer) clearTimeout(assemblyRef.current.timer);
       assemblyRef.current = null;
+      applyAnswerModeRef.current = null;
       unlistenStatus?.();
       unlistenTranscript?.();
     };
   }, [clearSession, evaluate, recordSessionEnd, rememberReflectionTurn, reportTurnLatency]);
 
   /** User-initiated "answer this now": flushes a held question immediately, or,
-   * when only interim speech exists, answers from the freshest interim text.
+   * when only interim speech exists, answers from the freshest interim text,
+   * or, with nothing new at all, answers the last interviewer turn again.
    * Runs as "suggest" because a question the user explicitly sent must not be
    * second-guessed by the gate. */
   const sendNow = useCallback(() => {
@@ -1787,7 +2004,10 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       return;
     }
     const interim = lastRemoteInterimRef.current;
-    if (!interim || !interim.text.trim()) return;
+    if (!interim || !interim.text.trim()) {
+      runManualAction("suggest");
+      return;
+    }
     lastRemoteInterimRef.current = null;
     const synthetic: InterviewTranscriptTurn = { ...interim, isFinal: true };
     // Seed the echo window so the provider's own final for this speech dedups
@@ -1804,7 +2024,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     setCanSuggest(true);
     setQuestionPending(false);
     evaluate(synthetic, recentTurns, "suggest");
-  }, [evaluate, rememberReflectionTurn]);
+  }, [evaluate, rememberReflectionTurn, runManualAction]);
 
   return {
     phase,
@@ -1856,11 +2076,10 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     pause,
     resume,
     stop,
-    suggest: () => runManualAction("suggest"),
     shorter: () => runManualAction("shorter"),
-    anotherExample: () => runManualAction("another_example"),
-    moreTechnical: () => runManualAction("more_technical"),
     screenSight,
+    answerMode,
+    setAnswerMode,
     reflect,
     saveReflection,
     dismissReflection,

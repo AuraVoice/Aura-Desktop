@@ -45,7 +45,7 @@ pub fn install_panic_hook() {
             // recorded without it. Sentry still receives the full event through
             // the chained hook below, where sentry_setup's before_send drops
             // anything originating in the dictation module.
-            log::error!("panic: on a dictation thread, details withheld");
+            log::error!("panic: on a speech thread, details withheld");
         } else {
             log::error!("panic: {info}");
         }
@@ -57,7 +57,10 @@ pub fn install_panic_hook() {
 /// memory. Matched by thread name because a panic hook has no other handle on
 /// where it came from.
 fn panicking_thread_handles_speech() -> bool {
-    matches!(std::thread::current().name(), Some("aura-dictation"))
+    matches!(
+        std::thread::current().name(),
+        Some("aura-dictation" | "aura-interview")
+    )
 }
 
 /// Hard ceiling on how many lines a single read may return, regardless of

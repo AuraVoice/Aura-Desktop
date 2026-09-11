@@ -1,4 +1,4 @@
-import { authFetch } from "./api";
+import { authFetch, authFetchWithTimeout } from "./api";
 import { readSseFrames } from "./sseStream";
 import type { AnswerShape } from "./interviewPolicy";
 import { RESUME_MAX_CHARS } from "./resumeText";
@@ -86,9 +86,16 @@ export class InterviewUnavailableError extends Error {}
  * the first handshake it was minted for, surfacing as a confusing auth
  * failure mid-connect. Same guard as dictationCredential.ts. */
 const MIN_USEFUL_TTL_SECONDS = 15;
+/** Start waits on this call; without a deadline a stalled connection leaves
+ * the card on "Starting..." with no way to tell. */
+const MINT_TIMEOUT_MS = 15_000;
 
 export async function mintInterviewCredential(): Promise<InterviewCredential> {
-  const response = await authFetch("/interview-companion/stt-token", { method: "POST" });
+  const response = await authFetchWithTimeout(
+    "/interview-companion/stt-token",
+    { method: "POST" },
+    MINT_TIMEOUT_MS,
+  );
   if (response.status === 503) {
     throw new InterviewUnavailableError("Interview transcription is unavailable");
   }

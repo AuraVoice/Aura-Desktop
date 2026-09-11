@@ -4,10 +4,11 @@
 //!
 //! Unlike the chat cache this is NOT a rendering cache of server state - the
 //! backend never stores an interview transcript, so this file is the only copy.
-//! It is written once, on Stop, with the whole session in a single transaction,
-//! so nothing touches disk on the live answer path. A crash mid-interview loses
-//! that one session; that is the accepted trade for keeping capture latency off
-//! the disk.
+//! The webview checkpoints the running session every half minute (an upsert of
+//! what changed, off the answer path) and finishes it on Stop. A row whose
+//! `ended_at_ms` is still 0 is therefore either the live session or one a crash
+//! left behind; every read and write finalises the latter (end = last turn) and
+//! leaves the former alone, so a crash costs at most the last thirty seconds.
 //!
 //! ## What is stored
 //!
@@ -234,6 +235,117 @@ fn prune(tx: &rusqlite::Transaction, uid: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Closes every session a crash left open (`ended_at_ms = 0`) for one account,
+/// except the one the worker is running right now. The end time becomes the
+/// last turn's timestamp, or the start when nothing was transcribed yet.
+fn finalize_orphans(conn: &Connection, uid: &str, live_session_id: Option<&str>) -> Result<(), String> {
+    conn.execute(
+        "UPDATE sessions SET ended_at_ms = COALESCE(
+            (SELECT MAX(t.at_ms) FROM turns t
+               WHERE t.uid = sessions.uid AND t.session_id = sessions.session_id),
+            started_at_ms)
+         WHERE uid = ?1 AND ended_at_ms = 0 AND session_id <> ?2",
+        params![uid, live_session_id.unwrap_or("")],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+fn seal_turn(key: &[u8; 32], uid: &str, sid: &str, turn: &StoredTurn) -> Result<Vec<u8>, String> {
+    seal(key, &turn.text, &row_aad(uid, sid, &format!("turn:{}", turn.seq)))
+}
+
+fn seal_exchange(
+    key: &[u8; 32],
+    uid: &str,
+    sid: &str,
+    exchange: &StoredExchange,
+) -> Result<(Vec<u8>, Vec<u8>), String> {
+    Ok((
+        seal(key, &exchange.question, &row_aad(uid, sid, &format!("exchange:{}:q", exchange.seq)))?,
+        seal(key, &exchange.answer, &row_aad(uid, sid, &format!("exchange:{}:a", exchange.seq)))?,
+    ))
+}
+
+/// Upserts the running session's rows with `ended_at_ms` left at 0. Idempotent
+/// by (session, seq), so the webview can send its whole current snapshot. Once
+/// Stop has finished the row a late checkpoint writes nothing: the session
+/// upsert only matches an open row, and the turns follow only if it did.
+#[tauri::command]
+pub async fn interview_session_checkpoint(
+    app: AppHandle,
+    uid: String,
+    session: InterviewSessionRecord,
+) -> Result<(), String> {
+    if !ENCRYPTION_AVAILABLE || uid.is_empty() || session.session_id.is_empty() {
+        return Ok(());
+    }
+    if session.turns.is_empty() && session.exchanges.is_empty() {
+        return Ok(());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let live = crate::interview::active_session_id(&app);
+        let key = cache_key(&app)?;
+        let mut conn = open(&app)?;
+        let tx = conn.transaction().map_err(|e| e.to_string())?;
+        let sid = &session.session_id;
+        finalize_orphans(&tx, &uid, live.as_deref())?;
+
+        let company = seal_optional(&key, &session.company, &row_aad(&uid, sid, "company"))?;
+        let role = seal_optional(&key, &session.role, &row_aad(&uid, sid, "role"))?;
+        let open_rows = tx
+            .execute(
+                "INSERT INTO sessions (
+                    uid, session_id, started_at_ms, ended_at_ms, round_kind,
+                    company, role, brief_id
+                 ) VALUES (?1, ?2, ?3, 0, ?4, ?5, ?6, ?7)
+                 ON CONFLICT (uid, session_id) DO UPDATE SET
+                    started_at_ms = excluded.started_at_ms,
+                    round_kind = excluded.round_kind,
+                    company = excluded.company,
+                    role = excluded.role,
+                    brief_id = excluded.brief_id
+                 WHERE sessions.ended_at_ms = 0",
+                params![
+                    uid,
+                    sid,
+                    session.started_at_ms,
+                    session.round_kind,
+                    company,
+                    role,
+                    session.brief_id,
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        if open_rows == 0 {
+            return Ok(());
+        }
+
+        for turn in &session.turns {
+            let sealed = seal_turn(&key, &uid, sid, turn)?;
+            tx.execute(
+                "INSERT OR REPLACE INTO turns (uid, session_id, seq, source, at_ms, text)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![uid, sid, turn.seq, turn.source, turn.at_ms, sealed],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        for exchange in &session.exchanges {
+            let (question, answer) = seal_exchange(&key, &uid, sid, exchange)?;
+            tx.execute(
+                "INSERT OR REPLACE INTO exchanges (uid, session_id, seq, question, answer, unverified)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![uid, sid, exchange.seq, question, answer, i64::from(exchange.unverified)],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Persists one finished session and prunes past the retention bounds, in a
 /// single transaction. Called once on Stop.
 #[tauri::command]
@@ -250,10 +362,12 @@ pub async fn interview_session_save(
         return Ok(());
     }
     tauri::async_runtime::spawn_blocking(move || {
+        let live = crate::interview::active_session_id(&app);
         let key = cache_key(&app)?;
         let mut conn = open(&app)?;
         let tx = conn.transaction().map_err(|e| e.to_string())?;
         let sid = &session.session_id;
+        finalize_orphans(&tx, &uid, live.as_deref())?;
         // Rewrite the whole session, so a re-save cannot leave stale rows behind.
         tx.execute(
             "DELETE FROM sessions WHERE uid = ?1 AND session_id = ?2",
@@ -282,7 +396,7 @@ pub async fn interview_session_save(
         .map_err(|e| e.to_string())?;
 
         for turn in &session.turns {
-            let sealed = seal(&key, &turn.text, &row_aad(&uid, sid, &format!("turn:{}", turn.seq)))?;
+            let sealed = seal_turn(&key, &uid, sid, turn)?;
             tx.execute(
                 "INSERT INTO turns (uid, session_id, seq, source, at_ms, text)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -292,16 +406,7 @@ pub async fn interview_session_save(
         }
 
         for exchange in &session.exchanges {
-            let question = seal(
-                &key,
-                &exchange.question,
-                &row_aad(&uid, sid, &format!("exchange:{}:q", exchange.seq)),
-            )?;
-            let answer = seal(
-                &key,
-                &exchange.answer,
-                &row_aad(&uid, sid, &format!("exchange:{}:a", exchange.seq)),
-            )?;
+            let (question, answer) = seal_exchange(&key, &uid, sid, exchange)?;
             tx.execute(
                 "INSERT INTO exchanges (uid, session_id, seq, question, answer, unverified)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -330,8 +435,12 @@ pub async fn interview_sessions_list(
         return Ok(Vec::new());
     }
     tauri::async_runtime::spawn_blocking(move || {
+        let live = crate::interview::active_session_id(&app);
         let key = cache_key(&app)?;
         let conn = open(&app)?;
+        finalize_orphans(&conn, &uid, live.as_deref())?;
+        // The live session's row is still open (ended_at_ms = 0) and belongs to
+        // the card, not the history list.
         let mut statement = conn
             .prepare(
                 "SELECT s.session_id, s.started_at_ms, s.ended_at_ms, s.round_kind,
@@ -342,7 +451,7 @@ pub async fn interview_sessions_list(
                            WHERE t.uid = s.uid AND t.session_id = s.session_id),
                         s.reflection IS NOT NULL
                  FROM sessions s
-                 WHERE s.uid = ?1
+                 WHERE s.uid = ?1 AND s.ended_at_ms <> 0
                  ORDER BY s.started_at_ms DESC",
             )
             .map_err(|e| e.to_string())?;

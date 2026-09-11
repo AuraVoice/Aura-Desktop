@@ -1,7 +1,7 @@
 .glass-surface.interview-hacker-control-bar {
   /* Must agree with INTERVIEW_CONTROL_WIDTH/HEIGHT in overlay.rs: Rust sizes
      the native window to exactly this footprint. */
-  width: 228px;
+  width: 280px;
   height: 52px;
   justify-self: center;
   border-radius: 999px;
@@ -15,7 +15,7 @@
 
 .interview-hacker-control-inner {
   display: grid;
-  grid-template-columns: 40px 1fr 40px;
+  grid-template-columns: 96px 1fr 40px;
   align-items: center;
   gap: 7px;
   width: 100%;
@@ -24,7 +24,6 @@
   box-sizing: border-box;
 }
 
-.interview-hacker-aura-mark,
 .interview-hacker-stop-button {
   display: grid;
   place-items: center;
@@ -33,15 +32,42 @@
   border-radius: 50%;
 }
 
-.interview-hacker-aura-mark {
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.72);
+/* Auto | Manual. One click flips it; the lit half is the current mode. */
+.interview-hacker-mode-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: stretch;
+  height: 38px;
+  padding: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  font: inherit;
+  cursor: pointer;
 }
 
-.interview-hacker-aura-mark img {
-  width: 29px;
-  height: 29px;
-  object-fit: contain;
+.interview-hacker-mode-toggle span {
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 11.5px;
+  font-weight: 650;
+  transition: background 120ms ease, color 120ms ease;
+}
+
+.interview-hacker-mode-toggle span[data-active="true"] {
+  background: rgba(255, 255, 255, 0.96);
+  color: rgba(18, 20, 27, 0.95);
+}
+
+.interview-hacker-mode-toggle:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.interview-hacker-mode-toggle:focus-visible {
+  outline: 2px solid rgba(126, 216, 255, 0.9);
+  outline-offset: 2px;
 }
 
 .interview-hacker-visibility-button,
@@ -179,6 +205,14 @@
   display: inline-flex;
   align-items: center;
   gap: 2px;
+}
+
+.interview-hacker-preflight-hint {
+  margin: 6px 12px 0;
+  color: var(--text-muted, rgba(255, 255, 255, 0.52));
+  font-size: 12.5px;
+  line-height: 1.35;
+  text-align: center;
 }
 
 /* The only visible signal that "Reviewed and ready" is a control, not a
@@ -610,9 +644,14 @@
 
 .interview-hacker-answer-actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: center;
   gap: 6px;
+}
+
+.interview-hacker-answer-actions button.is-primary:not(:disabled) {
+  background: rgba(255, 255, 255, 0.96);
+  color: rgba(18, 20, 27, 0.95);
 }
 
 .interview-hacker-answer-actions button {
