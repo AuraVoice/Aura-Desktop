@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import iconUrl from "../../assets/icons/Aura-Icon.png";
 import { GlassSurface } from "../GlassSurface";
-import { DocumentIcon, MicIcon, MicOffIcon, StopSquareIcon, UploadArrowIcon } from "../icons";
+import { DocumentIcon, DownArrowIcon, MicIcon, MicOffIcon, StopSquareIcon, UploadArrowIcon } from "../icons";
 import { callVisual } from "./callIcons";
 import { useMicPreflightLevel } from "./useMicPreflightLevel";
 import { RESUME_ACCEPT } from "../../lib/resumeText";
@@ -277,7 +277,14 @@ export function InterviewHackerCard({
   };
   useEffect(() => {
     const thread = threadRef.current;
-    if (thread && followingRef.current) thread.scrollTop = thread.scrollHeight;
+    if (thread && followingRef.current) {
+      // Smooth rather than instant: a question transition shrinks the thread
+      // (archived answer clears, "Drafting..." shows) then regrows as the new
+      // answer streams in. An instant scrollTop snap on every one of those
+      // steps reads as an up/down bounce; scrollTo(behavior: "smooth") glides
+      // through the sequence instead.
+      thread.scrollTo({ top: thread.scrollHeight, behavior: "smooth" });
+    }
   }, [hacker.history, hacker.question, hacker.answer, hacker.interimQuestion, hacker.drafting]);
 
   const active = isInterviewCaptureActive(hacker.phase);
@@ -451,8 +458,10 @@ export function InterviewHackerCard({
                 type="button"
                 className="interview-hacker-jump"
                 onClick={jumpToLatest}
+                aria-label="Jump to latest"
+                title="Jump to latest"
               >
-                Jump to latest
+                <DownArrowIcon />
               </button>
             )}
           </div>

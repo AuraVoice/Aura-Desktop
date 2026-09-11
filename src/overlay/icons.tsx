@@ -273,6 +273,14 @@ export function UploadArrowIcon() {
   );
 }
 
+export function DownArrowIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor">
+      <path d="M12 21.4 2.6 12h5.6V2.6h7.6V12h5.6L12 21.4Z" />
+    </svg>
+  );
+}
+
 /** Sheet of paper with a folded corner. The Interview Companion's brief slot. */
 export function DocumentIcon() {
   return (

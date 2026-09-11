@@ -325,6 +325,57 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     jobDescription: string;
   } | null>(null);
   const answerRef = useRef("");
+  // Streamed deltas not yet committed to `answer` state. Buffered separately
+  // from answerRef (rather than appended to it directly) because answerRef is
+  // re-synced from `answer` state at the top of every render - appending
+  // straight onto answerRef would get silently overwritten by that mirror the
+  // next time anything else in this hook re-renders before the batched flush
+  // fires. One React render per animation frame instead of one per streamed
+  // token, without that data loss.
+  const pendingAnswerDeltaRef = useRef("");
+  const answerFlushFrameRef = useRef<number | null>(null);
+
+  const flushAnswer = () => {
+    answerFlushFrameRef.current = null;
+    if (!pendingAnswerDeltaRef.current) return;
+    const next = answerRef.current + pendingAnswerDeltaRef.current;
+    pendingAnswerDeltaRef.current = "";
+    answerRef.current = next;
+    setAnswer(next);
+  };
+
+  const scheduleAnswerDelta = (delta: string) => {
+    pendingAnswerDeltaRef.current += delta;
+    if (answerFlushFrameRef.current !== null) return;
+    answerFlushFrameRef.current = requestAnimationFrame(flushAnswer);
+  };
+
+  // Folds any buffered-but-not-yet-rendered delta into answerRef.current right
+  // now, without waiting for the next animation frame. Needed anywhere that
+  // reads answerRef.current synchronously (archiving the previous answer into
+  // history, prepending it to replayed frozen speech-held deltas) - those
+  // reads must never miss the last chunk just because its render hasn't
+  // committed yet.
+  const flushAnswerSync = () => {
+    if (answerFlushFrameRef.current !== null) {
+      cancelAnimationFrame(answerFlushFrameRef.current);
+      answerFlushFrameRef.current = null;
+    }
+    if (pendingAnswerDeltaRef.current) {
+      answerRef.current += pendingAnswerDeltaRef.current;
+      pendingAnswerDeltaRef.current = "";
+    }
+  };
+
+  const resetAnswer = () => {
+    if (answerFlushFrameRef.current !== null) {
+      cancelAnimationFrame(answerFlushFrameRef.current);
+      answerFlushFrameRef.current = null;
+    }
+    pendingAnswerDeltaRef.current = "";
+    answerRef.current = "";
+    setAnswer("");
+  };
   const lastRemoteTurnRef = useRef<InterviewTranscriptTurn | null>(null);
   // Tracks whether the answer currently on screen was produced without a
   // reviewed brief, so it carries that flag with it when it becomes history.
@@ -430,7 +481,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     setSavingReflection(false);
     setHistory([]);
     setQuestion("");
-    setAnswer("");
+    resetAnswer();
     setInterimQuestion("");
     setCallName(null);
     setCallApp(null);
@@ -507,6 +558,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
    * through here.
    */
   const exchangesIncludingLive = useCallback((): InterviewExchange[] => {
+    flushAnswerSync();
     const archived = historyRef.current;
     const liveTurn = activeAnswerTurnRef.current;
     const liveAnswer = answerRef.current.trim();
@@ -978,6 +1030,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     screenSight: InterviewScreenSightFrame | null = null,
     queuedAtMs: number = Date.now(),
   ) => {
+    flushAnswerSync();
     const previousAnswer = answerRef.current;
     if (
       action !== "automatic"
@@ -1022,6 +1075,10 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       // below. A DIFFERENT turn means a new question, so the old pair becomes
       // history. The SAME turn means Shorter / Another example / More technical,
       // which refine the answer in place and must never stack up as duplicates.
+      // Must run before reading answerRef.current below: a delta can be
+      // buffered (scheduleAnswerDelta) but not yet committed to state, and the
+      // archive/reset that follows must never silently drop that last chunk.
+      flushAnswerSync();
       const previousTurn = activeAnswerTurnRef.current;
       const previousAnswer = answerRef.current;
       const previousUnverified = activeUnverifiedRef.current;
@@ -1053,8 +1110,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
         frozenDeltasRef.current = "";
         replaceAfterSpeechRef.current = true;
       } else {
-        answerRef.current = "";
-        setAnswer("");
+        resetAnswer();
       }
       setMessage(null);
       return true;
@@ -1136,8 +1192,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
                 frozenDeltasRef.current = "";
                 replaceAfterSpeechRef.current = true;
               } else {
-                answerRef.current = "";
-                setAnswer("");
+                resetAnswer();
               }
             }
             setMessage(null);
@@ -1169,8 +1224,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
               reportTurnLatency(timing);
               setDrafting(false);
             }
-            answerRef.current += frame.delta;
-            setAnswer((current) => current + frame.delta);
+            scheduleAnswerDelta(frame.delta);
           }
         } else if (frame.type === "answer_done") {
           if (!activated || generationRef.current !== controller) return;
@@ -1189,6 +1243,15 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
         }
       },
     }).catch((error) => {
+      // Discard rather than fold in: this generation failed, so whatever it
+      // had buffered for the next animation frame is exactly the text about
+      // to be reverted/abandoned below, and must not reappear if it fires
+      // after this handler runs.
+      if (answerFlushFrameRef.current !== null) {
+        cancelAnimationFrame(answerFlushFrameRef.current);
+        answerFlushFrameRef.current = null;
+      }
+      pendingAnswerDeltaRef.current = "";
       if (controller.signal.aborted) return;
       if (metricsRef.current) metricsRef.current.errors += 1;
       trackEvent("interview_companion_error", { code: "stream_failed", stage: "answer" });
@@ -1518,6 +1581,10 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
         }
         candidateSpeakingRef.current = false;
         setCandidateSpeaking(false);
+        // A pre-speech delta can still be buffered (scheduleAnswerDelta) when
+        // speech starts; fold it in before splicing on the frozen (held-during-
+        // speech) text, or the two chunks land out of chronological order.
+        flushAnswerSync();
         const frozen = frozenDeltasRef.current;
         if (replaceAfterSpeechRef.current) {
           answerRef.current = frozen;

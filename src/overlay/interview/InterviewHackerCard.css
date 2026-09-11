@@ -275,6 +275,7 @@
   flex: 1 1 auto;
   min-height: 72px;
   overflow-y: auto;
+  scroll-behavior: smooth;
   scrollbar-width: thin;
   scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
 }
@@ -297,17 +298,26 @@
 .interview-hacker-jump {
   position: absolute;
   bottom: 8px;
-  right: 12px;
-  padding: 5px 11px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
   border: none;
   border-radius: 999px;
   background: rgba(20, 20, 22, 0.82);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14), 0 4px 12px rgba(0, 0, 0, 0.4);
   color: rgba(255, 255, 255, 0.9);
-  font-size: 12px;
-  font-weight: 600;
   cursor: pointer;
   backdrop-filter: blur(6px);
+}
+
+.interview-hacker-jump svg {
+  width: 16px;
+  height: 16px;
 }
 
 .interview-hacker-jump:hover {
