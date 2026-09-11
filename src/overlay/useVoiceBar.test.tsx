@@ -358,7 +358,7 @@ describe("useVoiceBar cancellation boundaries", () => {
     expect(voice?.desiredActive).toBe(false);
   });
 
-  it("preserves Guide mode across an automatic retry", async () => {
+  it("does not automatically retry a failed Guide start", async () => {
     vi.useFakeTimers();
     try {
       mocks.fetchVoiceToken
@@ -373,7 +373,7 @@ describe("useVoiceBar cancellation boundaries", () => {
       await act(async () => {
         await vi.advanceTimersByTimeAsync(2_000);
       });
-      expect(mocks.fetchVoiceToken).toHaveBeenNthCalledWith(2, "guide", false);
+      expect(mocks.fetchVoiceToken).toHaveBeenCalledTimes(1);
     } finally {
       vi.useRealTimers();
     }

@@ -13,6 +13,7 @@ export const voiceCapReachedCode = "voice_cap_reached";
 
 const CODE_MESSAGES: Record<string, string> = {
   agent_join_timeout: "Buddy's taking too long to pick up. Give it another tap?",
+  voice_start_failed: "Buddy couldn't connect. Check your connection and try again.",
   agent_silent: "Buddy's connected but gone quiet on me. Tap to try again?",
   agent_disconnected_early: "Call dropped before Buddy could say anything. Let's try again?",
   provider_unavailable:
@@ -20,7 +21,7 @@ const CODE_MESSAGES: Record<string, string> = {
   agent_state_failed: "Buddy hit a snag mid-call. Mind tapping to start over?",
   session_runtime_failed: "Buddy hit a snag mid-call. Mind tapping to start over?",
   tts_pipeline_failed: "Buddy hit a snag mid-call. Mind tapping to start over?",
-  mic_permission_denied: "I need mic access to hear you. Flip it on in Settings and tap again.",
+  mic_permission_denied: "Microphone access is off. Buddy can't hear you.",
   [micCaptureFailedCode]:
     "Couldn't access your mic. Check it's plugged in and allowed in Settings, then try again.",
   [voiceCapReachedCode]: subscription.voiceCapReached,

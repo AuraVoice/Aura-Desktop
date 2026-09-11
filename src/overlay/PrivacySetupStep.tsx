@@ -12,6 +12,7 @@ import { trackEvent } from "../lib/analytics";
 import { trackOnboardingStepCompleted } from "../lib/acquisitionAnalytics";
 import { recordDesktopOnboardingEvent } from "../lib/profile";
 import { logError } from "../lib/log";
+import { requestMicrophoneStream, resetMicrophonePermission } from "../lib/microphoneAccess";
 import "./PrivacySetupStep.css";
 
 type MicrophoneStatus = "idle" | "checking" | "granted" | "denied" | "unavailable";
@@ -79,9 +80,11 @@ export function PrivacySetupStep({
       setMicrophoneStatus("unavailable");
       return;
     }
+    const retryingDeniedPermission = microphoneStatus === "denied";
     setMicrophoneStatus("checking");
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (retryingDeniedPermission) await resetMicrophonePermission();
+      const stream = await requestMicrophoneStream();
       stream.getTracks().forEach((track) => track.stop());
       setMicrophoneStatus("granted");
       trackEvent("desktop_permission_result", { permission: "microphone", granted: true, surface: "privacy_setup" });

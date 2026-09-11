@@ -50,7 +50,7 @@ pub struct NotificationsMenuItem(pub MenuItem<Wry>);
 pub struct CaptureMenuItem(pub MenuItem<Wry>);
 
 pub fn build(app: &AppHandle) -> tauri::Result<()> {
-    let open_buddy = MenuItem::with_id(app, OPEN_BUDDY, "Open Buddy", true, None::<&str>)?;
+    let open_buddy = MenuItem::with_id(app, OPEN_BUDDY, "Talk to Buddy", true, None::<&str>)?;
     let open_dashboard =
         MenuItem::with_id(app, OPEN_DASHBOARD, "Open Dashboard", true, None::<&str>)?;
     let notifications_item =
@@ -144,7 +144,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         // split (left summons, right opens the menu) put every tray action behind
         // a right-click, and a Mac trackpad has no second button, so "Capture now"
         // - the only way to record a call that is not on the calendar - needed a
-        // two-finger click and was never once opened in practice. "Open Buddy" is
+        // two-finger click and was never once opened in practice. "Talk to Buddy" is
         // the first row, so the summon costs one extra click.
         //
         // There is deliberately no on_tray_icon_event summon alongside this:
@@ -153,7 +153,12 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
         // opened the menu.
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| match event.id().as_ref() {
-            OPEN_BUDDY => overlay::summon(app),
+            OPEN_BUDDY => {
+                overlay::summon(app);
+                if let Err(e) = app.emit(crate::events::START_VOICE_REQUESTED, ()) {
+                    error!("tray: failed to emit start-voice-requested: {e}");
+                }
+            }
             OPEN_DASHBOARD => {
                 if let Err(e) = dashboard::open_dashboard_window(app) {
                     error!("tray: failed to open dashboard: {e}");

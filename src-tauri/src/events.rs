@@ -12,6 +12,7 @@ pub const CHAT_REQUESTED: &str = "chat-requested";
 pub const CHAT_TOGGLE_REQUESTED: &str = "chat-toggle-requested";
 pub const OUTPUT_MUTE_TOGGLE_REQUESTED: &str = "output-mute-toggle-requested";
 pub const END_VOICE_SESSION: &str = "end-voice-session";
+pub const START_VOICE_REQUESTED: &str = "start-voice-requested";
 pub const SIGN_OUT_REQUESTED: &str = "sign-out-requested";
 pub const POINTING_TARGET: &str = "pointing-target";
 

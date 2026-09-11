@@ -78,6 +78,12 @@ import { useOutputMode } from "./useOutputMode";
 import { useStatusPillEvents } from "./useStatusPillEvents";
 import { useUpdateReady } from "./useUpdateReady";
 import { UpdateBanner } from "../UpdateBanner";
+import {
+  microphoneSettingsLabel,
+  openMicrophoneSettings,
+  resetMicrophonePermission,
+} from "../lib/microphoneAccess";
+import { VoiceRecoveryCard, VOICE_RECOVERY_CARD_HEIGHT } from "./VoiceRecoveryCard";
 
 // Fixed heights remain for fixed-content surfaces. DraftCard reports its own
 // measured content height so a short reply stays compact and a long one grows.
@@ -119,6 +125,7 @@ export function OverlayRoot() {
   // every other write tool for surface="desktop", not anything decided here.
   const chatEnabled = user !== null;
   const voice = useVoiceBar();
+  const [voiceStartupSlow, setVoiceStartupSlow] = useState(false);
   const interviewHacker = useInterviewHacker(user !== null);
   const showInterviewHacker = interviewHacker.phase !== "idle";
   const [interviewHackerHidden, setInterviewHackerHidden] = useState(false);
@@ -135,6 +142,26 @@ export function OverlayRoot() {
   const outputMode = useOutputMode({
     room: voice.room,
   });
+  const startVoice = useCallback(async () => {
+    if (outputMode.muted) {
+      await voice.startSession();
+    } else {
+      await voice.startBridgedSession();
+    }
+  }, [outputMode.muted, voice.startBridgedSession, voice.startSession]);
+  useEffect(() => {
+    if (!voice.desiredActive) {
+      setVoiceStartupSlow(false);
+      return;
+    }
+    const timeoutId = setTimeout(() => setVoiceStartupSlow(true), 5_000);
+    return () => clearTimeout(timeoutId);
+  }, [voice.desiredActive]);
+  useEffect(() => {
+    if (voice.status !== "connecting" && voice.status !== "ready") {
+      setVoiceStartupSlow(false);
+    }
+  }, [voice.status]);
   useStatusPillEvents();
   const visibleChatOpen = chatEnabled && chatOpen && !showInterviewHacker;
   const chatOpenRef = useRef(visibleChatOpen);
@@ -350,9 +377,16 @@ export function OverlayRoot() {
     draftActive: showDraftCard,
     enabled: generalSettings.dailyCatchUp,
   });
+  const voiceNoticeMessage = voice.errorMessage
+    ?? (voiceStartupSlow ? "Buddy is taking longer than expected to connect." : null);
+  const showVoiceNotice =
+    user !== null
+    && voiceNoticeMessage !== null
+    && !showInterviewHacker
+    && !showInterviewPaste;
 
-  // Slot priority (CLAUDE.md): active Interview Companion > chat > draft >
-  // inbox > update > daily catch-up. The live companion must keep its capture
+  // Slot priority (CLAUDE.md): active Interview Companion > chat > voice recovery
+  // > draft > inbox > update > daily catch-up. The live companion must keep its capture
   // indicator and stop control visible; outside that explicit session, chat
   // keeps its existing priority because the user may be mid-sentence.
   // The interview paste box sits directly under chat and above everything else:
@@ -383,6 +417,7 @@ export function OverlayRoot() {
     && meetingPrompt.visible
     && !showInterviewHacker
     && !showInterviewPaste
+    && !showVoiceNotice
     && !showDraftCard;
   // Held on screen (and in the slot) through its exit animation, unless a
   // higher-priority card took the slot, which must not share it.
@@ -392,6 +427,7 @@ export function OverlayRoot() {
     || (meetingPromptPresence.leaving
       && !showInterviewHacker
       && !showInterviewPaste
+      && !showVoiceNotice
       && !showDraftCard);
   // The consent card sits directly under the meeting prompt: the user just
   // told Buddy "yes, turn it on" out loud, so it must not queue behind the
@@ -401,12 +437,14 @@ export function OverlayRoot() {
     && screenContextRequested
     && !showInterviewHacker
     && !showInterviewPaste
+    && !showVoiceNotice
     && !showDraftCard
     && !meetingPromptOnScreen;
   const showInbox =
     user !== null
     && inboxOpen
     && !showInterviewHacker
+    && !showVoiceNotice
     && !showDraftCard
     && !showInterviewPaste
     && !meetingPromptOnScreen
@@ -416,6 +454,7 @@ export function OverlayRoot() {
     && (updateReady.version !== null || updateReady.updatedNotice !== null)
     && !showInterviewHacker
     && !showInterviewPaste
+    && !showVoiceNotice
     && !showDraftCard
     && !meetingPromptOnScreen
     && !showScreenContextConsent
@@ -425,6 +464,7 @@ export function OverlayRoot() {
     && callbackCard.visible
     && !showInterviewHacker
     && !showInterviewPaste
+    && !showVoiceNotice
     && !showDraftCard
     && !meetingPromptOnScreen
     && !showScreenContextConsent
@@ -443,21 +483,23 @@ export function OverlayRoot() {
     ? interviewHackerHidden ? 0 : interviewHackerHeight
     : showInterviewPaste
       ? interviewSlotHeight
-      : showDraftCard
-        ? draftCardHeight
-        : meetingPromptOnScreen
-          ? MEETING_PROMPT_HEIGHT
-        : showScreenContextConsent
-          ? SCREEN_CONTEXT_CONSENT_HEIGHT
-        : showInbox
-          ? NOTIFICATION_INBOX_CARD_HEIGHT
-          : showUpdateBanner
-            ? updateReady.version !== null
-              ? UPDATE_BANNER_HEIGHT
-              : UPDATED_NOTICE_HEIGHT
-            : showCallbackCard
-              ? CALLBACK_CARD_HEIGHT
-              : null;
+      : showVoiceNotice
+        ? VOICE_RECOVERY_CARD_HEIGHT
+        : showDraftCard
+          ? draftCardHeight
+          : meetingPromptOnScreen
+            ? MEETING_PROMPT_HEIGHT
+            : showScreenContextConsent
+              ? SCREEN_CONTEXT_CONSENT_HEIGHT
+              : showInbox
+                ? NOTIFICATION_INBOX_CARD_HEIGHT
+                : showUpdateBanner
+                  ? updateReady.version !== null
+                    ? UPDATE_BANNER_HEIGHT
+                    : UPDATED_NOTICE_HEIGHT
+                  : showCallbackCard
+                    ? CALLBACK_CARD_HEIGHT
+                    : null;
   const appliedSlotHeight = visibleChatOpen ? chatSlotHeight : slotHeight;
 
   useEffect(() => {
@@ -686,7 +728,6 @@ export function OverlayRoot() {
     "OverlayRoot: listen end-voice-session",
   );
 
-  const startSession = voice.startSession;
   useEffect(() => {
     const started = voice.desiredActive && !previousVoiceActiveRef.current;
     previousVoiceActiveRef.current = voice.desiredActive;
@@ -701,13 +742,31 @@ export function OverlayRoot() {
       if (!user || voice.desiredActive) return;
       try {
         await invoke("summon_bar");
-        await startSession();
+        await startVoice();
       } catch (err) {
         logError("OverlayRoot: start voice requested", err);
       }
     },
     "OverlayRoot: listen start-voice-requested",
   );
+
+  const allowMicrophoneAndRetry = useCallback(async () => {
+    try {
+      await resetMicrophonePermission();
+      await startVoice();
+    } catch (err) {
+      logError("OverlayRoot: reset microphone permission", err);
+      await openMicrophoneSettings().catch((settingsErr) =>
+        logError("OverlayRoot: open microphone settings after reset failure", settingsErr),
+      );
+    }
+  }, [startVoice]);
+
+  const openSystemMicrophoneSettings = useCallback(async () => {
+    await openMicrophoneSettings().catch((err) =>
+      logError("OverlayRoot: open microphone settings", err),
+    );
+  }, []);
 
   useEffect(() => {
     if (!user) return;
@@ -811,9 +870,43 @@ export function OverlayRoot() {
           visible={presentation === "bar" || presentation === "companion"}
         />
       )}
+      {!visibleChatOpen && showVoiceNotice && (
+        <VoiceRecoveryCard
+          title={
+            voice.showMicSettingsHint
+              ? "Microphone access needed"
+              : voice.errorMessage
+                ? "Buddy couldn't start"
+                : "Still connecting"
+          }
+          message={voiceNoticeMessage ?? ""}
+          primaryLabel={
+            voice.showMicSettingsHint
+              ? "Allow microphone"
+              : voice.isVoiceCapped
+                ? "View plans"
+                : voice.errorMessage
+                  ? "Retry"
+                  : undefined
+          }
+          secondaryLabel={voice.showMicSettingsHint ? microphoneSettingsLabel() : undefined}
+          onPrimary={
+            voice.showMicSettingsHint
+              ? allowMicrophoneAndRetry
+              : voice.isVoiceCapped
+                ? () => openDashboardWindow("/billing")
+                : voice.errorMessage
+                  ? startVoice
+                  : undefined
+          }
+          onSecondary={voice.showMicSettingsHint ? openSystemMicrophoneSettings : undefined}
+          onClose={voice.endSession}
+        />
+      )}
       {!visibleChatOpen
         && !showInterviewHacker
         && !showInterviewPaste
+        && !showVoiceNotice
         && showDraftCard && (
           <DraftCard
             card={draftCard}

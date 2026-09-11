@@ -370,6 +370,7 @@ dependencies = [
  "url",
  "wasapi",
  "webpki-roots 1.0.8",
+ "webview2-com",
  "windows 0.61.3",
  "xcap",
 ]

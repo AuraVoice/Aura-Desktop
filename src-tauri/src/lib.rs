@@ -53,6 +53,7 @@ mod macos_install;
 #[cfg(target_os = "macos")]
 mod macos_window;
 mod meeting;
+mod microphone_permission;
 mod overlay;
 mod redact;
 mod saved_images;
@@ -448,6 +449,7 @@ pub fn run() {
             meeting::start_ambient_watch,
             meeting::stop_ambient_watch,
             meeting::debug_force_join,
+            microphone_permission::reset_microphone_permission,
             voice_toggle_key::voice_toggle_key_status,
             voice_toggle_key::set_voice_toggle_key,
             voice_toggle_key::voice_toggle_key_permission,

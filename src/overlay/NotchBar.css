@@ -251,9 +251,7 @@
   inset: 0;
   clip-path: path("M0,0 H184 V5.6 C184,18.4 172,28.8 153.6,28.8 H30.4 C12,28.8 0,18.4 0,5.6 Z");
   -webkit-clip-path: path("M0,0 H184 V5.6 C184,18.4 172,28.8 153.6,28.8 H30.4 C12,28.8 0,18.4 0,5.6 Z");
-  background:
-    linear-gradient(to bottom, var(--glass-sheen), transparent 32%),
-    var(--glass-surface-fill);
+  background: #0a0a0a;
   filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.35));
 }
 

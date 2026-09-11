@@ -11,6 +11,11 @@ import { micCaptureFailedCode, voiceCapReachedCode, voiceErrorMessageForCode } f
 import { shouldArmInitialAgentSilenceWatchdog } from "./voiceSessionTiming";
 import { startRealtimeLeg, type RealtimeActivity } from "../lib/realtime";
 import { outputMuted, subscribeOutputMode } from "../lib/outputMode";
+import {
+  MicrophoneAccessError,
+  microphoneErrorCode,
+  requestMicrophoneStream,
+} from "../lib/microphoneAccess";
 import { BridgeCoordinator } from "./bridgeCoordinator";
 
 export type VoiceSessionStatus =
@@ -27,16 +32,13 @@ export type VoiceSessionStatus =
 // an endless spinner - direct port of the two timers `voice_session_service`
 // drives, which is where `agent_join_timeout`/`agent_silent` actually
 // originate (they're client-generated, not sent by the backend).
-const AGENT_JOIN_TIMEOUT_MS = 30_000;
+const AGENT_JOIN_TIMEOUT_MS = 7_000;
 const SILENCE_WATCHDOG_MS = 15_000;
 // Realtime is the fast first-turn leg, but it must never delay the normal voice
 // path when its session mint or WebRTC negotiation is unhealthy. LiveKit is warmed
 // in parallel, so this is the maximum extra time we are willing to wait before
 // handing the already-prepared room the microphone.
-// TEMP (diagnostic): bumped from 5_000 so the Realtime leg has room to actually
-// connect and we can observe true TTFT instead of always tripping the race. Revert
-// to a real budget (and move the mint outside the race) once measured.
-const REALTIME_STARTUP_TIMEOUT_MS = 20_000;
+const REALTIME_STARTUP_TIMEOUT_MS = 5_000;
 
 // Auto-retry budget for a failed call. Excludes mic-access codes below, since
 // those need the user to fix something in OS settings - retrying immediately
@@ -48,6 +50,8 @@ const RETRY_BASE_DELAY_MS = 2_000;
 const NON_RETRYABLE_CODES = new Set<string>([
   "mic_permission_denied",
   micCaptureFailedCode,
+  "agent_join_timeout",
+  "voice_start_failed",
   voiceCapReachedCode,
 ]);
 
@@ -93,6 +97,7 @@ export function useVoiceBar() {
   // an unexpected RoomEvent.Disconnected be classified as a clean end vs. an
   // early-drop error, since nothing over the wire distinguishes those.
   const didConnectRef = useRef(false);
+  const didAgentJoinRef = useRef(false);
   const didReceiveAssistantOutputRef = useRef(false);
   const didTrackFirstResponseRef = useRef(false);
   const sessionStartedAtRef = useRef<number | null>(null);
@@ -132,6 +137,7 @@ export function useVoiceBar() {
   // Both null/false for every non-bridge session, so the standard flow is untouched.
   const bridgedRef = useRef(false);
   const bridgeRef = useRef<BridgeCoordinator | null>(null);
+  const pendingMicrophoneTrackRef = useRef<MediaStreamTrack | null>(null);
   // bridgedRef flips true before LiveKit even connects, but bridgeRef isn't built
   // until after the Realtime handshake finishes - the agent can join and subscribe
   // its audio track in that gap (seen as agentJoinMs=0 in the logs). If that track
@@ -188,6 +194,8 @@ export function useVoiceBar() {
   const teardownBridge = useCallback(() => {
     bridgeRef.current?.teardown();
     bridgeRef.current = null;
+    pendingMicrophoneTrackRef.current?.stop();
+    pendingMicrophoneTrackRef.current = null;
     bridgedRef.current = false;
     pendingAgentTrackRef.current = null;
     pendingBridgeControlsRef.current = [];
@@ -300,6 +308,7 @@ export function useVoiceBar() {
   // watchdog and start waiting for the agent's first real output the same way.
   const handleAgentJoined = useCallback(
     (participant: RemoteParticipant, source: string) => {
+      didAgentJoinRef.current = true;
       const shouldArm = shouldArmInitialAgentSilenceWatchdog(
         didReceiveAssistantOutputRef.current,
       );
@@ -317,6 +326,23 @@ export function useVoiceBar() {
       bridgeRef.current?.onAgentReady();
     },
     [armSilenceWatchdog, clearWatchdogs],
+  );
+
+  const armAgentJoinWatchdog = useCallback(
+    (activeRoom: Room) => {
+      if (didAgentJoinRef.current || joinWatchdogRef.current) return;
+      const existingAgent = Array.from(activeRoom.remoteParticipants.values()).find(
+        (participant) => participant.isAgent,
+      );
+      if (existingAgent) {
+        handleAgentJoined(existingAgent, "microphone-ready");
+        return;
+      }
+      joinWatchdogRef.current = setTimeout(() => {
+        enterErrorState("agent_join_timeout");
+      }, AGENT_JOIN_TIMEOUT_MS);
+    },
+    [enterErrorState, handleAgentJoined],
   );
 
   const endSession = useCallback(async () => {
@@ -388,6 +414,7 @@ export function useVoiceBar() {
       setLastErrorCode(null);
       setAssistantCaption("");
       didConnectRef.current = false;
+      didAgentJoinRef.current = false;
       didReceiveAssistantOutputRef.current = false;
       didTrackFirstResponseRef.current = false;
       connectResolvedAtRef.current = null;
@@ -571,6 +598,9 @@ export function useVoiceBar() {
     newRoom.on(RoomEvent.MediaDevicesError, (err) => {
       try {
         logInfo("useVoiceBar: MediaDevicesError", err.message);
+        if (roomRef.current === newRoom) {
+          enterErrorState(microphoneErrorCode(err));
+        }
       } catch (loggingErr) {
         logError("useVoiceBar: MediaDevicesError handler", loggingErr);
       }
@@ -693,10 +723,6 @@ export function useVoiceBar() {
           // ParticipantConnected never fires retroactively for it (confirmed
           // empirically), so the live-join listener above would never catch it.
           handleAgentJoined(existingAgent, "already-present");
-        } else {
-          joinWatchdogRef.current = setTimeout(() => {
-            enterErrorState("agent_join_timeout");
-          }, AGENT_JOIN_TIMEOUT_MS);
         }
       } catch (err) {
         reportRealtimeBridgeCapability(false);
@@ -723,7 +749,7 @@ export function useVoiceBar() {
           error_code: normalizedErrorCode(err, "unknown"),
           token_ms: Date.now() - tokenRequestedAt,
         });
-        enterErrorState(null, "Couldn't start the call. Give it another shot in a sec?");
+        enterErrorState("voice_start_failed");
       }
     })();
     preparePromiseRef.current = prepared;
@@ -767,10 +793,14 @@ export function useVoiceBar() {
         return;
       }
       const mediaTrack = micPublication?.track?.mediaStreamTrack;
+      if (!mediaTrack || mediaTrack.readyState !== "live") {
+        throw new MicrophoneAccessError(micCaptureFailedCode);
+      }
       logInfo(
         "useVoiceBar: activateSession",
         `microphone enabled, waiting for agent to join room=${roomNameRef.current ?? "unknown"} - publication=${micPublication ? "present" : "UNDEFINED"} muted=${micPublication?.isMuted} trackReadyState=${mediaTrack?.readyState} trackEnabled=${mediaTrack?.enabled}`,
       );
+      armAgentJoinWatchdog(activeRoom);
     } catch (err) {
       if (!sessionStillWanted()) {
         await activeRoom.disconnect().catch((disconnectErr) =>
@@ -779,18 +809,35 @@ export function useVoiceBar() {
         return;
       }
       logError("useVoiceBar: activateSession", err);
-      enterErrorState(null, "Couldn't start the call. Give it another shot in a sec?");
+      enterErrorState(microphoneErrorCode(err));
     }
-  }, [enterErrorState]);
+  }, [armAgentJoinWatchdog, enterErrorState]);
 
   // The original single-call entry point, preserved for every caller that has
   // no reason to split the phases (retry effect, tray/deep-link start, the
-  // onboarding demo). Prepare's sync section runs before activate, so the
-  // native call-live mark still lands ahead of the token fetch resolving.
-  const startSession = useCallback(async (mode: VoiceSessionMode = "standard") => {
-    void prepareSession(mode);
+  // onboarding demo). Microphone access and transport preparation begin together;
+  // neither waits for the other before doing its slow work.
+  const startSession = useCallback(async (
+    mode: VoiceSessionMode = "standard",
+    microphoneAlreadyApproved = false,
+  ) => {
+    const prepared = prepareSession(mode);
+    if (!microphoneAlreadyApproved) {
+      let microphone: MediaStream;
+      try {
+        microphone = await requestMicrophoneStream();
+      } catch (err) {
+        logError("useVoiceBar: microphone preflight", err);
+        enterErrorState(microphoneErrorCode(err));
+        return;
+      }
+      microphone.getAudioTracks().forEach((track) => track.stop());
+    }
+    if (!desiredActiveRef.current) return;
+    if (roomRef.current) armAgentJoinWatchdog(roomRef.current);
+    await prepared;
     await activateSession();
-  }, [activateSession, prepareSession]);
+  }, [activateSession, armAgentJoinWatchdog, enterErrorState, prepareSession]);
 
   // Bridged start: open the instant OpenAI Realtime leg AND warm LiveKit in parallel, then
   // let BridgeCoordinator hand off. The one shared mic goes to Realtime first and is
@@ -821,11 +868,19 @@ export function useVoiceBar() {
         const coordinator = bridgeRef.current;
         bridgeRef.current = null;
         coordinator?.teardown();
+        if (pendingMicrophoneTrackRef.current === sharedTrack) {
+          pendingMicrophoneTrackRef.current = null;
+        }
         sharedTrack?.stop();
         pendingAgentTrackRef.current = null;
         pendingBridgeControlsRef.current = [];
         setRealtimeActivity(null);
         setRealtimeVisualizerTrack(null);
+        if (reason instanceof MicrophoneAccessError) {
+          bridgeOutcomeRef.current = reason.code;
+          enterErrorState(reason.code);
+          return;
+        }
         const detail = String(reason);
         bridgeOutcomeRef.current = detail.includes("timed out")
           ? "bridge_timeout"
@@ -845,7 +900,7 @@ export function useVoiceBar() {
         const generation = sessionGenerationRef.current;
         await endSession();
         if (sessionGenerationRef.current !== generation + 1) return;
-        await startSession(mode);
+        await startSession(mode, true);
       };
       try {
         // Start the cold-path transport before waiting on Realtime. prepareSession
@@ -862,22 +917,38 @@ export function useVoiceBar() {
           if (!enabled) bridgedRef.current = false;
           resolveBridgeCapability(enabled);
         });
-        if (!(await bridgeCapability)) {
+        const generation = sessionGenerationRef.current;
+        const microphonePromise = requestMicrophoneStream().then((stream) => {
+          const track = stream.getAudioTracks()[0] ?? null;
+          if (!track) throw new MicrophoneAccessError(micCaptureFailedCode);
+          sharedTrack = track;
+          pendingMicrophoneTrackRef.current = track;
+          if (roomRef.current) armAgentJoinWatchdog(roomRef.current);
+          return track;
+        });
+        const [bridgeEnabled, activeMicrophoneTrack] = await Promise.all([
+          bridgeCapability,
+          microphonePromise,
+        ]);
+        if (!desiredActiveRef.current || sessionGenerationRef.current !== generation) {
+          pendingMicrophoneTrackRef.current = null;
+          activeMicrophoneTrack.stop();
+          return;
+        }
+        if (!bridgeEnabled) {
+          pendingMicrophoneTrackRef.current = null;
+          activeMicrophoneTrack.stop();
+          sharedTrack = null;
           bridgeOutcomeRef.current = "bridge_disabled";
           logInfo("useVoiceBar: bridge disabled", "using prepared LiveKit room");
           await liveKitPrepare;
           await activateSession();
           return;
         }
-        const stream = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
-        });
-        sharedTrack = stream.getAudioTracks()[0] ?? null;
-        if (!sharedTrack) throw new Error("no audio track from getUserMedia");
         setRealtimeActivity("listening");
-        setRealtimeVisualizerTrack(sharedTrack);
+        setRealtimeVisualizerTrack(activeMicrophoneTrack);
         const realtimeStart = startRealtimeLeg({
-          micTrack: sharedTrack,
+          micTrack: activeMicrophoneTrack,
           audioEl: ensureAudioEl(realtimeAudioElRef),
           signal: controller.signal,
           mode,
@@ -887,7 +958,7 @@ export function useVoiceBar() {
             setRealtimeVisualizerTrack(
               activity === "buddy_talking" && realtimeRemoteTrack
                 ? realtimeRemoteTrack
-                : sharedTrack,
+                : activeMicrophoneTrack,
             );
           },
           onRemoteAudioTrack: (track) => {
@@ -906,15 +977,17 @@ export function useVoiceBar() {
           }),
         ]);
         if (realtimeTimeout) clearTimeout(realtimeTimeout);
+        setStatus("listening");
         // Realtime is live and about to greet. LiveKit has been warming in bridge
         // mode (no mic yet) since the beginning of this function.
         await liveKitPrepare;
         const room = roomRef.current;
         if (!room) throw new Error("bridge: room missing after prepareSession");
+        armAgentJoinWatchdog(room);
         bridgeRef.current = new BridgeCoordinator({
           room,
           realtime,
-          sharedTrack,
+          sharedTrack: activeMicrophoneTrack,
           liveKitAudioEl: ensureAudioEl(liveKitAudioElRef),
           onFatal: (reason) => {
             logError("useVoiceBar: bridge fatal", reason);
@@ -927,6 +1000,7 @@ export function useVoiceBar() {
             logInfo("useVoiceBar: bridge active", "LiveKit owns the conversation");
           },
         });
+        pendingMicrophoneTrackRef.current = null;
         // The agent's track may have arrived and been stashed before the coordinator
         // existed (see the TrackSubscribed handler above) - route it now so it stays
         // muted until handover_applied instead of never being attached at all.
@@ -946,7 +1020,7 @@ export function useVoiceBar() {
         await fallbackToColdPath(err);
       }
     },
-    [activateSession, endSession, markAssistantResponded, prepareSession, startSession],
+    [activateSession, armAgentJoinWatchdog, endSession, enterErrorState, markAssistantResponded, prepareSession, startSession],
   );
 
   const toggleSession = useCallback(() => {
@@ -1013,7 +1087,9 @@ export function useVoiceBar() {
     };
   }, [clearWatchdogs, teardownBridge]);
 
-  const showMicSettingsHint = errorMessage === voiceErrorMessageForCode({ code: micCaptureFailedCode });
+  const showMicSettingsHint = status === "error" && (
+    lastErrorCode === "mic_permission_denied" || lastErrorCode === micCaptureFailedCode
+  );
   // Rides the existing error status + code rather than a new VoiceSessionStatus
   // member: the bar renders the capped state as a neutral notice with an
   // Upgrade pointer instead of the error treatment.
