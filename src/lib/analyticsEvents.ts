@@ -37,6 +37,7 @@ export type AnalyticsEvent =
   | "desktop_notification_queued"
   | "desktop_notification_toast_shown"
   | "desktop_notification_toast_denied"
+  | "desktop_notification_backlog_summary_toast_shown"
   | "desktop_notification_dismissed"
   | "desktop_notification_page_dropped"
   // Voice

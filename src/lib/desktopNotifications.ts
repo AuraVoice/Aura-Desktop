@@ -57,6 +57,10 @@ export interface ToastContext {
   appHidden: boolean;
   /** Authenticated owner expected to be bound to the durable store. */
   ownerUid: string;
+  /** True while draining a backlog: the item still gets persisted, deduped,
+   *  and acknowledged, but its individual toast is skipped in favor of one
+   *  coalesced summary toast (see `fireBacklogSummaryToast`). */
+  suppressToast?: boolean;
 }
 
 let storeRef: Store | null = null;
@@ -253,6 +257,7 @@ async function maybeToast(
   notification: DesktopNotification,
   ctx: ToastContext,
 ): Promise<void> {
+  if (ctx.suppressToast) return;
   const delivered = (await store.get<Record<string, string>>(DELIVERED_KEY)) ?? {};
   if (!shouldToast(notification, ctx, delivered[notification.notificationId] !== undefined)) {
     return;
@@ -299,6 +304,37 @@ async function maybeToast(
   } catch (err) {
     // A failed toast must never lose the inbox row (already persisted).
     logError("desktopNotifications: toast", err);
+  }
+}
+
+/** One coalesced toast for a backlog drain, in place of the individual toasts
+ *  that `maybeToast` skipped for those items (`ToastContext.suppressToast`).
+ *  Every item is still in the inbox; this only replaces the notification
+ *  chrome for the ones that were suppressed. */
+export async function fireBacklogSummaryToast(count: number): Promise<void> {
+  try {
+    if (!(await isPermissionGranted())) {
+      trackEvent("desktop_notification_toast_denied", { type: "backlog_summary" });
+      return;
+    }
+    const settings = await loadGeneralSettings();
+    const title = "Aura";
+    const body = `${count} new update${count === 1 ? "" : "s"} while you were away — click to open Aura`;
+    try {
+      await invoke("show_actionable_toast", {
+        notificationId: "backlog-summary",
+        action: "open_notifications",
+        title,
+        body,
+        silent: !settings.dictationSounds,
+      });
+    } catch (invokeErr) {
+      logError("desktopNotifications: backlog summary toast, using plugin fallback", invokeErr);
+      sendNotification({ title, body });
+    }
+    trackEvent("desktop_notification_backlog_summary_toast_shown", { count });
+  } catch (err) {
+    logError("desktopNotifications: backlog summary toast", err);
   }
 }
 

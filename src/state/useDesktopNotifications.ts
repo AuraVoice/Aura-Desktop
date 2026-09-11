@@ -10,6 +10,7 @@ import {
   bindOwner,
   dismiss as dismissRow,
   ensurePermission,
+  fireBacklogSummaryToast,
   ingest,
   isDisabled,
   loadInbox,
@@ -41,6 +42,11 @@ const OUTBOX_MAX_PAGES_PER_POLL = 20;
 // holding, which covers a transient backend shape problem, while still
 // guaranteeing the poller cannot be wedged forever by one permanently bad row.
 const UNPARSEABLE_PAGE_MAX_ATTEMPTS = 5;
+// Past this many NEW items in a single poll, we are draining a backlog (e.g.
+// after sign-in following a stretch offline), not seeing routine live
+// traffic. Individual toasts stop and one coalesced summary toast takes over
+// for the remainder of the poll.
+const OUTBOX_BACKLOG_TOAST_THRESHOLD = 8;
 
 export interface DesktopNotificationsState {
   inbox: StoredNotification[];
@@ -192,6 +198,8 @@ export function useDesktopNotifications({
     const poll = async () => {
       if (cancelled || running || boundUidRef.current !== uid) return;
       running = true;
+      let ingestedCount = 0;
+      let suppressedCount = 0;
       try {
         for (let pageNumber = 0; pageNumber < OUTBOX_MAX_PAGES_PER_POLL; pageNumber++) {
           const previousCursor = outboxCursorRef.current;
@@ -209,9 +217,11 @@ export function useDesktopNotifications({
           if (cancelled || boundUidRef.current !== uid) return;
           let unparseable = 0;
           for (const raw of page.items) {
+            const suppressToast = ingestedCount >= OUTBOX_BACKLOG_TOAST_THRESHOLD;
             const result = await ingest(raw, {
               appHidden: appHiddenRef.current,
               ownerUid: uid,
+              suppressToast,
             });
             if (result.parseFailed) unparseable += 1;
             if (result.notification) {
@@ -222,6 +232,10 @@ export function useDesktopNotifications({
               trackEvent("desktop_notification_fetched", {
                 type: result.notification.type,
               });
+            }
+            if (result.isNew) {
+              ingestedCount += 1;
+              if (suppressToast) suppressedCount += 1;
             }
           }
 
@@ -263,6 +277,9 @@ export function useDesktopNotifications({
           }
         }
         refresh();
+        if (suppressedCount > 0) {
+          await fireBacklogSummaryToast(suppressedCount);
+        }
       } catch (err) {
         logError("useDesktopNotifications: poll", err);
       } finally {
