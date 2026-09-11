@@ -92,6 +92,8 @@ export type AnalyticsEvent =
   | "interview_companion_answer_completed"
   | "interview_companion_question_decision"
   | "interview_companion_resume_attached"
+  | "interview_companion_brief_switched"
+  | "interview_companion_brief_reset"
   | "interview_companion_credential_rotation"
   | "interview_companion_screen_sight"
   | "interview_companion_reflection"

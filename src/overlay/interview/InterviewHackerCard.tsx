@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import iconUrl from "../../assets/icons/Aura-Icon.png";
+import { logError } from "../../lib/log";
 import { GlassSurface } from "../GlassSurface";
-import { DocumentIcon, DownArrowIcon, MicIcon, MicOffIcon, StopSquareIcon, UploadArrowIcon } from "../icons";
+import { ChevronDownIcon, DocumentIcon, DownArrowIcon, MicIcon, MicOffIcon, StopSquareIcon, UploadArrowIcon } from "../icons";
 import { callVisual } from "./callIcons";
 import { useMicPreflightLevel } from "./useMicPreflightLevel";
 import { RESUME_ACCEPT } from "../../lib/resumeText";
@@ -10,6 +12,18 @@ import { isInterviewCaptureActive } from "./useInterviewHacker";
 import type { InterviewExchange, InterviewHackerState } from "./useInterviewHacker";
 import "./InterviewHackerCard.css";
 
+// The overlay is always-on-top by a static, once-at-creation setting (see
+// overlay::set_dialog_friendly on the Rust side for the full story). A native
+// file-open dialog is an ordinary, non-topmost window, so left as-is it
+// renders trapped underneath the overlay and neither it nor the overlay can
+// be clicked. Toggling this around the dialog's lifetime is idempotent on the
+// Rust side, so callers never need to track whether it is already applied.
+function setOverlayDialogFriendly(friendly: boolean) {
+  void invoke("set_overlay_dialog_friendly", { friendly }).catch((error: unknown) =>
+    logError("InterviewHackerCard: set_overlay_dialog_friendly", error),
+  );
+}
+
 export const INTERVIEW_HACKER_SLOT_HEIGHT = 420;
 /** Preflight is the tallest non-pitch state: three widgets with icon bands, both
  * pickers with their pills wrapped, and the Start button. Measured against the
@@ -17,6 +31,11 @@ export const INTERVIEW_HACKER_SLOT_HEIGHT = 420;
 export const INTERVIEW_HACKER_PREFLIGHT_SLOT_HEIGHT = 420;
 /** Taller slot while the opening pitch is expanded. See OverlayRoot's slotHeight. */
 export const INTERVIEW_HACKER_PITCH_SLOT_HEIGHT = 480;
+/** Preflight height plus room for the Brief switcher popover (a handful of
+ * rows plus the "start fresh" action) before it scrolls internally. See
+ * OverlayRoot's slotHeight - the overlay window is physically resized to
+ * this, it is not free CSS overflow. */
+export const INTERVIEW_HACKER_BRIEF_MENU_SLOT_HEIGHT = 620;
 
 /**
  * Segmented picker local to the overlay.
@@ -150,8 +169,101 @@ function CallSource({ app, name }: { app: string | null; name: string | null }) 
   );
 }
 
+/**
+ * The Brief widget's switcher. Opens on click whether or not a brief is
+ * already active: a "Reviewed and ready" brief used to be a dead end, so a
+ * user who suddenly had to join a different, unprepped meeting had no way out
+ * short of the dashboard's full builder. This lists every other interview
+ * that already has a reviewed brief (near-instant to activate, no rebuild),
+ * plus a fresh-start action for a meeting nothing was prepared for.
+ */
+function BriefMenu({
+  hacker,
+  onAttachNew,
+}: {
+  hacker: InterviewHackerState;
+  onAttachNew: () => void;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    function onPointerDown(event: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        hacker.closeBriefMenu();
+      }
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, [hacker]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="interview-hacker-brief-menu"
+      onKeyDown={(event) => {
+        // Stops here so the overlay's window-level Escape handler never sees
+        // it - that handler dismisses the whole interview card, not just this
+        // popover.
+        if (event.key === "Escape") {
+          event.stopPropagation();
+          hacker.closeBriefMenu();
+        }
+      }}
+    >
+      <GlassSurface className="interview-hacker-brief-menu-surface" draggable={false}>
+        <div className="interview-hacker-brief-menu-inner">
+          <span className="interview-hacker-brief-menu-label">Switch prepared interview</span>
+          {hacker.preparedInterviews.length === 0 ? (
+            <p className="interview-hacker-brief-menu-empty">No other prepared interviews yet</p>
+          ) : (
+            <ul className="interview-hacker-brief-menu-list">
+              {hacker.preparedInterviews.map((interview) => (
+                <li key={interview.interviewId}>
+                  <button
+                    type="button"
+                    className="interview-hacker-brief-menu-item"
+                    disabled={hacker.briefMenuBusy}
+                    onClick={() => hacker.switchToInterview(interview.interviewId)}
+                  >
+                    <strong>{interview.input.company.trim() || "Untitled interview"}</strong>
+                    <span>
+                      {interview.input.role.trim() || "Target role not added"}
+                      {interview.draftBrief?.reviewedAtMs == null && " · Unreviewed"}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {hacker.briefMenuError && (
+            <p className="interview-hacker-brief-menu-error">{hacker.briefMenuError}</p>
+          )}
+          <button
+            type="button"
+            className="interview-hacker-brief-menu-fresh"
+            disabled={hacker.briefMenuBusy}
+            onClick={() => {
+              // Harmless when there is nothing to clear yet: clearing an
+              // already-empty or resume-only slot before attaching is a no-op
+              // beyond the round trip, and it keeps this one action correct
+              // in every state instead of needing a branch here too.
+              hacker.startFresh();
+              onAttachNew();
+            }}
+          >
+            {hacker.briefReady
+              ? "Start fresh with a resume"
+              : hacker.resumeWords === null
+                ? "Attach a resume"
+                : "Replace resume"}
+          </button>
+        </div>
+      </GlassSurface>
+    </div>
+  );
+}
+
 function BriefSource({ hacker }: { hacker: InterviewHackerState }) {
-  const fileRef = useRef<HTMLInputElement | null>(null);
   const caption = hacker.briefReady
     ? "Reviewed and ready"
     : hacker.attachingResume
@@ -167,41 +279,39 @@ function BriefSource({ hacker }: { hacker: InterviewHackerState }) {
           {hacker.briefReady ? <DocumentIcon /> : <UploadArrowIcon />}
         </i>
       </div>
-      <strong>{caption}</strong>
+      <span className="interview-hacker-source-caption">
+        <strong>{caption}</strong>
+        {/* Ready-but-static text read as a dead status line, not a control -
+            this chevron is the only signal that clicking it opens the
+            switcher. Always shown: the click always opens the same popover
+            now, whether or not a brief is active yet. */}
+        <i
+          className={`interview-hacker-source-chevron${hacker.briefMenuOpen ? " is-open" : ""}`}
+          aria-hidden="true"
+        >
+          <ChevronDownIcon />
+        </i>
+      </span>
     </>
   );
-  if (hacker.briefReady) {
-    return (
-      <div className="interview-hacker-source">
-        <span>Brief</span>
-        {body}
-      </div>
-    );
-  }
   return (
-    <div className={`interview-hacker-source${hacker.resumeError ? " is-warning" : ""}`}>
+    <div className={`interview-hacker-source${!hacker.briefReady && hacker.resumeError ? " is-warning" : ""}`}>
       <span>Brief</span>
       <button
         type="button"
         className="interview-hacker-source-action"
-        onClick={() => fileRef.current?.click()}
+        // Always the switcher, never a direct file-picker trigger: the
+        // popover is the one place both "switch to a prepared interview" and
+        // "attach/replace the resume" live, in every state. A resume-only
+        // state used to skip straight to the OS file picker here, which left
+        // no way back to the prepared-interview list once you'd attached one.
+        onClick={hacker.briefMenuOpen ? hacker.closeBriefMenu : hacker.openBriefMenu}
         disabled={hacker.attachingResume}
-        title="Attach a resume for this call"
+        aria-expanded={hacker.briefMenuOpen}
+        title="Switch prepared interview or attach a resume"
       >
         {body}
       </button>
-      <input
-        ref={fileRef}
-        type="file"
-        accept={RESUME_ACCEPT}
-        hidden
-        onChange={(event) => {
-          const file = event.target.files?.[0];
-          // Cleared immediately so re-picking the same file fires onChange again.
-          event.target.value = "";
-          if (file) hacker.attachResume(file);
-        }}
-      />
     </div>
   );
 }
@@ -252,6 +362,31 @@ export function InterviewHackerCard({
   hacker: InterviewHackerState;
 }) {
   const threadRef = useRef<HTMLDivElement | null>(null);
+  const resumeFileRef = useRef<HTMLInputElement | null>(null);
+  const triggerAttach = () => {
+    setOverlayDialogFriendly(true);
+    resumeFileRef.current?.click();
+  };
+  // Two independent restores, because neither is fully reliable alone: a
+  // "cancel" listener misses if the WebView's cancel event support is spotty
+  // (WKWebView's is less certain than WebView2's), and window focus alone
+  // would miss a same-window re-click before the dialog ever closes. Both
+  // just call the same idempotent toggle, so firing twice is harmless.
+  useEffect(() => {
+    const input = resumeFileRef.current;
+    if (!input) return;
+    const restore = () => setOverlayDialogFriendly(false);
+    input.addEventListener("cancel", restore);
+    window.addEventListener("focus", restore);
+    return () => {
+      input.removeEventListener("cancel", restore);
+      window.removeEventListener("focus", restore);
+    };
+    // resumeFileRef's <input> only exists while phase is "preflight" (it's
+    // conditionally rendered below), so this must re-run when that flips -
+    // an empty deps array would bind to a still-null ref on first mount and
+    // never attach once the input actually appears.
+  }, [hacker.phase]);
   // Whether the reader is pinned to the bottom. Tracked from scroll events
   // rather than measured inside the effect, because by the time the effect runs
   // the new content is already in the DOM and "was I at the bottom?" can no
@@ -304,9 +439,7 @@ export function InterviewHackerCard({
         ? "Paused"
         : hacker.phase === "starting"
           ? "Starting transcription..."
-          : hacker.phase === "checking"
-            ? "Checking the active call..."
-            : null);
+          : null);
 
   return (
     <GlassSurface className="interview-hacker-card">
@@ -320,12 +453,36 @@ export function InterviewHackerCard({
           </div>
         )}
 
-        {(hacker.phase === "preflight" || hacker.phase === "checking") && (
-          <div className="interview-hacker-preflight">
-            <MicSource active={hacker.phase === "preflight" || hacker.phase === "checking"} />
-            <CallSource app={hacker.callApp} name={hacker.callName} />
-            <BriefSource hacker={hacker} />
-          </div>
+        {hacker.phase === "preflight" && (
+          <>
+            <div className="interview-hacker-preflight">
+              <MicSource active={hacker.phase === "preflight"} />
+              <CallSource app={hacker.callApp} name={hacker.callName} />
+              <BriefSource hacker={hacker} />
+            </div>
+            <input
+              ref={resumeFileRef}
+              type="file"
+              accept={RESUME_ACCEPT}
+              hidden
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                // Cleared immediately so re-picking the same file fires onChange again.
+                event.target.value = "";
+                setOverlayDialogFriendly(false);
+                if (file) hacker.attachResume(file);
+              }}
+            />
+            {/* Rendered as a sibling of the preflight row, not nested inside
+                BriefSource's narrow grid cell: .glass-surface clips overflow
+                for its border-radius, so an absolutely-positioned popover
+                would be cut off by the card's edge. Flowing in-line and
+                growing the window's slot height (OverlayRoot) instead keeps
+                it fully visible. */}
+            {hacker.briefMenuOpen && (
+              <BriefMenu hacker={hacker} onAttachNew={triggerAttach} />
+            )}
+          </>
         )}
 
         {hacker.phase === "preflight" && (
@@ -355,13 +512,15 @@ export function InterviewHackerCard({
           </button>
         )}
 
-        {hacker.phase === "checking" && hacker.callBlocker === "accessibility" && (
+        {/* Optional, not a gate: Start above already works without it. This
+            only unlocks the "Call" widget's app label. */}
+        {hacker.phase === "preflight" && hacker.callBlocker === "accessibility" && (
           <button
             type="button"
-            className="interview-hacker-primary"
+            className="interview-hacker-secondary"
             onClick={hacker.requestCallAccess}
           >
-            {hacker.blockerAsked ? "Open System Settings again" : "Allow in System Settings"}
+            {hacker.blockerAsked ? "Open System Settings again" : "Allow in System Settings to label the call"}
           </button>
         )}
 

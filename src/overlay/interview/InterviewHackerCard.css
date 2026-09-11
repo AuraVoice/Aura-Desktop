@@ -175,6 +175,37 @@
   font-weight: 600;
 }
 
+.interview-hacker-source-caption {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* The only visible signal that "Reviewed and ready" is a control, not a
+   status readout - without it the switcher is invisible until someone
+   clicks the text by accident. Flips to point up while the menu is open. */
+.interview-hacker-source-chevron {
+  display: flex;
+  width: 13px;
+  height: 13px;
+  color: var(--text-muted, rgba(255, 255, 255, 0.52));
+  transition: transform 120ms ease;
+}
+
+.interview-hacker-source-chevron svg {
+  width: 100%;
+  height: 100%;
+}
+
+.interview-hacker-source-chevron.is-open {
+  transform: rotate(180deg);
+}
+
+.interview-hacker-source-action:hover .interview-hacker-source-chevron,
+.interview-hacker-source-action:focus-visible .interview-hacker-source-chevron {
+  color: var(--accent, rgba(150, 190, 255, 0.92));
+}
+
 /* Icon + meter band between the label and the value. Fixed height so a cell
    whose icon is missing does not sit shorter than its neighbours. */
 .interview-hacker-source-body {
@@ -246,6 +277,148 @@
 .interview-hacker-source.is-warning .interview-hacker-source-icon,
 .interview-hacker-source.is-warning strong {
   color: var(--warning, rgba(255, 196, 120, 0.95));
+}
+
+/* Flowed in-line below the preflight row, not absolutely positioned: the
+   card's .glass-surface clips overflow for its border-radius, so a floating
+   popover would be cut off. OverlayRoot grows the window's slot height to
+   make room instead.
+
+   Right-anchored and width-capped rather than stretched: the card itself is
+   a fixed 720px regardless of which state is open (Rust sizes the window,
+   not CSS), so an unconstrained flex child fills that whole width by
+   default. A two-line company/role list at 720px read as an oversized,
+   mostly-empty box - capping the surface's own width and pushing it toward
+   the Brief widget (the rightmost of the three preflight columns) instead
+   keeps it looking like a popover anchored to what opened it. */
+.interview-hacker-brief-menu {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  justify-content: flex-end;
+}
+
+/* A small tail pointing up at the Brief widget, the common tooltip/popover
+   cue that this is anchored to the control above it. Lives on the wrapper,
+   not the surface: .glass-surface clips overflow for its own border-radius,
+   which would cut off anything meant to poke past its top edge. */
+.interview-hacker-brief-menu::before {
+  content: "";
+  position: absolute;
+  top: -5px;
+  right: 28px;
+  width: 10px;
+  height: 10px;
+  /* Matches .glass-surface's own fill/border tokens (GlassSurface.css) so the
+     tail reads as part of the same surface rather than a mismatched patch. */
+  background: var(--glass-surface-fill);
+  border: 1px solid var(--glass-border-top);
+  border-right: 0;
+  border-bottom: 0;
+  transform: rotate(45deg);
+}
+
+.interview-hacker-brief-menu-surface {
+  width: 100%;
+  max-width: 260px;
+  border-radius: 18px;
+}
+
+.interview-hacker-brief-menu-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  box-sizing: border-box;
+}
+
+.interview-hacker-brief-menu-label {
+  color: var(--text-muted, rgba(255, 255, 255, 0.52));
+  font-size: 12.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.interview-hacker-brief-menu-empty {
+  margin: 0;
+  color: var(--text-muted, rgba(255, 255, 255, 0.52));
+  font-size: 13.5px;
+}
+
+.interview-hacker-brief-menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.interview-hacker-brief-menu-item {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--surface-border, rgba(255, 255, 255, 0.14));
+  border-radius: 12px;
+  background: var(--surface-sunken, rgba(0, 0, 0, 0.18));
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.interview-hacker-brief-menu-item:hover,
+.interview-hacker-brief-menu-item:focus-visible {
+  border-color: var(--accent, rgba(150, 190, 255, 0.92));
+}
+
+.interview-hacker-brief-menu-item:disabled {
+  cursor: progress;
+  opacity: 0.6;
+}
+
+.interview-hacker-brief-menu-item strong {
+  color: var(--text-primary, rgba(255, 255, 255, 0.9));
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.interview-hacker-brief-menu-item span {
+  color: var(--text-muted, rgba(255, 255, 255, 0.52));
+  font-size: 12.5px;
+}
+
+.interview-hacker-brief-menu-error {
+  margin: 0;
+  color: var(--warning, rgba(255, 196, 120, 0.95));
+  font-size: 12.5px;
+}
+
+.interview-hacker-brief-menu-fresh {
+  padding: 9px 10px;
+  border: 1px dashed var(--surface-border, rgba(255, 255, 255, 0.14));
+  border-radius: 12px;
+  background: none;
+  color: var(--text-primary, rgba(255, 255, 255, 0.9));
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.interview-hacker-brief-menu-fresh:hover,
+.interview-hacker-brief-menu-fresh:focus-visible {
+  border-color: var(--accent, rgba(150, 190, 255, 0.92));
+  color: var(--accent, rgba(150, 190, 255, 0.92));
+}
+
+.interview-hacker-brief-menu-fresh:disabled {
+  cursor: progress;
+  opacity: 0.6;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -647,6 +820,7 @@
 
 .interview-hacker-secondary,
 .interview-hacker-text-button {
+  align-self: center;
   color: var(--text-primary, rgba(255, 255, 255, 0.9));
   background: rgba(255, 255, 255, 0.09);
 }

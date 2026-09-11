@@ -121,6 +121,18 @@ fn set_slot_height(app: AppHandle, height: Option<f64>, centered: bool) {
     overlay::set_slot_height(&app, height, centered);
 }
 
+/// Temporarily drops the overlay's always-on-top/window-level so a native
+/// file-open dialog (spawned by a plain `<input type="file">`, e.g. the
+/// Interview Companion resume picker) can render in front of it instead of
+/// being trapped underneath - see `overlay::set_dialog_friendly`.
+#[tauri::command]
+fn set_overlay_dialog_friendly(app: AppHandle, friendly: bool) -> Result<(), String> {
+    let Some(window) = overlay::main_window(&app) else {
+        return Ok(());
+    };
+    overlay::set_dialog_friendly(&window, friendly)
+}
+
 #[tauri::command]
 fn set_chat_enabled(app: AppHandle, enabled: bool) -> Result<(), String> {
     hotkeys::set_chat_enabled(&app, enabled)
@@ -354,6 +366,7 @@ pub fn run() {
             set_voice_screen_context,
             set_panel_variant,
             set_slot_height,
+            set_overlay_dialog_friendly,
             set_chat_enabled,
             tray::set_tray_unread,
             set_onboarding_step,

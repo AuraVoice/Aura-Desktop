@@ -290,6 +290,38 @@ pub fn exclude_main_window_from_capture(_window: &WebviewWindow) -> Result<(), S
     Ok(())
 }
 
+/// Windows: always-on-top was set once at window creation from
+/// `tauri.conf.json` and never toggled since. A native file-open dialog (the
+/// WebView2 response to a plain `<input type="file">` click, not a Tauri
+/// dialog - this app has no dialog plugin) is an ordinary, non-topmost
+/// window. Left as-is it renders underneath the overlay's `HWND_TOPMOST` and
+/// never receives a click, and the overlay - still on top of a dialog it
+/// can't see past - does not receive one either: both end up unclickable at
+/// once. Temporarily dropping always-on-top for the dialog's lifetime fixes
+/// it. `set_always_on_top` is idempotent, so calling it with the value it
+/// already has is harmless - callers do not need to track state.
+#[cfg(target_os = "windows")]
+pub fn set_dialog_friendly(window: &WebviewWindow, friendly: bool) -> Result<(), String> {
+    window
+        .set_always_on_top(!friendly)
+        .map_err(|e| format!("failed to toggle always-on-top: {e}"))
+}
+
+/// macOS: the overlay panel sits at `NSStatusWindowLevel` (`apply_panel_style`
+/// in macos_window.rs), well above the level a native Open panel renders at -
+/// the same occlusion/deadlock as the Windows case above, by a different
+/// native mechanism.
+#[cfg(target_os = "macos")]
+pub fn set_dialog_friendly(window: &WebviewWindow, friendly: bool) -> Result<(), String> {
+    crate::macos_window::set_dialog_friendly_level(window, friendly);
+    Ok(())
+}
+
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+pub fn set_dialog_friendly(_window: &WebviewWindow, _friendly: bool) -> Result<(), String> {
+    Ok(())
+}
+
 /// Re-applies whatever native window style the platform needs after a Tauri
 /// window operation has had a chance to clobber it. A no-op on Windows, where
 /// the overlay's always-on-top and transparency all come from the builder and

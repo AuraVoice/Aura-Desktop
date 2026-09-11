@@ -38,8 +38,8 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Bool, ClassBuilder, Sel};
 use objc2::{sel, ClassType, MainThreadMarker};
 use objc2_app_kit::{
-    NSPanel, NSStatusWindowLevel, NSWindow, NSWindowCollectionBehavior, NSWindowSharingType,
-    NSWindowStyleMask,
+    NSNormalWindowLevel, NSPanel, NSStatusWindowLevel, NSWindow, NSWindowCollectionBehavior,
+    NSWindowSharingType, NSWindowStyleMask,
 };
 use tauri::{LogicalPosition, LogicalSize, WebviewWindow};
 
@@ -350,6 +350,18 @@ fn apply_panel_style(ns_window: &NSWindow) {
     // an always-on-top companion means it vanishes the moment the user clicks
     // anything else - the exact opposite of what it is for.
     ns_window.setHidesOnDeactivate(false);
+}
+
+/// Temporarily drops the overlay below the level a native Open panel renders
+/// at (see `overlay::set_dialog_friendly` for why this exists), then restores
+/// `NSStatusWindowLevel` - the same level `apply_panel_style` sets, so the two
+/// must be kept in sync if that one ever changes. `setLevel` with the value it
+/// already has is a no-op, so callers do not need to track state.
+pub fn set_dialog_friendly_level(window: &WebviewWindow, friendly: bool) {
+    let level = if friendly { NSNormalWindowLevel } else { NSStatusWindowLevel };
+    with_ns_window(window, "set_dialog_friendly_level", move |ns_window, _mtm| {
+        ns_window.setLevel(level);
+    });
 }
 
 /// Points the window's first responder back at its content view, which is the

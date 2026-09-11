@@ -19,7 +19,12 @@ import {
   stableInterviewBriefSlice,
   type InterviewBrief,
 } from "../../lib/interviewBrief";
-import { listenForInterviewBrief, loadInterviewBrief } from "../../lib/interviewBriefMemory";
+import {
+  clearInterviewBrief,
+  listenForInterviewBrief,
+  loadInterviewBrief,
+  storeInterviewBrief,
+} from "../../lib/interviewBriefMemory";
 import { osName } from "../../lib/platformKeys";
 import {
   listenForInterviewResume,
@@ -32,7 +37,7 @@ import {
   extractResumeText,
   resumeStats,
 } from "../../lib/resumeText";
-import { loadInterviewWorkspace } from "../../lib/interviewWorkspace";
+import { loadInterviewWorkspace, type InterviewWorkspaceRecord } from "../../lib/interviewWorkspace";
 import { interviewKeyterms } from "../../lib/interviewKeyterms";
 import {
   saveInterviewSession,
@@ -68,7 +73,6 @@ export interface InterviewExchange {
 
 export type InterviewHackerPhase =
   | "idle"
-  | "checking"
   | "preflight"
   | "starting"
   | "listening"
@@ -133,7 +137,14 @@ const PACING_TICK_MS = 1_000;
 const PITCH_COLLAPSE_AFTER_ACCEPTED = 2;
 const ECHO_WINDOW_MS = 2_500;
 const MAX_CREDENTIAL_RETRIES = 3;
-const CALL_DETECTION_RETRY_MS = 1_500;
+// Cosmetic-only since Start no longer waits on this (see openPreflight), so
+// the poll can afford to be slower than a gate would need. It used to run
+// only until the user reached "preflight"; now it runs for as long as
+// preflight is open, which can be a while, so a slower interval matters more
+// than it did. macOS's detector is the costlier one to poll repeatedly (see
+// interview_supported_call): it walks every running app's accessibility
+// window list, versus a single EnumWindows syscall on Windows.
+const CALL_DETECTION_RETRY_MS = 4_000;
 // A 30 minute round runs 15-25 questions, so this is headroom rather than a
 // limit anyone should hit. Strings only, no images, so the cost is negligible.
 const MAX_HISTORY_EXCHANGES = 40;
@@ -215,8 +226,9 @@ export interface InterviewHackerState {
    *  "teams-web"), so the card can draw the app's own mark. `callName` stays the
    *  humanized string for copy. */
   callApp: string | null;
-  /** Why the "checking" phase cannot succeed, rather than simply not having
-   *  found a call yet. Currently only "accessibility" (macOS grant missing). */
+  /** Why background call detection cannot succeed, independent of whether the
+   *  session can start - it never gates Start. Currently only "accessibility"
+   *  (macOS grant missing). */
   callBlocker: string | null;
   /** True once the user has clicked through to the permission dialog, so the
    *  button can switch to "again" wording the way ShortcutEditorDialog does. */
@@ -233,6 +245,16 @@ export interface InterviewHackerState {
   attachingResume: boolean;
   resumeError: string | null;
   attachResume: (file: File) => void;
+  /** Other interviews with a reviewed brief, for the "switch" picker. Never
+   *  includes the one currently active. */
+  preparedInterviews: InterviewWorkspaceRecord[];
+  briefMenuOpen: boolean;
+  briefMenuBusy: boolean;
+  briefMenuError: string | null;
+  openBriefMenu: () => void;
+  closeBriefMenu: () => void;
+  switchToInterview: (interviewId: string) => void;
+  startFresh: () => void;
   canSuggest: boolean;
   recoverable: boolean;
   candidateSpeaking: boolean;
@@ -285,6 +307,14 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   const [resumeText, setResumeText] = useState<string | null>(null);
   const [attachingResume, setAttachingResume] = useState(false);
   const [resumeError, setResumeError] = useState<string | null>(null);
+  const [preparedInterviews, setPreparedInterviews] = useState<InterviewWorkspaceRecord[]>([]);
+  const [briefMenuOpen, setBriefMenuOpen] = useState(false);
+  const [briefMenuBusy, setBriefMenuBusy] = useState(false);
+  const [briefMenuError, setBriefMenuError] = useState<string | null>(null);
+  // Local bookkeeping only, never persisted: the overlay must not write the
+  // shared workspace cache (see the read-only note below), so this just lets
+  // the picker exclude whichever interview is currently active.
+  const activeInterviewIdRef = useRef<string | null>(null);
   const [history, setHistory] = useState<InterviewExchange[]>([]);
   const [question, setQuestion] = useState("");
   const [answer, setAnswer] = useState("");
@@ -658,13 +688,22 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     setReflection(null);
     setCallName(null);
     setCallApp(null);
-    setPhase("checking");
-    setMessage("Waiting for Zoom, Teams, or Google Meet. Aura checks automatically.");
+    setCallBlocker(null);
+    // Start is available immediately: which call app (if any) is running is
+    // opportunistic labelling for the "Call" widget below, never a
+    // precondition. A candidate practicing solo, or on a call Aura's detector
+    // does not recognise, loses nothing by starting without it.
+    setPhase("preflight");
+    setMessage(null);
     setErrorDetail(null);
   }, [signedIn]);
 
+  // Runs in the background purely to label the "Call" widget and to surface
+  // the macOS Accessibility grant if that is what is keeping the label blank -
+  // it never blocks or delays Start, which is already available the moment
+  // openPreflight runs above.
   useEffect(() => {
-    if (!signedIn || phase !== "checking") return;
+    if (!signedIn || phase !== "preflight") return;
     const attempt = preflightAttemptRef.current;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -676,28 +715,15 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
           if (result.supported) {
             setCallName(callLabel(result.app));
             setCallApp(result.app);
-            setMessage(null);
             setCallBlocker(null);
-            setPhase("preflight");
             return;
           }
-          // A blocker means the check CANNOT come good, however long it runs, so
-          // "waiting for a call" would be a lie. Keep polling anyway: the grant
-          // can land while the card is open, and the next tick clears this by
-          // itself.
           setCallBlocker(result.blocker ?? null);
-          setMessage(
-            result.blocker === "accessibility"
-              ? `Aura needs Accessibility to see which call you are in. Allow it in ${osName()} Settings.`
-              : "Waiting for Zoom, Teams, or Google Meet. Aura checks automatically.",
-          );
           timer = setTimeout(check, CALL_DETECTION_RETRY_MS);
         })
         .catch((error) => {
           if (cancelled || preflightAttemptRef.current !== attempt) return;
           logError("Interview Companion: call detection", error);
-          setMessage("Call detection was interrupted. Aura is retrying automatically.");
-          setErrorDetail("Error code: call_detection_failed. The next automatic check is still scheduled.");
           timer = setTimeout(check, CALL_DETECTION_RETRY_MS);
         });
     };
@@ -942,6 +968,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
         // job description feed keyterms even when the resume came from Rust.
         const workspace = await loadInterviewWorkspace(user.uid);
         if (!active || !workspace) return;
+        activeInterviewIdRef.current = workspace.activeInterviewId;
         const current = workspace.interviews.find(
           (record) => record.interviewId === workspace.currentInterviewId,
         );
@@ -996,6 +1023,96 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
         setResumeError("Could not read that file");
       })
       .finally(() => setAttachingResume(false));
+  }, []);
+
+  // Opened fresh every time rather than reusing the mount-time workspace load
+  // above: that load only seeds keyterms once, and a prep built in the
+  // dashboard minutes before a surprise meeting would otherwise be invisible
+  // here. loadInterviewWorkspace is a local cache read, not network I/O, so
+  // refetching on every open costs nothing.
+  const openBriefMenu = useCallback(() => {
+    setBriefMenuOpen(true);
+    setBriefMenuError(null);
+    if (!user?.uid) return;
+    setBriefMenuBusy(true);
+    loadInterviewWorkspace(user.uid)
+      .then((workspace) => {
+        if (!workspace) {
+          setPreparedInterviews([]);
+          return;
+        }
+        activeInterviewIdRef.current = workspace.activeInterviewId;
+        // Any built brief is switchable, not only ones already marked
+        // reviewed: switchToInterview stamps reviewedAtMs itself on
+        // selection, the same effect "Use reviewed brief" has in the
+        // dashboard. Requiring reviewedAtMs here left "Review needed" history
+        // entries invisible to this list even though the dashboard's own
+        // Interview history panel shows them.
+        setPreparedInterviews(
+          workspace.interviews.filter(
+            (interview) =>
+              interview.draftBrief != null
+              && interview.interviewId !== workspace.activeInterviewId,
+          ),
+        );
+      })
+      .catch((error: unknown) => {
+        logError("Interview Companion: load prepared interviews", error);
+        setBriefMenuError("Could not load your prepared interviews.");
+      })
+      .finally(() => setBriefMenuBusy(false));
+  }, [user?.uid]);
+
+  const closeBriefMenu = useCallback(() => {
+    setBriefMenuOpen(false);
+    setBriefMenuError(null);
+  }, []);
+
+  // Mirrors the dashboard's useBrief(): a saved brief is already built, so
+  // activating it is just re-stamping and pushing it to the same Rust slot -
+  // no rebuild, no LLM call, near-instant.
+  const switchToInterview = useCallback((interviewId: string) => {
+    const interview = preparedInterviews.find((item) => item.interviewId === interviewId);
+    if (!interview?.draftBrief) return;
+    setBriefMenuBusy(true);
+    setBriefMenuError(null);
+    const reviewed: InterviewBrief = {
+      ...interview.draftBrief,
+      reviewedAtMs: Date.now(),
+      lastRoundKind: interview.lastRoundKind ?? DEFAULT_ROUND_KIND,
+      plannedMinutes: interview.plannedMinutes ?? DEFAULT_PLANNED_MINUTES,
+    };
+    storeInterviewBrief(reviewed)
+      .then(() => {
+        activeInterviewIdRef.current = interviewId;
+        trackEvent("interview_companion_brief_switched", {});
+        setBriefMenuOpen(false);
+      })
+      .catch((error: unknown) => {
+        logError("Interview Companion: switch brief", error);
+        setBriefMenuError("Could not switch to that interview.");
+      })
+      .finally(() => setBriefMenuBusy(false));
+  }, [preparedInterviews]);
+
+  // Clears both the brief and resume slots server-side (clear_preparation
+  // clears the resume first), so a stale, wrong-company brief never leaks its
+  // claims into answers for an unplanned meeting. The existing brief/resume
+  // listeners pick up the resulting events and reset local state on their own.
+  const startFresh = useCallback(() => {
+    setBriefMenuBusy(true);
+    setBriefMenuError(null);
+    clearInterviewBrief()
+      .then(() => {
+        activeInterviewIdRef.current = null;
+        trackEvent("interview_companion_brief_reset", {});
+        setBriefMenuOpen(false);
+      })
+      .catch((error: unknown) => {
+        logError("Interview Companion: reset brief", error);
+        setBriefMenuError("Could not clear the current brief.");
+      })
+      .finally(() => setBriefMenuBusy(false));
   }, []);
 
   // Seed the preflight pickers from the brief envelope, which is the only
@@ -1697,6 +1814,14 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     attachingResume,
     resumeError,
     attachResume,
+    preparedInterviews,
+    briefMenuOpen,
+    briefMenuBusy,
+    briefMenuError,
+    openBriefMenu,
+    closeBriefMenu,
+    switchToInterview,
+    startFresh,
     canSuggest,
     recoverable,
     candidateSpeaking,

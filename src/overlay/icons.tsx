@@ -281,6 +281,18 @@ export function DownArrowIcon() {
   );
 }
 
+/** Small down chevron, not the chunky DownArrowIcon above: this one marks a
+ * control as expandable (the Interview Companion Brief widget's switcher)
+ * rather than an action like jump-to-latest, so it has to read as "more
+ * options" at a glance, not "go down". */
+export function ChevronDownIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none">
+      <path d="M5 9 12 16 19 9" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 /** Sheet of paper with a folded corner. The Interview Companion's brief slot. */
 export function DocumentIcon() {
   return (
