@@ -128,8 +128,8 @@ mod backend {
         if lines != size {
             return None;
         }
-        let has_alpha = pixels.chunks_exact(4).any(|pixel| pixel[3] != 0);
-        for pixel in pixels.chunks_exact_mut(4) {
+        let has_alpha = pixels.as_chunks::<4>().0.iter().any(|pixel| pixel[3] != 0);
+        for pixel in pixels.as_chunks_mut::<4>().0 {
             pixel.swap(0, 2);
             if !has_alpha {
                 pixel[3] = u8::MAX;
