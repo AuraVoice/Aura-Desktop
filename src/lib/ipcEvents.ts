@@ -40,6 +40,9 @@ export const MEETING_CAPTURE_STATE = "meeting-capture-state";
 export const MEETING_JOIN_DETECTED = "meeting-join-detected";
 export const MEETING_SEGMENT_READY = "meeting-segment-ready";
 export const MEETING_LEFT = "meeting-left";
+// The ambient scanner saw a call window appear / disappear (detect.rs).
+export const MEETING_CALL_SEEN = "meeting-call-seen";
+export const MEETING_CALL_GONE = "meeting-call-gone";
 
 // interview.rs
 export const INTERVIEW_HACKER_STATUS = "interview-hacker-status";
@@ -81,6 +84,25 @@ export interface GuideArmedPayload {
 // Mirrors security.rs ArmedPayload.
 export interface ScreenSightArmedPayload {
   armed: boolean;
+}
+
+// Mirrors meeting/mod.rs AmbientCallPayload. Consumed by useMeetingPrompt (the
+// card) and useMeetingCapture (stopping a capture when its call goes away).
+// callKey is app + a hash of the normalized title, never the title itself, so
+// it is safe to remember; windowTitle is for the card only.
+export interface AmbientCallPayload {
+  callKey: string;
+  app: string;
+  windowTitle: string;
+  source: string;
+  /** PNG data URL of a native call app's real icon; null for browser calls. */
+  appIcon: string | null;
+}
+
+// Mirrors meeting/mod.rs AmbientGonePayload.
+export interface AmbientGonePayload {
+  callKey: string;
+  app: string;
 }
 
 // Mirrors dictation/hud.rs HudUpdate (rename_all = "camelCase"). Consumed by

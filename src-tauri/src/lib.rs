@@ -356,6 +356,7 @@ pub fn run() {
         .manage(meeting::MeetingRuntimeLease::acquire())
         .manage(meeting::MeetingCaptureHandle::default())
         .manage(meeting::JoinWatchHandle::default())
+        .manage(meeting::AmbientWatchHandle::default())
         .manage(toast::PendingToastActivation::default())
         .manage(status_pill::StatusPillHandle::default())
         .manage(screenshot::ChatCaptureHandle::default())
@@ -444,6 +445,8 @@ pub fn run() {
             meeting::delete_local_recording,
             meeting::start_join_watch,
             meeting::stop_join_watch,
+            meeting::start_ambient_watch,
+            meeting::stop_ambient_watch,
             meeting::debug_force_join,
             voice_toggle_key::voice_toggle_key_status,
             voice_toggle_key::set_voice_toggle_key,

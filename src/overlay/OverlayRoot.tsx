@@ -21,10 +21,16 @@ import { useTurnScreenCapture } from "./useTurnScreenCapture";
 import { useSystemControl } from "./useSystemControl";
 import { useDraftCard } from "./useDraftCard";
 import { useMeetings } from "./useMeetings";
-import { useMeetingArm } from "./useMeetingArm";
 import { useDictationCredential } from "./useDictationCredential";
 import { usePolishCredential } from "./usePolishCredential";
 import { useMeetingCapture } from "./useMeetingCapture";
+import { useMeetingPrompt } from "./useMeetingPrompt";
+import {
+  MeetingPromptCard,
+  MEETING_PROMPT_EXIT_MS,
+  MEETING_PROMPT_HEIGHT,
+} from "./MeetingPromptCard";
+import { usePresence } from "./usePresence";
 import { useCallbackCard } from "./useCallbackCard";
 import { useDesktopNotifications } from "../state/useDesktopNotifications";
 import { openDashboardWindow } from "../lib/dashboardWindow";
@@ -87,6 +93,8 @@ const UPDATED_NOTICE_HEIGHT = 72;
 interface OverlaySnapshot {
   presentation: OverlayPresentation;
   notchEdge: NotchEdge;
+  /** The Bar has lent its edge to the dictation HUD and is not drawn. */
+  dictationHold: boolean;
 }
 
 export function OverlayRoot() {
@@ -101,6 +109,7 @@ export function OverlayRoot() {
   const updateReady = useUpdateReady();
   const [presentation, setPresentation] = useState<OverlayPresentation>("hidden");
   const [notchEdge, setNotchEdge] = useState<NotchEdge>("top");
+  const [dictationHold, setDictationHold] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatHistoryOpen, setChatHistoryOpen] = useState(false);
   const [chatFocusNonce, setChatFocusNonce] = useState(0);
@@ -270,10 +279,10 @@ export function OverlayRoot() {
   const draftCard = useDraftCard(voice.room, presentation);
   const callLive =
     voice.status !== "disconnected" && voice.status !== "ended" && voice.status !== "error";
-  // Meeting capture is a background service, not part of the notch UI. Keep
-  // polling, join watches, durable upload recovery, and completion alive even
-  // while the native window is hidden. The removed meeting controls/cards stay
-  // intentionally absent from this visual root.
+  // Meeting capture is a background service. Keep calendar polling, durable
+  // upload recovery, and completion alive even while the native window is
+  // hidden. Its one piece of notch UI is the "Record this meeting?" card
+  // below (useMeetingPrompt); the old meeting controls stay absent.
   const meetings = useMeetings({
     presentation,
     signedIn: user !== null,
@@ -287,14 +296,9 @@ export function OverlayRoot() {
   // Keeps the AI-formatting backend credential warm for the same reason. Rust
   // no-ops with it when the polish toggle is off.
   usePolishCredential(user?.uid ?? null);
-  const meetingArm = useMeetingArm(user?.uid ?? null);
   const meetingCapture = useMeetingCapture({
     uid: user?.uid ?? null,
     appHidden: presentation !== "bar",
-    events: meetings.events,
-    isArmed: meetingArm.isArmed,
-    armRevision: meetingArm.revision,
-    automaticCapture: true,
   });
   const resetDraftCard = draftCard.reset;
   const showDraftCard = user !== null && draftCard.phase !== "idle";
@@ -357,21 +361,55 @@ export function OverlayRoot() {
   // Chat still outranks it for the documented reason, and that degradation is
   // honest: the box never renders, so it is never acknowledged, and the worker's
   // own fallback asks for the role by voice instead.
-  // The consent card sits directly under draft: the user just told Buddy
-  // "yes, turn it on" out loud, so it must not queue behind the inbox or a
-  // banner while that sentence is still hanging.
+  // The "Record this meeting?" card sits under the interview surfaces and the
+  // draft: it is a 15 s question, so it must not queue behind the inbox or a
+  // banner, and a draft only exists during a voice call, where the prompt is
+  // suppressed anyway. The hook already hides itself for a live call, a live
+  // Interview Companion, an active capture, or a non-notch presentation.
+  const meetingPrompt = useMeetingPrompt({
+    uid: user?.uid ?? null,
+    ownsRuntime: meetingCapture.ownsRuntime,
+    recording: meetingCapture.recording,
+    events: meetings.events,
+    presentation,
+    dictationHold,
+    callLive,
+    interviewLive: showInterviewHacker,
+    chatOpen: visibleChatOpen,
+    recordCall: meetingCapture.recordCall,
+  });
+  const showMeetingPrompt =
+    user !== null
+    && meetingPrompt.visible
+    && !showInterviewHacker
+    && !showInterviewPaste
+    && !showDraftCard;
+  // Held on screen (and in the slot) through its exit animation, unless a
+  // higher-priority card took the slot, which must not share it.
+  const meetingPromptPresence = usePresence(showMeetingPrompt, MEETING_PROMPT_EXIT_MS);
+  const meetingPromptOnScreen =
+    showMeetingPrompt
+    || (meetingPromptPresence.leaving
+      && !showInterviewHacker
+      && !showInterviewPaste
+      && !showDraftCard);
+  // The consent card sits directly under the meeting prompt: the user just
+  // told Buddy "yes, turn it on" out loud, so it must not queue behind the
+  // inbox or a banner while that sentence is still hanging.
   const showScreenContextConsent =
     user !== null
     && screenContextRequested
     && !showInterviewHacker
     && !showInterviewPaste
-    && !showDraftCard;
+    && !showDraftCard
+    && !meetingPromptOnScreen;
   const showInbox =
     user !== null
     && inboxOpen
     && !showInterviewHacker
     && !showDraftCard
     && !showInterviewPaste
+    && !meetingPromptOnScreen
     && !showScreenContextConsent;
   const showUpdateBanner =
     user !== null
@@ -379,6 +417,7 @@ export function OverlayRoot() {
     && !showInterviewHacker
     && !showInterviewPaste
     && !showDraftCard
+    && !meetingPromptOnScreen
     && !showScreenContextConsent
     && !showInbox;
   const showCallbackCard =
@@ -387,6 +426,7 @@ export function OverlayRoot() {
     && !showInterviewHacker
     && !showInterviewPaste
     && !showDraftCard
+    && !meetingPromptOnScreen
     && !showScreenContextConsent
     && !showInbox
     && !showUpdateBanner;
@@ -405,6 +445,8 @@ export function OverlayRoot() {
       ? interviewSlotHeight
       : showDraftCard
         ? draftCardHeight
+        : meetingPromptOnScreen
+          ? MEETING_PROMPT_HEIGHT
         : showScreenContextConsent
           ? SCREEN_CONTEXT_CONSENT_HEIGHT
         : showInbox
@@ -619,6 +661,7 @@ export function OverlayRoot() {
     (payload) => {
       setPresentation(payload.presentation);
       setNotchEdge(payload.notchEdge);
+      setDictationHold(payload.dictationHold === true);
       if (payload.presentation === "hidden") setChatOpen(false);
     },
     "OverlayRoot: listen overlay-changed",
@@ -629,6 +672,7 @@ export function OverlayRoot() {
       .then((snapshot) => {
         setPresentation(snapshot.presentation);
         setNotchEdge(snapshot.notchEdge);
+        setDictationHold(snapshot.dictationHold === true);
       })
       .catch((err) => logError("OverlayRoot: current_overlay_state", err));
   }, []);
@@ -777,6 +821,9 @@ export function OverlayRoot() {
             visible={presentation === "bar" || presentation === "companion"}
           />
         )}
+      {!visibleChatOpen && meetingPromptOnScreen && (
+        <MeetingPromptCard prompt={meetingPrompt} leaving={meetingPromptPresence.leaving} />
+      )}
       {!visibleChatOpen && showScreenContextConsent && (
         <ScreenContextConsentCard
           onAllow={allowScreenContext}

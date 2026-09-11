@@ -574,6 +574,7 @@ pub fn session_changed(app: &AppHandle, signed_in: bool, uid: Option<String>) {
         crate::interview::request_stop(app, "signed_out");
         crate::interview::clear_preparation(app);
         crate::meeting::stop_all_join_watches(app);
+        crate::meeting::stop_ambient_watch_native(app);
         // A frame captured under the previous account must never survive into
         // the next one, and the chat buffer is plaintext in memory.
         crate::screenshot::clear_chat_capture(app);

@@ -42,6 +42,9 @@ pub const MEETING_CAPTURE_STATE: &str = "meeting-capture-state";
 pub const MEETING_JOIN_DETECTED: &str = "meeting-join-detected";
 pub const MEETING_SEGMENT_READY: &str = "meeting-segment-ready";
 pub const MEETING_LEFT: &str = "meeting-left";
+/// The ambient scanner saw a call window appear / disappear (detect.rs).
+pub const MEETING_CALL_SEEN: &str = "meeting-call-seen";
+pub const MEETING_CALL_GONE: &str = "meeting-call-gone";
 
 // interview.rs
 pub const INTERVIEW_HACKER_STATUS: &str = "interview-hacker-status";

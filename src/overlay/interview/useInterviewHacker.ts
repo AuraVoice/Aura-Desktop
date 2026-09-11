@@ -26,6 +26,7 @@ import {
   storeInterviewBrief,
 } from "../../lib/interviewBriefMemory";
 import { osName } from "../../lib/platformKeys";
+import { callLabel } from "../../lib/meetingCopy";
 import {
   listenForInterviewResume,
   loadInterviewResume,
@@ -120,17 +121,6 @@ interface StatusPayload {
   epoch: number | null;
   app: string | null;
   reason: string | null;
-}
-
-function callLabel(app: string | null): string {
-  switch (app) {
-    case "google-meet": return "Google Meet";
-    case "teams-web": return "Microsoft Teams";
-    case "zoom-web": return "Zoom";
-    case "teams": return "Microsoft Teams";
-    case "zoom": return "Zoom";
-    default: return "Supported call";
-  }
 }
 
 // Default same-speaker merge debounce. The session's round can raise it (see

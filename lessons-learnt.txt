@@ -1,3 +1,34 @@
+2026-09-11  Every sign-in and every dev launch replayed a week of notifications as fresh toasts
+
+Problem: signing out and back in, switching accounts, or quitting the installed app and running
+`npm run tauri dev` fired 9+ Windows toasts at once, all old follow-ups and a meeting-ready from
+hours earlier. It happened on both the Mac and the Windows machine.
+
+Issue: two defenses were scoped to the same boundary and failed together. The backend outbox
+(desktop_outbox.list_notifications) returns every unexpired row, oldest first, ack status ignored,
+whenever the cursor is empty. The client empties the cursor on any owner change (bindOutboxOwner)
+or a 400. And bindOwner, on the same owner change, wiped delivered_toasts along with the inbox
+and dedup, so the toast-once memory was gone exactly when the replay arrived. The poller then
+treated a week of history as live traffic: 8 individual toasts (OUTBOX_BACKLOG_TOAST_THRESHOLD)
+plus a "5 new updates" summary. The live store proved it: 13 inbox rows created Sept 4 to 11, all
+received within 3.6 seconds of a dev-launch sign-in, exactly 8 stamped delivered. Dev and installed
+share the plugin-store JSON files but not the webview origin, so each origin carries its own
+Firebase session, and a different account on one side is enough to flip the owner.
+
+Solution: delivered stamps now live per uid (delivered_toasts_by_owner) and survive an owner
+switch; only inbox and dedup are cleared, and the legacy flat map folds into the previous owner's
+bucket once. The poller classifies anything created before this session bound the account as
+catch-up: every such row lands in the inbox silently, then only the newest 2 are toasted through
+toastStored, which still applies policy, permission and the per-uid toast-once check.
+
+Justification: the delivered ids are opaque UUIDs with no content, so keeping them across a switch
+does not weaken the rule that one account never sees another's notifications. Client-only, so no
+juno-backend deploy. A backend fix that skips already-received rows was not taken because the
+backend's delivery status is per user, not per device, and would silence a second machine that
+has never shown the item.
+
+---
+
 2026-09-11  Interview Companion refused to start on a real recruiter call, ten times, with one word
 
 Problem: Interview Companion started fine in a dry run before the interview and failed on every

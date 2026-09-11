@@ -2,13 +2,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
+  MEETING_CALL_GONE,
   MEETING_CAPTURE_STATE,
-  MEETING_JOIN_DETECTED,
-  MEETING_LEFT,
   MEETING_SEGMENT_READY,
+  type AmbientCallPayload,
+  type AmbientGonePayload,
 } from "../lib/ipcEvents";
 import type { UpcomingMeeting } from "../lib/calendar";
-import { isEligibleForNotes } from "./useMeetingArm";
+import { callLabel } from "../lib/meetingCopy";
 import {
   claimMeeting,
   completeMeeting,
@@ -36,8 +37,6 @@ import {
   sendMeetingCaptureEndedNotification,
 } from "../lib/meetingDesktopNotification";
 
-/** Fallback meeting length when the calendar event has no end time. */
-const DEFAULT_MEETING_MS = 60 * 60_000;
 /** Manual captures ("I'm in a call") get this claim window. */
 const MANUAL_WINDOW_MS = 2 * 60 * 60_000;
 /** After the user leaves a call, completion holds this long for a rejoin
@@ -144,7 +143,13 @@ function asBytes(raw: unknown): Uint8Array {
   throw new Error(`read_segment returned ${Object.prototype.toString.call(raw)}, expected binary`);
 }
 
+/** What a Record press led to, so the prompt card can say so. "skipped" is a
+ * guard exit (already recording, runtime not owned, account changed). */
+export type RecordCallOutcome = "started" | "cap" | "failed" | "skipped";
+
 export interface MeetingCaptureState {
+  /** This process owns the meeting runtime lease (detection + capture). */
+  ownsRuntime: boolean;
   /** A capture is running right now (drives the bar's recording dot). */
   recording: boolean;
   /** Capture paused because the session is locked. */
@@ -152,8 +157,17 @@ export interface MeetingCaptureState {
   /** The monthly cap blocked the last claim (drives the caption + Upgrade). */
   capBlocked: boolean;
   dismissCapBlocked: () => void;
-  /** Manual "Capture this call" entry (Google Meet has no detector). */
+  /** Manual "Capture this call" entry from the tray, for calls the scanner
+   * does not know. Sets no call key, so a call going away never stops it. */
   captureNow: () => void;
+  /** The "Record this meeting?" card's Record button: attaches to `event`
+   * when the call overlaps an eligible calendar meeting, else a manual
+   * capture labelled with the app. The capture stops when that call's
+   * `meeting-call-gone` arrives. */
+  recordCall: (
+    call: AmbientCallPayload,
+    event: UpcomingMeeting | null,
+  ) => Promise<RecordCallOutcome>;
   /** The bar's stop control (after its own confirm step). */
   stopCapture: () => void;
   /** Durable local lifecycle rows, newest first. */
@@ -166,27 +180,23 @@ export interface MeetingCaptureState {
 interface MeetingCaptureInputs {
   uid: string | null;
   appHidden: boolean;
-  events: UpcomingMeeting[];
-  isArmed: (eventId: string) => boolean;
-  /** Arm-state revision counter so watch scheduling reruns on toggles. */
-  armRevision: number;
-  /** Temporary test mode. Eligible calendar meetings are watched without the
-   * persisted arm decision. Keep the arm inputs intact for the consent gate. */
-  automaticCapture?: boolean;
 }
 
 /**
- * The arm -> detect -> claim -> capture -> upload -> complete state machine.
- * Rust detects and captures; this hook owns every HTTP leg (claim, segment
- * upload, complete) because tokens live in JS. Mounted once in OverlayRoot,
- * alive regardless of presentation, like useMeetings.
+ * The claim -> capture -> upload -> complete state machine. Nothing here
+ * starts a capture on its own: every one begins with a press, either the
+ * notch's "Record this meeting?" card (`recordCall`, fed by the ambient
+ * scanner via useMeetingPrompt) or the tray's Capture now (`captureNow`).
+ * Rust captures; this hook owns every HTTP leg (claim, segment upload,
+ * complete) because tokens live in JS. Mounted once in OverlayRoot, alive
+ * regardless of presentation, like useMeetings.
  *
  * Every failure path here is silent to the user except the monthly cap
- * (a plan state, surfaced with an Upgrade pointer, mirroring the voice cap).
+ * (a plan state, surfaced with an Upgrade pointer, mirroring the voice cap)
+ * and a Record press, whose outcome the card reports.
  */
 export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureState {
-  const { uid, appHidden, events, isArmed, armRevision, automaticCapture = false } = inputs;
-  const signedIn = uid !== null;
+  const { uid, appHidden } = inputs;
 
   const [recording, setRecording] = useState(false);
   const [paused, setPaused] = useState(false);
@@ -197,27 +207,22 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
   const activitiesRef = useRef(activities);
   activitiesRef.current = activities;
 
-  const eventsRef = useRef(events);
-  eventsRef.current = events;
   const uidRef = useRef(uid);
   uidRef.current = uid;
   const appHiddenRef = useRef(appHidden);
   appHiddenRef.current = appHidden;
   const identityEpochRef = useRef(0);
-  const isArmedRef = useRef(isArmed);
-  isArmedRef.current = isArmed;
 
   const recordingRef = useRef(false);
   /** event_id -> claimed meeting for this session (rejoins reuse it). */
   const claimsRef = useRef<Map<string, Awaited<ReturnType<typeof claimMeeting>>>>(new Map());
   const captureRunByMeetingRef = useRef<Map<string, string>>(new Map());
   const activeEventRef = useRef<string | null>(null);
-  const watchedRef = useRef<Set<string>>(new Set());
+  /** The ambient call the live capture was started for (null for a tray
+   * capture). Its `meeting-call-gone` is what stops the capture. */
+  const activeCallKeyRef = useRef<string | null>(null);
   const pumpRunningRef = useRef<{ uid: string; epoch: number } | null>(null);
   const claimInFlightRef = useRef<{ uid: string; epoch: number } | null>(null);
-  /** A join re-detected while the previous engine was still flushing; replayed
-   * once the capture-state event says the teardown finished. */
-  const pendingRejoinRef = useRef<string | null>(null);
   /** Live captures awaiting their end toast. The upload pump may upload audio
    * while this is set, but it cannot hand completion to transcription. */
   const endNotificationPendingRef = useRef<Set<string>>(new Set());
@@ -232,17 +237,13 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
     pumpRunningRef.current = null;
     claimInFlightRef.current = null;
     activeEventRef.current = null;
-    pendingRejoinRef.current = null;
+    activeCallKeyRef.current = null;
     endNotificationPendingRef.current.clear();
     recordingRef.current = false;
     setRecording(false);
     setPaused(false);
     setCapBlocked(false);
     setActivities([]);
-    for (const eventId of watchedRef.current) {
-      void invoke("stop_join_watch", { eventId }).catch(() => undefined);
-    }
-    watchedRef.current.clear();
     if (uid) {
       void bindMeetingActivityOwner(uid)
         .then((rows) => {
@@ -295,63 +296,19 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
     [uid],
   );
 
-  // ── Watch scheduling ────────────────────────────────────────────────────
-  // Keep Rust's join detector armed for exactly the armed meetings whose
-  // watch window is still ahead. Diffed against what's currently watched so
-  // toggling one meeting doesn't churn the others.
-  useEffect(() => {
-    if (!signedIn || !ownsRuntime) {
-      for (const eventId of watchedRef.current) {
-        void invoke("stop_join_watch", { eventId }).catch(() => undefined);
-      }
-      watchedRef.current.clear();
-      return;
-    }
-    const now = Date.now();
-    const desired = new Map<string, { startMs: number; endMs: number }>();
-    for (const event of events) {
-      if (!isEligibleForNotes(event) || (!automaticCapture && !isArmed(event.id))) continue;
-      const start = Date.parse(event.startTime);
-      if (Number.isNaN(start)) continue;
-      const parsedEnd = Date.parse(event.endTime);
-      const end = Number.isNaN(parsedEnd) ? start + DEFAULT_MEETING_MS : parsedEnd;
-      if (end <= now) continue;
-      // Detection polls ONLY inside the event's own scheduled window, start
-      // to end - no lead, no tail. This is deliberate exposure control: an
-      // armed window is also the window in which an unrelated Zoom/Teams
-      // call can be misattributed to the event (detection is not
-      // link-matched in v1), so it stays exactly as wide as the meeting.
-      // An overrunning call the user is still IN keeps its presence watch
-      // (detect.rs holds the watch while joined); what's given up is
-      // detecting a join that happens before start or after scheduled end.
-      desired.set(event.id, { startMs: start, endMs: end });
-    }
-
-    for (const eventId of watchedRef.current) {
-      if (!desired.has(eventId)) {
-        watchedRef.current.delete(eventId);
-        void invoke("stop_join_watch", { eventId }).catch((err) =>
-          logError("useMeetingCapture: stop_join_watch", err),
-        );
-      }
-    }
-    for (const [eventId, window] of desired) {
-      if (watchedRef.current.has(eventId)) continue;
-      watchedRef.current.add(eventId);
-      void invoke("start_join_watch", {
-        eventId,
-        windowStartMs: window.startMs,
-        windowEndMs: window.endMs,
-      }).catch((err) => logError("useMeetingCapture: start_join_watch", err));
-    }
-  }, [uid, signedIn, ownsRuntime, events, isArmed, armRevision, automaticCapture]);
-
   // ── Claim + capture ─────────────────────────────────────────────────────
   const startCaptureFor = useCallback(
-    async (eventId: string, title: string, startTime: string, endTime: string) => {
-      if (!uid || !ownsRuntime || recordingRef.current || claimInFlightRef.current) return;
+    async (
+      eventId: string,
+      title: string,
+      startTime: string,
+      endTime: string,
+    ): Promise<RecordCallOutcome> => {
+      if (!uid || !ownsRuntime || recordingRef.current || claimInFlightRef.current) {
+        return "skipped";
+      }
       const runtimeStatus = runtimeStatusRef.current;
-      if (!runtimeStatus?.ownsRuntime) return;
+      if (!runtimeStatus?.ownsRuntime) return "skipped";
       const run = { uid, epoch: identityEpochRef.current };
       const isCurrent = () =>
         uidRef.current === run.uid && identityEpochRef.current === run.epoch;
@@ -368,7 +325,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
               installationId: runtimeStatus.installationId,
               runtimeInstanceId: runtimeStatus.runtimeInstanceId,
             });
-            if (!isCurrent()) return;
+            if (!isCurrent()) return "skipped";
             claimsRef.current.set(eventId, claim);
             captureRunByMeetingRef.current.set(claim.meetingId, claim.captureRunId);
             activeEventRef.current = eventId;
@@ -379,7 +336,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
               captureFence: claim.captureFence,
               eventId,
             });
-            if (!isCurrent()) return;
+            if (!isCurrent()) return "skipped";
             recordActivity({
               meetingId: claim.meetingId,
               captureRunId: claim.captureRunId,
@@ -394,31 +351,32 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
               updatedAt: Date.now(),
             });
             trackEvent("meeting_capture_started", { rejoined: claim.rejoined });
-            return;
+            return "started";
           } catch (err) {
             const claimedMeeting = claimsRef.current.get(eventId);
             if (claimedMeeting && !recordingRef.current) {
               endNotificationPendingRef.current.delete(claimedMeeting.meetingId);
             }
-            if (!isCurrent()) return;
+            if (!isCurrent()) return "skipped";
             if (err instanceof MeetingCapError) {
               setCapBlocked(true);
               trackEvent("meeting_cap_blocked", {
                 seconds_until_reset: err.secondsUntilReset ?? -1,
               });
-              return;
+              return "cap";
             }
             if (err instanceof MeetingClaimConflictError) {
               logInfo("useMeetingCapture", "claim conflict: another device is capturing");
-              return;
+              return "failed";
             }
-            if (err instanceof AuthRequiredError) return;
+            if (err instanceof AuthRequiredError) return "failed";
             lastError = err;
             await new Promise((resolve) => setTimeout(resolve, 5000 * (attempt + 1)));
-            if (!isCurrent()) return;
+            if (!isCurrent()) return "skipped";
           }
         }
         logError("useMeetingCapture: claim failed after retries", lastError);
+        return "failed";
       } finally {
         if (claimInFlightRef.current === run) {
           claimInFlightRef.current = null;
@@ -428,38 +386,34 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
     [uid, ownsRuntime, recordActivity],
   );
 
-  const handleJoinDetected = useCallback(
-    (eventId: string) => {
-      if (!uidRef.current) return;
-      if (recordingRef.current) {
-        if (activeEventRef.current === eventId) {
-          // The detector re-latched the same meeting while the previous
-          // engine run is still flushing (fast rejoin). The detector won't
-          // emit again, so replay this once the teardown finishes.
-          pendingRejoinRef.current = eventId;
-          return;
-        }
-        // One capture at a time; an overlapping second meeting is skipped.
-        logInfo("useMeetingCapture", `join for ${eventId} ignored, capture already live`);
-        return;
-      }
-      const event = eventsRef.current.find((candidate) => candidate.id === eventId);
+  const recordCall = useCallback(
+    async (
+      call: AmbientCallPayload,
+      event: UpcomingMeeting | null,
+    ): Promise<RecordCallOutcome> => {
+      if (!ownsRuntime || recordingRef.current || !uidRef.current) return "skipped";
+      activeCallKeyRef.current = call.callKey;
+      let outcome: RecordCallOutcome;
       if (event) {
-        if (!automaticCapture && !isArmedRef.current(eventId)) return;
-        void startCaptureFor(eventId, event.title, event.startTime, event.endTime);
-        return;
+        outcome = await startCaptureFor(event.id, event.title, event.startTime, event.endTime);
+      } else {
+        // Same claim shape as the tray path: the backend validates the
+        // `manual:` prefix, so an ad-hoc call is a manual capture that
+        // happens to carry the app's name.
+        const now = new Date();
+        outcome = await startCaptureFor(
+          `manual:${crypto.randomUUID()}`,
+          callLabel(call.app),
+          now.toISOString(),
+          new Date(now.getTime() + MANUAL_WINDOW_MS).toISOString(),
+        );
       }
-      // Debug injections and rejoins after the event dropped off the agenda
-      // still capture: the claim is what validates, not the local list.
-      const now = new Date();
-      void startCaptureFor(
-        eventId,
-        "Meeting",
-        now.toISOString(),
-        new Date(now.getTime() + DEFAULT_MEETING_MS).toISOString(),
-      );
+      if (outcome !== "started" && activeCallKeyRef.current === call.callKey) {
+        activeCallKeyRef.current = null;
+      }
+      return outcome;
     },
-    [startCaptureFor, automaticCapture],
+    [ownsRuntime, startCaptureFor],
   );
 
   const captureNow = useCallback(() => {
@@ -781,20 +735,17 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
     };
 
     add(
-      listen<{ eventId: string }>(MEETING_JOIN_DETECTED, (event) => {
-        handleJoinDetected(event.payload.eventId);
-      }),
-      "join-detected",
-    );
-    add(
-      listen<{ eventId: string }>(MEETING_LEFT, (event) => {
-        if (activeEventRef.current === event.payload.eventId) {
+      listen<AmbientGonePayload>(MEETING_CALL_GONE, (event) => {
+        if (
+          activeCallKeyRef.current !== null
+          && activeCallKeyRef.current === event.payload.callKey
+        ) {
           void invoke("stop_meeting_capture", { reason: "meeting_left" }).catch((err) =>
-            logError("useMeetingCapture: stop on meeting-left", err),
+            logError("useMeetingCapture: stop on meeting-call-gone", err),
           );
         }
       }),
-      "meeting-left",
+      "meeting-call-gone",
     );
     add(
       listen<CaptureStatePayload>(MEETING_CAPTURE_STATE, (event) => {
@@ -808,8 +759,9 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
         setPaused(payload.active && payload.paused);
         if (!payload.active) {
           activeEventRef.current = null;
+          activeCallKeyRef.current = null;
           if (payload.meetingId) {
-            if (payload.reason === "meeting_left" && !automaticCapture) {
+            if (payload.reason === "meeting_left") {
               // Rust persisted the completion job's rejoin hold. This timer
               // merely wakes the pump near that durable deadline.
               setTimeout(() => void pump(), REJOIN_HOLD_MS + 1000);
@@ -825,13 +777,6 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
           if (payload.reason === "capture_failed") {
             trackEvent("meeting_capture_failed", {});
           }
-          // A join that arrived during this teardown was latched, not lost:
-          // replay it now that the engine is gone.
-          const pendingRejoin = pendingRejoinRef.current;
-          if (pendingRejoin) {
-            pendingRejoinRef.current = null;
-            setTimeout(() => handleJoinDetected(pendingRejoin), 0);
-          }
         }
       }),
       "capture-state",
@@ -846,13 +791,12 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
       disposed = true;
       unlisteners.forEach((unlisten) => unlisten());
     };
-  }, [handleJoinDetected, pump, automaticCapture]);
+  }, [pump]);
 
   // Recording is a per-user consent grant: signing out (or being signed out)
   // must end any live capture immediately, not just stop future watches.
   useEffect(() => {
     if (uid) return;
-    pendingRejoinRef.current = null;
     if (recordingRef.current) {
       void invoke("stop_meeting_capture", { reason: "signed_out" }).catch((err) =>
         logError("useMeetingCapture: stop on sign-out", err),
@@ -934,11 +878,13 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
   );
 
   return {
+    ownsRuntime,
     recording,
     paused,
     capBlocked,
     dismissCapBlocked,
     captureNow,
+    recordCall,
     stopCapture,
     activities,
     retryNow,

@@ -37,19 +37,17 @@ export function isEligibleForNotes(event: UpcomingMeeting): boolean {
 // by Firebase uid: recording consent belongs to the PERSON who granted it,
 // not the Windows install - user B signing into the same profile must never
 // inherit user A's opt-in.
-const AUTO_NOTES_KEY = "auto_meeting_notes";
+// The former global "auto meeting notes" default (`auto_meeting_notes`) is
+// retired: every capture now starts from the notch's "Record this meeting?"
+// prompt or the tray, so nothing records without a press. The stored key is
+// left inert rather than deleted.
 const ARMED_KEY = "armed_events";
 const DISARMED_KEY = "disarmed_events";
 
 const getCalendarStore = lazyStore(CALENDAR_STORE);
 
 export interface MeetingArmState {
-  /** The global default (persisted, OFF until the user flips it - the
-   * opt-in-arm trust model in MEETING_NOTES_PLAN.md section 1). */
-  autoNotes: boolean;
-  toggleAutoNotes: () => void;
-  /** Effective per-meeting decision: global default plus today's per-meeting
-   * overrides in either direction. */
+  /** Per-meeting decision: today's per-meeting overrides, otherwise off. */
   isArmed: (eventId: string) => boolean;
   toggleArm: (eventId: string) => void;
   /** Bumped on every arm-state change so effects can depend on one value. */
@@ -57,21 +55,16 @@ export interface MeetingArmState {
 }
 
 /**
- * Who gets meeting notes captured. Capture is user-armed, never default-on:
- * the global toggle starts OFF, and arming is a deliberate choice made from
- * the agenda card. Per-meeting overrides are day-scoped maps (like dismissed
- * events) because a calendar instance id only means something on its day.
- * All state is keyed by the signed-in uid; a null uid resolves everything to
- * disarmed and persists nothing.
+ * Per-meeting arm chips on the agenda card. Per-meeting overrides are
+ * day-scoped maps (like dismissed events) because a calendar instance id only
+ * means something on its day. All state is keyed by the signed-in uid; a null
+ * uid resolves everything to disarmed and persists nothing.
  */
 export function useMeetingArm(uid: string | null): MeetingArmState {
-  const [autoNotes, setAutoNotes] = useState(false);
   const [revision, setRevision] = useState(0);
 
   const armedRef = useRef<IdDateMap>({});
   const disarmedRef = useRef<IdDateMap>({});
-  const autoNotesRef = useRef(autoNotes);
-  autoNotesRef.current = autoNotes;
   const uidRef = useRef(uid);
   uidRef.current = uid;
 
@@ -80,7 +73,6 @@ export function useMeetingArm(uid: string | null): MeetingArmState {
     // load the new user's (or stay disarmed when signed out).
     armedRef.current = {};
     disarmedRef.current = {};
-    setAutoNotes(false);
     setRevision((r) => r + 1);
     if (!uid) return;
     let cancelled = false;
@@ -96,11 +88,9 @@ export function useMeetingArm(uid: string | null): MeetingArmState {
           await store.get<IdDateMap>(scopedKey(DISARMED_KEY, uid)),
           today,
         );
-        const auto = (await store.get<boolean>(scopedKey(AUTO_NOTES_KEY, uid))) === true;
         if (cancelled) return;
         armedRef.current = armed;
         disarmedRef.current = disarmed;
-        setAutoNotes(auto);
         setRevision((r) => r + 1);
       } catch (err) {
         logError("useMeetingArm: load store", err);
@@ -112,7 +102,7 @@ export function useMeetingArm(uid: string | null): MeetingArmState {
   }, [uid]);
 
   const persist = useCallback(
-    async (baseKey: string, value: IdDateMap | boolean) => {
+    async (baseKey: string, value: IdDateMap) => {
       const currentUid = uidRef.current;
       if (!currentUid) return;
       try {
@@ -131,7 +121,7 @@ export function useMeetingArm(uid: string | null): MeetingArmState {
     const today = localDateString();
     if (armedRef.current[eventId] === today) return true;
     if (disarmedRef.current[eventId] === today) return false;
-    return autoNotesRef.current;
+    return false;
   }, []);
 
   const toggleArm = useCallback(
@@ -155,13 +145,5 @@ export function useMeetingArm(uid: string | null): MeetingArmState {
     [isArmed, persist],
   );
 
-  const toggleAutoNotes = useCallback(() => {
-    const next = !autoNotesRef.current;
-    setAutoNotes(next);
-    void persist(AUTO_NOTES_KEY, next);
-    setRevision((r) => r + 1);
-    trackEvent("meeting_notes_auto_toggled", { enabled: next });
-  }, [persist]);
-
-  return { autoNotes, toggleAutoNotes, isArmed, toggleArm, revision };
+  return { isArmed, toggleArm, revision };
 }

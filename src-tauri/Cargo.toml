@@ -32,7 +32,7 @@ tauri-plugin-deep-link = "2"
 tauri-plugin-store = "2.4.3"
 tauri-plugin-os = "2.3.2"
 xcap = "0.9.6"
-image = { version = "0.25.10", default-features = false, features = ["jpeg"] }
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 tauri-plugin-log = "2.8.0"
 log = "0.4.33"
 tauri-plugin-updater = "2.10.1"
@@ -144,8 +144,12 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
     "objc2-core-foundation",
     "NSAlert",
     "NSApplication",
+    # The meeting prompt's app icon (meeting/app_icon.rs).
+    "NSBitmapImageRep",
     "NSButton",
     "NSControl",
+    "NSImage",
+    "NSImageRep",
     "NSPanel",
     "NSResponder",
     "NSRunningApplication",
@@ -158,6 +162,8 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
     "std",
     "block2",
     "NSArray",
+    # The app icon's TIFF/PNG bytes (meeting/app_icon.rs).
+    "NSData",
     "NSDictionary",
     "NSDistributedNotificationCenter",
     "NSEnumerator",

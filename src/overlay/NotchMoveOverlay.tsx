@@ -1,15 +1,17 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { logError } from "../lib/log";
-import { nearestEdge, NOTCH_EDGES, type NotchEdge } from "./notchEdge";
+import { nearestEdge, type NotchEdge } from "./notchEdge";
 import "./NotchMoveOverlay.css";
 
 /**
- * The fullscreen edge-picker shown while the notch is being moved. Rust has
+ * The fullscreen drag surface shown while the notch is being moved. Rust has
  * taken the display over (presentation "movingnotch", cursor-live), so this
- * covers the whole webview. As the cursor moves, the nearest of the four edge
- * drop-zones highlights and a ghost pill follows; releasing the pointer docks
- * the notch there (commit_notch_move), while Escape cancels it back in place.
+ * covers the whole webview, but it draws nothing except a pill trailing the
+ * cursor: no screen dim, no drop-zones, no hint (product call 2026-09-11, the
+ * move should feel like picking the notch up, not opening a picker). The
+ * nearest edge is still tracked; releasing the pointer docks the notch there
+ * (commit_notch_move), while Escape or a right-click cancels it back in place.
  *
  * Both a held drag (pointer stays down from the long-press) and a fresh
  * move-then-click resolve the same way, so it works even if the pointer capture
@@ -83,16 +85,6 @@ export function NotchMoveOverlay() {
 
   return (
     <div className="notch-move-overlay" role="dialog" aria-label="Move the notch to a screen edge">
-      {NOTCH_EDGES.map((edge) => (
-        <div
-          key={edge}
-          className={`notch-move-zone notch-move-zone-${edge}${
-            target === edge ? " notch-move-zone-active" : ""
-          }`}
-          aria-hidden="true"
-        />
-      ))}
-
       {ghost && (
         <div
           className="notch-move-ghost"
@@ -100,8 +92,6 @@ export function NotchMoveOverlay() {
           aria-hidden="true"
         />
       )}
-
-      <p className="notch-move-hint">Drag to an edge to dock. Esc to cancel.</p>
     </div>
   );
 }

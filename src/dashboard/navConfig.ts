@@ -34,7 +34,7 @@ export const primaryNavItems: NavItem[] = [
 ];
 
 export const settingsNavItem: NavItem = {
-  to: "/general",
+  to: "/system",
   label: "Settings",
   Icon: Settings,
 };

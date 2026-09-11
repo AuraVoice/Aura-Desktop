@@ -3,10 +3,33 @@
  * working tree; these can fold in later. Same rules: plain human phrasing,
  * no em-dashes anywhere. */
 
+/** Product name for a detected call app (detect.rs app strings). Product
+ * names, not platform strings, so they live here rather than platformKeys. */
+export function callLabel(app: string | null): string {
+  switch (app) {
+    case "google-meet": return "Google Meet";
+    case "teams-web": return "Microsoft Teams";
+    case "zoom-web": return "Zoom";
+    case "teams": return "Microsoft Teams";
+    case "zoom": return "Zoom";
+    default: return "Supported call";
+  }
+}
+
+/** The notch's "Record this meeting?" card (MeetingPromptCard). */
+export const meetingPrompt = {
+  title: (appLabel: string) => `Record this ${appLabel} call?`,
+  titleForEvent: (eventTitle: string) => `Record ${eventTitle}?`,
+  recordNow: "Record now",
+  snooze: "Snooze 2 min",
+  dismiss: "Dismiss",
+  starting: "Starting...",
+  capReached: "Monthly meeting limit reached.",
+  failed: "Couldn't start recording.",
+} as const;
+
 export const meetingNotes = {
   // CalendarAgendaCard
-  autoNotesOn: "Auto meeting notes: on",
-  autoNotesOff: "Auto meeting notes: off",
   armTooltip: "Take notes for this meeting",
   disarmTooltip: "Skip notes for this meeting",
 

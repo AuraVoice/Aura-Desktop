@@ -190,13 +190,6 @@ export function CalendarAgendaCard({
             >
               {copy.turnOff}
             </button>
-            <button
-              type="button"
-              className="calendar-agenda-turn-off calendar-agenda-auto-notes"
-              onClick={arm.toggleAutoNotes}
-            >
-              {arm.autoNotes ? notesCopy.autoNotesOn : notesCopy.autoNotesOff}
-            </button>
           </div>
         )}
       </div>

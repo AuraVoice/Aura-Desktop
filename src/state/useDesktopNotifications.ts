@@ -20,6 +20,7 @@ import {
   permissionGranted,
   setDisabled,
   type StoredNotification,
+  toastStored,
   unreadCount as countUnread,
 } from "../lib/desktopNotifications";
 import { logError } from "../lib/log";
@@ -47,6 +48,20 @@ const UNPARSEABLE_PAGE_MAX_ATTEMPTS = 5;
 // traffic. Individual toasts stop and one coalesced summary toast takes over
 // for the remainder of the poll.
 const OUTBOX_BACKLOG_TOAST_THRESHOLD = 8;
+// Items created before this session bound the account are history the outbox
+// replays (fresh bind, account switch, reset cursor), not live traffic. All of
+// them land in the inbox; only this many of the newest get a toast.
+const CATCH_UP_TOAST_LIMIT = 2;
+
+/** True when a raw outbox item was created before `cutoffMs`. An unreadable
+ *  timestamp counts as live, so the broker's own validation decides its fate. */
+function createdBefore(raw: unknown, cutoffMs: number): boolean {
+  if (!raw || typeof raw !== "object") return false;
+  const createdAt = (raw as Record<string, unknown>).created_at;
+  if (typeof createdAt !== "string") return false;
+  const createdMs = Date.parse(createdAt);
+  return Number.isFinite(createdMs) && createdMs < cutoffMs;
+}
 
 export interface DesktopNotificationsState {
   inbox: StoredNotification[];
@@ -80,6 +95,7 @@ export function useDesktopNotifications({
   const [notificationsEnabled, setNotificationsEnabledState] = useState(true);
   const [ownerReady, setOwnerReady] = useState(false);
   const boundUidRef = useRef<string | null>(null);
+  const boundAtMsRef = useRef<number | null>(null);
   const outboxCursorRef = useRef("");
   // cursor -> how many times a page starting there failed to parse. In memory
   // only: a restart re-attempting a bad page is the desired behaviour, since the
@@ -100,6 +116,7 @@ export function useDesktopNotifications({
   // store when the uid changes, so one account never sees another's inbox.
   useEffect(() => {
     boundUidRef.current = null;
+    boundAtMsRef.current = null;
     setOwnerReady(false);
     setInbox([]);
     setPermissionPromptVisible(false);
@@ -111,6 +128,7 @@ export function useDesktopNotifications({
       .then(async () => {
         if (cancelled) return null;
         boundUidRef.current = uid;
+        boundAtMsRef.current = Date.now();
         const [rows, alreadyAsked, alreadyGranted, cursor, disabled] = await Promise.all([
           loadInbox(),
           permissionAlreadyAsked(),
@@ -200,6 +218,8 @@ export function useDesktopNotifications({
       running = true;
       let ingestedCount = 0;
       let suppressedCount = 0;
+      const catchUp: StoredNotification[] = [];
+      const boundAtMs = boundAtMsRef.current ?? Date.now();
       try {
         for (let pageNumber = 0; pageNumber < OUTBOX_MAX_PAGES_PER_POLL; pageNumber++) {
           const previousCursor = outboxCursorRef.current;
@@ -217,7 +237,9 @@ export function useDesktopNotifications({
           if (cancelled || boundUidRef.current !== uid) return;
           let unparseable = 0;
           for (const raw of page.items) {
-            const suppressToast = ingestedCount >= OUTBOX_BACKLOG_TOAST_THRESHOLD;
+            const historical = createdBefore(raw, boundAtMs);
+            const suppressToast =
+              historical || ingestedCount >= OUTBOX_BACKLOG_TOAST_THRESHOLD;
             const result = await ingest(raw, {
               appHidden: appHiddenRef.current,
               ownerUid: uid,
@@ -233,7 +255,9 @@ export function useDesktopNotifications({
                 type: result.notification.type,
               });
             }
-            if (result.isNew) {
+            if (result.isNew && historical && result.notification) {
+              catchUp.push(result.notification);
+            } else if (result.isNew) {
               ingestedCount += 1;
               if (suppressToast) suppressedCount += 1;
             }
@@ -275,6 +299,13 @@ export function useDesktopNotifications({
           } else {
             break;
           }
+        }
+        const newestCatchUp = catchUp
+          .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+          .slice(0, CATCH_UP_TOAST_LIMIT);
+        for (const notification of newestCatchUp) {
+          if (cancelled || boundUidRef.current !== uid) break;
+          await toastStored(notification, { appHidden: appHiddenRef.current, ownerUid: uid });
         }
         refresh();
         if (suppressedCount > 0) {
@@ -356,6 +387,7 @@ export function useDesktopNotifications({
   }, []);
   const reset = useCallback(() => {
     boundUidRef.current = null;
+    boundAtMsRef.current = null;
     setOwnerReady(false);
     outboxCursorRef.current = "";
     setInbox([]);

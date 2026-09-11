@@ -148,6 +148,10 @@ pub struct OverlaySnapshot {
     pub presentation: OverlayPresentation,
     pub panel_variant: PanelVariant,
     pub notch_edge: NotchEdge,
+    // Mirrored so React can tell a Bar that is actually drawn from one that
+    // has lent its edge to the dictation HUD (a timed card must not count
+    // down while nobody can see it).
+    pub dictation_hold: bool,
 }
 
 /// All the mutable overlay bookkeeping that used to be split across Flutter's
@@ -784,6 +788,7 @@ pub fn snapshot(app: &AppHandle) -> OverlaySnapshot {
             presentation: OverlayPresentation::Hidden,
             panel_variant: PanelVariant::Setup,
             notch_edge: NotchEdge::default(),
+            dictation_hold: false,
         };
     };
     let state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -791,6 +796,7 @@ pub fn snapshot(app: &AppHandle) -> OverlaySnapshot {
         presentation: state.presentation,
         panel_variant: state.panel_variant,
         notch_edge: state.notch_edge,
+        dictation_hold: state.dictation_hold,
     }
 }
 

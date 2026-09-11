@@ -11,8 +11,8 @@ const mocks = vi.hoisted(() => ({
   user: { uid: "user-1" } as { uid: string } | null,
   invoke: vi.fn(() => Promise.resolve()),
   useMeetings: vi.fn(),
-  useMeetingArm: vi.fn(),
   useMeetingCapture: vi.fn(),
+  useMeetingPrompt: vi.fn(),
   useOnboardingTail: vi.fn(),
   useGuideMode: vi.fn(),
   useDraftCard: vi.fn(),
@@ -55,8 +55,8 @@ vi.mock("./useDraftCard", () => ({
 vi.mock("./useGuideMode", () => ({ useGuideMode: mocks.useGuideMode }));
 vi.mock("./useUpdateReady", () => ({ useUpdateReady: mocks.useUpdateReady }));
 vi.mock("./useMeetings", () => ({ useMeetings: mocks.useMeetings }));
-vi.mock("./useMeetingArm", () => ({ useMeetingArm: mocks.useMeetingArm }));
 vi.mock("./useMeetingCapture", () => ({ useMeetingCapture: mocks.useMeetingCapture }));
+vi.mock("./useMeetingPrompt", () => ({ useMeetingPrompt: mocks.useMeetingPrompt }));
 vi.mock("./useOnboardingTail", () => ({ useOnboardingTail: mocks.useOnboardingTail }));
 vi.mock("./OnboardingTail", () => ({ OnboardingTail: () => <div>tail</div> }));
 vi.mock("./NotchBar", () => ({ NotchBar: () => <div>notch</div> }));
@@ -83,8 +83,8 @@ beforeEach(() => {
   mocks.useDraftCard.mockReturnValue({ phase: "idle", reset: vi.fn() });
   mocks.useUpdateReady.mockReturnValue({ version: null, updatedNotice: null });
   mocks.useMeetings.mockReturnValue({ events: [] });
-  mocks.useMeetingArm.mockReturnValue({ isArmed: vi.fn(() => false), revision: 0 });
   mocks.useMeetingCapture.mockReturnValue({});
+  mocks.useMeetingPrompt.mockReturnValue({ visible: false, call: null });
   mocks.useOnboardingTail.mockReturnValue({ status: "done", complete: vi.fn() });
 });
 
@@ -97,7 +97,7 @@ afterEach(() => {
 });
 
 describe("OverlayRoot meeting background services", () => {
-  it("mounts calendar, saved arm state, capture, and restart recovery without auto-summoning UI", () => {
+  it("mounts calendar, capture, the record prompt, and restart recovery without auto-summoning UI", () => {
     const event = {
       id: "event-1",
       title: "Planning",
@@ -105,10 +105,9 @@ describe("OverlayRoot meeting background services", () => {
       endTime: "2026-07-17T10:30:00Z",
       meetingLink: "https://zoom.us/j/1",
     };
-    const isArmed = vi.fn(() => true);
+    const recordCall = vi.fn();
     mocks.useMeetings.mockReturnValue({ events: [event] });
-    mocks.useMeetingArm.mockReturnValue({ isArmed, revision: 4 });
-    mocks.useMeetingCapture.mockReturnValue({});
+    mocks.useMeetingCapture.mockReturnValue({ ownsRuntime: true, recording: false, recordCall });
     mocks.useOnboardingTail.mockReturnValue({ status: "done", complete: vi.fn() });
 
     act(() => {
@@ -122,20 +121,26 @@ describe("OverlayRoot meeting background services", () => {
       callLive: false,
       autoSummon: false,
     });
-    expect(mocks.useMeetingArm).toHaveBeenCalledWith("user-1");
     expect(mocks.useMeetingCapture).toHaveBeenCalledWith({
       uid: "user-1",
       appHidden: true,
+    });
+    expect(mocks.useMeetingPrompt).toHaveBeenCalledWith({
+      uid: "user-1",
+      ownsRuntime: true,
+      recording: false,
       events: [event],
-      isArmed,
-      armRevision: 4,
-      automaticCapture: true,
+      presentation: "hidden",
+      dictationHold: false,
+      callLive: false,
+      interviewLive: false,
+      chatOpen: false,
+      recordCall,
     });
   });
 
   it("leaves onboarding to the dashboard while first-run is active", () => {
     mocks.useMeetings.mockReturnValue({ events: [] });
-    mocks.useMeetingArm.mockReturnValue({ isArmed: vi.fn(() => false), revision: 0 });
     mocks.useMeetingCapture.mockReturnValue({});
     mocks.useOnboardingTail.mockReturnValue({ status: "active", complete: vi.fn() });
 

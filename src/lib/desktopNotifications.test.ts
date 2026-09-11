@@ -72,6 +72,13 @@ function notification(id: string) {
   };
 }
 
+function delivered(uid: string) {
+  const byOwner = fake.values.get("delivered_toasts_by_owner") as
+    | Record<string, Record<string, string>>
+    | undefined;
+  return byOwner?.[uid] ?? {};
+}
+
 beforeEach(() => {
   fake.values.clear();
   fake.sent.length = 0;
@@ -224,7 +231,7 @@ describe("desktop notification broker", () => {
 
       await ingest(notification("meeting-old"), { appHidden: true, ownerUid: "user-1" });
       expect(fake.values.get("dedup")).toHaveProperty("meeting:meeting-old:ready:1");
-      expect(fake.values.get("delivered_toasts")).toHaveProperty("meeting-old");
+      expect(delivered("user-1")).toHaveProperty("meeting-old");
 
       // Past the 30-day inbox retention window: the next ingest prunes the old
       // row out of the inbox and drops its dedup + delivered entries with it.
@@ -233,8 +240,8 @@ describe("desktop notification broker", () => {
 
       expect(await loadInbox()).toHaveLength(1);
       expect(fake.values.get("dedup")).not.toHaveProperty("meeting:meeting-old:ready:1");
-      expect(fake.values.get("delivered_toasts")).not.toHaveProperty("meeting-old");
-      expect(fake.values.get("delivered_toasts")).toHaveProperty("meeting-new");
+      expect(delivered("user-1")).not.toHaveProperty("meeting-old");
+      expect(delivered("user-1")).toHaveProperty("meeting-new");
     } finally {
       vi.useRealTimers();
     }

@@ -35,7 +35,11 @@ import { loadGeneralSettings } from "./generalSettings";
 
 const STORE_FILE = "desktop-notifications.json";
 const INBOX_KEY = "inbox"; // Record<notificationId, StoredNotification>
-const DELIVERED_KEY = "delivered_toasts"; // Record<notificationId, ISODate> (restart-safe)
+// Record<uid, Record<notificationId, ISODate>>. Kept per account and NOT wiped
+// on an owner switch: the ids are opaque, and forgetting them is what made a
+// sign-in replay of the backend outbox re-toast a week of history.
+const DELIVERED_BY_OWNER_KEY = "delivered_toasts_by_owner";
+const LEGACY_DELIVERED_KEY = "delivered_toasts"; // flat pre-2026-09-11 map, migrated on bind
 const DEDUP_KEY = "dedup"; // Record<dedupKey, notificationId>
 const DISABLED_KEY = "disabled"; // boolean; whole-feature off switch
 const PERMISSION_ASKED_KEY = "permission_asked"; // boolean; we asked once, in-app
@@ -83,6 +87,33 @@ async function readInbox(store: Store): Promise<Record<string, StoredNotificatio
   return (await store.get<Record<string, StoredNotification>>(INBOX_KEY)) ?? {};
 }
 
+type DeliveredMap = Record<string, string>;
+
+async function readDeliveredByOwner(store: Store): Promise<Record<string, DeliveredMap>> {
+  return (await store.get<Record<string, DeliveredMap>>(DELIVERED_BY_OWNER_KEY)) ?? {};
+}
+
+async function readDelivered(store: Store, uid: string): Promise<DeliveredMap> {
+  return (await readDeliveredByOwner(store))[uid] ?? {};
+}
+
+async function writeDelivered(store: Store, uid: string, delivered: DeliveredMap): Promise<void> {
+  const byOwner = await readDeliveredByOwner(store);
+  byOwner[uid] = delivered;
+  await store.set(DELIVERED_BY_OWNER_KEY, byOwner);
+}
+
+/** Keeps only delivered stamps inside the retention window. */
+function pruneDelivered(delivered: DeliveredMap, nowMs: number): DeliveredMap {
+  const cutoffMs = nowMs - INBOX_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
+  const kept: DeliveredMap = {};
+  for (const [id, at] of Object.entries(delivered)) {
+    const deliveredAtMs = Date.parse(at);
+    if (Number.isFinite(deliveredAtMs) && deliveredAtMs >= cutoffMs) kept[id] = at;
+  }
+  return kept;
+}
+
 function prune(inbox: Record<string, StoredNotification>, nowMs: number): Record<string, StoredNotification> {
   const cutoff = nowMs - INBOX_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
   const kept = Object.values(inbox)
@@ -94,18 +125,32 @@ function prune(inbox: Record<string, StoredNotification>, nowMs: number): Record
   return result;
 }
 
-/** Bind the store to a user. On an account switch (owner differs) the inbox,
- *  dedup, and delivered-toast records are cleared, so one account can never see
- *  another's notifications. Call on sign-in before loading the inbox. */
+/** Bind the store to a user. On an account switch (owner differs) the inbox
+ *  and dedup are cleared, so one account can never see another's
+ *  notifications. Delivered-toast stamps survive per uid, so returning to an
+ *  account never re-toasts what it already showed. Call on sign-in before
+ *  loading the inbox. */
 export async function bindOwner(uid: string): Promise<void> {
   if (!uid.trim()) throw new Error("Notification owner uid is required");
   return serializeMutation(async () => {
     const store = await getStore();
     const previous = await store.get<string>(OWNER_KEY);
     if (previous === uid) return;
+    const nowMs = Date.now();
+    const byOwner = await readDeliveredByOwner(store);
+    const legacy = await store.get<DeliveredMap>(LEGACY_DELIVERED_KEY);
+    if (legacy !== undefined && legacy !== null) {
+      if (previous) byOwner[previous] = { ...legacy, ...(byOwner[previous] ?? {}) };
+      await store.delete(LEGACY_DELIVERED_KEY);
+    }
+    const prunedByOwner: Record<string, DeliveredMap> = {};
+    for (const [owner, delivered] of Object.entries(byOwner)) {
+      const kept = pruneDelivered(delivered, nowMs);
+      if (Object.keys(kept).length > 0) prunedByOwner[owner] = kept;
+    }
     await store.set(INBOX_KEY, {});
     await store.set(DEDUP_KEY, {});
-    await store.set(DELIVERED_KEY, {});
+    await store.set(DELIVERED_BY_OWNER_KEY, prunedByOwner);
     await store.set(OWNER_KEY, uid);
     await store.save();
   });
@@ -258,7 +303,7 @@ async function maybeToast(
   ctx: ToastContext,
 ): Promise<void> {
   if (ctx.suppressToast) return;
-  const delivered = (await store.get<Record<string, string>>(DELIVERED_KEY)) ?? {};
+  const delivered = await readDelivered(store, ctx.ownerUid);
   if (!shouldToast(notification, ctx, delivered[notification.notificationId] !== undefined)) {
     return;
   }
@@ -272,7 +317,7 @@ async function maybeToast(
     // API. If the process dies immediately afterward, the durable inbox remains
     // the fallback and restart cannot duplicate the lock-screen effect.
     delivered[notification.notificationId] = new Date().toISOString();
-    await store.set(DELIVERED_KEY, delivered);
+    await writeDelivered(store, ctx.ownerUid, delivered);
     await store.save();
     // Prefer the Rust actionable toast: it lands in Action Center under the
     // app's identity and clicking it opens the dashboard to the responsible
@@ -409,18 +454,10 @@ export async function ingest(
     for (const [key, id] of Object.entries(dedup)) {
       if (survivingIds.has(id)) prunedDedup[key] = id;
     }
-    const deliveredCutoffMs = nowMs - INBOX_MAX_AGE_DAYS * 24 * 60 * 60 * 1000;
-    const delivered = (await store.get<Record<string, string>>(DELIVERED_KEY)) ?? {};
-    const prunedDelivered: Record<string, string> = {};
-    for (const [id, at] of Object.entries(delivered)) {
-      const deliveredAtMs = Date.parse(at);
-      if (Number.isFinite(deliveredAtMs) && deliveredAtMs >= deliveredCutoffMs) {
-        prunedDelivered[id] = at;
-      }
-    }
+    const prunedDelivered = pruneDelivered(await readDelivered(store, ctx.ownerUid), nowMs);
     await store.set(INBOX_KEY, pruned);
     await store.set(DEDUP_KEY, prunedDedup);
-    await store.set(DELIVERED_KEY, prunedDelivered);
+    await writeDelivered(store, ctx.ownerUid, prunedDelivered);
     await store.save();
 
     trackEvent("desktop_notification_queued", {
@@ -433,6 +470,25 @@ export async function ingest(
   } catch (err) {
     logError("desktopNotifications: ingest", err);
     return { notification: null, isNew: false };
+    }
+  });
+}
+
+/** Toast a row that was ingested earlier with `suppressToast`, under the same
+ *  policy, permission and toast-once rules as a live ingest. The outbox poller
+ *  uses this to show only the newest few of a catch-up replay. */
+export async function toastStored(
+  notification: StoredNotification,
+  ctx: ToastContext,
+): Promise<void> {
+  return serializeMutation(async () => {
+    try {
+      const store = await getStore();
+      if ((await store.get<string>(OWNER_KEY)) !== ctx.ownerUid) return;
+      if ((await store.get<boolean>(DISABLED_KEY)) === true) return;
+      await maybeToast(store, notification, { ...ctx, suppressToast: false });
+    } catch (err) {
+      logError("desktopNotifications: toastStored", err);
     }
   });
 }

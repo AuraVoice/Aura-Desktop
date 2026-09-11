@@ -24,6 +24,7 @@ pub(crate) mod audio;
 // key wrapping is per-OS (crate::crypto). chat_cache and interview_store
 // depend on this on every platform, so it must not be gated.
 pub(crate) mod crypto;
+mod app_icon;
 pub mod detect;
 mod session;
 
@@ -96,6 +97,43 @@ pub struct MeetingCaptureHandle(pub Mutex<Option<ActiveCapture>>);
 pub struct JoinWatchHandle(
     pub Mutex<std::collections::HashMap<String, std::sync::Arc<std::sync::atomic::AtomicBool>>>,
 );
+
+/// One call the ambient detector can see right now (`meeting-call-seen`).
+/// `call_key` is a stable identity for the call (app plus a hash of the
+/// normalized window title, never the title itself) so React can remember a
+/// decision per call without holding meeting names. `source` says which
+/// signal produced it: "window" today, "mic" once mic-in-use detection lands.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AmbientCallPayload {
+    pub call_key: String,
+    pub app: String,
+    pub window_title: String,
+    pub source: String,
+    /// PNG data URL of a native call app's icon (app_icon.rs), or None for a
+    /// browser-hosted call or when it could not be read.
+    pub app_icon: Option<String>,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AmbientGonePayload {
+    pub call_key: String,
+    pub app: String,
+}
+
+/// The single always-on call scanner (detect.rs `ambient_thread`). `cancel`
+/// is Some while a thread is running; `current` is the call it last reported,
+/// handed back to a remounting webview so a call already in progress still
+/// gets its prompt.
+#[derive(Default)]
+pub struct AmbientWatch {
+    cancel: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    current: Option<AmbientCallPayload>,
+}
+
+#[derive(Default)]
+pub struct AmbientWatchHandle(pub Mutex<AmbientWatch>);
 
 /// The `is_voice_active` analog for meeting capture - updater.rs consults
 /// this before installing so a restart can never eat a recording.
@@ -203,6 +241,13 @@ pub fn stop_all_join_watches(app: &AppHandle) {
         return;
     };
     cancel_all_join_watches(&handle);
+}
+
+/// Native twin of `stop_ambient_watch` for authorization revocation: the
+/// scanner reports which app the user is in a call with, and that must not
+/// keep running under the next account on the webview's say-so alone.
+pub fn stop_ambient_watch_native(app: &AppHandle) {
+    detect::stop_ambient_watch(app);
 }
 
 fn cancel_all_join_watches(handle: &JoinWatchHandle) -> usize {
@@ -898,6 +943,32 @@ pub fn start_join_watch(
 pub fn stop_join_watch(app: AppHandle, event_id: String) -> Result<(), String> {
     require_runtime_owner(&app)?;
     detect::stop_join_watch(app, event_id);
+    Ok(())
+}
+
+/// Starts the always-on call scanner behind the "Record this meeting?"
+/// prompt. Idempotent: a second call while it runs returns the call it can
+/// currently see (if any) instead of spawning another thread. Sync on purpose,
+/// like start_join_watch: it only spawns; every scan happens on that thread.
+#[tauri::command]
+pub fn start_ambient_watch(app: AppHandle) -> Result<Option<AmbientCallPayload>, String> {
+    require_runtime_owner(&app)?;
+    let ticket = crate::security::authorize(&app, crate::security::Operation::StartJoinWatch)?;
+    let snapshot = detect::start_ambient_watch(app.clone())?;
+    // Same authorize -> insert race close as start_join_watch above.
+    if let Err(denied) =
+        crate::security::recheck(&app, crate::security::Operation::StartJoinWatch, &ticket)
+    {
+        detect::stop_ambient_watch(&app);
+        return Err(denied);
+    }
+    Ok(snapshot)
+}
+
+#[tauri::command]
+pub fn stop_ambient_watch(app: AppHandle) -> Result<(), String> {
+    require_runtime_owner(&app)?;
+    detect::stop_ambient_watch(&app);
     Ok(())
 }
 
