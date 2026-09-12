@@ -7,7 +7,9 @@ import {
   FileJson,
   HardDrive,
   LoaderCircle,
+  MessageSquareText,
   RefreshCw,
+  Sparkles,
   Trash2,
   TriangleAlert,
   Video,
@@ -20,15 +22,21 @@ import {
   deleteMeeting,
   retryMeeting,
   type MeetingDoc,
+  type MeetingNote,
   type MeetingProcessingStage,
+  type TranscriptTurn,
 } from "../../lib/meetings";
 import { CardGrid } from "../components/CardGrid";
 import type { CardModel } from "../components/DashboardCard";
 import { EmptyState } from "../components/EmptyState";
 import { PageError } from "../components/PageError";
 import { RefreshIndicator } from "../components/RefreshIndicator";
+import { SlidingTabs, useTabStage } from "../components/SlidingTabs";
 import { shortDateTime } from "../format";
 import { useDashboardResource } from "../useDashboardResource";
+import { useMediaQuery } from "../useMediaQuery";
+
+type MeetingPane = "insights" | "transcript";
 
 interface LocalRecording {
   meetingId: string;
@@ -169,6 +177,86 @@ function NoteList({ items }: { items: string[] }) {
   );
 }
 
+/** Meeting-relative stamp for a turn. Notes written before
+ *  meeting-transcript-v3 have no timings, and those turns show none. */
+function turnStamp(seconds: number | undefined): string | null {
+  if (seconds === undefined) return null;
+  const whole = Math.floor(seconds);
+  const hours = Math.floor(whole / 3600);
+  const minutes = Math.floor((whole % 3600) / 60);
+  const secs = whole % 60;
+  const body = `${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+  return hours > 0 ? `${hours}:${body}` : body;
+}
+
+function MeetingInsights({ note }: { note: MeetingNote }) {
+  return (
+    <div className="db-meeting-note">
+      {note.summary && (
+        <section className="db-meeting-section">
+          <h2>Summary</h2>
+          <p className="db-detail-text">{note.summary}</p>
+        </section>
+      )}
+      {note.decisions.length > 0 && (
+        <section className="db-meeting-section">
+          <h2>{meetingNotes.decisionsHeading}</h2>
+          <NoteList items={note.decisions} />
+        </section>
+      )}
+      {note.actionItems.length > 0 && (
+        <section className="db-meeting-section">
+          <h2>{meetingNotes.actionItemsHeading}</h2>
+          <NoteList items={note.actionItems} />
+        </section>
+      )}
+      {note.openQuestions.length > 0 && (
+        <section className="db-meeting-section">
+          <h2>Open questions</h2>
+          <NoteList items={note.openQuestions} />
+        </section>
+      )}
+      {(note.oneSided || note.partial) && (
+        <div className="db-meeting-caveats">
+          {note.oneSided && <p>{meetingNotes.oneSidedCaveat}</p>}
+          {note.partial && <p>{meetingNotes.partialCaveat}</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MeetingTranscript({ turns }: { turns: TranscriptTurn[] }) {
+  return (
+    <div className="db-meeting-transcript">
+      <div className="db-meeting-transcript-head">
+        <h2>Transcript</h2>
+        <span>{turns.length} turns</span>
+      </div>
+      <div className="db-meeting-turns">
+        {turns.map((turn, index) => {
+          const stamp = turnStamp(turn.startS);
+          // "You" is the device owner's microphone channel; the backend owns
+          // both labels, so this is the one comparison the client may make.
+          const mine = turn.speaker === "You";
+          return (
+            <article
+              className={`db-meeting-turn${mine ? " is-mine" : ""}`}
+              key={`${index}:${turn.startS ?? ""}`}
+            >
+              <header>
+                <span className="db-meeting-turn-speaker">{turn.speaker || "Speaker"}</span>
+                {stamp && <time className="db-meeting-turn-stamp">{stamp}</time>}
+              </header>
+              <p>{turn.text}</p>
+            </article>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function MeetingDetail({
   meeting,
   local,
@@ -188,6 +276,9 @@ function MeetingDetail({
   const state = visualState(current, local);
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState(false);
+  // Wide enough for two readable columns; below it the panes take turns.
+  const stacked = useMediaQuery("(max-width: 1080px)");
+  const pane = useTabStage<MeetingPane>("insights");
 
   const handleRetry = async () => {
     setRetrying(true);
@@ -227,49 +318,45 @@ function MeetingDetail({
       </div>
 
       {state === "ready" && current.note ? (
-        <div className="db-detail db-meeting-note">
-          {current.note.summary && (
-            <section className="db-meeting-section">
-              <h2>Summary</h2>
-              <p className="db-detail-text">{current.note.summary}</p>
-            </section>
-          )}
-          {current.note.decisions.length > 0 && (
-            <section className="db-meeting-section">
-              <h2>{meetingNotes.decisionsHeading}</h2>
-              <NoteList items={current.note.decisions} />
-            </section>
-          )}
-          {current.note.actionItems.length > 0 && (
-            <section className="db-meeting-section">
-              <h2>{meetingNotes.actionItemsHeading}</h2>
-              <NoteList items={current.note.actionItems} />
-            </section>
-          )}
-          {current.note.openQuestions.length > 0 && (
-            <section className="db-meeting-section">
-              <h2>Open questions</h2>
-              <NoteList items={current.note.openQuestions} />
-            </section>
-          )}
-          {(current.note.oneSided || current.note.partial) && (
-            <div className="db-meeting-caveats">
-              {current.note.oneSided && <p>{meetingNotes.oneSidedCaveat}</p>}
-              {current.note.partial && <p>{meetingNotes.partialCaveat}</p>}
-            </div>
-          )}
-          {current.note.transcript.length > 0 && (
-            <section className="db-meeting-section db-detail-transcript">
-              <h2>Transcript</h2>
-              {current.note.transcript.map((turn, index) => (
-                <div className="db-turn" key={`${index}:${turn.speaker}`}>
-                  <span className="db-turn-role">{turn.speaker || "Speaker"}</span>
-                  <p className="db-turn-text">{turn.text}</p>
+        current.note.transcript.length === 0 ? (
+          <div className="db-detail">
+            <MeetingInsights note={current.note} />
+          </div>
+        ) : stacked ? (
+          <div className="db-detail">
+            <SlidingTabs
+              tabs={[
+                { value: "insights", label: "Insights", Icon: Sparkles },
+                {
+                  value: "transcript",
+                  label: "Transcript",
+                  Icon: MessageSquareText,
+                  count: current.note.transcript.length,
+                },
+              ]}
+              value={pane.tab}
+              onChange={pane.switchTab}
+              ariaLabel="Meeting detail"
+              idPrefix="meeting"
+            />
+            <div className={`db-tab-stage is-${pane.transition}`}>
+              {pane.renderedTab === "transcript" ? (
+                <div id="meeting-transcript-panel" role="tabpanel" aria-labelledby="meeting-transcript-tab">
+                  <MeetingTranscript turns={current.note.transcript} />
                 </div>
-              ))}
-            </section>
-          )}
-        </div>
+              ) : (
+                <div id="meeting-insights-panel" role="tabpanel" aria-labelledby="meeting-insights-tab">
+                  <MeetingInsights note={current.note} />
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="db-detail db-meeting-split">
+            <MeetingInsights note={current.note} />
+            <MeetingTranscript turns={current.note.transcript} />
+          </div>
+        )
       ) : (
         <div className={`db-meeting-state db-meeting-state-${state}`}>
           {state === "failed" ? <TriangleAlert size={20} /> : <LoaderCircle size={20} />}

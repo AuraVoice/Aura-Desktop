@@ -78,6 +78,9 @@ export interface MeetingClaim {
 export interface TranscriptTurn {
   speaker: string;
   text: string;
+  /** Meeting-relative seconds, present from meeting-transcript-v3 onward. */
+  startS?: number;
+  endS?: number;
 }
 
 export interface MeetingNote {
@@ -497,6 +500,13 @@ function parseCompletionReceipt(
   return receipt;
 }
 
+/** Turn timings arrived with meeting-transcript-v3. Notes published before it
+ *  carry none, so an absent or malformed value leaves the turn untimed rather
+ *  than dropping the whole transcript the way a strict check would. */
+function turnSeconds(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
 function parseNote(raw: unknown): MeetingNote | null {
   if (typeof raw !== "object" || raw === null) return null;
   const row = raw as Record<string, unknown>;
@@ -509,8 +519,13 @@ function parseNote(raw: unknown): MeetingNote | null {
       return typeof entry.speaker === "string" && typeof entry.text === "string";
     })
     ? row.transcript.map((turn) => {
-        const entry = turn as Record<string, string>;
-        return { speaker: entry.speaker, text: entry.text };
+        const entry = turn as Record<string, unknown>;
+        return {
+          speaker: entry.speaker as string,
+          text: entry.text as string,
+          startS: turnSeconds(entry.start_s),
+          endS: turnSeconds(entry.end_s),
+        };
       })
     : [];
   return {

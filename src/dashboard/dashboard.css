@@ -7258,7 +7258,7 @@
 
 /* Meetings list detail swaps into the page instead of opening a modal. */
 .db-meeting-detail {
-  width: min(900px, 100%);
+  width: min(1280px, 100%);
   margin: 0 auto;
   padding-bottom: 32px;
 }
@@ -7303,8 +7303,100 @@
   line-height: 1.15;
 }
 .db-meeting-note {
+  display: flex;
+  flex-direction: column;
   gap: 24px;
   padding-top: 24px;
+}
+/* Insights and transcript side by side. The detail already re-narrows itself
+   inside a full-width page shell, so widening it costs the page nothing. */
+.db-meeting-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 32px;
+  align-items: start;
+}
+.db-meeting-transcript {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding-top: 24px;
+}
+/* The transcript scrolls against the note instead of pushing it off screen. */
+.db-meeting-turns {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  max-height: calc(100vh - 300px);
+  padding-right: 6px;
+}
+.db-meeting-transcript-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 9px;
+  background: var(--db-bg, transparent);
+}
+.db-meeting-transcript-head h2 {
+  margin: 0;
+  color: var(--db-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+.db-meeting-transcript-head span {
+  color: var(--db-text-mute);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+/* A transcript row, not a chat bubble: speaker and time in a quiet header, the
+   speech as one paragraph the eye can run down. */
+.db-meeting-turn {
+  padding: 9px 13px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--db-text) 4%, transparent);
+}
+.db-meeting-turn.is-mine {
+  background: color-mix(in srgb, var(--db-teal, #2fb3a3) 11%, transparent);
+}
+.db-meeting-turn header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 3px;
+}
+.db-meeting-turn-speaker {
+  color: var(--db-text-muted, var(--db-text-dim));
+  font-size: 11px;
+  font-weight: 650;
+}
+.db-meeting-turn-stamp {
+  color: var(--db-text-mute);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.db-meeting-turn p {
+  margin: 0;
+  color: var(--db-text);
+  font-size: 13.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 1080px) {
+  /* Single pane under the tab strip; it owns the page scroll again. */
+  .db-meeting-turns {
+    max-height: none;
+    overflow-y: visible;
+    padding-right: 0;
+  }
+  .db-meeting-transcript {
+    padding-top: 18px;
+  }
 }
 .db-meeting-section h2 {
   margin: 0 0 9px;
