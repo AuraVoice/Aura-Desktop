@@ -1,65 +1,140 @@
-.voice-recovery-card {
-  border: 1px solid rgba(255, 255, 255, 0.82);
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.9), rgba(239, 245, 242, 0.62));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.07);
+/* Matte black, same recipe and geometry as MeetingPromptCard (2026-09-11
+ * product call): this notice sits over whatever app the user is in, and the
+ * old bright glass panel was both too tall and too white for one line of
+ * text. Scoped with .glass-surface so it outranks GlassSurface.css's radius,
+ * fill and gradient hairline regardless of stylesheet order.
+ *
+ * The X straddles the top-right corner, so the card must not clip
+ * (.voice-recovery-clip clips the content instead) and the card is inset by
+ * the X's radius on the top and both sides. VOICE_RECOVERY_CARD_HEIGHT counts
+ * that 11px top inset. */
+.glass-surface.voice-recovery-card {
+  position: relative;
+  width: calc(100% - 22px);
+  height: calc(100% - 11px);
+  margin: 11px 11px 0;
+  border-radius: 18px;
+  background: rgba(12, 12, 14, 0.94);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.32);
   backdrop-filter: blur(18px) saturate(1.2);
   -webkit-backdrop-filter: blur(18px) saturate(1.2);
-  border-radius: 14px;
+  color: rgba(255, 255, 255, 0.94);
+  text-shadow: none;
+  overflow: visible;
+}
+
+/* Replace GlassSurface's light gradient rim with a faint white hairline. */
+.glass-surface.voice-recovery-card::after {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.voice-recovery-clip {
+  position: relative;
+  height: 100%;
+  border-radius: inherit;
   overflow: hidden;
 }
 
 .voice-recovery-inner {
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  justify-content: center;
+  gap: 8px;
+  height: 100%;
   padding: 12px 14px;
 }
 
+.voice-recovery-header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  height: 24px;
+  min-width: 0;
+  /* Keeps the text clear of the corner X's inner half. */
+  padding-right: 8px;
+}
+
+.voice-recovery-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.voice-recovery-spin {
+  animation: voice-recovery-spin 1.1s linear infinite;
+}
+
+@keyframes voice-recovery-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.voice-recovery-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
 .voice-recovery-title {
-  font-size: 13px;
-  font-weight: 650;
-  color: rgba(30, 45, 40, 0.94);
+  font-size: 12px;
+  line-height: 13px;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.94);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .voice-recovery-message {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.4;
-  color: rgba(30, 45, 40, 0.74);
+  font-size: 11px;
+  line-height: 12px;
+  color: rgba(255, 255, 255, 0.6);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .voice-recovery-actions {
   display: flex;
-  gap: 7px;
-  margin-top: 1px;
+  justify-content: flex-end;
+  gap: 8px;
+  height: 28px;
 }
 
 .voice-recovery-primary,
-.voice-recovery-secondary,
-.voice-recovery-close {
-  border: 1px solid rgba(63, 86, 78, 0.16);
-  border-radius: 9px;
-  padding: 5px 11px;
-  font-size: 11px;
+.voice-recovery-secondary {
+  box-sizing: border-box;
+  height: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 10px;
+  padding: 0 14px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  background: rgba(255, 255, 255, 0.52);
-  color: rgba(30, 45, 40, 0.88);
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.88);
 }
 
+/* The recovery action is primary: solid white on the dark card. */
 .voice-recovery-primary {
-  background: rgba(63, 128, 104, 0.9);
-  border-color: rgba(63, 128, 104, 0.42);
-  color: rgba(255, 255, 255, 0.98);
+  background: rgba(255, 255, 255, 0.94);
+  border-color: rgba(255, 255, 255, 0.94);
+  color: rgba(12, 12, 14, 0.94);
 }
 
-.voice-recovery-primary:hover {
-  background: rgba(52, 110, 89, 0.94);
+.voice-recovery-primary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 1);
 }
 
-.voice-recovery-secondary:hover,
-.voice-recovery-close:hover {
-  background: rgba(255, 255, 255, 0.76);
+.voice-recovery-secondary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.16);
 }
 
 .voice-recovery-primary:disabled,
@@ -67,4 +142,35 @@
 .voice-recovery-close:disabled {
   cursor: default;
   opacity: 0.6;
+}
+
+/* The corner X: centred on the top-right corner, half on the card. */
+.voice-recovery-close {
+  position: absolute;
+  top: -11px;
+  right: -11px;
+  z-index: 2;
+  box-sizing: border-box;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 50%;
+  background: rgba(30, 30, 34, 0.98);
+  color: rgba(255, 255, 255, 0.8);
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+}
+
+.voice-recovery-close:hover:not(:disabled) {
+  background: rgba(52, 52, 58, 1);
+  color: rgba(255, 255, 255, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-recovery-spin {
+    animation: none;
+  }
 }

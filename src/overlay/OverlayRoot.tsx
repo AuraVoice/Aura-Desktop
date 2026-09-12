@@ -872,6 +872,9 @@ export function OverlayRoot() {
       )}
       {!visibleChatOpen && showVoiceNotice && (
         <VoiceRecoveryCard
+          variant={
+            voice.showMicSettingsHint ? "mic" : voice.errorMessage ? "error" : "connecting"
+          }
           title={
             voice.showMicSettingsHint
               ? "Microphone access needed"
