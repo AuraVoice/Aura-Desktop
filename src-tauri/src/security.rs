@@ -112,6 +112,7 @@ pub enum Operation {
     CaptureTurnScreen,
     CaptureChatScreen,
     CaptureInterviewScreen,
+    CaptureRegion,
     CaptureGuide,
     PointAt,
     DesktopControl,
@@ -244,6 +245,21 @@ impl SecurityState {
             // one-shot button is the authorizing gesture, and the capture
             // command separately requires a live Interview Companion session.
             Operation::CaptureInterviewScreen => {
+                if self.guide_armed {
+                    return Err(Denied::ModeConflict);
+                }
+            }
+            // The hold-and-stroke gesture IS the authorizing act, so this is
+            // deliberately NOT gated on screen_sight_armed: that bit defaults
+            // false, so requiring it would make the gesture silently do nothing
+            // for every user who has never pressed the Screen Sight shortcut.
+            //
+            // It is also NOT gated on voice_active. A live call makes the
+            // gesture a CAPTIONED NO-OP, decided in region/mod.rs, not a
+            // denial: a Denied here would surface as an error string rather
+            // than a caption, and would make recheck fail a turn that started
+            // legitimately.
+            Operation::CaptureRegion => {
                 if self.guide_armed {
                     return Err(Denied::ModeConflict);
                 }
@@ -578,6 +594,12 @@ pub fn session_changed(app: &AppHandle, signed_in: bool, uid: Option<String>) {
         // A frame captured under the previous account must never survive into
         // the next one, and the chat buffer is plaintext in memory.
         crate::screenshot::clear_chat_capture(app);
+        // Same rule for a region gesture: an in-flight stroke or a parked crop
+        // taken under account A must not resolve into account B's session.
+        // Unconditional on purpose - this is the only thing isolating the
+        // gesture across accounts.
+        #[cfg(any(windows, target_os = "macos"))]
+        crate::region::cancel("signed_out");
     }
     // Per-account pruning below runs on EVERY real transition, not only
     // `revoked`, so a fresh sign-in that follows a crash (no sign-out ever ran)
@@ -623,6 +645,13 @@ pub fn note_voice_active(app: &AppHandle, active: bool) {
     if transition.guide_disarmed {
         crate::guide::on_security_disarmed(app);
     }
+    // A call starting takes over the voice and the screen context, so anything
+    // the region gesture had in flight is abandoned rather than answered over
+    // the top of the call.
+    #[cfg(any(windows, target_os = "macos"))]
+    if active {
+        crate::region::cancel("voice_started");
+    }
 }
 
 /// Settings hook - called from the `set_voice_screen_context` command whenever
@@ -654,7 +683,7 @@ pub fn toggle_screen_sight(app: &AppHandle) {
     }
 }
 
-/// Ctrl+Shift+D: revoke native authorization immediately, without waiting for
+/// The sign-out shortcut: revoke native authorization immediately, without waiting for
 /// the webview's sign-out round trip (which may stall or never come).
 pub fn clear_for_sign_out(app: &AppHandle) {
     session_changed(app, false, None);
@@ -724,11 +753,12 @@ mod tests {
         s
     }
 
-    const GATED_OPS: [Operation; 16] = [
+    const GATED_OPS: [Operation; 17] = [
         Operation::CaptureScreen,
         Operation::CaptureTurnScreen,
         Operation::CaptureChatScreen,
         Operation::CaptureInterviewScreen,
+        Operation::CaptureRegion,
         Operation::CaptureGuide,
         Operation::PointAt,
         Operation::DesktopControl,

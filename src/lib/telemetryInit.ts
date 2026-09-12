@@ -85,7 +85,7 @@ function watchAuthIdentity(): void {
       if (user) {
         identifyUser(user.uid);
       } else if (hasIdentifiedUser()) {
-        // Sign-out from another window (the overlay's Ctrl+Shift+D, the
+        // Sign-out from another window (the overlay's sign-out shortcut, the
         // dashboard's account page): drop the identity here too, so this
         // window's later events never land on the old account.
         resetTelemetryIdentity();

@@ -47,7 +47,7 @@ pub(crate) const GEOMETRY_HEADER_LEN: usize = 4 * 7;
 
 const LEGACY_SCREENSHOTS_DIR: &str = "screenshots";
 
-struct CapturedFrame {
+pub(crate) struct CapturedFrame {
     payload: Vec<u8>,
     jpeg_bytes: Vec<u8>,
     stages: CaptureStages,
@@ -56,6 +56,16 @@ struct CapturedFrame {
 impl CapturedFrame {
     fn into_response(self) -> Response {
         Response::new(self.payload)
+    }
+
+    /// Encoded dimensions, for callers outside this module that need to report
+    /// what they captured without reaching into `CaptureStages`.
+    pub(crate) fn jpeg_width_px(&self) -> u32 {
+        self.stages.jpeg_width_px
+    }
+
+    pub(crate) fn jpeg_height_px(&self) -> u32 {
+        self.stages.jpeg_height_px
     }
 }
 
@@ -407,6 +417,90 @@ pub fn discard_chat_capture(app: AppHandle) {
     clear_chat_capture(&app);
 }
 
+// ── Region screen context ───────────────────────────────────────────────────
+//
+// Deliberately reuses the CHAT capture header shape rather than the geometry
+// header at the top of this file. A region frame describes a SUB-rectangle of a
+// display, and `ScreenFrameGeometry`'s `monitor_*` fields would still describe
+// the whole display, so `screenPointFor` would map model coordinates through
+// the wrong rectangle and silently point at the wrong place. Carrying no
+// monitor fields at all makes that misreading impossible. Pointing is not
+// wanted for this surface anyway: the answer renders in the chat card.
+//
+// Like the chat buffer, this is NEVER persisted. It lives in memory until the
+// frontend takes it, discards it, or the session is revoked.
+
+struct PendingRegionCapture {
+    jpeg: Vec<u8>,
+    width_px: u32,
+    height_px: u32,
+    captured_at_ms: i64,
+}
+
+#[derive(Default)]
+pub struct RegionCaptureHandle(Mutex<Option<PendingRegionCapture>>);
+
+/// Captures `crop` out of the display under `point`, for a caller that already
+/// holds a `CaptureRegion` ticket. Blocking on purpose: the region worker is
+/// its own thread, so there is no main-thread message loop to starve here and
+/// no reason to pay for a `spawn_blocking` hop.
+pub(crate) fn capture_region_blocking(
+    point: (i32, i32),
+    crop: Option<CropRect>,
+) -> Result<CapturedFrame, String> {
+    capture_frame_cropped(point.0, point.1, crop)
+}
+
+/// Parks a captured region frame for the frontend to collect. Replaces any
+/// earlier pending frame: only the most recent gesture can be answered.
+pub(crate) fn store_region_capture(app: &AppHandle, frame: &CapturedFrame) {
+    let Some(handle) = app.try_state::<RegionCaptureHandle>() else {
+        return;
+    };
+    let mut pending = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+    *pending = Some(PendingRegionCapture {
+        width_px: frame.stages.jpeg_width_px,
+        height_px: frame.stages.jpeg_height_px,
+        jpeg: frame.jpeg_bytes.clone(),
+        captured_at_ms: crate::util::now_ms(),
+    });
+}
+
+/// Drops any pending region frame. Called when the frontend finishes with it,
+/// when a gesture is cancelled, and on sign-out.
+pub(crate) fn clear_region_capture(app: &AppHandle) {
+    if let Some(handle) = app.try_state::<RegionCaptureHandle>() {
+        let mut pending = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        *pending = None;
+    }
+}
+
+/// The pending region frame as `CHAT_CAPTURE_HEADER_LEN` bytes of header
+/// followed by the JPEG. An empty response means nothing is pending. Raw bytes
+/// for the same reason `take_chat_capture` uses them: Tauri serializes a
+/// `Vec<u8>` field as a JSON array of numbers.
+#[tauri::command]
+pub fn take_region_capture(app: AppHandle) -> Response {
+    let Some(handle) = app.try_state::<RegionCaptureHandle>() else {
+        return Response::new(Vec::new());
+    };
+    let pending = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(pending) = pending.as_ref() else {
+        return Response::new(Vec::new());
+    };
+    let mut payload = Vec::with_capacity(CHAT_CAPTURE_HEADER_LEN + pending.jpeg.len());
+    payload.extend_from_slice(&pending.width_px.to_le_bytes());
+    payload.extend_from_slice(&pending.height_px.to_le_bytes());
+    payload.extend_from_slice(&pending.captured_at_ms.to_le_bytes());
+    payload.extend_from_slice(&pending.jpeg);
+    Response::new(payload)
+}
+
+#[tauri::command]
+pub fn discard_region_capture(app: AppHandle) {
+    clear_region_capture(&app);
+}
+
 /// Publishes the stage timings for one capture. Failing to emit telemetry must
 /// never fail a capture, so the result is deliberately dropped.
 fn emit_capture_stages(app: &AppHandle, stages: &CaptureStages) {
@@ -504,10 +598,36 @@ fn screen_capture_permitted() -> Result<(), String> {
     Ok(())
 }
 
+/// A sub-rectangle of the virtual screen, in the SAME space `cursor_point`
+/// reports: physical pixels on Windows, points on macOS. The conversion into
+/// image-local pixels happens in `capture_frame_cropped`, which is the only
+/// place that knows the monitor's scale factor.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CropRect {
+    pub(crate) x: i32,
+    pub(crate) y: i32,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+}
+
 /// Returns a raw IPC response: the `GEOMETRY_HEADER_LEN`-byte geometry header
 /// followed directly by the JPEG bytes, so the frontend reads it as an
 /// `ArrayBuffer` with no base64 encode/decode round trip.
 fn capture_frame(cursor_x: i32, cursor_y: i32) -> Result<CapturedFrame, String> {
+    capture_frame_cropped(cursor_x, cursor_y, None)
+}
+
+/// The same capture with an optional crop applied BEFORE the downscale, so a
+/// region smaller than `MODEL_FRAME_LONG_EDGE_PX` is never resized at all and
+/// the JPEG encode gets cheaper rather than more expensive.
+///
+/// `crop: None` is byte-for-byte what `capture_frame` did before the region
+/// gesture existed; every pre-existing caller takes that path.
+fn capture_frame_cropped(
+    cursor_x: i32,
+    cursor_y: i32,
+    crop: Option<CropRect>,
+) -> Result<CapturedFrame, String> {
     let mut stages = CaptureStages::default();
 
     screen_capture_permitted()?;
@@ -517,8 +637,18 @@ fn capture_frame(cursor_x: i32, cursor_y: i32) -> Result<CapturedFrame, String> 
     let captured = monitor.capture_image().map_err(|e| e.to_string())?;
     let rgb_image = image::DynamicImage::ImageRgba8(captured).into_rgb8();
     stages.native_capture_ms = capture_started.elapsed().as_millis() as u64;
+    // The honest source size is the whole display, before any crop.
     stages.source_width_px = rgb_image.width();
     stages.source_height_px = rgb_image.height();
+
+    let rgb_image = match crop {
+        Some(crop) => crop_to_rect(rgb_image, &monitor, crop)?,
+        None => rgb_image,
+    };
+    // Measured AFTER the crop, so `resized` answers "did downscale_for_model do
+    // anything", not "is this smaller than the display". Without this a region
+    // capture would report resized:true on every frame it never resized.
+    let pre_resize_width_px = rgb_image.width();
 
     let resize_started = Instant::now();
     let rgb_image = downscale_for_model(rgb_image);
@@ -526,7 +656,7 @@ fn capture_frame(cursor_x: i32, cursor_y: i32) -> Result<CapturedFrame, String> 
     let (jpeg_width_px, jpeg_height_px) = (rgb_image.width(), rgb_image.height());
     stages.jpeg_width_px = jpeg_width_px;
     stages.jpeg_height_px = jpeg_height_px;
-    stages.resized = jpeg_width_px != stages.source_width_px;
+    stages.resized = jpeg_width_px != pre_resize_width_px;
 
     // monitor_* stay in PHYSICAL screen pixels while jpeg_* now describe the
     // resized image. That split is what keeps pointing correct: the mapping in
@@ -580,6 +710,56 @@ fn capture_frame(cursor_x: i32, cursor_y: i32) -> Result<CapturedFrame, String> 
 /// `pub(crate)` so Guide shares this exact rule. Two capture paths that
 /// disagreed on frame size once meant Guide shipped full-resolution frames the
 /// backend then had to resize, and oversized ones it silently dropped.
+/// Cuts `crop` out of a freshly captured full-display image.
+///
+/// The one genuinely dangerous conversion in the region path. `crop` arrives in
+/// cursor space, and that is NOT the same space as the captured bitmap on both
+/// platforms: `monitor.capture_image()` always returns PHYSICAL pixels, while
+/// `cursor_point` returns physical pixels on Windows but POINTS on macOS (see
+/// the comment above the macOS `cursor_point`, which explains why it reads
+/// CGEvent::location rather than going through tao). `monitor.x()/y()` follow
+/// the same platform split, which is why `to_px` is applied to the offset and
+/// the size together, exactly as the geometry header below already does.
+///
+/// Getting this wrong does not error. It produces a real crop of the wrong part
+/// of the screen, which on a Retina Mac lands in the top-left quadrant.
+fn crop_to_rect(
+    image: image::RgbImage,
+    monitor: &Monitor,
+    crop: CropRect,
+) -> Result<image::RgbImage, String> {
+    let scale_factor = monitor.scale_factor().map_err(|e| e.to_string())?;
+    let to_px = if cfg!(target_os = "macos") { scale_factor } else { 1.0 };
+    let monitor_left = monitor.x().map_err(|e| e.to_string())? as f32;
+    let monitor_top = monitor.y().map_err(|e| e.to_string())? as f32;
+
+    let local_x = (((crop.x as f32 - monitor_left) * to_px).round()).max(0.0) as u32;
+    let local_y = (((crop.y as f32 - monitor_top) * to_px).round()).max(0.0) as u32;
+    let local_w = ((crop.width as f32 * to_px).round()).max(1.0) as u32;
+    let local_h = ((crop.height as f32 * to_px).round()).max(1.0) as u32;
+
+    // Clamp rather than error: a stroke that ran a pixel past the edge is a
+    // normal gesture, not a failure. Only a rect entirely off the image is
+    // unusable, and that can only mean the wrong monitor was resolved.
+    let x = local_x.min(image.width().saturating_sub(1));
+    let y = local_y.min(image.height().saturating_sub(1));
+    let width = local_w.min(image.width().saturating_sub(x));
+    let height = local_h.min(image.height().saturating_sub(y));
+    if width == 0 || height == 0 {
+        return Err(format!(
+            "region crop {}x{} at ({}, {}) does not overlap the {}x{} display",
+            crop.width,
+            crop.height,
+            crop.x,
+            crop.y,
+            image.width(),
+            image.height()
+        ));
+    }
+
+    Ok(image::imageops::crop_imm(&image, x, y, width, height).to_image())
+}
+
 pub(crate) fn downscale_for_model(image: image::RgbImage) -> image::RgbImage {
     let long_edge = image.width().max(image.height());
     if long_edge <= MODEL_FRAME_LONG_EDGE_PX || long_edge == 0 {

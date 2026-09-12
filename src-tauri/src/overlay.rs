@@ -1305,7 +1305,8 @@ pub fn esc_pressed(app: &AppHandle) {
     let _ = app;
 }
 
-/// Ctrl+Shift+D: a deliberate, non-Flutter-parity power-user shortcut. Tells
+/// The sign-out shortcut (Ctrl+Alt+Q by default): a deliberate,
+/// non-Flutter-parity power-user shortcut. Tells
 /// the frontend to sign out immediately (bypassing its usual confirm step)
 /// and brings the panel up so the result is visible.
 pub fn sign_out_requested(app: &AppHandle) {

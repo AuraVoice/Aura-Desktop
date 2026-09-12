@@ -189,7 +189,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
                     error!("tray: failed to emit open-interview-hacker-requested: {e}");
                 }
             }
-            // Same entry point Ctrl+Shift+D uses: it revokes the native command
+            // Same entry point the sign-out shortcut uses: it revokes the native command
             // surface BEFORE asking the webview to sign out, so a stalled JS leg
             // still leaves the sensitive commands locked.
             SIGN_OUT => overlay::sign_out_requested(app),

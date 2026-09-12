@@ -19,6 +19,21 @@
 /// (vk codes, label, Win guard, voice-toggle suppression) derives from it.
 pub const DICTATION_CHORD: DictationChord = DictationChord::CtrlWin;
 
+/// The chord that arms a screen-region selection (region/mod.rs). Same one-value
+/// rule as DICTATION_CHORD above.
+///
+/// Win+Alt is the only safe bare pair left: Ctrl+Win is dictation, Ctrl+Alt is
+/// what AltGr emits on international layouts, Ctrl+Shift is the layout-cycle
+/// hotkey, and hotkeys.rs rejects anything containing the Win key outright, so
+/// this can only ever live on the hook path, never as a registered shortcut.
+///
+/// NOTE: this chord and DICTATION_CHORD deliberately SHARE the Win key, so the
+/// two state machines are no longer independent. Pressing Win alone prewarms
+/// both; the second key then cancels the loser. That is why the region worker
+/// must ignore ChordSignal::Prewarm entirely and act only on Arm/Release/Cancel.
+/// Flipping either constant means re-checking that overlap.
+pub const REGION_CHORD: DictationChord = DictationChord::WinAlt;
+
 // Win32 virtual key codes. Written out rather than imported from the windows
 // crate so this table stays target-independent.
 const VK_LSHIFT: u32 = 0xA0;
@@ -58,7 +73,7 @@ impl DictationChord {
             DictationChord::CtrlShift => (&[VK_LCONTROL], &[VK_LSHIFT, VK_RSHIFT]),
             DictationChord::CtrlAlt => (&[VK_LCONTROL], &[VK_LMENU, VK_RMENU]),
             DictationChord::WinShift => (&[VK_LWIN], &[VK_LSHIFT, VK_RSHIFT]),
-            DictationChord::WinAlt => (&[VK_LWIN], &[VK_LMENU, VK_RMENU]),
+            DictationChord::WinAlt => (&[VK_LWIN, VK_RWIN], &[VK_LMENU, VK_RMENU]),
             DictationChord::RightCtrlOnly => (&[VK_RCONTROL], &[]),
         }
     }
@@ -145,10 +160,12 @@ pub struct ChordOutcome {
     pub engaged: bool,
 }
 
-/// Hook-thread state for the chord. Lives in a thread_local inside
-/// voice_toggle_key's hook thread; never shared, never locked.
-#[derive(Default)]
+/// Hook-thread state for ONE chord. Lives in a thread_local inside
+/// voice_toggle_key's hook thread; never shared, never locked. The chord is a
+/// field rather than the module constant because the hook now runs two of these
+/// side by side (dictation and region).
 pub struct ChordState {
+    chord: DictationChord,
     anchor_held: u8,
     partner_held: u8,
     prewarmed: bool,
@@ -156,11 +173,17 @@ pub struct ChordState {
 }
 
 impl ChordState {
+    /// `const` so the hook's thread_locals can be `const`-initialised and keep
+    /// the lazy-init check out of the callback.
+    pub const fn new(chord: DictationChord) -> Self {
+        Self { chord, anchor_held: 0, partner_held: 0, prewarmed: false, armed: false }
+    }
+
     /// Feeds one PHYSICAL key event (callers must drop injected events first:
     /// the Win guard's own synthetic VK_LWIN keyup would otherwise read as the
     /// user releasing the chord).
     pub fn observe(&mut self, vk: u32, is_down: bool, is_up: bool) -> ChordOutcome {
-        let chord = DICTATION_CHORD;
+        let chord = self.chord;
         if !chord.is_chord_key(vk) {
             // A non-chord key while one chord key is down but the chord is not
             // complete means this was an ordinary shortcut, not a dictation:
@@ -229,7 +252,7 @@ impl ChordState {
         if self.armed {
             return (false, None);
         }
-        let (anchor, partner) = DICTATION_CHORD.vk_sets();
+        let (anchor, partner) = self.chord.vk_sets();
         let mut cleared = false;
         for (keys, held) in [
             (anchor, &mut self.anchor_held),
@@ -255,7 +278,7 @@ impl ChordState {
     }
 
     fn engaged(&self) -> bool {
-        let (_, partner) = DICTATION_CHORD.vk_sets();
+        let (_, partner) = self.chord.vk_sets();
         self.anchor_held != 0 && (partner.is_empty() || self.partner_held != 0)
     }
 }

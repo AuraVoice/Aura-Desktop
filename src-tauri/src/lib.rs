@@ -56,6 +56,10 @@ mod meeting;
 mod microphone_permission;
 mod overlay;
 mod redact;
+/// Same gate as `dictation`: it shares that module's chord state machine, and
+/// the cursor sampler is Win32 on one side and CoreGraphics on the other.
+#[cfg(any(windows, target_os = "macos"))]
+mod region;
 mod saved_images;
 mod screenshot;
 mod screenshot_store;
@@ -361,6 +365,7 @@ pub fn run() {
         .manage(toast::PendingToastActivation::default())
         .manage(status_pill::StatusPillHandle::default())
         .manage(screenshot::ChatCaptureHandle::default())
+        .manage(screenshot::RegionCaptureHandle::default())
         .invoke_handler(tauri::generate_handler![
             current_overlay_state,
             esc_pressed,
@@ -416,6 +421,8 @@ pub fn run() {
             screenshot::take_chat_capture,
             screenshot::refresh_chat_capture,
             screenshot::discard_chat_capture,
+            screenshot::take_region_capture,
+            screenshot::discard_region_capture,
             entitlement::cache_entitlement,
             entitlement::cached_entitlement,
             entitlement::clear_entitlement_cache,
@@ -563,6 +570,12 @@ pub fn run() {
             // socket, and the synthetic-keystroke burst all live there, never
             // on the thread that pumps the native window's events.
             app.manage(dictation::start(app.handle().clone()));
+
+            // Same ordering rule as dictation above: started BEFORE the
+            // keyboard listener so the hook's first chord edge already has a
+            // worker to signal. Owns the "aura-region" thread, where the 60 Hz
+            // cursor sampler and the blocking screen capture both run.
+            app.manage(region::start(app.handle().clone()));
 
             // Optional AI transcript cleanup. Also cheap when unused: one
             // small JSON read and, only if a key was ever saved, one decrypt.

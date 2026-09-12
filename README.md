@@ -125,7 +125,7 @@ stateDiagram-v2
 |---|---|---|
 | `overlay-changed` | `{ presentation, panelVariant, notchEdge }` | Any state change that goes through `apply()` |
 | `end-voice-session` | - | Rust asks React to end a live voice session |
-| `sign-out-requested` | - | Ctrl+Shift+D or tray sign-out |
+| `sign-out-requested` | - | Ctrl+Alt+Q or tray sign-out |
 | `aura-toggle` | `{ sequence, emittedAtMs }` | The configured voice trigger fired |
 | `chat-requested` | - | Ctrl+Alt+Space or text-chat summon |
 | `output-mute-toggle-requested` | - | Ctrl+Alt+M |

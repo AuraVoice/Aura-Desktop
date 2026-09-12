@@ -85,7 +85,7 @@ const SPECS: [HotkeySpec; 6] = [
     HotkeySpec { id: "screenSight", label: "Toggle Screen Sight", default_accelerator: "Control+Alt+KeyS" },
     HotkeySpec { id: "guide", label: "Toggle Guide Mode", default_accelerator: "Control+Alt+KeyG" },
     HotkeySpec { id: "outputMute", label: "Mute or unmute Buddy", default_accelerator: "Control+Alt+KeyM" },
-    HotkeySpec { id: "signOut", label: "Sign out", default_accelerator: "Control+Shift+KeyD" },
+    HotkeySpec { id: "signOut", label: "Sign out", default_accelerator: "Control+Alt+KeyQ" },
 ];
 
 struct HotkeyRuntime {

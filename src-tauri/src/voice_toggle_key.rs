@@ -496,7 +496,8 @@ mod platform {
     thread_local! {
         static EVENT_SENDER: RefCell<Option<tokio_mpsc::UnboundedSender<()>>> = const { RefCell::new(None) };
         static TAP_STATE: RefCell<TapState> = RefCell::new(TapState::default());
-        static CHORD_STATE: RefCell<ChordState> = RefCell::new(ChordState::default());
+        static CHORD_STATE: RefCell<ChordState> = const { RefCell::new(ChordState::new(DICTATION_CHORD)) };
+        static REGION_CHORD_STATE: RefCell<ChordState> = const { RefCell::new(ChordState::new(crate::region::REGION_CHORD)) };
     }
 
     unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -550,6 +551,20 @@ mod platform {
             if let Some(signal) = chord_outcome.as_ref().and_then(|outcome| outcome.signal) {
                 crate::dictation::signal(signal);
             }
+            // The region chord, observed independently. It shares the Win key
+            // with DICTATION_CHORD, so both machines see every Win press and
+            // the second key cancels the loser; the region worker ignores
+            // Prewarm for exactly that reason.
+            let region_outcome = if is_injected {
+                None
+            } else {
+                Some(REGION_CHORD_STATE.with(|state| {
+                    state.borrow_mut().observe(event.vkCode, is_down, is_up)
+                }))
+            };
+            if let Some(signal) = region_outcome.as_ref().and_then(|outcome| outcome.signal) {
+                crate::region::signal(signal);
+            }
             // Escape is the escape hatch for held dictation text. Gated on the
             // flag so an ordinary Escape (every dialog, every editor, all day)
             // is one relaxed atomic load in this hook and nothing else.
@@ -562,11 +577,28 @@ mod platform {
                     crate::dictation::chord::ChordSignal::CancelPending,
                 );
             }
+            // A separate `if`, not an `else if`: a region stroke can be in
+            // flight while dictation text waits for a text box, and Escape has
+            // to kill both.
+            if is_down
+                && !is_injected
+                && event.vkCode == VK_ESCAPE.0 as u32
+                && crate::region::is_selecting()
+            {
+                crate::region::signal(crate::dictation::chord::ChordSignal::Cancel);
+            }
             // Only a chord that actually contains the voice toggle key needs
             // the classifier suppressed; DICTATION_CHORD::RightCtrlOnly (with
             // VOICE_TOGGLE_KEY on Left Ctrl) turns this off by itself.
-            let dictation_engaged = DICTATION_CHORD.suppresses_voice_toggle()
-                && chord_outcome.is_some_and(|outcome| outcome.engaged);
+            // Derived from BOTH chords, never hardcoded. On Windows the region
+            // half is always false (Win+Alt contains no Ctrl), but on macOS
+            // DOUBLE_TAP_SENTINELS includes AltLeft/AltRight, so a user on an
+            // Option double-tap trigger WOULD otherwise emit a voice toggle on
+            // every Cmd+Option stroke, and two strokes would start a call.
+            let chord_engaged = (DICTATION_CHORD.suppresses_voice_toggle()
+                && chord_outcome.is_some_and(|outcome| outcome.engaged))
+                || (crate::region::REGION_CHORD.suppresses_voice_toggle()
+                    && region_outcome.is_some_and(|outcome| outcome.engaged));
             let is_toggle_key = is_voice_toggle_vk(event.vkCode);
 
             let should_emit = TAP_STATE.with(|state| {
@@ -576,7 +608,7 @@ mod platform {
                     is_down,
                     is_up,
                     is_injected,
-                    dictation_engaged,
+                    chord_engaged,
                 )
             });
             if should_emit {
@@ -877,7 +909,8 @@ mod platform {
     thread_local! {
         static EVENT_SENDER: RefCell<Option<tokio_mpsc::UnboundedSender<()>>> = const { RefCell::new(None) };
         static TAP_STATE: RefCell<TapState> = RefCell::new(TapState::default());
-        static CHORD_STATE: RefCell<ChordState> = RefCell::new(ChordState::default());
+        static CHORD_STATE: RefCell<ChordState> = const { RefCell::new(ChordState::new(DICTATION_CHORD)) };
+        static REGION_CHORD_STATE: RefCell<ChordState> = const { RefCell::new(ChordState::new(crate::region::REGION_CHORD)) };
         static TAP_PORT: Cell<Option<CFMachPortRef>> = const { Cell::new(None) };
     }
 
@@ -953,14 +986,37 @@ mod platform {
         if let Some(signal) = chord_outcome.as_ref().and_then(|outcome| outcome.signal) {
             crate::dictation::signal(signal);
         }
+        // The region chord, observed independently. Same shared-Win-key caveat
+        // as the Windows half: both machines see every Cmd press, so the region
+        // worker ignores Prewarm.
+        let region_outcome = if is_injected {
+            None
+        } else {
+            Some(REGION_CHORD_STATE.with(|state| state.borrow_mut().observe(vk, is_down, is_up)))
+        };
+        if let Some(signal) = region_outcome.as_ref().and_then(|outcome| outcome.signal) {
+            crate::region::signal(signal);
+        }
         // Escape is the escape hatch for held dictation text. Gated on the
         // flag so an ordinary Escape is one relaxed atomic load and nothing
         // else. VK_ESCAPE comes from the shared macos_input table.
         if is_down && !is_injected && vk == 0x1B && crate::dictation::is_holding_text() {
             crate::dictation::signal(crate::dictation::chord::ChordSignal::CancelPending);
         }
-        let dictation_engaged = DICTATION_CHORD.suppresses_voice_toggle()
-            && chord_outcome.is_some_and(|outcome| outcome.engaged);
+        // A separate `if`, not an `else if`: a region stroke and held dictation
+        // text can both be live, and Escape has to kill both.
+        if is_down && !is_injected && vk == 0x1B && crate::region::is_selecting() {
+            crate::region::signal(crate::dictation::chord::ChordSignal::Cancel);
+        }
+        // Derived from BOTH chords. This is the half that MATTERS on macOS:
+        // DOUBLE_TAP_SENTINELS includes AltLeft/AltRight here, so a user whose
+        // voice trigger is an Option double-tap would otherwise emit a toggle
+        // on the Option keyup of every Cmd+Option stroke, and two strokes
+        // inside DOUBLE_TAP_MS would open a call.
+        let chord_engaged = (DICTATION_CHORD.suppresses_voice_toggle()
+            && chord_outcome.is_some_and(|outcome| outcome.engaged))
+            || (crate::region::REGION_CHORD.suppresses_voice_toggle()
+                && region_outcome.is_some_and(|outcome| outcome.engaged));
         let is_toggle_key = is_voice_toggle_vk(vk);
         let should_emit = TAP_STATE.with(|state| {
             observe_physical_key_event(
@@ -969,7 +1025,7 @@ mod platform {
                 is_down,
                 is_up,
                 is_injected,
-                dictation_engaged,
+                chord_engaged,
             )
         });
         if should_emit {

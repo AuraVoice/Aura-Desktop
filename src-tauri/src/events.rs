@@ -38,6 +38,21 @@ pub const DICTATION_HOLD_COMPLETED: &str = "dictation-hold-completed";
 /// credential pump to mint one now rather than on its own timer.
 pub const DICTATION_CREDENTIAL_NEEDED: &str = "dictation-credential-needed";
 
+// region
+/// The hold was authorized and the veil is up. Payload carries the display rect
+/// so the overlay can size its canvas without asking Rust again.
+pub const REGION_SELECTION_STARTED: &str = "region-selection-started";
+/// A batch of stroke points since the last emit. Coordinates only, never
+/// persisted. Batched rather than per-sample because the veil is click-through
+/// and therefore cannot track the cursor itself: Rust is the only source of
+/// stroke geometry, and 60 events a second to draw one polyline is waste.
+pub const REGION_SELECTION_POINTS: &str = "region-selection-points";
+/// A cropped frame is parked and waiting for `take_region_capture`. The JPEG is
+/// deliberately NOT on this event: a 200 KB frame becomes ~700 KB of JSON.
+pub const REGION_CAPTURE_READY: &str = "region-capture-ready";
+/// The gesture produced nothing. Carries a reason code for the caption.
+pub const REGION_CANCELLED: &str = "region-cancelled";
+
 // meeting
 pub const MEETING_CAPTURE_STATE: &str = "meeting-capture-state";
 pub const MEETING_JOIN_DETECTED: &str = "meeting-join-detected";

@@ -94,7 +94,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  // Ctrl+Shift+D: sign out immediately, bypassing VoiceBar's usual confirm step.
+  // The sign-out shortcut: sign out immediately, bypassing VoiceBar's usual confirm step.
   useTauriEvent(
     SIGN_OUT_REQUESTED,
     () => {
