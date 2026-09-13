@@ -539,6 +539,24 @@ mod platform {
                     crate::dictation::signal(signal);
                 }
             }
+            // The same reconcile for the region chord. Without it a Win key-up
+            // lost on the secure desktop leaves Win latched, and every bare Alt
+            // press after that (Alt+Tab included) reads as Win+Alt and freezes
+            // the screen.
+            if is_down && !is_injected && crate::region::REGION_CHORD.is_chord_key(event.vkCode) {
+                let (cleared, stale_signal) = REGION_CHORD_STATE.with(|state| {
+                    state.borrow_mut().reconcile(|vk| {
+                        vk == event.vkCode
+                            || (unsafe { GetAsyncKeyState(vk as i32) } as u16 & 0x8000) != 0
+                    })
+                });
+                if cleared {
+                    log::info!("region.chord: cleared stale held key state");
+                }
+                if let Some(signal) = stale_signal {
+                    crate::region::signal(signal);
+                }
+            }
             let chord_outcome = if is_injected {
                 None
             } else {
@@ -973,6 +991,23 @@ mod platform {
             }
             if let Some(signal) = stale_signal {
                 crate::dictation::signal(signal);
+            }
+        }
+        // And for the region chord, for the same reason as the Windows half.
+        if is_down && !is_injected && crate::region::REGION_CHORD.is_chord_key(vk) {
+            let (cleared, stale_signal) = REGION_CHORD_STATE.with(|state| {
+                state.borrow_mut().reconcile(|probe_vk| {
+                    probe_vk == vk
+                        || keycode_for_vk(probe_vk)
+                            .map(|keycode| unsafe { CGEventSourceKeyState(HID_SYSTEM_STATE, keycode) })
+                            .unwrap_or(false)
+                })
+            });
+            if cleared {
+                log::info!("region.chord: cleared stale held key state");
+            }
+            if let Some(signal) = stale_signal {
+                crate::region::signal(signal);
             }
         }
         // From here down this is the Windows keyboard_hook, step for step:

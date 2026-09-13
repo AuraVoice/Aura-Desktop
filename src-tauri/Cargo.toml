@@ -314,6 +314,15 @@ wasapi = "0.23"
 # the in-process Activated handler.
 tauri-winrt-notification = "0.7"
 
+# Dev builds only. The circle-to-ask freeze converts and JPEG-encodes a full
+# resolution display, which took 3.8s unoptimized and made the gesture feel
+# dead in `tauri dev`. Release builds are already optimized.
+[profile.dev.package.image]
+opt-level = 3
+
+[profile.dev.package.xcap]
+opt-level = 3
+
 [profile.release]
 # Silent integer wrap in shipped builds is worse than a loud panic for code
 # doing buffer sizes, audio offsets and image geometry.

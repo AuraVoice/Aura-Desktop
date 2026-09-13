@@ -64,6 +64,14 @@ export const CONNECTOR_OAUTH_COMPLETE = "connector-oauth-complete";
 export const DASHBOARD_NAVIGATE = "dashboard-navigate";
 export const STATUS_PILL_UPDATE = "status-pill-update";
 
+// region/mod.rs
+export const REGION_SELECTION_STARTED = "region-selection-started";
+export const REGION_SELECTION_POINTS = "region-selection-points";
+export const REGION_FREEZE_READY = "region-freeze-ready";
+export const REGION_SELECTION_LOCKED = "region-selection-locked";
+export const REGION_CAPTURE_READY = "region-capture-ready";
+export const REGION_CANCELLED = "region-cancelled";
+
 // JS-originated (no Rust twin)
 export const START_VOICE_REQUESTED = "start-voice-requested";
 export const DESKTOP_ONBOARDING_COMPLETED = "desktop-onboarding-completed";
@@ -123,4 +131,58 @@ export interface DictationUpdatePayload {
   chordLabel: string;
   edge: "top" | "bottom" | "left" | "right";
   ownTarget: boolean;
+}
+
+// Mirrors region/mod.rs SelectionStarted (rename_all = "camelCase"). The rect
+// is in the platform's own space: physical pixels on Windows, points on macOS.
+// The overlay uses it verbatim as its SVG viewBox, which is what keeps stroke
+// plotting free of any devicePixelRatio maths on either platform.
+export interface RegionSelectionStartedPayload {
+  generation: number;
+  displayX: number;
+  displayY: number;
+  displayWidth: number;
+  displayHeight: number;
+}
+
+// Mirrors region/mod.rs SelectionPoints (rename_all = "camelCase"). Flat
+// [x, y, x, y, ...] in the same space as the rect above, batched at ~20 Hz.
+export interface RegionSelectionPointsPayload {
+  generation: number;
+  points: number[];
+}
+
+// Mirrors region/mod.rs FreezeReady (rename_all = "camelCase"). The still is
+// collected with take_region_freeze, for the same reason the crop below is.
+export interface RegionFreezeReadyPayload {
+  generation: number;
+  widthPx: number;
+  heightPx: number;
+}
+
+// Mirrors region/mod.rs SelectionLocked (rename_all = "camelCase"). The crop
+// is in the same space as RegionSelectionStartedPayload's display rect.
+export interface RegionSelectionLockedPayload {
+  generation: number;
+  cropX: number;
+  cropY: number;
+  cropWidth: number;
+  cropHeight: number;
+  wholeDisplay: boolean;
+}
+
+// Mirrors region/mod.rs CaptureReady (rename_all = "camelCase"). The JPEG is
+// deliberately absent: it is collected with the take_region_capture command,
+// because a 200 KB frame on an event becomes roughly 700 KB of JSON.
+export interface RegionCaptureReadyPayload {
+  generation: number;
+  widthPx: number;
+  heightPx: number;
+  wholeDisplay: boolean;
+}
+
+// Mirrors region/mod.rs Cancelled (rename_all = "camelCase").
+export interface RegionCancelledPayload {
+  generation: number;
+  reason: string;
 }

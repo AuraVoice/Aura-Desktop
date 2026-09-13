@@ -12,7 +12,8 @@ import { anySharingActive } from "../../lib/generalSettings";
 import { revokeTraceSharing } from "../../lib/dictationUpload";
 import { useAuth } from "../../state/AuthProvider";
 import { chordKeysOf, useDictationStatus } from "../../lib/dictationStatus";
-import { dictationChord as chordCopy } from "../../lib/copy";
+import { dictationChord as chordCopy, regionChord as regionCopy } from "../../lib/copy";
+import { regionKeysOf, useRegionStatus } from "../../lib/regionStatus";
 import { osName } from "../../lib/platformKeys";
 import { resetHotkeyBindings } from "../../lib/hotkeys";
 import { useHotkeyBindings } from "../../state/useHotkeyBindings";
@@ -81,6 +82,7 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
   // tray's "Start with Windows" item, which stays in sync automatically.
   const [launchAtStartup, setLaunchAtStartup] = useState(false);
   const dictationStatus = useDictationStatus();
+  const regionStatus = useRegionStatus();
   const pageCopy = PAGE_COPY[section];
 
   useEffect(() => {
@@ -400,6 +402,33 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
                     : dictationStatus.available
                       ? chordCopy.statusReady
                       : dictationStatus.reason}
+                </span>
+              </div>
+            </div>
+          </SettingsSection>
+
+          <SettingsSection
+            title={regionCopy.sectionTitle}
+            description={regionCopy.systemDescription}
+          >
+            <div className="db-panel db-shortcut-list">
+              <div className="db-shortcut-row">
+                <span>{regionCopy.rowLabel}</span>
+                <span className={`db-shortcut-keys${regionStatus?.available === false ? " db-shortcut-keys-inert" : ""}`}>
+                  {regionKeysOf(regionStatus).map((key) => (
+                    <kbd key={key}>{key}</kbd>
+                  ))}
+                  <kbd>{regionCopy.fixed}</kbd>
+                </span>
+              </div>
+              <div className="db-shortcut-row">
+                <span>{regionCopy.statusLabel}</span>
+                <span className="db-setting-description">
+                  {regionStatus === null
+                    ? regionCopy.statusChecking
+                    : regionStatus.available
+                      ? regionCopy.statusReady
+                      : regionStatus.reason}
                 </span>
               </div>
             </div>

@@ -47,6 +47,12 @@ pub const REGION_SELECTION_STARTED: &str = "region-selection-started";
 /// and therefore cannot track the cursor itself: Rust is the only source of
 /// stroke geometry, and 60 events a second to draw one polyline is waste.
 pub const REGION_SELECTION_POINTS: &str = "region-selection-points";
+/// The display was frozen and its still is parked for `take_region_freeze`.
+/// The veil window answers with `region_veil_ready` once it has decoded it.
+pub const REGION_FREEZE_READY: &str = "region-freeze-ready";
+/// The key came up on a usable stroke. Carries the crop rect so the veil can
+/// play the lock-in before Rust hides it.
+pub const REGION_SELECTION_LOCKED: &str = "region-selection-locked";
 /// A cropped frame is parked and waiting for `take_region_capture`. The JPEG is
 /// deliberately NOT on this event: a 200 KB frame becomes ~700 KB of JSON.
 pub const REGION_CAPTURE_READY: &str = "region-capture-ready";

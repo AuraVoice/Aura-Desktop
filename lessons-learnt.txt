@@ -804,3 +804,41 @@ test, so a red assertion can sit indefinitely; one of those two is precisely the
 "untouched means on". Verification for the catalog half is a before/after retrieval probe on both
 platform values, not a test: the Windows results must come back byte-identical while the macOS
 ones change.
+
+
+2026-09-12  Circle to ask captured fine and did nothing, and a lost Win key-up would have armed it on Alt+Tab
+
+Problem: holding Win+Alt and stroking over the screen logged a correct crop ("[Region] {gen:1,
+points:50, ... jpeg:1280x973}") and then nothing visible happened. The shortcut also appeared
+nowhere in Settings.
+
+Issue: three separate gaps. Nothing consumed region-capture-ready except the veil clearing its
+trail, and take_region_capture had no caller, so the crop sat in memory until the next gesture.
+The capture ran on the LIVE desktop after release, so the crop could differ from what was circled.
+And the stale-held-key reconcile in voice_toggle_key.rs ran only for CHORD_STATE, never for
+REGION_CHORD_STATE: a Win key-up swallowed by the secure desktop (Win+L, UAC) would leave Win
+latched, and every bare Alt press afterwards, Alt+Tab included, would read as Win+Alt. Harmless
+while the veil drew only a line; a visible screen freeze once the veil shows a still.
+
+Solution: the region worker now freezes the display once the stroke passes the 24px reveal
+threshold (before the veil exists, so the still is clean), crops from that frozen image on
+release through the same encode pipeline as every other frame (encode_captured_frame), and the
+veil shows the still with a dim scrim and a lock-in. take_region_capture now MOVES the frame out,
+the notch shows a preview chip, and Settings > System shows the fixed chord via region_status. The
+reconcile runs for both chord states on both platforms.
+
+Justification: two state machines sharing one hook must share every piece of hook hygiene, not
+just the observe call; the reconcile was written when there was only one. The veil window's
+readiness ack deliberately avoids requestAnimationFrame, because the window is hidden at that
+point and a hidden webview may not run animation frames, which would have turned every gesture
+into the 400ms timeout path.
+
+Follow-up, same day: the first manual test still failed. The log read "region: frozen 2880x1800 in
+3857ms" then "rejected, only 3 points (need 8)". The freeze ran inline on the region worker, which
+is also the 60Hz cursor sampler, so every sample during a 3.8s unoptimized capture and encode was
+lost and a real stroke arrived as three points. Fix: the freeze runs on its own thread and the
+worker polls for its result each tick; a release that lands mid-freeze waits for it (8s cap). The
+FrozenDisplay stores its origin point instead of xcap's Monitor, whose raw HMONITOR is not Send,
+and the crop re-resolves the monitor on the worker. Cargo.toml also optimizes image and xcap in
+the dev profile. Lesson: anything slow must never share a thread with a sampler whose gaps are
+invisible until the result is judged.

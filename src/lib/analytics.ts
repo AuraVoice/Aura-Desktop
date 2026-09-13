@@ -68,7 +68,14 @@ export interface AnalyticsSdkOptions {
 export function initAnalyticsSdk(options: AnalyticsSdkOptions): void {
   if (sdkReady) return;
   windowLabel = options.label;
-  const replayOff = options.label === "dictation" || options.label === "status-pill";
+  // Accessory windows never record a session replay. "region" is the
+  // fullscreen selection trail: its DOM is a polyline of raw cursor
+  // coordinates across the user's whole screen, which is exactly the kind of
+  // thing a replay must not carry.
+  const replayOff =
+    options.label === "dictation" ||
+    options.label === "status-pill" ||
+    options.label === "region";
   try {
     posthog.init(PROJECT_TOKEN, {
       api_host: HOST,

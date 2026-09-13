@@ -1,0 +1,156 @@
+/* Root reset for the "region" window.
+ *
+ * App.css is imported only by App.tsx, so this window loads none of it -
+ * including the .is-overlay rule that main.tsx adds the class for. Any future
+ * window with its own React root needs this too; DictationHud.css and
+ * StatusPill.css repeat it for the same reason. */
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Deliberately NO background colour, not even a near-transparent one.
+ * NotchMoveOverlay.css uses rgba(0, 0, 0, 0.004) because a fully transparent
+ * pixel is not hit-testable and that surface WANTS clicks. This one wants the
+ * opposite: it must never intercept a click meant for the app underneath.
+ * Click-through is enforced natively anyway (set_ignore_cursor_events in
+ * build_accessory_window), so this is belt and braces. */
+.region-overlay {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  animation: region-overlay-in 120ms ease-out both;
+}
+
+/* The frozen display. Stretched rather than contained: the window is exactly
+ * the display's size, so this is 1:1 and any other fit would misalign the
+ * trail drawn on top of it. */
+.region-still {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  user-select: none;
+}
+
+.region-overlay-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* Everything outside the circled box dims; the box itself stays at full
+ * brightness through the mask cutout. Darker once locked, which is the whole
+ * lock-in: a single step the user reads as "got it". The transition length is
+ * LOCK_IN in region/mod.rs, which waits for it before hiding the window. */
+.region-scrim {
+  fill: rgb(6, 10, 14);
+  fill-opacity: 0.32;
+  transition: fill-opacity 260ms ease-out;
+}
+
+.region-overlay-locked .region-scrim {
+  fill-opacity: 0.58;
+}
+
+.region-focus {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.55);
+  stroke-width: 2;
+}
+
+.region-overlay-locked .region-focus {
+  stroke: var(--glass-accent-lerp-white, var(--glass-accent));
+  stroke-width: 4;
+  animation: region-focus-lock 260ms ease-out both;
+}
+
+/* The wide, blurred pass underneath the sharp one. Two polylines plus one blur
+ * is cheaper and reads sharper than a drop-shadow filter on a path whose point
+ * list changes every frame. */
+.region-stroke-glow {
+  fill: none;
+  stroke: var(--glass-accent);
+  stroke-width: 14;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.45;
+  filter: url(#region-stroke-blur);
+}
+
+.region-stroke {
+  fill: none;
+  stroke: var(--glass-accent-lerp-white, var(--glass-accent));
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.region-stroke-close {
+  stroke: rgba(255, 255, 255, 0.6);
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-dasharray: 10 12;
+}
+
+/* Once locked the box speaks for itself, so the ink gets out of the way. */
+.region-stroke-glow,
+.region-stroke,
+.region-stroke-close {
+  transition: opacity 160ms ease-out;
+}
+
+.region-overlay-locked .region-stroke-glow,
+.region-overlay-locked .region-stroke,
+.region-overlay-locked .region-stroke-close {
+  opacity: 0;
+}
+
+@keyframes region-overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes region-focus-lock {
+  0% {
+    stroke-opacity: 0.4;
+  }
+  50% {
+    stroke-opacity: 1;
+  }
+  100% {
+    stroke-opacity: 0.9;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .region-overlay,
+  .region-overlay-locked .region-focus {
+    animation: none;
+  }
+  .region-scrim,
+  .region-stroke-glow,
+  .region-stroke,
+  .region-stroke-close {
+    transition: none;
+  }
+}

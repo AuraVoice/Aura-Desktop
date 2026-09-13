@@ -84,6 +84,8 @@ import {
   resetMicrophonePermission,
 } from "../lib/microphoneAccess";
 import { VoiceRecoveryCard, VOICE_RECOVERY_CARD_HEIGHT } from "./VoiceRecoveryCard";
+import { useRegionCapture } from "./region/useRegionCapture";
+import { RegionPreviewCard, REGION_PREVIEW_CARD_HEIGHT } from "./region/RegionPreviewCard";
 
 // Fixed heights remain for fixed-content surfaces. DraftCard reports its own
 // measured content height so a short reply stays compact and a long one grows.
@@ -327,6 +329,8 @@ export function OverlayRoot() {
     uid: user?.uid ?? null,
     appHidden: presentation !== "bar",
   });
+  // Circle to ask: holds the crop from the region gesture for the preview chip.
+  const regionCapture = useRegionCapture(user !== null);
   const resetDraftCard = draftCard.reset;
   const showDraftCard = user !== null && draftCard.phase !== "idle";
   const [draftCardHeight, setDraftCardHeight] = useState(INITIAL_DRAFT_SLOT_HEIGHT);
@@ -440,6 +444,19 @@ export function OverlayRoot() {
     && !showVoiceNotice
     && !showDraftCard
     && !meetingPromptOnScreen;
+  // What the user just circled with the region gesture. Under the live-session
+  // surfaces above, which only exist mid-call where the gesture is a no-op, and
+  // above the inbox, update banner and catch-up, which would otherwise sit on
+  // the answer to something the user did a second ago.
+  const showRegionPreview =
+    user !== null
+    && regionCapture.preview !== null
+    && !showInterviewHacker
+    && !showInterviewPaste
+    && !showVoiceNotice
+    && !showDraftCard
+    && !meetingPromptOnScreen
+    && !showScreenContextConsent;
   const showInbox =
     user !== null
     && inboxOpen
@@ -448,7 +465,8 @@ export function OverlayRoot() {
     && !showDraftCard
     && !showInterviewPaste
     && !meetingPromptOnScreen
-    && !showScreenContextConsent;
+    && !showScreenContextConsent
+    && !showRegionPreview;
   const showUpdateBanner =
     user !== null
     && (updateReady.version !== null || updateReady.updatedNotice !== null)
@@ -458,6 +476,7 @@ export function OverlayRoot() {
     && !showDraftCard
     && !meetingPromptOnScreen
     && !showScreenContextConsent
+    && !showRegionPreview
     && !showInbox;
   const showCallbackCard =
     user !== null
@@ -468,6 +487,7 @@ export function OverlayRoot() {
     && !showDraftCard
     && !meetingPromptOnScreen
     && !showScreenContextConsent
+    && !showRegionPreview
     && !showInbox
     && !showUpdateBanner;
   // The opening pitch needs room the resting card does not have, so the slot
@@ -491,15 +511,17 @@ export function OverlayRoot() {
             ? MEETING_PROMPT_HEIGHT
             : showScreenContextConsent
               ? SCREEN_CONTEXT_CONSENT_HEIGHT
-              : showInbox
-                ? NOTIFICATION_INBOX_CARD_HEIGHT
-                : showUpdateBanner
-                  ? updateReady.version !== null
-                    ? UPDATE_BANNER_HEIGHT
-                    : UPDATED_NOTICE_HEIGHT
-                  : showCallbackCard
-                    ? CALLBACK_CARD_HEIGHT
-                    : null;
+              : showRegionPreview
+                ? REGION_PREVIEW_CARD_HEIGHT
+                : showInbox
+                  ? NOTIFICATION_INBOX_CARD_HEIGHT
+                  : showUpdateBanner
+                    ? updateReady.version !== null
+                      ? UPDATE_BANNER_HEIGHT
+                      : UPDATED_NOTICE_HEIGHT
+                    : showCallbackCard
+                      ? CALLBACK_CARD_HEIGHT
+                      : null;
   const appliedSlotHeight = visibleChatOpen ? chatSlotHeight : slotHeight;
 
   useEffect(() => {
@@ -925,6 +947,9 @@ export function OverlayRoot() {
           onAllow={allowScreenContext}
           onDismiss={dismissScreenContextRequest}
         />
+      )}
+      {!visibleChatOpen && showRegionPreview && regionCapture.preview && (
+        <RegionPreviewCard preview={regionCapture.preview} onDismiss={regionCapture.dismiss} />
       )}
       {!visibleChatOpen && showInbox && (
         <NotificationInboxCard

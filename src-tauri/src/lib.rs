@@ -366,6 +366,7 @@ pub fn run() {
         .manage(status_pill::StatusPillHandle::default())
         .manage(screenshot::ChatCaptureHandle::default())
         .manage(screenshot::RegionCaptureHandle::default())
+        .manage(screenshot::RegionFreezeHandle::default())
         .invoke_handler(tauri::generate_handler![
             current_overlay_state,
             esc_pressed,
@@ -423,6 +424,9 @@ pub fn run() {
             screenshot::discard_chat_capture,
             screenshot::take_region_capture,
             screenshot::discard_region_capture,
+            screenshot::take_region_freeze,
+            region::region_status,
+            region::region_veil_ready,
             entitlement::cache_entitlement,
             entitlement::cached_entitlement,
             entitlement::clear_entitlement_cache,

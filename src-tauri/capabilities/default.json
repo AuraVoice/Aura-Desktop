@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main overlay window, the in-app dashboard window, the dictation HUD, and the status pill",
-  "windows": ["main", "dashboard", "dictation", "status-pill"],
+  "description": "Capability for the main overlay window, the in-app dashboard window, the dictation HUD, the status pill, and the region selection trail. EVERY window label must be listed below: Tauri scopes permissions per label, so an unlisted window is silently denied even core:event:allow-listen, and its React root just never receives an event.",
+  "windows": ["main", "dashboard", "dictation", "status-pill", "region"],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",

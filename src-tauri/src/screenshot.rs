@@ -440,15 +440,64 @@ struct PendingRegionCapture {
 #[derive(Default)]
 pub struct RegionCaptureHandle(Mutex<Option<PendingRegionCapture>>);
 
-/// Captures `crop` out of the display under `point`, for a caller that already
-/// holds a `CaptureRegion` ticket. Blocking on purpose: the region worker is
-/// its own thread, so there is no main-thread message loop to starve here and
-/// no reason to pay for a `spawn_blocking` hop.
-pub(crate) fn capture_region_blocking(
-    point: (i32, i32),
+/// Quality of the frozen still the veil shows while the user circles. Higher
+/// than the model frame because it is shown full screen at native resolution,
+/// where 82 bands visibly on gradients; it never leaves the machine.
+const REGION_FREEZE_JPEG_QUALITY: u8 = 85;
+
+/// The display under a region gesture, captured once at the moment the hold
+/// became a stroke. The crop is cut from THIS image, so what the user circled
+/// is exactly what gets sent, even if the screen changed underneath the veil.
+/// Lives only in the region worker's state; never stored or persisted.
+pub(crate) struct FrozenDisplay {
+    rgb: image::RgbImage,
+    /// The point the display was resolved from. The monitor handle itself is
+    /// re-resolved when cropping rather than stored: the freeze runs on its own
+    /// thread, and xcap's handle wraps a raw HMONITOR that is not Send.
+    origin: (i32, i32),
+    native_capture_ms: u64,
+}
+
+impl FrozenDisplay {
+    /// Pixel size of the frozen still, which is what the veil draws.
+    pub(crate) fn dimensions(&self) -> (u32, u32) {
+        (self.rgb.width(), self.rgb.height())
+    }
+}
+
+/// Captures the display under `point` for a caller that already holds a
+/// `CaptureRegion` ticket, and encodes the full-resolution still the veil shows.
+/// Blocking on purpose: the region worker is its own thread, so there is no
+/// main-thread message loop to starve here and no reason to pay for a
+/// `spawn_blocking` hop.
+pub(crate) fn freeze_display_blocking(point: (i32, i32)) -> Result<(FrozenDisplay, Vec<u8>), String> {
+    screen_capture_permitted()?;
+    let capture_started = Instant::now();
+    let monitor = Monitor::from_point(point.0, point.1).map_err(|e| e.to_string())?;
+    let captured = monitor.capture_image().map_err(|e| e.to_string())?;
+    let rgb = image::DynamicImage::ImageRgba8(captured).into_rgb8();
+    let native_capture_ms = capture_started.elapsed().as_millis() as u64;
+
+    let mut still: Vec<u8> = Vec::new();
+    JpegEncoder::new_with_quality(&mut Cursor::new(&mut still), REGION_FREEZE_JPEG_QUALITY)
+        .encode_image(&rgb)
+        .map_err(|e| e.to_string())?;
+    Ok((FrozenDisplay { rgb, origin: point, native_capture_ms }, still))
+}
+
+/// Cuts `crop` out of a frozen display and runs it through the same resize and
+/// encode as every other frame. Consumes the frozen image: nothing needs it
+/// after the crop, and holding a second full-resolution copy is waste.
+pub(crate) fn crop_frozen_display(
+    frozen: FrozenDisplay,
     crop: Option<CropRect>,
 ) -> Result<CapturedFrame, String> {
-    capture_frame_cropped(point.0, point.1, crop)
+    let stages = CaptureStages {
+        native_capture_ms: frozen.native_capture_ms,
+        ..CaptureStages::default()
+    };
+    let monitor = Monitor::from_point(frozen.origin.0, frozen.origin.1).map_err(|e| e.to_string())?;
+    encode_captured_frame(frozen.rgb, &monitor, crop, stages)
 }
 
 /// Parks a captured region frame for the frontend to collect. Replaces any
@@ -476,16 +525,17 @@ pub(crate) fn clear_region_capture(app: &AppHandle) {
 }
 
 /// The pending region frame as `CHAT_CAPTURE_HEADER_LEN` bytes of header
-/// followed by the JPEG. An empty response means nothing is pending. Raw bytes
-/// for the same reason `take_chat_capture` uses them: Tauri serializes a
-/// `Vec<u8>` field as a JSON array of numbers.
+/// followed by the JPEG, MOVED out: the caller holds the only copy afterwards.
+/// That is what lets a separate discard call never race a newer gesture's
+/// frame. An empty response means nothing is pending. Raw bytes for the same
+/// reason `take_chat_capture` uses them: Tauri serializes a `Vec<u8>` field as
+/// a JSON array of numbers.
 #[tauri::command]
 pub fn take_region_capture(app: AppHandle) -> Response {
     let Some(handle) = app.try_state::<RegionCaptureHandle>() else {
         return Response::new(Vec::new());
     };
-    let pending = handle.0.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(pending) = pending.as_ref() else {
+    let Some(pending) = handle.0.lock().unwrap_or_else(|e| e.into_inner()).take() else {
         return Response::new(Vec::new());
     };
     let mut payload = Vec::with_capacity(CHAT_CAPTURE_HEADER_LEN + pending.jpeg.len());
@@ -499,6 +549,57 @@ pub fn take_region_capture(app: AppHandle) -> Response {
 #[tauri::command]
 pub fn discard_region_capture(app: AppHandle) {
     clear_region_capture(&app);
+}
+
+struct PendingRegionFreeze {
+    generation: u64,
+    width_px: u32,
+    height_px: u32,
+    jpeg: Vec<u8>,
+}
+
+/// The frozen still for the veil, parked between the region worker encoding it
+/// and the "region" window collecting it. Taken, not copied: a full-resolution
+/// still has no second reader.
+#[derive(Default)]
+pub struct RegionFreezeHandle(Mutex<Option<PendingRegionFreeze>>);
+
+/// Byte length of `take_region_freeze`'s header: width u32, height u32,
+/// generation u64, all little-endian. Mirrored in RegionOverlay.tsx.
+const REGION_FREEZE_HEADER_LEN: usize = 4 + 4 + 8;
+
+pub(crate) fn store_region_freeze(app: &AppHandle, generation: u64, width_px: u32, height_px: u32, jpeg: Vec<u8>) {
+    let Some(handle) = app.try_state::<RegionFreezeHandle>() else {
+        return;
+    };
+    let mut pending = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+    *pending = Some(PendingRegionFreeze { generation, width_px, height_px, jpeg });
+}
+
+pub(crate) fn clear_region_freeze(app: &AppHandle) {
+    if let Some(handle) = app.try_state::<RegionFreezeHandle>() {
+        let mut pending = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        *pending = None;
+    }
+}
+
+/// The frozen still as `REGION_FREEZE_HEADER_LEN` bytes of header followed by
+/// the JPEG, and removes it. An empty response means nothing is pending, which
+/// is normal when the gesture was cancelled before the window asked.
+#[tauri::command]
+pub fn take_region_freeze(app: AppHandle) -> Response {
+    let Some(handle) = app.try_state::<RegionFreezeHandle>() else {
+        return Response::new(Vec::new());
+    };
+    let Some(pending) = handle.0.lock().unwrap_or_else(|e| e.into_inner()).take() else {
+        return Response::new(Vec::new());
+    };
+    let mut payload = Vec::with_capacity(REGION_FREEZE_HEADER_LEN + pending.jpeg.len());
+    payload.extend_from_slice(&pending.width_px.to_le_bytes());
+    payload.extend_from_slice(&pending.height_px.to_le_bytes());
+    payload.extend_from_slice(&pending.generation.to_le_bytes());
+    payload.extend_from_slice(&pending.jpeg);
+    Response::new(payload)
 }
 
 /// Publishes the stage timings for one capture. Failing to emit telemetry must
@@ -583,7 +684,7 @@ pub(crate) fn request_screen_capture_access_once() {}
 /// reaches the model. Preflight only here; the one request lives in
 /// `request_screen_capture_access_once` above.
 #[cfg(target_os = "macos")]
-fn screen_capture_permitted() -> Result<(), String> {
+pub(crate) fn screen_capture_permitted() -> Result<(), String> {
     if objc2_core_graphics::CGPreflightScreenCaptureAccess() {
         return Ok(());
     }
@@ -594,7 +695,7 @@ fn screen_capture_permitted() -> Result<(), String> {
 }
 
 #[cfg(not(target_os = "macos"))]
-fn screen_capture_permitted() -> Result<(), String> {
+pub(crate) fn screen_capture_permitted() -> Result<(), String> {
     Ok(())
 }
 
@@ -637,12 +738,24 @@ fn capture_frame_cropped(
     let captured = monitor.capture_image().map_err(|e| e.to_string())?;
     let rgb_image = image::DynamicImage::ImageRgba8(captured).into_rgb8();
     stages.native_capture_ms = capture_started.elapsed().as_millis() as u64;
+    encode_captured_frame(rgb_image, &monitor, crop, stages)
+}
+
+/// Everything after the native capture: crop, resize, encode, header. Split out
+/// so a region crop cut from an already frozen display runs the exact same
+/// pipeline as a live capture instead of a second copy of it.
+fn encode_captured_frame(
+    rgb_image: image::RgbImage,
+    monitor: &Monitor,
+    crop: Option<CropRect>,
+    mut stages: CaptureStages,
+) -> Result<CapturedFrame, String> {
     // The honest source size is the whole display, before any crop.
     stages.source_width_px = rgb_image.width();
     stages.source_height_px = rgb_image.height();
 
     let rgb_image = match crop {
-        Some(crop) => crop_to_rect(rgb_image, &monitor, crop)?,
+        Some(crop) => crop_to_rect(rgb_image, monitor, crop)?,
         None => rgb_image,
     };
     // Measured AFTER the crop, so `resized` answers "did downscale_for_model do

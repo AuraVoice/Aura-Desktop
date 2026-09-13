@@ -88,6 +88,26 @@ export const dictationChord = {
   restartNote: "Turn on Aura under Input Monitoring, then restart Aura to finish.",
 } as const;
 
+export const regionChord = {
+  /** Settings > System section heading. */
+  sectionTitle: "Circle to ask",
+  systemDescription:
+    "Hold the keys and move your cursor around anything on screen. Let go to capture it.",
+  rowLabel: "Hold and circle",
+  fixed: "Fixed",
+  statusLabel: "Status",
+  statusChecking: "Checking listener...",
+  statusReady: "Ready",
+} as const;
+
+export const regionPreview = {
+  title: "Circled area",
+  wholeScreen: "Whole screen",
+  /** Width and height of the captured crop, in pixels. */
+  size: (width: number, height: number) => `${width} × ${height}`,
+  dismiss: "Dismiss capture",
+} as const;
+
 export const onboarding = {
   welcome: {
     headingAccent: "Meet Buddy",
