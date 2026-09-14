@@ -154,6 +154,9 @@ fn build_url(config: &SessionConfig) -> String {
         query.append_pair("smart_format", "true");
         // Stable low-cardinality label for Deepgram usage and billing reports.
         query.append_pair("tag", "aura-desktop-dictation");
+        // Keep the user's audio out of Deepgram's Model Improvement Program.
+        // Opted-out audio is retained only as long as it takes to transcribe.
+        query.append_pair("mip_opt_out", "true");
         // Do not hold interim results back for extra context. This is a
         // latency knob for exactly this kind of interactive use.
         query.append_pair("no_delay", "true");
@@ -181,6 +184,7 @@ fn build_continuous_url(config: &ContinuousSessionConfig) -> String {
         query.append_pair("punctuate", "true");
         query.append_pair("smart_format", "true");
         query.append_pair("tag", "aura-desktop-interview");
+        query.append_pair("mip_opt_out", "true");
         query.append_pair("no_delay", "true");
         if config.diarize {
             query.append_pair("diarize_model", "latest");
