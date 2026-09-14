@@ -30,6 +30,14 @@ import { trackEvent } from "../lib/analytics";
  *    it the first five steps of the backoff table (30s through 2h) are all
  *    shorter than the gap between windows and collapse into "try again
  *    tomorrow", so a five-second network blip costs a whole day.
+ *  - **Catch-up**, once a day has passed without a completed daily drain: the
+ *    same bulk drain, taken on the next ordinary tick. A laptop asleep at 3 AM
+ *    used to upload nothing at all, ever, because the hourly sweep only
+ *    retries rows that were already attempted.
+ *
+ * Neither runs while a call, a meeting recording or an interview is live: a
+ * catch-up can land in the daytime, and FLAC uploads must not take bandwidth
+ * from audio the user is in the middle of.
  *
  * Rust owns the queue, the backoff and the persisted attempt counts, so this
  * hook holds no durable state. Missing a tick costs nothing.
@@ -49,6 +57,12 @@ const MAX_PER_NIGHT = 100;
 /** Ceiling for an hourly retry sweep. Small on purpose: it exists to recover
  * from a blip, not to become a second uploader. */
 const MAX_PER_RETRY_SWEEP = 10;
+
+/** A day without a completed daily drain is a missed window, made up on the
+ * next tick. A laptop asleep at 3 AM is the normal case, not an edge case. */
+const CATCH_UP_AFTER_MS = 24 * 60 * 60 * 1000;
+/** Per account, so one account's drain never stands in for another's. */
+const LAST_DAILY_DRAIN_KEY = "dictationShareLastDailyDrainMs:";
 
 /**
  * How many traces upload at once.
@@ -82,6 +96,26 @@ function installJitterMs(): number {
   }
 }
 
+function dailyDrainOverdue(uid: string, nowMs: number): boolean {
+  try {
+    const stored = Number(globalThis.localStorage?.getItem(LAST_DAILY_DRAIN_KEY + uid));
+    // Missing, unreadable, or in the future (a clock set back) all read as
+    // overdue: one extra drain is idempotent, a stalled queue is not.
+    if (!Number.isFinite(stored) || stored <= 0 || stored > nowMs) return true;
+    return nowMs - stored >= CATCH_UP_AFTER_MS;
+  } catch {
+    return true;
+  }
+}
+
+function recordDailyDrain(uid: string, atMs: number): void {
+  try {
+    globalThis.localStorage?.setItem(LAST_DAILY_DRAIN_KEY + uid, String(atMs));
+  } catch {
+    // Unwritable storage costs at most one extra drain a day.
+  }
+}
+
 function windowIsOpen(jitterMs: number): boolean {
   const now = new Date();
   const start = new Date(now);
@@ -100,7 +134,8 @@ function windowIsOpen(jitterMs: number): boolean {
  * Feature-detected throughout: these APIs are optional, and a missing one must
  * read as "no objection", never as a block that disables sharing forever.
  */
-async function uploadBlockedBy(): Promise<string | null> {
+async function uploadBlockedBy(busy: boolean): Promise<string | null> {
+  if (busy) return "busy";
   if (typeof navigator !== "undefined" && navigator.onLine === false) return "offline";
 
   const connection = (
@@ -153,8 +188,19 @@ async function pool(count: number, limit: number, worker: () => Promise<void>): 
   await Promise.allSettled(lanes);
 }
 
-export function useDictationUpload(ownerUid: string | null, sharing: boolean): void {
+export function useDictationUpload(
+  ownerUid: string | null,
+  sharing: boolean,
+  busy: boolean,
+): void {
   const runningRef = useRef(false);
+  // A ref, so a call starting or ending does not tear down and restart the
+  // pump's timer; the tick reads the latest value when it runs.
+  const busyRef = useRef(busy);
+  useEffect(() => {
+    busyRef.current = busy;
+  }, [busy]);
+  const lastSkipReasonRef = useRef<string | null>(null);
   const lastNightlyDayRef = useRef<string | null>(null);
   const lastRetryHourRef = useRef<string | null>(null);
 
@@ -177,7 +223,7 @@ export function useDictationUpload(ownerUid: string | null, sharing: boolean): v
       // One cheap read decides whether there is anything to do at all, and folds
       // a newly-eligible backlog into the queue so turning sharing on needs no
       // separate signal.
-      const state = await sharePumpState(uid, sharing);
+      const state = await sharePumpState(uid, sharing, retriesOnly);
       const cap = retriesOnly ? MAX_PER_RETRY_SWEEP : MAX_PER_NIGHT;
 
       // Deletions first, and regardless of `sharing`: withdrawing consent
@@ -208,9 +254,15 @@ export function useDictationUpload(ownerUid: string | null, sharing: boolean): v
         }
       }
 
+      if (sharing && retriesOnly && state.pendingUploads === 0 && state.pendingNew > 0) {
+        // Not idle: new dictations are waiting for the daily drain.
+        outcome.lastErrorReason = "awaiting_daily";
+      }
+
       if (sharing && state.pendingUploads > 0) {
         const budget = Math.min(cap, state.pendingUploads);
         let stop = false;
+        let claimed = 0;
         await pool(budget, CONCURRENCY, async () => {
           if (cancelled || stop) return;
           const lease = await claimTraceUpload(uid, retriesOnly);
@@ -218,6 +270,7 @@ export function useDictationUpload(ownerUid: string | null, sharing: boolean): v
             stop = true;
             return;
           }
+          claimed += 1;
           try {
             await uploadTrace(lease, uid);
             await resolveTraceUpload(uid, lease.traceId);
@@ -254,6 +307,12 @@ export function useDictationUpload(ownerUid: string | null, sharing: boolean): v
             }
           }
         });
+        // Work was counted and none could be claimed. The count and the claim
+        // share one WHERE, so this names a real disagreement instead of logging
+        // a healthy empty drain, which is how this queue once hid for weeks.
+        if (claimed === 0 && !cancelled && outcome.lastErrorReason === null) {
+          outcome.lastErrorReason = "claim_empty";
+        }
       }
 
       outcome.durationMs = Date.now() - startedAt;
@@ -275,29 +334,39 @@ export function useDictationUpload(ownerUid: string | null, sharing: boolean): v
       });
     }
 
-    async function tick(): Promise<void> {
+    async function tick(fromInterval: boolean): Promise<void> {
       if (runningRef.current || cancelled || !ownerUid) return;
 
       const now = new Date();
       const today = now.toDateString();
       const thisHour = `${today}:${now.getHours()}`;
-      const nightlyDue = windowIsOpen(jitterMs) && lastNightlyDayRef.current !== today;
+      // Catch-up waits for an interval tick, so it never lands on app startup.
+      const catchUpDue = fromInterval && dailyDrainOverdue(ownerUid, now.getTime());
+      const nightlyDue =
+        lastNightlyDayRef.current !== today && (windowIsOpen(jitterMs) || catchUpDue);
       const retryDue = !nightlyDue && lastRetryHourRef.current !== thisHour;
       if (!nightlyDue && !retryDue) return;
 
-      const blockedBy = await uploadBlockedBy();
+      const blockedBy = await uploadBlockedBy(busyRef.current);
       if (blockedBy) {
         // Named, because "offline", "on a hotspot" and "battery low" used to be
-        // indistinguishable from "nothing to do".
-        logError("useDictationUpload: drain skipped", new Error(blockedBy));
+        // indistinguishable from "nothing to do". Once per reason: a tick every
+        // five minutes repeated it until it filled the log tail.
+        if (lastSkipReasonRef.current !== blockedBy) {
+          lastSkipReasonRef.current = blockedBy;
+          logError("useDictationUpload: drain skipped", new Error(blockedBy));
+        }
         return;
       }
+      lastSkipReasonRef.current = null;
 
       runningRef.current = true;
       if (nightlyDue) lastNightlyDayRef.current = today;
       else lastRetryHourRef.current = thisHour;
       try {
         await drain(ownerUid, !nightlyDue);
+        // Stamped after the drain completes, never before it starts.
+        if (nightlyDue && !cancelled) recordDailyDrain(ownerUid, Date.now());
       } catch (err) {
         // The drain handles per-item failures itself; anything reaching here is
         // the pump failing as a whole, which must not stop future ticks.
@@ -307,8 +376,8 @@ export function useDictationUpload(ownerUid: string | null, sharing: boolean): v
       }
     }
 
-    const timer = setInterval(() => void tick(), TICK_MS);
-    void tick();
+    const timer = setInterval(() => void tick(true), TICK_MS);
+    void tick(false);
     return () => {
       cancelled = true;
       clearInterval(timer);

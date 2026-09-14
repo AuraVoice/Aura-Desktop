@@ -1,3 +1,35 @@
+2026-09-13  Dictation sharing uploaded nothing, ever, while every drain logged a healthy empty run
+
+Problem: production held zero dictation traces and the backend had never received an authenticated
+upload, although the pipeline shipped in 0.15.x and at least one opted-in machine (consent v2,
+Conversation samples on) had queued 61 dictations. Every drain logged uploaded=0 reason=none.
+
+Issue: new rows were only claimable by the nightly drain, a one-hour window at local 03:00 plus
+jitter. The hourly sweep passes retries_only, and claim_one then requires share_attempts > 0, so a
+never-attempted row is invisible to it. The desktop log had no line at all in the 3 AM hour on any
+day: the laptop was asleep, so the only path that could take a new row never ran. pump_state counted
+every pending row regardless of mode or clip, so the pump saw work, claimed nothing, and reported
+an idle success. Reading the same code turned up three more: parallel lanes selected the same
+oldest row with no lease (a losing lane's 409 could mark a resolved row failed); audio eviction left
+clip-less rows pending forever; and withdrawal read only transcript rows, so any copy whose row
+local retention (90 d) or a user delete had removed stayed on the server for its full 180 d,
+contradicting "what was sent is deleted too".
+
+Solution: a catch-up daily drain once 24 h pass without one (persisted per uid, stamped after
+success, interval ticks only), held off while a call, meeting recording or interview is live.
+pump_state counts exactly the claim's WHERE and reports pending_new, and the drain names
+awaiting_daily and claim_empty. Claims lease the row with a compare-and-set. Eviction drops pending
+rows from the queue. A share_uploaded ledger, written in resolve's transaction, is what withdrawal
+reads; user deletes and Clear history queue server deletions in the same transaction as the delete,
+and a resolve for a row erased mid-upload queues one too.
+
+Justification: the nightly window assumed an always-on machine; the product is a laptop app. A
+daytime drain is idempotent and quota-bounded server side, and the busy gate keeps it off live
+audio. Automatic retention and account-switch pruning deliberately do not delete server copies:
+they are not a request to erase, and the ledger keeps those copies withdrawable.
+
+---
+
 2026-09-11  Every sign-in and every dev launch replayed a week of notifications as fresh toasts
 
 Problem: signing out and back in, switching accounts, or quitting the installed app and running

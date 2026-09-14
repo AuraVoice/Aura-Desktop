@@ -282,6 +282,16 @@ pub(super) fn open(app: &AppHandle) -> Result<Connection, String> {
             uid TEXT PRIMARY KEY,
             blocked_until_ms INTEGER NOT NULL
          );
+         -- Every trace the server accepted, kept apart from the transcript row.
+         -- Withdrawal reads this: local text expires at 90 days while the
+         -- server keeps its copy for 180, so the row alone cannot say what was
+         -- sent.
+         CREATE TABLE IF NOT EXISTS share_uploaded (
+            uid TEXT NOT NULL,
+            trace_id TEXT NOT NULL,
+            shared_at_ms INTEGER NOT NULL,
+            PRIMARY KEY (uid, trace_id)
+         );
          -- Column order matters and was chosen by measurement, not taste:
          -- with recorded_at_ms second the claim's ORDER BY is satisfied by the
          -- index (no temp b-tree) and the pump's COUNT is still covering.
@@ -403,6 +413,7 @@ fn sweep(app: &AppHandle, conn: &Connection, uid: &str) -> Result<(), String> {
         params![uid, cutoff, MAX_ENTRIES],
     )
     .map_err(|e| e.to_string())?;
+    super::share::prune_uploaded_ledger(conn, uid, now)?;
 
     // Size budget. Evicts the oldest audio first and keeps its transcript, so
     // the user loses replay long before they lose the words.
@@ -446,7 +457,10 @@ fn sweep(app: &AppHandle, conn: &Connection, uid: &str) -> Result<(), String> {
         // enforced from that row onward.
         for (id, relative) in evict {
             match conn.execute(
-                "UPDATE transcripts SET audio_path = NULL, audio_bytes = 0
+                // A queued row with no clip can never be claimed, so it leaves
+                // the queue with its audio instead of counting as pending forever.
+                "UPDATE transcripts SET audio_path = NULL, audio_bytes = 0,
+                        share_state = CASE WHEN share_state = 1 THEN 0 ELSE share_state END
                  WHERE uid = ?1 AND id = ?2",
                 params![uid, id],
             ) {
@@ -827,11 +841,16 @@ pub async fn dictation_history_delete(
                 |row| row.get(0),
             )
             .unwrap_or(None);
-        conn.execute(
+        // Erasing an uploaded dictation erases the server's copy too, queued in
+        // the same transaction as the delete so the obligation cannot be lost.
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        super::share::queue_remote_deletions(&tx, &uid, Some(&id))?;
+        tx.execute(
             "DELETE FROM transcripts WHERE uid = ?1 AND id = ?2",
             params![uid, id],
         )
         .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
         // Row first, file second. An orphan file is reaped by the next sweep,
         // but a row pointing at a deleted file would show a play button that
         // cannot work.
@@ -854,8 +873,11 @@ pub async fn dictation_history_clear(app: AppHandle, uid: String) -> Result<(), 
     tauri::async_runtime::spawn_blocking(move || {
         let conn = open(&app)?;
         let doomed = clip_paths(&conn, Some(&uid))?;
-        conn.execute("DELETE FROM transcripts WHERE uid = ?1", params![uid])
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        super::share::queue_remote_deletions(&tx, &uid, None)?;
+        tx.execute("DELETE FROM transcripts WHERE uid = ?1", params![uid])
             .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
         remove_clips(&app, &doomed);
         Ok(())
     })

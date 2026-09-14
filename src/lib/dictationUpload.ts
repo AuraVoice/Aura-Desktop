@@ -43,8 +43,11 @@ interface TraceUploadLease {
 }
 
 interface SharePumpState {
+  /** Exactly what a claim in this mode can take. */
   pendingUploads: number;
   pendingDeletions: number;
+  /** Never-attempted rows, which only the daily drain may take. */
+  pendingNew: number;
 }
 
 /** A failed attempt, already classified into "try again later" vs "never". */
@@ -184,8 +187,12 @@ export async function deleteRemoteTrace(traceId: string, ownerUid: string): Prom
   }
 }
 
-export function sharePumpState(uid: string, sharing: boolean): Promise<SharePumpState> {
-  return invoke<SharePumpState>("dictation_share_pump_state", { uid, sharing });
+export function sharePumpState(
+  uid: string,
+  sharing: boolean,
+  retriesOnly: boolean,
+): Promise<SharePumpState> {
+  return invoke<SharePumpState>("dictation_share_pump_state", { uid, sharing, retriesOnly });
 }
 
 /** What one drain did. Counts and durations only - it is persisted and it is

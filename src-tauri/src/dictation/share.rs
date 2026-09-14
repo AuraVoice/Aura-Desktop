@@ -21,6 +21,13 @@
 //!    has no consent gate of its own - it trusts the `consentVersion` this
 //!    client asserts - so this module is the only thing standing between a
 //!    withdrawn opt-in and an upload.
+//! 4. **Every claim is a lease.** It pushes the row's next attempt past the
+//!    upload's lifetime with a compare-and-set, so parallel lanes each take a
+//!    different dictation and a crash mid-upload frees the row when it lapses.
+//! 5. **What was sent is remembered apart from the row.** `share_uploaded` is
+//!    what withdrawal reads. Local text expires at 90 days and the server keeps
+//!    its copy for 180, so reading only the transcript rows left every copy
+//!    older than local retention on the server after the user withdrew.
 
 use log::{info, warn};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -52,6 +59,15 @@ const MAX_QUOTA_PAUSE_MS: i64 = 32 * 24 * 60 * 60 * 1_000;
 const MAX_TEXT_CHARS: usize = 32_000;
 const MAX_DURATION_MS: i64 = 120_000;
 const MAX_AUDIO_BYTES: i64 = 8 * 1024 * 1024;
+
+/// The backend's METADATA_RETENTION_DAYS and AUDIO_RETENTION_DAYS. A ledger
+/// entry older than this names a copy the server has already expired.
+const SERVER_RETENTION_MS: i64 = 180 * 24 * 60 * 60 * 1_000;
+
+/// How long a claimed row stays out of the queue while its upload runs. Longer
+/// than the slowest plausible upload of an 8 MB clip, short enough that a crash
+/// mid-upload only delays that row.
+const CLAIM_LEASE_MS: i64 = 10 * 60 * 1_000;
 
 /// FROZEN. Changing this re-derives every trace id and would orphan every
 /// already-uploaded row behind a permanent server-side tombstone.
@@ -111,6 +127,9 @@ pub struct TraceUploadLease {
 pub struct SharePumpState {
     pub pending_uploads: i64,
     pub pending_deletions: i64,
+    /// Never-attempted rows. A retry sweep cannot take them, so this is what
+    /// lets it say it is waiting for the daily drain instead of looking idle.
+    pub pending_new: i64,
 }
 
 /// The id the server knows a row by.
@@ -198,39 +217,115 @@ pub fn revoke_all(app: &AppHandle, uid: &str) -> Result<usize, String> {
         return Ok(0);
     }
     let conn = history::open(app)?;
-    let tombstoned = conn
+    let now = now_ms();
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // The ledger first: it still names copies whose transcript row local
+    // retention already deleted. The rows are the belt to its braces.
+    let tombstoned = tx
         .execute(
             "INSERT OR IGNORE INTO share_deletions (uid, trace_id, requested_at_ms)
+             SELECT uid, trace_id, ?1 FROM share_uploaded
+              WHERE uid = ?2 AND shared_at_ms > ?3
+             UNION
              SELECT uid, share_trace_id, ?1 FROM transcripts
-              WHERE uid = ?2 AND share_state = ?3 AND share_trace_id IS NOT NULL",
-            params![now_ms(), uid, STATE_UPLOADED],
+              WHERE uid = ?2 AND share_state = ?4 AND share_trace_id IS NOT NULL",
+            params![now, uid, now - SERVER_RETENTION_MS, STATE_UPLOADED],
         )
         .map_err(|e| e.to_string())?;
-    conn.execute(
+    tx.execute("DELETE FROM share_uploaded WHERE uid = ?1", params![uid])
+        .map_err(|e| e.to_string())?;
+    tx.execute(
         "UPDATE transcripts SET share_state = ?1 WHERE uid = ?2 AND share_state <> ?1",
         params![STATE_INELIGIBLE, uid],
     )
     .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
     info!("dictation.share: sharing off, {tombstoned} remote copies queued for deletion");
     Ok(tombstoned)
 }
 
-pub fn pump_state(app: &AppHandle, uid: &str, sharing: bool) -> Result<SharePumpState, String> {
+/// A user erasing an uploaded dictation is also erasing the server's copy, so
+/// the deletion is owed before the row goes. Only for user-initiated deletes:
+/// retention and account-switch pruning are not a request to erase, and the
+/// ledger keeps those copies reachable by a later withdrawal. `id` of `None`
+/// covers every row of the account, which is what Clear history deletes.
+pub(super) fn queue_remote_deletions(
+    conn: &Connection,
+    uid: &str,
+    id: Option<&str>,
+) -> Result<(), String> {
+    conn.execute(
+        "INSERT OR IGNORE INTO share_deletions (uid, trace_id, requested_at_ms)
+         SELECT uid, share_trace_id, ?1 FROM transcripts
+          WHERE uid = ?2 AND (?3 IS NULL OR id = ?3)
+            AND share_state = ?4 AND share_trace_id IS NOT NULL",
+        params![now_ms(), uid, id, STATE_UPLOADED],
+    )
+    .map_err(|e| e.to_string())?;
+    conn.execute(
+        "DELETE FROM share_uploaded WHERE uid = ?1 AND trace_id IN (
+            SELECT share_trace_id FROM transcripts
+             WHERE uid = ?1 AND (?2 IS NULL OR id = ?2) AND share_trace_id IS NOT NULL
+         )",
+        params![uid, id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Drops ledger entries for copies the server has already expired.
+pub(super) fn prune_uploaded_ledger(conn: &Connection, uid: &str, now: i64) -> Result<(), String> {
+    conn.execute(
+        "DELETE FROM share_uploaded WHERE uid = ?1 AND shared_at_ms <= ?2",
+        params![uid, now - SERVER_RETENTION_MS],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn pump_state(
+    app: &AppHandle,
+    uid: &str,
+    sharing: bool,
+    retries_only: bool,
+) -> Result<SharePumpState, String> {
     if !valid_uid(uid) {
         return Ok(SharePumpState::default());
     }
     let conn = history::open(app)?;
     let now = now_ms();
+    let accepting = sharing && !quota_blocked(&conn, uid, now)?;
     // A failure here must not read as "nothing to do". It used to: both counts
     // fell back to 0 on error, so a broken database and a genuinely idle night
     // produced identical, permanently silent behaviour.
-    let pending_uploads: i64 = if sharing && !quota_blocked(&conn, uid, now)? {
+    let pending_uploads: i64 = if accepting {
         conn.query_row(
             // share_state is a LITERAL here, not a parameter: SQLite resolves
             // partial-index usability at prepare time, so binding it makes
             // transcripts_share_queue unusable and this becomes a scan.
+            //
+            // It counts exactly what `claim_one` can take. Counting every
+            // pending row, including new rows a retry sweep may not claim and
+            // rows whose clip was evicted, made the pump see work, claim
+            // nothing, and log a healthy empty drain every hour.
             "SELECT COUNT(*) FROM transcripts
-              WHERE uid = ?1 AND share_state = 1 AND share_next_attempt_ms <= ?2",
+              WHERE uid = ?1 AND share_state = 1 AND share_next_attempt_ms <= ?2
+                AND audio_path IS NOT NULL
+                AND (?3 = 0 OR share_attempts > 0)",
+            params![uid, now, i64::from(retries_only)],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .unwrap_or(0)
+    } else {
+        0
+    };
+    let pending_new: i64 = if accepting {
+        conn.query_row(
+            "SELECT COUNT(*) FROM transcripts
+              WHERE uid = ?1 AND share_state = 1 AND share_next_attempt_ms <= ?2
+                AND audio_path IS NOT NULL AND share_attempts = 0",
             params![uid, now],
             |row| row.get(0),
         )
@@ -252,6 +347,7 @@ pub fn pump_state(app: &AppHandle, uid: &str, sharing: bool) -> Result<SharePump
     Ok(SharePumpState {
         pending_uploads,
         pending_deletions,
+        pending_new,
     })
 }
 
@@ -350,6 +446,22 @@ fn claim_one(
     else {
         return Ok(ClaimStep::Empty);
     };
+
+    // The lease, taken before any work. Every lane of a parallel drain runs the
+    // SELECT above, and without a compare-and-set they all took the oldest row
+    // and uploaded it at once; a losing lane's 409 could then mark failed a row
+    // another lane had just resolved. Losing the race is not an error: the next
+    // pass takes the next row.
+    let leased = conn
+        .execute(
+            "UPDATE transcripts SET share_next_attempt_ms = ?1
+              WHERE uid = ?2 AND id = ?3 AND share_state = 1 AND share_next_attempt_ms <= ?4",
+            params![now + CLAIM_LEASE_MS, uid, id, now],
+        )
+        .map_err(|e| e.to_string())?;
+    if leased == 0 {
+        return Ok(ClaimStep::Skipped);
+    }
 
     let key = load_or_create_key(app)?;
     let text = unseal(&key, &sealed_text, &history::row_aad(uid, &id, "text")).ok();
@@ -489,18 +601,38 @@ pub fn audio_body(app: &AppHandle, uid: &str, trace_id: &str) -> Result<Vec<u8>,
 /// second slot of the monthly quota for a trace the server already had.
 pub fn resolve(app: &AppHandle, uid: &str, trace_id: &str) -> Result<(), String> {
     let conn = history::open(app)?;
-    let updated = conn
+    let now = now_ms();
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let updated = tx
         .execute(
             "UPDATE transcripts
                 SET share_state = ?1, shared_at_ms = ?2, share_next_attempt_ms = 0
               WHERE uid = ?3 AND share_trace_id = ?4",
-            params![STATE_UPLOADED, now_ms(), uid, trace_id],
+            params![STATE_UPLOADED, now, uid, trace_id],
         )
         .map_err(|e| e.to_string())?;
     if updated == 0 {
-        warn!("dictation.share: resolve matched no row trace={trace_id}");
+        // The row went while its upload was in flight, which only an erase does.
+        // The server now holds a copy nothing local names, so it is owed a
+        // deletion rather than left for 180 days.
+        tx.execute(
+            "INSERT OR IGNORE INTO share_deletions (uid, trace_id, requested_at_ms)
+             VALUES (?1, ?2, ?3)",
+            params![uid, trace_id, now],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+        warn!("dictation.share: resolve matched no row, deletion queued trace={trace_id}");
         return Err("dictation share: resolve matched no row".to_string());
     }
+    // Same transaction as the state change, so a row can never read uploaded
+    // without withdrawal being able to find its copy.
+    tx.execute(
+        "INSERT OR IGNORE INTO share_uploaded (uid, trace_id, shared_at_ms) VALUES (?1, ?2, ?3)",
+        params![uid, trace_id, now],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -527,8 +659,10 @@ pub fn fail(app: &AppHandle, uid: &str, trace_id: &str, retryable: bool) -> Resu
     let attempts = previous.max(0).saturating_add(1);
     if !retryable || attempts >= MAX_SHARE_ATTEMPTS {
         conn.execute(
+            // share_state = 1: a failure report must never demote a row that
+            // is no longer pending, least of all one already uploaded.
             "UPDATE transcripts SET share_state = ?1, share_attempts = ?2
-              WHERE uid = ?3 AND share_trace_id = ?4",
+              WHERE uid = ?3 AND share_trace_id = ?4 AND share_state = 1",
             params![STATE_FAILED, attempts, uid, trace_id],
         )
         .map_err(|e| e.to_string())?;
@@ -537,7 +671,7 @@ pub fn fail(app: &AppHandle, uid: &str, trace_id: &str, retryable: bool) -> Resu
         let next = now_ms() + jitter(BACKOFF_SECONDS[index] * 1_000);
         conn.execute(
             "UPDATE transcripts SET share_attempts = ?1, share_next_attempt_ms = ?2
-              WHERE uid = ?3 AND share_trace_id = ?4",
+              WHERE uid = ?3 AND share_trace_id = ?4 AND share_state = 1",
             params![attempts, next, uid, trace_id],
         )
         .map_err(|e| e.to_string())?;
@@ -690,7 +824,7 @@ pub fn stats(app: &AppHandle, uid: &str) -> Result<ShareStats, String> {
         .optional()
         .map_err(|e| e.to_string())?
         .unwrap_or_default();
-    let live = pump_state(app, uid, true)?;
+    let live = pump_state(app, uid, true, false)?;
     out.pending_uploads = live.pending_uploads;
     out.pending_deletions = live.pending_deletions;
     Ok(out)
@@ -776,6 +910,7 @@ pub async fn dictation_share_pump_state(
     app: AppHandle,
     uid: String,
     sharing: bool,
+    retries_only: bool,
 ) -> Result<SharePumpState, String> {
     tauri::async_runtime::spawn_blocking(move || {
         if sharing {
@@ -790,7 +925,7 @@ pub async fn dictation_share_pump_state(
                 warn!("dictation.share: could not queue the backlog ({error})");
             }
         }
-        pump_state(&app, &uid, sharing)
+        pump_state(&app, &uid, sharing, retries_only)
     })
     .await
     .map_err(|e| e.to_string())?

@@ -108,12 +108,6 @@ interface OverlaySnapshot {
 export function OverlayRoot() {
   const { user } = useAuth();
   const generalSettings = useGeneralSettings();
-  // Nightly drain of the dictation sharing queue. Mounted here rather than in
-  // the dashboard because the overlay is the window that is always alive;
-  // the dashboard is built on demand and would only upload while open.
-  // improvementSharingActive is the only thing that may decide this: the two
-  // toggles mean nothing without the consent version they were recorded under.
-  useDictationUpload(user?.uid ?? null, dictationSharingActive(generalSettings));
   const updateReady = useUpdateReady();
   const [presentation, setPresentation] = useState<OverlayPresentation>("hidden");
   const [notchEdge, setNotchEdge] = useState<NotchEdge>("top");
@@ -329,6 +323,18 @@ export function OverlayRoot() {
     uid: user?.uid ?? null,
     appHidden: presentation !== "bar",
   });
+  // Daily drain of the dictation sharing queue. Mounted here rather than in
+  // the dashboard because the overlay is the window that is always alive;
+  // the dashboard is built on demand and would only upload while open.
+  // dictationSharingActive is the only thing that may decide this: the two
+  // toggles mean nothing without the consent version they were recorded under.
+  // Busy holds uploads off the network while a call, a meeting recording or an
+  // interview is live, since a catch-up drain can now run in the daytime.
+  useDictationUpload(
+    user?.uid ?? null,
+    dictationSharingActive(generalSettings),
+    callLive || meetingCapture.recording || interviewHacker.phase !== "idle",
+  );
   // Circle to ask: holds the crop from the region gesture for the preview chip.
   const regionCapture = useRegionCapture(user !== null);
   const resetDraftCard = draftCard.reset;
