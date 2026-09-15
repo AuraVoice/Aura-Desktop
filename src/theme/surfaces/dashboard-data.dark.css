@@ -20,7 +20,7 @@
   --research-blue: #7fb3d9;
   --research-amber: var(--dk-warning);
   --research-coral: var(--dk-danger);
-  --research-line: rgba(190, 235, 222, 0.12);
+  --research-line: rgba(255, 255, 255, 0.12);
 }
 
 /* ── Research: shared buttons and labels ── */
@@ -39,7 +39,7 @@
 }
 :root[data-theme="dark"] .db-research-secondary:hover {
   border-color: var(--dk-glass-border-hover);
-  background: linear-gradient(135deg, rgba(40, 62, 56, 0.8), rgba(18, 30, 26, 0.64));
+  background: linear-gradient(135deg, rgba(38, 38, 41, 0.8), rgba(18, 18, 20, 0.64));
 }
 :root[data-theme="dark"] .db-research-eyebrow,
 :root[data-theme="dark"] .db-research-section-kicker,
@@ -51,15 +51,15 @@
 :root[data-theme="dark"] .db-research-command {
   border-color: var(--dk-border);
   background:
-    linear-gradient(rgba(190, 235, 222, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(190, 235, 222, 0.03) 1px, transparent 1px),
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
     radial-gradient(70% 120% at 0% 100%, rgba(46, 224, 196, 0.06), transparent 62%),
     var(--dk-surface);
   background-size: 24px 24px, 24px 24px, auto, auto;
 }
 :root[data-theme="dark"] .db-research-command::after {
-  border-color: rgba(190, 235, 222, 0.1);
-  box-shadow: inset 0 0 0 44px rgba(255, 255, 255, 0.02), inset 0 0 0 45px rgba(190, 235, 222, 0.05);
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 0 0 44px rgba(255, 255, 255, 0.02), inset 0 0 0 45px rgba(255, 255, 255, 0.05);
 }
 :root[data-theme="dark"] .db-research-command-copy p {
   color: var(--dk-text-dim);
@@ -103,7 +103,7 @@
   background: var(--dk-glass-fill);
 }
 :root[data-theme="dark"] .db-research-active-run:hover {
-  border-color: rgba(190, 235, 222, 0.24);
+  border-color: rgba(255, 255, 255, 0.24);
 }
 :root[data-theme="dark"] .db-research-active-symbol {
   background: #1f6f61;
@@ -432,7 +432,7 @@
 /* ── Research paywall ── more opaque than page glass: it floats over a scrim. */
 :root[data-theme="dark"] .db-modal-panel.db-research-paywall {
   border-color: var(--dk-glass-border);
-  background: linear-gradient(135deg, rgba(30, 48, 43, 0.94), rgba(16, 27, 24, 0.9));
+  background: linear-gradient(135deg, rgba(30, 30, 32, 0.94), rgba(16, 16, 17, 0.9));
   box-shadow: var(--dk-glass-inset), var(--dk-shadow-pop);
 }
 :root[data-theme="dark"] .db-research-paywall-glyph::before {
@@ -451,7 +451,7 @@
 /* ── Help: community panel and Discord button ── */
 :root[data-theme="dark"] .db-settings-page .db-help-discord {
   border-color: var(--dk-glass-border);
-  background: linear-gradient(135deg, rgba(34, 44, 58, 0.72), rgba(14, 24, 21, 0.56));
+  background: linear-gradient(135deg, rgba(34, 44, 58, 0.72), rgba(14, 14, 15, 0.56));
   box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
 }
 :root[data-theme="dark"] .db-help-discord::after {

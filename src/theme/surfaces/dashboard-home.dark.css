@@ -3,32 +3,32 @@
 
 /* ── Home hero ──
    The shell sheet lifts --db-teal-deep-a/b to mint for text, so the hero sets its
-   own deep mint-black gradient here instead of reading those tokens. */
+   own charcoal gradient here instead of reading those tokens. Teal is only a faint
+   glow in one corner, so the card reads black, not green. */
 :root[data-theme="dark"] .db-hero {
   background:
-    radial-gradient(80% 130% at 72% 0%, rgba(170, 255, 230, 0.08), transparent 55%),
-    radial-gradient(70% 110% at 0% 100%, rgba(46, 224, 196, 0.1), transparent 65%),
-    linear-gradient(135deg, #1f5a4e, #173f37);
-  box-shadow: inset 0 0 0 1px rgba(190, 240, 225, 0.1), var(--dk-glass-inset), var(--dk-shadow-md);
+    radial-gradient(70% 110% at 0% 100%, rgba(46, 224, 196, 0.07), transparent 62%),
+    linear-gradient(135deg, #1a1a1c, #0f0f10);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), var(--dk-glass-inset), var(--dk-shadow-md);
 }
 
 /* White pills keep working on the dark hero, but their mint token text would
-   not, so every pill gets a pale mint fill with deep teal ink. */
+   not, so every pill gets a white fill with black ink. */
 :root[data-theme="dark"] .db-hero-cta {
-  background: #e6f5f1;
-  color: #174a40;
+  background: #f5f5f5;
+  color: #0a0a0b;
 }
 :root[data-theme="dark"] .db-hero-cta:hover {
-  background: #d3ebe5;
+  background: #e2e2e4;
 }
 
 /* ── Hotkey guide ── */
 :root[data-theme="dark"] .db-hero-keycaps kbd {
-  border-color: rgba(190, 240, 225, 0.16);
+  border-color: rgba(255, 255, 255, 0.14);
   border-bottom-color: rgba(0, 0, 0, 0.5);
-  background: linear-gradient(145deg, #2c423c, #1b2b27);
+  background: linear-gradient(145deg, #2b2b2e, #18181a);
   box-shadow:
-    0 5px 0 #0a1411,
+    0 5px 0 #050505,
     0 7px 13px rgba(0, 0, 0, 0.45),
     inset 0 1px 0 rgba(255, 255, 255, 0.1);
   color: var(--dk-text);
@@ -45,22 +45,22 @@
 @keyframes db-key-press-dark {
   0%, 10%, 100% {
     box-shadow:
-      0 5px 0 #0a1411,
+      0 5px 0 #050505,
       0 7px 13px rgba(0, 0, 0, 0.45),
       inset 0 1px 0 rgba(255, 255, 255, 0.1);
     transform: translateY(0);
   }
   4%, 7% {
     box-shadow:
-      0 2px 0 #0a1411,
+      0 2px 0 #050505,
       0 3px 6px rgba(0, 0, 0, 0.4),
       inset 0 1px 0 rgba(255, 255, 255, 0.1);
     transform: translateY(3px);
   }
 }
 :root[data-theme="dark"] .db-hero-hotkey-actions button {
-  background: #e6f5f1;
-  color: #174a40;
+  background: #f5f5f5;
+  color: #0a0a0b;
   box-shadow: 0 5px 14px rgba(0, 0, 0, 0.4);
 }
 :root[data-theme="dark"] .db-hero-hotkey-actions button:hover {
@@ -72,13 +72,13 @@
 
 /* ── Up next ── */
 :root[data-theme="dark"] .db-hero-up-next {
-  border-color: rgba(190, 240, 225, 0.14);
+  border-color: rgba(255, 255, 255, 0.1);
   background: rgba(0, 0, 0, 0.22);
   box-shadow: var(--dk-glass-inset);
 }
 :root[data-theme="dark"] .db-hero-up-next button {
-  background: #e6f5f1;
-  color: #174a40;
+  background: #f5f5f5;
+  color: #0a0a0b;
 }
 :root[data-theme="dark"] .db-hero-up-next-actions .db-hero-up-next-secondary {
   background: transparent;

@@ -28,42 +28,46 @@
    On :root so portaled and out-of-.db-app elements can use it too. Override
    sheets should reach for these before inventing a new value. */
 :root[data-theme="dark"] {
-  --dk-bg: #0b1412;
-  --dk-bg-raised: #0e1916;
-  --dk-surface: #13201c;
-  --dk-surface-2: #1a2b26;
-  --dk-text: #e6efec;
-  --dk-text-dim: #9aaba6;
-  --dk-text-mute: #6b7c77;
-  --dk-border: rgba(190, 235, 222, 0.1);
-  --dk-border-strong: rgba(190, 235, 222, 0.18);
-  --dk-divider: rgba(190, 235, 222, 0.08);
+  /* Matte black with white ink. Teal is kept for accents only (active icons,
+     links, toggles), never for a surface, so nothing reads green. */
+  --dk-bg: #0a0a0b;
+  --dk-bg-raised: #0f0f10;
+  --dk-surface: #151517;
+  --dk-surface-2: #1c1c1f;
+  --dk-text: #f5f5f5;
+  --dk-text-dim: #a3a3a8;
+  --dk-text-mute: #6f6f75;
+  --dk-border: rgba(255, 255, 255, 0.08);
+  --dk-border-strong: rgba(255, 255, 255, 0.14);
+  --dk-divider: rgba(255, 255, 255, 0.06);
   --dk-hover: rgba(255, 255, 255, 0.06);
   --dk-press: rgba(255, 255, 255, 0.09);
-  --dk-active: #24403a;
+  --dk-active: #1f1f22;
   --dk-accent: #2ee0c4;
   --dk-accent-text: #5fd6c1;
   --dk-accent-soft: rgba(46, 224, 196, 0.12);
   --dk-accent-ring: rgba(46, 224, 196, 0.35);
 
-  /* The bright glass recipe, after dark. Same four layers as CLAUDE.md's
-     canonical light recipe; pair it with the same backdrop-filter. */
-  --dk-glass-fill: linear-gradient(135deg, rgba(30, 48, 43, 0.72), rgba(14, 24, 21, 0.56));
-  --dk-glass-border: rgba(190, 240, 225, 0.12);
-  --dk-glass-border-hover: rgba(190, 240, 225, 0.22);
+  /* The bright glass recipe, after dark. Same layers as CLAUDE.md's canonical
+     light recipe, minus the backdrop-filter: dashboard surfaces sit on a flat
+     page colour, so the blur cost a scroll's worth of raster and drew nothing.
+     Only the top bar, which real content scrolls under, still blurs. */
+  --dk-glass-fill: linear-gradient(135deg, rgba(30, 30, 32, 0.72), rgba(14, 14, 15, 0.6));
+  --dk-glass-border: rgba(255, 255, 255, 0.09);
+  --dk-glass-border-hover: rgba(255, 255, 255, 0.16);
   --dk-glass-inset: inset 0 1px 0 rgba(255, 255, 255, 0.06);
   --dk-glass-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
   --dk-glass-shadow-hover: 0 16px 36px rgba(0, 0, 0, 0.45);
   --dk-glass-hover: rgba(255, 255, 255, 0.05);
-  --dk-sheen-soft: rgba(170, 255, 230, 0.03);
-  --dk-sheen-peak: rgba(170, 255, 230, 0.12);
+  --dk-sheen-soft: rgba(255, 255, 255, 0.03);
+  --dk-sheen-peak: rgba(255, 255, 255, 0.1);
 
-  --dk-popover-bg: rgba(20, 33, 29, 0.96);
+  --dk-popover-bg: rgba(22, 22, 24, 0.97);
   --dk-field-bg: rgba(255, 255, 255, 0.04);
-  --dk-field-border: rgba(190, 235, 222, 0.14);
-  --dk-scrim: rgba(0, 0, 0, 0.55);
-  --dk-scroll-thumb: rgba(230, 239, 236, 0.16);
-  --dk-scroll-thumb-hover: rgba(230, 239, 236, 0.3);
+  --dk-field-border: rgba(255, 255, 255, 0.12);
+  --dk-scrim: rgba(0, 0, 0, 0.6);
+  --dk-scroll-thumb: rgba(245, 245, 245, 0.16);
+  --dk-scroll-thumb-hover: rgba(245, 245, 245, 0.3);
   --dk-danger: #ff8a80;
   --dk-danger-soft: rgba(255, 107, 95, 0.12);
   --dk-warning: #f0c060;

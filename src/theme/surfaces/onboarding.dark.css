@@ -51,7 +51,7 @@
 
 /* ── Account onboarding ── */
 :root[data-theme="dark"] .account-onboarding {
-  background: rgba(19, 32, 28, 0.96);
+  background: rgba(20, 20, 22, 0.96);
   color: var(--dk-text);
 }
 :root[data-theme="dark"] .account-onboarding-scroll > p {
@@ -301,7 +301,7 @@
     0 5px 14px rgba(0, 0, 0, 0.3);
 }
 :root[data-theme="dark"] .privacy-choice-card input {
-  border-color: rgba(190, 235, 222, 0.3);
+  border-color: rgba(255, 255, 255, 0.3);
   background: var(--dk-field-bg);
 }
 :root[data-theme="dark"] .privacy-choice-card input:checked {
@@ -322,7 +322,7 @@
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 5px 14px rgba(0, 0, 0, 0.3);
 }
 :root[data-theme="dark"] .privacy-confirm-backdrop {
-  background: rgba(11, 20, 18, 0.86);
+  background: rgba(10, 10, 11, 0.86);
 }
 :root[data-theme="dark"] .privacy-confirm-dialog {
   border-color: var(--dk-border-strong);
@@ -468,9 +468,9 @@
 
 /* ── Voice picker cards ── */
 :root[data-theme="dark"] .voice-card {
-  border-color: color-mix(in srgb, var(--voice-tint) 28%, rgba(190, 240, 225, 0.1));
+  border-color: color-mix(in srgb, var(--voice-tint) 28%, rgba(255, 255, 255, 0.1));
   background:
-    linear-gradient(145deg, rgba(30, 48, 43, 0.66), rgba(14, 24, 21, 0.44)),
+    linear-gradient(145deg, rgba(30, 30, 32, 0.66), rgba(14, 14, 15, 0.44)),
     linear-gradient(145deg, var(--voice-tint-soft), var(--voice-tint-faint));
   box-shadow: var(--dk-glass-inset), 0 12px 28px rgba(0, 0, 0, 0.3);
 }
@@ -485,11 +485,11 @@
   );
 }
 :root[data-theme="dark"] .voice-card:hover {
-  border-color: color-mix(in srgb, var(--voice-tint) 54%, rgba(190, 240, 225, 0.22));
+  border-color: color-mix(in srgb, var(--voice-tint) 54%, rgba(255, 255, 255, 0.22));
   box-shadow: var(--dk-glass-inset), 0 15px 32px rgba(0, 0, 0, 0.4);
 }
 :root[data-theme="dark"] .voice-card.is-selected {
-  border-color: color-mix(in srgb, var(--voice-tint) 68%, rgba(190, 240, 225, 0.12));
+  border-color: color-mix(in srgb, var(--voice-tint) 68%, rgba(255, 255, 255, 0.12));
   box-shadow: var(--dk-glass-inset), 0 0 0 1px color-mix(in srgb, var(--voice-tint) 30%, transparent),
     0 15px 34px rgba(0, 0, 0, 0.42);
 }
@@ -497,7 +497,7 @@
   outline-color: color-mix(in srgb, var(--voice-tint) 76%, var(--dk-accent));
 }
 :root[data-theme="dark"] .voice-preview-button {
-  border-color: rgba(190, 240, 225, 0.16);
+  border-color: rgba(255, 255, 255, 0.16);
   background: color-mix(in srgb, var(--voice-tint) 22%, rgba(255, 255, 255, 0.06));
   color: color-mix(in srgb, var(--voice-tint) 70%, #ffffff);
   box-shadow: var(--dk-glass-inset);
@@ -512,7 +512,7 @@
   color: color-mix(in srgb, var(--voice-tint) 70%, #ffffff);
 }
 :root[data-theme="dark"] .voice-waveform span {
-  background: rgba(190, 235, 222, 0.28);
+  background: rgba(255, 255, 255, 0.28);
 }
 :root[data-theme="dark"] .voice-waveform.is-active span {
   background: rgba(255, 255, 255, 0.96);

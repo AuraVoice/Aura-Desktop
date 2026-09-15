@@ -3,7 +3,7 @@
 
 /* ── InterviewPage.css: tokens ── */
 :root[data-theme="dark"] .db-interview-page {
-  --interview-glass: color-mix(in srgb, #1a2b26 72%, transparent);
+  --interview-glass: color-mix(in srgb, #1c1c1f 72%, transparent);
   --interview-glass-soft: rgba(255, 255, 255, 0.035);
   --interview-glass-border: var(--dk-glass-border);
   --interview-glass-shadow: 0 16px 42px rgba(0, 0, 0, 0.3), var(--dk-glass-inset);
@@ -249,10 +249,10 @@
   box-shadow: 0 0 0 2px var(--db-teal-deep-a), var(--dk-glass-inset), var(--dk-glass-shadow);
 }
 :root[data-theme="dark"] .db-prep-ring .is-track {
-  stroke: rgba(190, 235, 222, 0.1);
+  stroke: rgba(255, 255, 255, 0.1);
 }
 :root[data-theme="dark"] .db-prep-dots button {
-  background: rgba(190, 235, 222, 0.18);
+  background: rgba(255, 255, 255, 0.18);
 }
 :root[data-theme="dark"] .db-prep-dots button.is-confident {
   background: var(--prep-strong);
@@ -309,7 +309,7 @@
   background: var(--dk-hover);
 }
 :root[data-theme="dark"] .db-prep-meter i {
-  background: rgba(190, 235, 222, 0.14);
+  background: rgba(255, 255, 255, 0.14);
 }
 :root[data-theme="dark"] .db-prep-strength.is-strong .db-prep-meter i {
   background: var(--prep-strong);

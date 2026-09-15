@@ -8,17 +8,17 @@
    that were written as literals. */
 :root[data-theme="dark"] .db-app,
 :root[data-theme="dark"] .db-window {
-  --db-bg: #0b1412;
-  --db-surface: #13201c;
-  --db-content-bg: #0e1916;
-  --db-text: #e6efec;
-  --db-text-dim: #9aaba6;
-  --db-text-mute: #6b7c77;
-  --db-border: rgba(190, 235, 222, 0.1);
+  --db-bg: #0a0a0b;
+  --db-surface: #151517;
+  --db-content-bg: #0d0d0e;
+  --db-text: #f5f5f5;
+  --db-text-dim: #a3a3a8;
+  --db-text-mute: #6f6f75;
+  --db-border: rgba(255, 255, 255, 0.08);
   --db-hover: rgba(255, 255, 255, 0.06);
-  /* A raised mint-black chip rather than an inverted light one: every active
+  /* A raised charcoal chip rather than an inverted light one: every active
      state pairs this with literal #fff text, which then keeps working. */
-  --db-active: #24403a;
+  --db-active: #1f1f22;
   --db-teal: #2ee0c4;
   /* deep-a is mostly used as TEXT (links, eyebrows), so dark lifts it to a
      readable mint. The one gradient that uses it (Home hero) is re-set in
@@ -56,12 +56,27 @@
 
 /* ── Sidebar ── */
 :root[data-theme="dark"] .db-sidebar {
-  background: rgba(11, 20, 18, 0.82);
+  background: rgba(10, 10, 11, 0.82);
 }
 :root[data-theme="dark"] .db-nav-item-active,
 :root[data-theme="dark"] .db-nav-item-active:hover {
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 0 0 1px rgba(46, 224, 196, 0.14),
     0 4px 14px rgba(0, 0, 0, 0.3);
+}
+/* The one teal on an active row is its icon; the chip itself stays charcoal. */
+:root[data-theme="dark"] .db-nav-item-active .db-nav-icon:not(.db-nav-help-icon-discord),
+:root[data-theme="dark"] .db-nav-item-active:hover .db-nav-icon:not(.db-nav-help-icon-discord) {
+  color: var(--dk-accent);
+}
+/* The light pill's white gloss washes out white ink, so dark drops the gloss and
+   deepens the gold enough for white letters to read. */
+:root[data-theme="dark"] .db-nav-beta,
+:root[data-theme="dark"] .db-nav-item-active .db-nav-beta {
+  --aura-pill-border: rgba(255, 215, 128, 0.42);
+  --aura-pill-fill: rgba(150, 104, 18, 0.62);
+  --aura-pill-text: #fff;
+  background: var(--aura-pill-fill);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 1px 3px rgba(0, 0, 0, 0.4);
 }
 :root[data-theme="dark"] .db-nav-item-help[data-phase="discord"]:hover:not(.db-nav-item-active) {
   background: rgba(88, 101, 242, 0.16);
@@ -77,19 +92,16 @@
   --word-shine: #9ff0e2;
 }
 
-/* ── Main area: the content card gets a faint mint glow in its corner so the
-   frosted cards on top have something to frost. ── */
+/* ── Main area: plain matte black. The teal corner glows it used to carry are
+   what made the whole page read green. ── */
 :root[data-theme="dark"] .db-main {
-  border-color: rgba(190, 240, 225, 0.08);
-  background:
-    radial-gradient(70% 80% at 0% 0%, rgba(46, 224, 196, 0.06), transparent 62%),
-    radial-gradient(90% 100% at 100% 0%, rgba(46, 224, 196, 0.045), transparent 58%),
-    var(--db-content-bg);
+  border-color: rgba(255, 255, 255, 0.07);
+  background: var(--db-content-bg);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 2px 6px rgba(0, 0, 0, 0.3),
     0 12px 32px rgba(0, 0, 0, 0.35);
 }
 :root[data-theme="dark"] .db-topbar {
-  background: rgba(14, 25, 22, 0.72);
+  background: rgba(13, 13, 14, 0.72);
 }
 :root[data-theme="dark"] .db-badge-count {
   color: #062a24;
@@ -207,12 +219,12 @@
 
 /* ── Buttons ── */
 :root[data-theme="dark"] .db-primary-btn:hover:not(:disabled) {
-  background: #2e524a;
+  background: #2a2a2e;
 }
 
 /* ── Settings rows and toggles ── */
 :root[data-theme="dark"] .db-setting-toggle {
-  border-color: rgba(190, 235, 222, 0.16);
+  border-color: rgba(255, 255, 255, 0.16);
   background: rgba(255, 255, 255, 0.1);
 }
 :root[data-theme="dark"] .db-setting-toggle::after {
@@ -281,8 +293,8 @@
   background: linear-gradient(
     90deg,
     transparent,
-    rgba(190, 235, 222, 0.12) 22%,
-    rgba(190, 235, 222, 0.12) 78%,
+    rgba(255, 255, 255, 0.12) 22%,
+    rgba(255, 255, 255, 0.12) 78%,
     transparent
   );
 }

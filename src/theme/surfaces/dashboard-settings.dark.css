@@ -24,7 +24,7 @@
 }
 /* A little brighter than --dk-sheen-peak: the sweep crosses a very small key. */
 :root[data-theme="dark"] .db-chord-flash kbd::after {
-  background: linear-gradient(90deg, transparent, rgba(170, 255, 230, 0.22), transparent);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.22), transparent);
 }
 :root[data-theme="dark"] .db-settings-error {
   color: var(--dk-danger);
@@ -301,8 +301,8 @@
 :root[data-theme="dark"] .db-page-toolbar::after {
   background: linear-gradient(
     90deg,
-    rgba(190, 235, 222, 0.12),
-    rgba(190, 235, 222, 0.05) 55%,
+    rgba(255, 255, 255, 0.12),
+    rgba(255, 255, 255, 0.05) 55%,
     transparent
   );
 }

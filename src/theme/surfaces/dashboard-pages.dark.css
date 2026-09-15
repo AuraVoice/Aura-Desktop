@@ -60,7 +60,7 @@
   box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35), var(--dk-glass-inset);
 }
 :root[data-theme="dark"] .db-local-recording-actions .db-primary-btn:hover:not(:disabled) {
-  background: #2e524a;
+  background: #2a2a2e;
   box-shadow: var(--db-shadow-md);
 }
 :root[data-theme="dark"] .db-local-recording-actions .db-secondary-btn {
@@ -91,7 +91,7 @@
 /* Denser than the page glass: a dialog has to stay readable over whatever sits behind it. */
 :root[data-theme="dark"] .db-local-confirm-panel {
   border-color: var(--dk-glass-border);
-  background: linear-gradient(145deg, rgba(30, 48, 43, 0.95), rgba(16, 27, 24, 0.92));
+  background: linear-gradient(145deg, rgba(30, 30, 32, 0.95), rgba(16, 16, 17, 0.92));
   box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55), var(--dk-glass-inset);
 }
 :root[data-theme="dark"] .db-local-confirm-icon {
@@ -133,7 +133,7 @@
 
 /* ── Copy button ── */
 :root[data-theme="dark"] .db-copy-compact {
-  background: rgba(20, 33, 29, 0.86);
+  background: rgba(22, 22, 24, 0.86);
 }
 :root[data-theme="dark"] .db-copy-compact:hover {
   background: var(--dk-surface-2);
@@ -252,7 +252,7 @@
 /* ── Update dialog ── */
 :root[data-theme="dark"] .db-modal-panel.db-update-dialog {
   border-color: var(--dk-glass-border);
-  background: linear-gradient(135deg, rgba(30, 48, 43, 0.95), rgba(14, 24, 21, 0.92));
+  background: linear-gradient(135deg, rgba(30, 30, 32, 0.95), rgba(14, 14, 15, 0.92));
   box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
 }
 /* #0c594e sinks into the dark glass; these stay above 4.5:1 against the white label. */
