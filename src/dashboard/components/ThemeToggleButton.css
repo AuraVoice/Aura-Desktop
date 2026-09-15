@@ -1,0 +1,31 @@
+/* Sun and moon share one spot and trade places: the outgoing glyph spins away
+   and shrinks while the incoming one springs in, a touch past full size. */
+.db-theme-toggle {
+  overflow: hidden;
+}
+.db-theme-toggle svg {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  transition: opacity 220ms var(--db-ease), transform 460ms cubic-bezier(0.34, 1.45, 0.64, 1),
+    color 0.15s var(--db-ease);
+}
+.db-theme-toggle.is-light .db-theme-toggle-moon {
+  opacity: 0;
+  transform: rotate(-90deg) scale(0.4);
+}
+.db-theme-toggle.is-dark .db-theme-toggle-sun {
+  opacity: 0;
+  transform: rotate(90deg) scale(0.4);
+}
+.db-theme-toggle.is-light:hover .db-theme-toggle-sun {
+  color: #d58a12;
+  transform: rotate(45deg);
+}
+.db-theme-toggle.is-dark:hover .db-theme-toggle-moon {
+  color: #9ff0e2;
+  transform: rotate(-16deg) scale(1.04);
+}
+.db-theme-toggle:active svg {
+  transition-duration: 120ms;
+}

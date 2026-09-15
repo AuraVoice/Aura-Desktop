@@ -1,0 +1,151 @@
+/* Appearance layer. Imported once, last, from main.tsx, so it loads after every
+   component sheet in every window.
+
+   How theming works (see APPEARANCE_THEMING_PLAN.md):
+   - themeEngine.ts stamps <html data-theme="light|dark"> before first paint.
+   - Light is the base: every component sheet is written for light and stays
+     untouched. Dark lives in the surfaces/*.dark.css override sheets, which
+     prefix each rule with :root[data-theme="dark"].
+   - The overlay is the exception. Its --glass-* tokens (theme.css) were dark
+     from day one, so for the overlay the LIGHT look is the override
+     (surfaces/overlay-cards.light.css) and the notch opts out of it with
+     .theme-pinned-dark.
+   - An override sheet must twin every state it touches (:hover, :active,
+     .is-active...). The prefix raises specificity, so a dark base rule would
+     otherwise beat a light :hover rule. */
+
+@import "./surfaces/dashboard-shell.dark.css";
+@import "./surfaces/dashboard-home.dark.css";
+@import "./surfaces/dashboard-data.dark.css";
+@import "./surfaces/dashboard-settings.dark.css";
+@import "./surfaces/dashboard-pages.dark.css";
+@import "./surfaces/dashboard-interview.dark.css";
+@import "./surfaces/onboarding.dark.css";
+@import "./surfaces/overlay-cards.light.css";
+@import "./surfaces/overlay-chat.light.css";
+
+/* ── Shared dark vocabulary ────────────────────────────────────────────────
+   On :root so portaled and out-of-.db-app elements can use it too. Override
+   sheets should reach for these before inventing a new value. */
+:root[data-theme="dark"] {
+  --dk-bg: #0b1412;
+  --dk-bg-raised: #0e1916;
+  --dk-surface: #13201c;
+  --dk-surface-2: #1a2b26;
+  --dk-text: #e6efec;
+  --dk-text-dim: #9aaba6;
+  --dk-text-mute: #6b7c77;
+  --dk-border: rgba(190, 235, 222, 0.1);
+  --dk-border-strong: rgba(190, 235, 222, 0.18);
+  --dk-divider: rgba(190, 235, 222, 0.08);
+  --dk-hover: rgba(255, 255, 255, 0.06);
+  --dk-press: rgba(255, 255, 255, 0.09);
+  --dk-active: #24403a;
+  --dk-accent: #2ee0c4;
+  --dk-accent-text: #5fd6c1;
+  --dk-accent-soft: rgba(46, 224, 196, 0.12);
+  --dk-accent-ring: rgba(46, 224, 196, 0.35);
+
+  /* The bright glass recipe, after dark. Same four layers as CLAUDE.md's
+     canonical light recipe; pair it with the same backdrop-filter. */
+  --dk-glass-fill: linear-gradient(135deg, rgba(30, 48, 43, 0.72), rgba(14, 24, 21, 0.56));
+  --dk-glass-border: rgba(190, 240, 225, 0.12);
+  --dk-glass-border-hover: rgba(190, 240, 225, 0.22);
+  --dk-glass-inset: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  --dk-glass-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  --dk-glass-shadow-hover: 0 16px 36px rgba(0, 0, 0, 0.45);
+  --dk-glass-hover: rgba(255, 255, 255, 0.05);
+  --dk-sheen-soft: rgba(170, 255, 230, 0.03);
+  --dk-sheen-peak: rgba(170, 255, 230, 0.12);
+
+  --dk-popover-bg: rgba(20, 33, 29, 0.96);
+  --dk-field-bg: rgba(255, 255, 255, 0.04);
+  --dk-field-border: rgba(190, 235, 222, 0.14);
+  --dk-scrim: rgba(0, 0, 0, 0.55);
+  --dk-scroll-thumb: rgba(230, 239, 236, 0.16);
+  --dk-scroll-thumb-hover: rgba(230, 239, 236, 0.3);
+  --dk-danger: #ff8a80;
+  --dk-danger-soft: rgba(255, 107, 95, 0.12);
+  --dk-warning: #f0c060;
+  --dk-warning-soft: rgba(240, 192, 96, 0.12);
+  --dk-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 1px rgba(0, 0, 0, 0.2);
+  --dk-shadow-md: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 16px rgba(0, 0, 0, 0.32);
+  --dk-shadow-pop: 0 2px 6px rgba(0, 0, 0, 0.35), 0 18px 44px rgba(0, 0, 0, 0.5);
+}
+
+/* ── Overlay glass, light ──────────────────────────────────────────────────
+   theme.css keeps today's dark values as the default. In light mode, cards
+   become frosted white. Opacity stays near 0.9 on purpose: a transparent
+   Tauri window's backdrop-filter only blurs webview pixels, never the desktop
+   behind it, so a thinner card is unreadable over a busy screen. */
+:root[data-theme="light"]:not(.theme-pinned-dark) {
+  --glass-surface-fill: rgba(250, 252, 251, 0.92);
+  --glass-sheen: rgba(255, 255, 255, 0.7);
+  --glass-border-top: rgba(255, 255, 255, 0.95);
+  --glass-border-bottom: rgba(63, 86, 78, 0.18);
+  --glass-border-flat: rgba(63, 86, 78, 0.16);
+  --glass-field-fill: rgba(63, 86, 78, 0.06);
+  --glass-text-bright: rgba(20, 28, 26, 0.94);
+  --glass-text-dim: rgba(20, 28, 26, 0.6);
+  --glass-icon-idle: rgba(20, 28, 26, 0.64);
+  --glass-danger: #c2412d;
+  --glass-tooltip-bg: rgba(255, 255, 255, 0.98);
+  --glass-text-shadow: none;
+  --glass-accent: #149e8b;
+  --glass-accent-lerp-white: #0f8a79;
+  --glass-accent-glow: rgba(20, 158, 139, 0.35);
+
+  --lt-hover: rgba(20, 40, 34, 0.05);
+  --lt-press: rgba(20, 40, 34, 0.09);
+  --lt-divider: rgba(63, 86, 78, 0.12);
+  --lt-accent-soft: rgba(20, 158, 139, 0.12);
+  --lt-danger-soft: rgba(194, 65, 45, 0.1);
+  --lt-scroll-thumb: rgba(20, 28, 26, 0.18);
+}
+
+/* The notch reads as hardware, so it and the dictation HUD that takes its edge
+   stay dark in both themes. Mirrors theme.css's :root glass values exactly;
+   change both together. */
+.theme-pinned-dark {
+  --glass-surface-fill: rgba(16, 16, 20, 0.85);
+  --glass-sheen: rgba(255, 255, 255, 0.08);
+  --glass-border-top: rgba(255, 255, 255, 0.22);
+  --glass-border-bottom: rgba(255, 255, 255, 0.09);
+  --glass-border-flat: rgba(255, 255, 255, 0.19);
+  --glass-field-fill: rgba(255, 255, 255, 0.08);
+  --glass-text-bright: rgba(255, 255, 255, 0.97);
+  --glass-text-dim: rgba(255, 255, 255, 0.66);
+  --glass-icon-idle: rgba(255, 255, 255, 0.76);
+  --glass-danger: #ff8a75;
+  --glass-tooltip-bg: rgba(28, 28, 34, 0.92);
+  --glass-text-shadow: 0 1px 8px rgba(0, 0, 0, 0.4);
+  --glass-accent: #1ec8b0;
+  --glass-accent-lerp-white: #74ddce;
+  --glass-accent-glow: rgba(116, 221, 206, 0.7);
+  color-scheme: dark;
+}
+
+/* ── Switching ─────────────────────────────────────────────────────────────
+   themeEngine.ts wraps the attribute flip in document.startViewTransition, so
+   the whole window crossfades between two snapshots. */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 320ms;
+  animation-timing-function: cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+/* Fallback for webviews without View Transitions: color properties ease for the
+   length of one switch only, so hovers never inherit a slow transition. */
+html.theme-switching,
+html.theme-switching *,
+html.theme-switching *::before,
+html.theme-switching *::after {
+  transition:
+    background-color 320ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    color 320ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    border-color 320ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    outline-color 320ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    box-shadow 320ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    fill 320ms cubic-bezier(0.22, 0.61, 0.36, 1),
+    stroke 320ms cubic-bezier(0.22, 0.61, 0.36, 1) !important;
+}

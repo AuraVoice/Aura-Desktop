@@ -1,0 +1,455 @@
+/* Light overrides for the overlay chat, interview and region cards. Owned by src/theme/themes.css; read its header first.
+   Every rule is prefixed :root[data-theme="light"] and twins each state it touches.
+
+   None of these cards can render inside .notch-shell: OverlayRoot mounts them as
+   siblings of the notch in .notch-column, so no :not(.theme-pinned-dark *) guard.
+   The overlay window never loads dashboard.css, so every var(--db-*) here resolves
+   to its --glass-* fallback (already flipped) or, with no fallback, inherits. */
+
+/* ── Chat card ── */
+:root[data-theme="light"] .glass-surface.chat-slot-surface {
+  background:
+    linear-gradient(to bottom, var(--glass-sheen), transparent 25%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(238, 247, 244, 0.9));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 10px 30px rgba(63, 86, 78, 0.14);
+}
+
+/* ── History sheet ── */
+:root[data-theme="light"] .glass-surface.chat-history-sheet {
+  background:
+    linear-gradient(to bottom, var(--glass-sheen), transparent 25%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(238, 247, 244, 0.92));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 22px 54px rgba(63, 86, 78, 0.2);
+}
+:root[data-theme="light"] .glass-surface.chat-history-sheet::before {
+  background: var(--lt-divider);
+}
+:root[data-theme="light"] .chat-history-scroll {
+  scrollbar-color: var(--lt-scroll-thumb) transparent;
+}
+:root[data-theme="light"] .chat-history-scroll::-webkit-scrollbar-thumb {
+  background: var(--lt-scroll-thumb) padding-box;
+}
+:root[data-theme="light"] .chat-history-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(20, 28, 26, 0.3) padding-box;
+}
+:root[data-theme="light"] .chat-history-row {
+  background: rgba(20, 40, 34, 0.03);
+}
+:root[data-theme="light"] .chat-history-row:hover:not(:disabled) {
+  border-color: rgba(20, 158, 139, 0.22);
+  background: var(--lt-hover);
+}
+:root[data-theme="light"] .chat-history-more {
+  background: var(--lt-hover);
+}
+:root[data-theme="light"] .chat-history-more:hover {
+  background: var(--lt-press);
+}
+
+/* ── Messages ── user turns get a soft teal glass, assistant turns are plain
+   ink. The assistant rule also re-sets color so it keeps outranking the kind
+   colors below, exactly as it does in the base sheet. */
+:root[data-theme="light"] .chat-message-user .chat-message-bubble {
+  background: linear-gradient(135deg, rgba(20, 158, 139, 0.16), rgba(20, 158, 139, 0.09));
+  box-shadow: inset 0 0 0 1px rgba(20, 158, 139, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+  color: rgba(20, 28, 26, 0.94);
+}
+:root[data-theme="light"] .chat-message-assistant .chat-message-bubble {
+  background: transparent;
+  color: var(--glass-text-bright);
+}
+
+/* ── Reminder ── indigo kept as the reminder's identity, deepened for white. */
+:root[data-theme="light"] .chat-message-kind-reminder {
+  border-color: rgba(99, 102, 241, 0.3);
+}
+:root[data-theme="light"] .chat-reminder-supplemental {
+  border-color: var(--lt-divider);
+}
+:root[data-theme="light"] .chat-reminder-supplemental .chat-reminder-card {
+  border-color: rgba(99, 102, 241, 0.26);
+  background: linear-gradient(135deg, rgba(129, 140, 248, 0.14), rgba(99, 102, 241, 0.07));
+}
+:root[data-theme="light"] .chat-reminder-icon {
+  color: #b7791f;
+}
+:root[data-theme="light"] .chat-reminder-label {
+  color: rgba(20, 28, 26, 0.6);
+}
+:root[data-theme="light"] .chat-reminder-message {
+  color: rgba(20, 28, 26, 0.94);
+}
+:root[data-theme="light"] .chat-reminder-time {
+  border-color: rgba(99, 102, 241, 0.3);
+  background: rgba(99, 102, 241, 0.1);
+  color: #4338ca;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+:root[data-theme="light"] .chat-reminder-time::after {
+  background: linear-gradient(90deg, transparent, rgba(99, 102, 241, 0.26), transparent);
+}
+
+/* ── Markdown ── code sits on a slightly darker frosted panel, never a black box. */
+:root[data-theme="light"] .chat-markdown code {
+  background: rgba(20, 40, 34, 0.07);
+}
+:root[data-theme="light"] .chat-markdown pre {
+  background: rgba(20, 40, 34, 0.05);
+  box-shadow: inset 0 0 0 1px rgba(63, 86, 78, 0.1);
+}
+:root[data-theme="light"] .chat-code-copy {
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: 0 0 0 1px rgba(63, 86, 78, 0.12);
+}
+:root[data-theme="light"] .chat-markdown pre code {
+  background: none;
+}
+
+/* ── Clarification ── the #149e8b accent is 3.3:1 on white, too light for 11px text. */
+:root[data-theme="light"] .chat-clarification-option.selected,
+:root[data-theme="light"] .chat-clarification-done {
+  color: #0d7a6b;
+}
+
+/* ── Thinking, notes, retry ── var(--db-text-mute) has no fallback here, so
+   these inherited full ink; give them the dim tone the source intended. */
+:root[data-theme="light"] .chat-thinking {
+  color: var(--glass-text-dim);
+}
+:root[data-theme="light"] .chat-message-retry {
+  color: #0d7a6b;
+}
+
+/* ── Composer ── */
+:root[data-theme="light"] .chat-slot-composer textarea {
+  background: rgba(255, 255, 255, 0.72);
+  box-shadow: inset 0 1px 2px rgba(20, 40, 34, 0.04);
+}
+:root[data-theme="light"] .chat-slot-send {
+  color: #ffffff;
+}
+
+/* ── Activity rail ── */
+:root[data-theme="light"] .chat-activity {
+  color: var(--glass-text-dim);
+}
+:root[data-theme="light"] .chat-activity-failed {
+  color: #c2412d;
+}
+
+/* ── Reasoning block ── */
+:root[data-theme="light"] .chat-reasoning-toggle {
+  color: var(--glass-text-dim);
+}
+:root[data-theme="light"] .chat-reasoning-toggle:hover {
+  color: var(--glass-text-bright);
+}
+:root[data-theme="light"] .chat-reasoning-body {
+  border-left-color: var(--lt-divider);
+  color: var(--glass-text-dim);
+}
+
+/* ── Interview control bar ── */
+:root[data-theme="light"] .glass-surface.interview-hacker-control-bar {
+  background:
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.7), transparent 45%),
+    rgba(250, 252, 251, 0.94);
+  box-shadow:
+    0 14px 36px rgba(63, 86, 78, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.95);
+}
+:root[data-theme="light"] .interview-hacker-mode-toggle {
+  border-color: rgba(63, 86, 78, 0.16);
+  background: var(--lt-hover);
+}
+:root[data-theme="light"] .interview-hacker-mode-toggle span {
+  color: rgba(20, 28, 26, 0.58);
+}
+:root[data-theme="light"] .interview-hacker-mode-toggle span[data-active="true"] {
+  background: #ffffff;
+  color: rgba(20, 28, 26, 0.94);
+  box-shadow: 0 1px 3px rgba(20, 40, 34, 0.14);
+}
+:root[data-theme="light"] .interview-hacker-mode-toggle:hover {
+  background: var(--lt-press);
+}
+:root[data-theme="light"] .interview-hacker-mode-toggle:focus-visible {
+  outline-color: rgba(20, 158, 139, 0.7);
+}
+:root[data-theme="light"] .interview-hacker-visibility-button,
+:root[data-theme="light"] .interview-hacker-stop-button {
+  border-color: rgba(63, 86, 78, 0.16);
+  color: rgba(20, 28, 26, 0.9);
+  background: var(--lt-hover);
+}
+:root[data-theme="light"] .interview-hacker-visibility-button:hover,
+:root[data-theme="light"] .interview-hacker-stop-button:hover {
+  background: var(--lt-press);
+}
+:root[data-theme="light"] .interview-hacker-visibility-button:focus-visible,
+:root[data-theme="light"] .interview-hacker-stop-button:focus-visible {
+  outline-color: rgba(20, 158, 139, 0.7);
+}
+
+/* ── Interview card ── the --text-*, --surface-* and --accent tokens are never
+   defined in the overlay, so every fallback below was a white literal. */
+:root[data-theme="light"] .glass-surface.interview-hacker-card {
+  background:
+    linear-gradient(to bottom, var(--glass-sheen), transparent 25%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(238, 247, 244, 0.9));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 10px 30px rgba(63, 86, 78, 0.14);
+}
+:root[data-theme="light"] .interview-hacker-status {
+  color: rgba(20, 28, 26, 0.6);
+}
+
+/* ── Preflight ── */
+:root[data-theme="light"] .interview-hacker-preflight {
+  border-color: rgba(63, 86, 78, 0.14);
+  background: rgba(20, 40, 34, 0.04);
+}
+:root[data-theme="light"] .interview-hacker-source span {
+  color: rgba(20, 28, 26, 0.6);
+}
+:root[data-theme="light"] .interview-hacker-source strong {
+  color: rgba(20, 28, 26, 0.9);
+}
+:root[data-theme="light"] .interview-hacker-preflight-hint {
+  color: rgba(20, 28, 26, 0.6);
+}
+:root[data-theme="light"] .interview-hacker-source-chevron {
+  color: rgba(20, 28, 26, 0.6);
+}
+:root[data-theme="light"] .interview-hacker-source-action:hover .interview-hacker-source-chevron,
+:root[data-theme="light"] .interview-hacker-source-action:focus-visible .interview-hacker-source-chevron {
+  color: #0d7a6b;
+}
+:root[data-theme="light"] .interview-hacker-source-icon {
+  color: rgba(20, 28, 26, 0.88);
+}
+:root[data-theme="light"] .interview-hacker-meter span {
+  background: #149e8b;
+}
+:root[data-theme="light"] .interview-hacker-source-action:hover strong,
+:root[data-theme="light"] .interview-hacker-source-action:focus-visible strong {
+  color: #0d7a6b;
+}
+/* Amber deep enough for 4.5:1 on white; the brief's #b8860b is only 3.3:1. */
+:root[data-theme="light"] .interview-hacker-source.is-warning .interview-hacker-source-icon,
+:root[data-theme="light"] .interview-hacker-source.is-warning strong {
+  color: #9a6700;
+}
+
+/* ── Brief switcher ── */
+:root[data-theme="light"] .interview-hacker-brief-menu-label {
+  color: rgba(20, 28, 26, 0.6);
+}
+:root[data-theme="light"] .interview-hacker-brief-menu-empty {
+  color: rgba(20, 28, 26, 0.6);
+}
+:root[data-theme="light"] .interview-hacker-brief-menu-item {
+  border-color: rgba(63, 86, 78, 0.14);
+  background: rgba(20, 40, 34, 0.04);
+}
+:root[data-theme="light"] .interview-hacker-brief-menu-item:hover,
+:root[data-theme="light"] .interview-hacker-brief-menu-item:focus-visible {
+  border-color: #149e8b;
+}
+:root[data-theme="light"] .interview-hacker-brief-menu-item strong {
+  color: rgba(20, 28, 26, 0.9);
+}
+:root[data-theme="light"] .interview-hacker-brief-menu-item span {
+  color: rgba(20, 28, 26, 0.6);
+}
+:root[data-theme="light"] .interview-hacker-brief-menu-error {
+  color: #9a6700;
+}
+:root[data-theme="light"] .interview-hacker-brief-menu-fresh {
+  border-color: rgba(63, 86, 78, 0.22);
+  color: rgba(20, 28, 26, 0.9);
+}
+:root[data-theme="light"] .interview-hacker-brief-menu-fresh:hover,
+:root[data-theme="light"] .interview-hacker-brief-menu-fresh:focus-visible {
+  border-color: #149e8b;
+  color: #0d7a6b;
+}
+
+/* ── Thread ── */
+:root[data-theme="light"] .interview-hacker-thread {
+  scrollbar-color: var(--lt-scroll-thumb) transparent;
+}
+:root[data-theme="light"] .interview-hacker-thread::-webkit-scrollbar-thumb {
+  background: var(--lt-scroll-thumb);
+}
+:root[data-theme="light"] .interview-hacker-jump {
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: inset 0 0 0 1px rgba(63, 86, 78, 0.16), 0 4px 12px rgba(63, 86, 78, 0.18);
+  color: rgba(20, 28, 26, 0.9);
+}
+:root[data-theme="light"] .interview-hacker-jump:hover {
+  background: rgba(236, 246, 243, 0.98);
+}
+:root[data-theme="light"] .interview-hacker-bubble {
+  color: rgba(20, 28, 26, 0.92);
+}
+:root[data-theme="light"] .interview-hacker-bubble.is-question {
+  background: rgba(20, 40, 34, 0.06);
+  color: rgba(20, 28, 26, 0.74);
+}
+:root[data-theme="light"] .interview-hacker-bubble.is-question.is-pending {
+  background: rgba(20, 40, 34, 0.03);
+  color: rgba(20, 28, 26, 0.56);
+}
+:root[data-theme="light"] .interview-hacker-bubble.is-answer {
+  background: rgba(20, 158, 139, 0.07);
+  box-shadow: inset 0 0 0 1px rgba(20, 158, 139, 0.18);
+}
+:root[data-theme="light"] .interview-hacker-bubble.is-answer.is-drafting {
+  color: rgba(20, 28, 26, 0.58);
+}
+:root[data-theme="light"] .interview-hacker-unverified {
+  color: #9a6700;
+}
+:root[data-theme="light"] .interview-hacker-thread-empty {
+  color: rgba(20, 28, 26, 0.55);
+}
+:root[data-theme="light"] .interview-hacker-transcript,
+:root[data-theme="light"] .interview-hacker-answer {
+  background: rgba(20, 40, 34, 0.045);
+  color: rgba(20, 28, 26, 0.92);
+}
+:root[data-theme="light"] .interview-hacker-transcript > span,
+:root[data-theme="light"] .interview-hacker-answer > span {
+  color: rgba(20, 28, 26, 0.6);
+}
+
+/* ── Answer actions ── the primary stays an inverse chip, as it is in dark. */
+:root[data-theme="light"] .interview-hacker-answer-actions button.is-primary:not(:disabled) {
+  background: rgba(20, 28, 26, 0.9);
+  color: #ffffff;
+}
+:root[data-theme="light"] .interview-hacker-answer-actions button {
+  border-color: rgba(63, 86, 78, 0.16);
+  background: var(--lt-hover);
+  color: rgba(20, 28, 26, 0.9);
+}
+:root[data-theme="light"] .interview-hacker-pacing {
+  background: var(--lt-hover);
+  color: rgba(20, 28, 26, 0.86);
+}
+
+/* ── Round pickers ── */
+:root[data-theme="light"] .interview-hacker-choice > span {
+  color: rgba(20, 28, 26, 0.6);
+}
+:root[data-theme="light"] .interview-hacker-choice button {
+  border-color: rgba(63, 86, 78, 0.16);
+  background: var(--lt-hover);
+  color: rgba(20, 28, 26, 0.9);
+}
+:root[data-theme="light"] .interview-hacker-choice button.is-selected {
+  border-color: #149e8b;
+  background: var(--lt-accent-soft);
+}
+
+/* ── Pitch ── */
+:root[data-theme="light"] .interview-hacker-pitch {
+  background: rgba(20, 40, 34, 0.045);
+  color: rgba(20, 28, 26, 0.92);
+}
+:root[data-theme="light"] .interview-hacker-pitch-head > span {
+  color: rgba(20, 28, 26, 0.6);
+}
+:root[data-theme="light"] .interview-hacker-pitch-head button {
+  color: rgba(20, 28, 26, 0.66);
+}
+:root[data-theme="light"] .interview-hacker-pitch li > span {
+  color: rgba(20, 28, 26, 0.56);
+}
+:root[data-theme="light"] .interview-hacker-pitch-foot {
+  color: rgba(20, 28, 26, 0.56);
+}
+
+/* ── Error detail ── */
+:root[data-theme="light"] .interview-hacker-error-detail {
+  border-color: rgba(194, 65, 45, 0.22);
+  background: var(--lt-danger-soft);
+  color: rgba(20, 28, 26, 0.66);
+}
+:root[data-theme="light"] .interview-hacker-error-detail summary {
+  color: rgba(20, 28, 26, 0.9);
+}
+
+/* ── Buttons ── #0f7f70 is the lightest teal that holds 4.5:1 under white 14px text. */
+:root[data-theme="light"] .interview-hacker-primary {
+  color: #ffffff;
+  background: #0f7f70;
+}
+:root[data-theme="light"] .interview-hacker-secondary,
+:root[data-theme="light"] .interview-hacker-text-button {
+  color: rgba(20, 28, 26, 0.9);
+  background: var(--lt-hover);
+}
+
+/* ── Interview paste card ── */
+:root[data-theme="light"] .glass-surface.interview-paste-card {
+  background:
+    linear-gradient(to bottom, var(--glass-sheen), transparent 25%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(238, 247, 244, 0.9));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 10px 30px rgba(63, 86, 78, 0.14);
+}
+:root[data-theme="light"] .interview-paste-title {
+  color: rgba(20, 28, 26, 0.92);
+}
+:root[data-theme="light"] .interview-paste-input {
+  border-color: rgba(63, 86, 78, 0.16);
+  background: rgba(255, 255, 255, 0.72);
+  color: rgba(20, 28, 26, 0.92);
+}
+:root[data-theme="light"] .interview-paste-input::placeholder {
+  color: rgba(20, 28, 26, 0.5);
+}
+:root[data-theme="light"] .interview-paste-input:focus {
+  border-color: #149e8b;
+}
+:root[data-theme="light"] .interview-paste-hint {
+  color: rgba(20, 28, 26, 0.6);
+}
+:root[data-theme="light"] .interview-paste-hint-error {
+  color: #c2412d;
+}
+:root[data-theme="light"] .interview-paste-send {
+  color: #ffffff;
+  background: #0f7f70;
+}
+
+/* ── Region preview card ── */
+:root[data-theme="light"] .glass-surface.region-preview-card {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(238, 247, 244, 0.9));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 10px 28px rgba(63, 86, 78, 0.16);
+  color: rgba(20, 28, 26, 0.94);
+}
+:root[data-theme="light"] .glass-surface.region-preview-card::after {
+  background: rgba(63, 86, 78, 0.16);
+}
+:root[data-theme="light"] .region-preview-thumb {
+  border-color: rgba(63, 86, 78, 0.16);
+  background: rgba(20, 40, 34, 0.04);
+}
+:root[data-theme="light"] .region-preview-title {
+  color: rgba(20, 28, 26, 0.94);
+}
+:root[data-theme="light"] .region-preview-meta {
+  color: rgba(20, 28, 26, 0.6);
+}
+:root[data-theme="light"] .region-preview-close {
+  border-color: rgba(63, 86, 78, 0.18);
+  background: rgba(255, 255, 255, 0.98);
+  color: rgba(20, 28, 26, 0.7);
+  box-shadow: 0 2px 6px rgba(63, 86, 78, 0.2);
+}
+:root[data-theme="light"] .region-preview-close:hover {
+  background: rgba(236, 246, 243, 1);
+  color: rgba(20, 28, 26, 0.94);
+}

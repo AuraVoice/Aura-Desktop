@@ -51,7 +51,7 @@ export function NotchBar({
   const showGuideStatus = guideArmed || guideActive;
 
   return (
-    <div className={`notch-shell notch-shell-${edge}`} {...dragHandlers}>
+    <div className={`notch-shell notch-shell-${edge} theme-pinned-dark`} {...dragHandlers}>
       <GlassSurface className={`notch-bar notch-bar-${voice.status}`} draggable={false}>
         <div className="notch-shape">
           <div className={`notch-bar-inner${showGuideStatus ? " has-guide" : ""}${outputMuted ? " has-output-mute" : ""}`}>

@@ -51,7 +51,7 @@ export function VoiceRecoveryCard({
   }
 
   return (
-    <GlassSurface className="voice-recovery-card" draggable={false}>
+    <GlassSurface className="voice-recovery-card theme-pinned-dark" draggable={false}>
       <div className="voice-recovery-clip">
         <div className="voice-recovery-inner" role="status" aria-live="polite">
           <div className="voice-recovery-header">

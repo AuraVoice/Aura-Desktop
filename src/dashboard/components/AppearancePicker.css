@@ -1,0 +1,246 @@
+/* Settings > System > Appearance. Three glass tiles, each holding a miniature
+   of the dashboard in its theme, with one selection ring that springs between
+   them. Light rules first, then the dark twins. */
+.db-appearance {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.db-appearance-ring {
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  left: 0;
+  width: var(--ring-w, 0px);
+  height: var(--ring-h, 0px);
+  border: 2px solid var(--db-teal);
+  border-radius: 20px;
+  box-shadow: 0 0 0 4px rgba(30, 200, 176, 0.14), 0 10px 26px rgba(30, 200, 176, 0.14);
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(var(--ring-x, 0px), var(--ring-y, 0px));
+}
+.db-appearance[data-ready="true"] .db-appearance-ring {
+  opacity: 1;
+  transition: transform 520ms cubic-bezier(0.34, 1.32, 0.64, 1),
+    width 520ms cubic-bezier(0.34, 1.32, 0.64, 1), height 320ms var(--db-ease),
+    opacity 200ms var(--db-ease);
+}
+
+.db-appearance-tile {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+  padding: 8px 8px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  border-radius: 20px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
+  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  backdrop-filter: blur(18px) saturate(1.2);
+  color: var(--db-text);
+  font-family: var(--font-body, system-ui, sans-serif);
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.22s var(--db-ease), box-shadow 0.22s var(--db-ease);
+}
+.db-appearance-tile:hover {
+  transform: translateY(-2px);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 14px 30px rgba(63, 86, 78, 0.1);
+}
+.db-appearance-tile:active {
+  transform: translateY(0) scale(0.985);
+}
+.db-appearance-tile:focus-visible {
+  outline: 2px solid var(--db-teal);
+  outline-offset: 4px;
+}
+
+.db-appearance-preview {
+  position: relative;
+  display: block;
+  overflow: hidden;
+  aspect-ratio: 16 / 10;
+  border-radius: 13px;
+  box-shadow: inset 0 0 0 1px rgba(31, 35, 40, 0.08);
+  isolation: isolate;
+}
+/* One sheen pass across the miniature the moment a tile is picked. */
+.db-appearance-preview::after {
+  position: absolute;
+  z-index: 3;
+  top: -60%;
+  left: -40%;
+  width: 34%;
+  height: 220%;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+  content: "";
+  pointer-events: none;
+  transform: translate3d(-160%, 0, 0) rotate(-22deg);
+}
+.db-appearance-tile.is-active .db-appearance-preview::after {
+  animation: db-appearance-sheen 900ms cubic-bezier(0.22, 1, 0.36, 1) 120ms both;
+}
+@keyframes db-appearance-sheen {
+  from { transform: translate3d(-160%, 0, 0) rotate(-22deg); }
+  to { transform: translate3d(520%, 0, 0) rotate(-22deg); }
+}
+
+/* ── The miniature ── */
+.db-ap-scene {
+  position: absolute;
+  inset: 0;
+  display: block;
+  transition: transform 0.4s var(--db-ease);
+}
+.db-appearance-tile:hover .db-ap-scene {
+  transform: scale(1.035);
+}
+.db-ap-scene > span,
+.db-ap-sidebar > span,
+.db-ap-card > span {
+  position: absolute;
+  display: block;
+}
+.db-ap-sidebar {
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 24%;
+}
+.db-ap-nav {
+  left: 16%;
+  width: 68%;
+  height: 8%;
+  border-radius: 99px;
+}
+.db-ap-nav:nth-child(1) { top: 22%; }
+.db-ap-nav:nth-child(2) { top: 36%; }
+.db-ap-nav:nth-child(3) { top: 50%; }
+.db-ap-title {
+  top: 11%;
+  left: 31%;
+  width: 30%;
+  height: 7%;
+  border-radius: 99px;
+}
+.db-ap-card {
+  border-radius: 7px;
+}
+.db-ap-card-a { top: 28%; left: 31%; width: 30%; height: 32%; }
+.db-ap-card-b { top: 28%; left: 64%; width: 29%; height: 32%; }
+.db-ap-card-wide { top: 66%; left: 31%; width: 62%; height: 22%; }
+.db-ap-dot {
+  top: 22%;
+  left: 14%;
+  width: 20%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+}
+
+.db-ap-scene-light { background: #faf9f5; }
+.db-ap-scene-light .db-ap-sidebar { background: #f1f0ea; }
+.db-ap-scene-light .db-ap-nav { background: rgba(31, 35, 40, 0.14); }
+.db-ap-scene-light .db-ap-nav.is-active { background: #20232a; }
+.db-ap-scene-light .db-ap-title { background: rgba(31, 35, 40, 0.72); }
+.db-ap-scene-light .db-ap-card {
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  background: linear-gradient(135deg, #ffffff, #e8f4f1);
+  box-shadow: 0 2px 6px rgba(63, 86, 78, 0.1);
+}
+.db-ap-scene-light .db-ap-dot { background: #1ec8b0; }
+
+.db-ap-scene-dark {
+  background:
+    radial-gradient(80% 90% at 20% 0%, rgba(46, 224, 196, 0.12), transparent 60%),
+    #0e1916;
+}
+.db-ap-scene-dark .db-ap-sidebar { background: #0b1412; }
+.db-ap-scene-dark .db-ap-nav { background: rgba(230, 239, 236, 0.14); }
+.db-ap-scene-dark .db-ap-nav.is-active { background: #24403a; box-shadow: 0 0 0 1px rgba(46, 224, 196, 0.3); }
+.db-ap-scene-dark .db-ap-title { background: rgba(230, 239, 236, 0.78); }
+.db-ap-scene-dark .db-ap-card {
+  border: 1px solid rgba(190, 240, 225, 0.16);
+  background: linear-gradient(135deg, rgba(30, 48, 43, 0.95), rgba(19, 32, 28, 0.9));
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+}
+.db-ap-scene-dark .db-ap-dot { background: #2ee0c4; box-shadow: 0 0 6px rgba(46, 224, 196, 0.6); }
+
+/* System: the dark scene is cut on a diagonal over the light one, and the cut
+   leans when hovered. */
+.db-appearance-tile-system .db-ap-scene-dark {
+  clip-path: polygon(64% 0, 100% 0, 100% 100%, 36% 100%);
+  transition: transform 0.4s var(--db-ease), clip-path 0.5s cubic-bezier(0.34, 1.3, 0.64, 1);
+}
+.db-appearance-tile-system:hover .db-ap-scene-dark {
+  clip-path: polygon(56% 0, 100% 0, 100% 100%, 44% 100%);
+}
+
+/* ── Label row ── */
+.db-appearance-meta {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: 8px;
+  align-items: center;
+  padding: 0 6px;
+}
+.db-appearance-icon {
+  grid-row: 1 / span 2;
+  color: var(--db-text-dim);
+  transition: color 0.2s var(--db-ease);
+}
+.db-appearance-tile.is-active .db-appearance-icon {
+  color: var(--db-teal-deep-a);
+  animation: db-appearance-pop 520ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes db-appearance-pop {
+  0% { transform: scale(0.6) rotate(-40deg); }
+  60% { transform: scale(1.18) rotate(8deg); }
+  100% { transform: scale(1) rotate(0deg); }
+}
+.db-appearance-label {
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.db-appearance-hint {
+  overflow: hidden;
+  color: var(--db-text-dim);
+  font-size: 11px;
+  line-height: 1.3;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 560px) {
+  .db-appearance {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* ── Dark twins ── */
+:root[data-theme="dark"] .db-appearance-ring {
+  box-shadow: 0 0 0 4px rgba(46, 224, 196, 0.16), 0 10px 26px rgba(0, 0, 0, 0.4);
+}
+:root[data-theme="dark"] .db-appearance-tile {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
+}
+:root[data-theme="dark"] .db-appearance-tile:hover {
+  border-color: var(--dk-glass-border-hover);
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow-hover);
+}
+:root[data-theme="dark"] .db-appearance-preview {
+  box-shadow: inset 0 0 0 1px rgba(190, 235, 222, 0.12);
+}
+:root[data-theme="dark"] .db-appearance-preview::after {
+  background: linear-gradient(90deg, transparent, rgba(170, 255, 230, 0.22), transparent);
+}

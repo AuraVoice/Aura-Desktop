@@ -1,0 +1,110 @@
+/* Dark overrides for dashboard-home. Owned by src/theme/themes.css; read its header first.
+   Every rule is prefixed :root[data-theme="dark"] and twins each state it touches. */
+
+/* ── Home hero ──
+   The shell sheet lifts --db-teal-deep-a/b to mint for text, so the hero sets its
+   own deep mint-black gradient here instead of reading those tokens. */
+:root[data-theme="dark"] .db-hero {
+  background:
+    radial-gradient(80% 130% at 72% 0%, rgba(170, 255, 230, 0.08), transparent 55%),
+    radial-gradient(70% 110% at 0% 100%, rgba(46, 224, 196, 0.1), transparent 65%),
+    linear-gradient(135deg, #1f5a4e, #173f37);
+  box-shadow: inset 0 0 0 1px rgba(190, 240, 225, 0.1), var(--dk-glass-inset), var(--dk-shadow-md);
+}
+
+/* White pills keep working on the dark hero, but their mint token text would
+   not, so every pill gets a pale mint fill with deep teal ink. */
+:root[data-theme="dark"] .db-hero-cta {
+  background: #e6f5f1;
+  color: #174a40;
+}
+:root[data-theme="dark"] .db-hero-cta:hover {
+  background: #d3ebe5;
+}
+
+/* ── Hotkey guide ── */
+:root[data-theme="dark"] .db-hero-keycaps kbd {
+  border-color: rgba(190, 240, 225, 0.16);
+  border-bottom-color: rgba(0, 0, 0, 0.5);
+  background: linear-gradient(145deg, #2c423c, #1b2b27);
+  box-shadow:
+    0 5px 0 #0a1411,
+    0 7px 13px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  color: var(--dk-text);
+  animation-name: db-key-press-dark;
+}
+:root[data-theme="dark"] .db-hero-keycaps.unavailable kbd {
+  animation-name: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme="dark"] .db-hero-keycaps kbd {
+    animation-name: none;
+  }
+}
+@keyframes db-key-press-dark {
+  0%, 10%, 100% {
+    box-shadow:
+      0 5px 0 #0a1411,
+      0 7px 13px rgba(0, 0, 0, 0.45),
+      inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    transform: translateY(0);
+  }
+  4%, 7% {
+    box-shadow:
+      0 2px 0 #0a1411,
+      0 3px 6px rgba(0, 0, 0, 0.4),
+      inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    transform: translateY(3px);
+  }
+}
+:root[data-theme="dark"] .db-hero-hotkey-actions button {
+  background: #e6f5f1;
+  color: #174a40;
+  box-shadow: 0 5px 14px rgba(0, 0, 0, 0.4);
+}
+:root[data-theme="dark"] .db-hero-hotkey-actions button:hover {
+  box-shadow: 0 7px 18px rgba(0, 0, 0, 0.48);
+}
+:root[data-theme="dark"] .db-hero-hotkey-actions .db-hero-hotkey-next {
+  color: rgba(255, 255, 255, 0.62);
+}
+
+/* ── Up next ── */
+:root[data-theme="dark"] .db-hero-up-next {
+  border-color: rgba(190, 240, 225, 0.14);
+  background: rgba(0, 0, 0, 0.22);
+  box-shadow: var(--dk-glass-inset);
+}
+:root[data-theme="dark"] .db-hero-up-next button {
+  background: #e6f5f1;
+  color: #174a40;
+}
+:root[data-theme="dark"] .db-hero-up-next-actions .db-hero-up-next-secondary {
+  background: transparent;
+  color: #fff;
+}
+
+/* ── Trial banner ── */
+:root[data-theme="dark"] .db-trial-banner {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
+}
+:root[data-theme="dark"] .db-trial-banner::after {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--dk-sheen-soft),
+    var(--dk-sheen-peak),
+    var(--dk-sheen-soft),
+    transparent
+  );
+}
+:root[data-theme="dark"] .db-trial-banner-dismiss {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-hover);
+}
+:root[data-theme="dark"] .db-trial-banner-dismiss:hover {
+  background: var(--dk-press);
+}

@@ -68,8 +68,8 @@ export function SlackBrandIcon({ size = 26, className }: BrandIconProps) {
 export function NotionBrandIcon({ size = 24, className }: BrandIconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden className={className}>
-      <rect x="3" y="3" width="18" height="18" rx="2.5" stroke="#111827" strokeWidth="1.8" />
-      <path d="M7.2 7.1v9.8M7.2 7.1l9.6 9.8M16.8 7.1v9.8" stroke="#111827" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+      <rect x="3" y="3" width="18" height="18" rx="2.5" stroke="currentColor" strokeWidth="1.8" />
+      <path d="M7.2 7.1v9.8M7.2 7.1l9.6 9.8M16.8 7.1v9.8" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }

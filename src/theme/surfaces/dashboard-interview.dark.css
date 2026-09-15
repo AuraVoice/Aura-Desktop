@@ -1,0 +1,329 @@
+/* Dark overrides for dashboard-interview. Owned by src/theme/themes.css; read its header first.
+   Every rule is prefixed :root[data-theme="dark"] and twins each state it touches. */
+
+/* ── InterviewPage.css: tokens ── */
+:root[data-theme="dark"] .db-interview-page {
+  --interview-glass: color-mix(in srgb, #1a2b26 72%, transparent);
+  --interview-glass-soft: rgba(255, 255, 255, 0.035);
+  --interview-glass-border: var(--dk-glass-border);
+  --interview-glass-shadow: 0 16px 42px rgba(0, 0, 0, 0.3), var(--dk-glass-inset);
+}
+
+/* ── Page head ── */
+:root[data-theme="dark"] .db-interview-new-button {
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4);
+}
+
+/* ── Panels ── */
+:root[data-theme="dark"] .db-interview-builder,
+:root[data-theme="dark"] .db-interview-dossier,
+:root[data-theme="dark"] .db-interview-history,
+:root[data-theme="dark"] .db-interview-review {
+  background: var(--dk-glass-fill);
+}
+
+/* ── Fields ── */
+:root[data-theme="dark"] .db-interview-field input,
+:root[data-theme="dark"] .db-interview-field textarea,
+:root[data-theme="dark"] .db-interview-field select {
+  background: var(--dk-field-bg);
+  box-shadow: var(--dk-glass-inset);
+}
+:root[data-theme="dark"] .db-interview-field input:focus,
+:root[data-theme="dark"] .db-interview-field textarea:focus,
+:root[data-theme="dark"] .db-interview-field select:focus {
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--db-teal) 12%, transparent), var(--dk-glass-inset);
+}
+:root[data-theme="dark"] .db-interview-field input::placeholder,
+:root[data-theme="dark"] .db-interview-field textarea::placeholder {
+  color: var(--dk-text-mute);
+}
+
+/* ── Footers ── */
+:root[data-theme="dark"] .db-interview-builder-footer button,
+:root[data-theme="dark"] .db-interview-review-footer > button {
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4);
+}
+:root[data-theme="dark"] .db-interview-builder-footer button:disabled,
+:root[data-theme="dark"] .db-interview-review-footer > button:disabled {
+  box-shadow: none;
+}
+
+:root[data-theme="dark"] .db-interview-error {
+  border-color: rgba(255, 138, 128, 0.3);
+  background: var(--dk-danger-soft);
+  color: var(--dk-danger);
+}
+
+/* ── History ── */
+:root[data-theme="dark"] .db-interview-history-card {
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22), var(--dk-glass-inset);
+}
+:root[data-theme="dark"] .db-interview-history-card.is-active {
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.22), 0 0 0 1px color-mix(in srgb, var(--db-teal) 12%, transparent),
+    var(--dk-glass-inset);
+}
+:root[data-theme="dark"] .db-interview-company-icon {
+  box-shadow: var(--dk-glass-inset);
+}
+:root[data-theme="dark"] .db-interview-delete-button:hover {
+  border-color: rgba(255, 138, 128, 0.2);
+  background: var(--dk-danger-soft);
+  color: var(--dk-danger);
+}
+:root[data-theme="dark"] .db-interview-delete-confirm {
+  border-top-color: rgba(255, 138, 128, 0.18);
+}
+:root[data-theme="dark"] .db-interview-delete-confirm button.is-danger {
+  border-color: rgba(255, 138, 128, 0.28);
+  background: var(--dk-danger-soft);
+  color: var(--dk-danger);
+}
+:root[data-theme="dark"] .db-interview-history-empty {
+  box-shadow: var(--dk-glass-inset);
+}
+
+/* ── Dossier cards ── */
+:root[data-theme="dark"] .db-interview-summary,
+:root[data-theme="dark"] .db-interview-dossier-section,
+:root[data-theme="dark"] .db-interview-predictions,
+:root[data-theme="dark"] .db-interview-unknowns,
+:root[data-theme="dark"] .db-interview-resume,
+:root[data-theme="dark"] .db-interview-optional,
+:root[data-theme="dark"] .db-interview-stories article,
+:root[data-theme="dark"] .db-interview-claim {
+  box-shadow: 0 9px 26px rgba(0, 0, 0, 0.2), var(--dk-glass-inset);
+}
+:root[data-theme="dark"] .db-interview-fact-meta span.is-estimated {
+  background: var(--dk-warning-soft);
+  color: var(--dk-warning);
+}
+/* Warmer than --dk-danger so "conflicting" still reads apart from real errors. */
+:root[data-theme="dark"] .db-interview-fact-meta span.is-conflicting {
+  background: rgba(255, 140, 110, 0.13);
+  color: #ffa088;
+}
+
+/* ── Claims ── */
+:root[data-theme="dark"] .db-interview-claim.is-constraint {
+  border-color: rgba(240, 192, 96, 0.22);
+  background: rgba(240, 192, 96, 0.06);
+}
+:root[data-theme="dark"] .db-interview-claim.is-constraint .db-interview-claim-status {
+  border-color: rgba(240, 192, 96, 0.26);
+  background: var(--dk-warning-soft);
+  color: var(--dk-warning);
+}
+
+/* ── Step rail ── deep-a turns mint in dark, so white text needs its own fill. */
+:root[data-theme="dark"] .db-interview-steps li.is-active .db-interview-step-index {
+  background: #1f5a4e;
+}
+
+/* ── Live research progress ── */
+:root[data-theme="dark"] .db-interview-progress {
+  box-shadow: var(--dk-glass-inset);
+}
+/* Kept apart from the bright active dot, and above 3:1 on the glass. */
+:root[data-theme="dark"] .db-interview-progress-steps li.is-done .db-interview-progress-dot {
+  background: #2f8f7d;
+}
+
+/* ── Brief build modal ── */
+:root[data-theme="dark"] .db-interview-build-steps li.is-active .db-interview-build-icon {
+  background: #1f5a4e;
+}
+:root[data-theme="dark"] .db-interview-build-steps li.is-warn .db-interview-build-icon {
+  background: var(--dk-warning-soft);
+  color: var(--dk-warning);
+}
+:root[data-theme="dark"] .db-interview-build-steps li.is-failed .db-interview-build-icon {
+  background: var(--dk-danger-soft);
+  color: var(--dk-danger);
+}
+
+/* ── Resume dialog ── */
+:root[data-theme="dark"] .db-modal-panel.db-interview-glass-panel {
+  border-color: var(--dk-glass-border);
+  box-shadow: var(--dk-glass-inset), 0 24px 60px rgba(0, 0, 0, 0.55);
+}
+:root[data-theme="dark"] .db-resume-tabs {
+  border-color: var(--dk-border);
+  background: rgba(255, 255, 255, 0.04);
+}
+:root[data-theme="dark"] .db-resume-drop {
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+}
+:root[data-theme="dark"] .db-resume-drop.is-dragging {
+  background: color-mix(in srgb, var(--db-teal) 12%, rgba(255, 255, 255, 0.04));
+}
+:root[data-theme="dark"] .db-resume-clipboard {
+  border-color: var(--dk-glass-border);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02));
+  box-shadow: var(--dk-glass-inset);
+}
+:root[data-theme="dark"] .db-resume-editor textarea {
+  border-color: var(--dk-field-border);
+  background: var(--dk-field-bg);
+  box-shadow: var(--dk-glass-inset);
+}
+:root[data-theme="dark"] .db-resume-editor textarea::placeholder {
+  color: var(--dk-text-mute);
+}
+:root[data-theme="dark"] .db-resume-notice {
+  border-color: rgba(255, 140, 110, 0.3);
+  background: rgba(255, 140, 110, 0.1);
+  color: #ffa088;
+}
+:root[data-theme="dark"] .db-resume-count.is-over {
+  color: #ffa088;
+}
+:root[data-theme="dark"] .db-resume-remove,
+:root[data-theme="dark"] .db-resume-cancel {
+  background: rgba(255, 255, 255, 0.05);
+}
+:root[data-theme="dark"] .db-resume-remove:hover,
+:root[data-theme="dark"] .db-resume-cancel:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+:root[data-theme="dark"] .db-resume-save {
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4);
+}
+:root[data-theme="dark"] .db-resume-save:disabled {
+  box-shadow: none;
+}
+
+/* ── Sessions tab: reflection ── */
+:root[data-theme="dark"] .db-interview-reflection {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
+}
+:root[data-theme="dark"] .db-interview-reflection-download {
+  border-color: var(--dk-glass-border);
+  background: rgba(255, 255, 255, 0.05);
+}
+:root[data-theme="dark"] .db-interview-reflection-download:hover {
+  border-color: var(--dk-glass-border-hover);
+  background: rgba(255, 255, 255, 0.1);
+}
+:root[data-theme="dark"] .db-interview-reflection h5 {
+  color: var(--dk-text-dim);
+}
+
+/* ── PrepRoom.css: tokens ── */
+:root[data-theme="dark"] .db-prep {
+  --prep-strong: #5fd08f;
+  --prep-partial: #f0b050;
+  --prep-gap: #ff8a80;
+  --prep-divider: var(--dk-divider);
+}
+
+/* ── Prep head ── */
+:root[data-theme="dark"] .db-prep-ghost {
+  border-color: var(--dk-glass-border);
+  background: rgba(255, 255, 255, 0.05);
+}
+:root[data-theme="dark"] .db-prep-ghost:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+:root[data-theme="dark"] .db-prep-chip {
+  background: rgba(255, 255, 255, 0.07);
+}
+:root[data-theme="dark"] .db-prep-status.is-strong,
+:root[data-theme="dark"] .db-prep-status.is-confirmed {
+  background: rgba(95, 208, 143, 0.14);
+}
+:root[data-theme="dark"] .db-prep-status.is-partial,
+:root[data-theme="dark"] .db-prep-status.is-estimated {
+  background: rgba(240, 176, 80, 0.14);
+}
+:root[data-theme="dark"] .db-prep-status.is-gap,
+:root[data-theme="dark"] .db-prep-status.is-conflicting {
+  background: rgba(255, 138, 128, 0.13);
+}
+
+/* ── Practice ── */
+:root[data-theme="dark"] .db-prep-deck:focus-visible .db-prep-card {
+  box-shadow: 0 0 0 2px var(--db-teal-deep-a), var(--dk-glass-inset), var(--dk-glass-shadow);
+}
+:root[data-theme="dark"] .db-prep-ring .is-track {
+  stroke: rgba(190, 235, 222, 0.1);
+}
+:root[data-theme="dark"] .db-prep-dots button {
+  background: rgba(190, 235, 222, 0.18);
+}
+:root[data-theme="dark"] .db-prep-dots button.is-confident {
+  background: var(--prep-strong);
+}
+:root[data-theme="dark"] .db-prep-dots button.is-work {
+  background: var(--prep-partial);
+}
+:root[data-theme="dark"] .db-prep-card,
+:root[data-theme="dark"] .db-prep-paper {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
+}
+:root[data-theme="dark"] .db-prep-star b {
+  background: rgba(255, 255, 255, 0.07);
+}
+:root[data-theme="dark"] .db-prep-star li.is-result b {
+  background: #1f5a4e;
+  color: #fff;
+}
+:root[data-theme="dark"] .db-prep-spoken {
+  background: rgba(255, 255, 255, 0.05);
+}
+:root[data-theme="dark"] .db-prep-pair > div {
+  border-color: var(--dk-glass-border);
+  background: rgba(255, 255, 255, 0.04);
+}
+:root[data-theme="dark"] .db-prep-pair > div.is-avoid {
+  border-color: transparent;
+  background: rgba(255, 138, 128, 0.1);
+}
+:root[data-theme="dark"] .db-prep-nav button {
+  border-color: var(--dk-glass-border);
+  background: rgba(255, 255, 255, 0.05);
+}
+:root[data-theme="dark"] .db-prep-nav button:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+:root[data-theme="dark"] .db-prep-rate button {
+  border-color: var(--dk-glass-border);
+  background: rgba(255, 255, 255, 0.05);
+}
+:root[data-theme="dark"] .db-prep-rate button.is-work[aria-pressed="true"] {
+  border-color: transparent;
+  background: rgba(240, 176, 80, 0.14);
+}
+:root[data-theme="dark"] .db-prep-rate button.is-confident[aria-pressed="true"] {
+  border-color: transparent;
+  background: rgba(95, 208, 143, 0.14);
+}
+
+/* ── Briefing ── */
+:root[data-theme="dark"] .db-prep-index button:hover {
+  background: var(--dk-hover);
+}
+:root[data-theme="dark"] .db-prep-meter i {
+  background: rgba(190, 235, 222, 0.14);
+}
+:root[data-theme="dark"] .db-prep-strength.is-strong .db-prep-meter i {
+  background: var(--prep-strong);
+}
+:root[data-theme="dark"] .db-prep-strength.is-partial .db-prep-meter i:nth-child(-n + 2) {
+  background: var(--prep-partial);
+}
+:root[data-theme="dark"] .db-prep-never span {
+  background: rgba(255, 138, 128, 0.1);
+}
+
+/* ── Interview page invite ── */
+:root[data-theme="dark"] .db-prep-invite {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
+}

@@ -1,0 +1,311 @@
+/* Dark overrides for dashboard-settings: account, usage, settings pages and
+   shortcuts, Insights charts, Connectors, page toolbars and range chips.
+   Owned by src/theme/themes.css; read its header first.
+   Every rule is prefixed :root[data-theme="dark"] and twins each state it touches. */
+
+/* ── General settings: shortcuts ── */
+:root[data-theme="dark"] .db-shortcut-unavailable {
+  color: var(--dk-danger);
+}
+/* --db-text-muted is never defined, so the light rule falls back to a literal. */
+:root[data-theme="dark"] .db-shortcut-reset {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-shortcut-reset:hover:not(:disabled) {
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .db-shortcut-reset-error {
+  color: var(--dk-danger);
+}
+:root[data-theme="dark"] .db-shortcut-keys kbd {
+  border-color: var(--dk-border-strong);
+  background: var(--dk-surface-2);
+  color: var(--dk-text);
+}
+/* A little brighter than --dk-sheen-peak: the sweep crosses a very small key. */
+:root[data-theme="dark"] .db-chord-flash kbd::after {
+  background: linear-gradient(90deg, transparent, rgba(170, 255, 230, 0.22), transparent);
+}
+:root[data-theme="dark"] .db-settings-error {
+  color: var(--dk-danger);
+}
+
+/* ── Insights: header, tabs, range, share ── */
+:root[data-theme="dark"] .db-insight-header {
+  border-bottom-color: var(--dk-border);
+}
+:root[data-theme="dark"] .db-insight-tabs button {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-insight-tabs button:hover,
+:root[data-theme="dark"] .db-insight-tabs button.is-active {
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .db-insight-tabs button::after {
+  background: var(--dk-text);
+}
+:root[data-theme="dark"] .db-insight-range {
+  border-color: var(--dk-border);
+  background: rgba(255, 255, 255, 0.04);
+}
+:root[data-theme="dark"] .db-insight-range button.is-active {
+  background: var(--dk-surface-2);
+}
+:root[data-theme="dark"] .db-insight-share {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .db-insight-share-ring text {
+  fill: var(--dk-accent-text);
+}
+:root[data-theme="dark"] .db-insight-share:hover {
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow-hover);
+}
+:root[data-theme="dark"] .db-insight-share.is-done {
+  color: var(--dk-accent-text);
+}
+
+/* ── Insights: summary cards and panels ── */
+:root[data-theme="dark"] .db-insight-summary-card,
+:root[data-theme="dark"] .db-insight-panel {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
+}
+:root[data-theme="dark"] .db-insight-summary-label {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-insight-info {
+  color: var(--dk-text-mute);
+}
+:root[data-theme="dark"] .db-insight-info:focus-visible {
+  box-shadow: 0 0 0 2px var(--dk-accent-ring);
+}
+/* The light tooltip is already dark, so on a dark card it only needs an edge. */
+:root[data-theme="dark"] .db-insight-info-tooltip {
+  background: var(--dk-popover-bg);
+  box-shadow: 0 0 0 1px var(--dk-border-strong), var(--dk-shadow-pop);
+}
+:root[data-theme="dark"] .db-insight-gauge-track {
+  stroke: var(--dk-border-strong);
+}
+:root[data-theme="dark"] .db-insight-gauge-value {
+  stroke: var(--dk-accent-text);
+}
+:root[data-theme="dark"] .db-insight-gauge > span {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-insight-breakdown {
+  border-top-color: var(--dk-divider);
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .db-insight-device {
+  border-top-color: var(--dk-divider);
+}
+:root[data-theme="dark"] .db-insight-device > span:first-child,
+:root[data-theme="dark"] .db-insight-device > strong {
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .db-insight-comparison {
+  border-color: var(--dk-border);
+  background: var(--dk-field-bg);
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-insight-peak-blurb {
+  border-top-color: var(--dk-divider);
+}
+:root[data-theme="dark"] .db-insight-panel-head > span {
+  color: var(--dk-text);
+}
+
+/* ── Insights: usage bars ── */
+:root[data-theme="dark"] .db-insight-usage-row > svg {
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .db-insight-usage-track {
+  background: var(--dk-hover);
+}
+:root[data-theme="dark"] .db-insight-usage-track > span {
+  background: var(--dk-accent-text);
+}
+:root[data-theme="dark"] .db-insight-usage-row > strong {
+  color: var(--dk-text);
+}
+
+/* ── Insights: heatmap ── */
+:root[data-theme="dark"] .db-insight-heatmap-months,
+:root[data-theme="dark"] .db-insight-heatmap-days,
+:root[data-theme="dark"] .db-insight-heatmap-legend {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-insight-heatmap > .db-insight-heatmap-cell,
+:root[data-theme="dark"] .db-insight-heatmap-legend i {
+  background: var(--dk-hover);
+}
+:root[data-theme="dark"] .db-insight-heatmap > .db-insight-heatmap-cell:hover,
+:root[data-theme="dark"] .db-insight-heatmap > .db-insight-heatmap-cell:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--dk-text);
+}
+/* The ramp inverts: quiet days recede into the card, busy days glow mint. */
+:root[data-theme="dark"] .db-insight-heatmap .is-level-1,
+:root[data-theme="dark"] .db-insight-heatmap-legend .is-level-1 {
+  background: #1d4a42;
+}
+:root[data-theme="dark"] .db-insight-heatmap .is-level-2,
+:root[data-theme="dark"] .db-insight-heatmap-legend .is-level-2 {
+  background: #23766a;
+}
+:root[data-theme="dark"] .db-insight-heatmap .is-level-3,
+:root[data-theme="dark"] .db-insight-heatmap-legend .is-level-3 {
+  background: #2aa593;
+}
+:root[data-theme="dark"] .db-insight-heatmap .is-level-4,
+:root[data-theme="dark"] .db-insight-heatmap-legend .is-level-4 {
+  background: #3fd9c2;
+}
+:root[data-theme="dark"] .db-insight-heatmap > .db-insight-heatmap-cell.is-future {
+  background: rgba(255, 255, 255, 0.03);
+}
+:root[data-theme="dark"] .db-insight-heatmap > .db-insight-heatmap-cell.is-current-streak {
+  box-shadow: inset 0 0 0 1px var(--dk-accent-text);
+}
+:root[data-theme="dark"] .db-insight-heatmap > .db-insight-heatmap-cell.is-current-streak:hover,
+:root[data-theme="dark"] .db-insight-heatmap > .db-insight-heatmap-cell.is-current-streak:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--dk-text);
+}
+:root[data-theme="dark"] .db-insight-heatmap-tooltip {
+  border-color: var(--dk-border-strong);
+  background: var(--dk-popover-bg);
+  box-shadow: var(--dk-shadow-pop);
+}
+:root[data-theme="dark"] .db-insight-heatmap-tooltip::after {
+  background: var(--dk-popover-bg);
+}
+:root[data-theme="dark"] .db-insight-current-key i {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--dk-accent-text);
+}
+:root[data-theme="dark"] .db-insight-note {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-insight-note.is-voice {
+  color: var(--dk-text);
+}
+/* Shares its element with the card rule above, so it restates the size the
+   shorthand resets. */
+:root[data-theme="dark"] .db-insight-skeleton {
+  background:
+    linear-gradient(100deg, transparent 22%, rgba(255, 255, 255, 0.06) 45%, transparent 68%),
+    var(--dk-surface);
+  background-size: 220% 100%;
+}
+
+/* ── Connectors ── */
+:root[data-theme="dark"] .db-connector-icon {
+  background: var(--dk-surface-2);
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-connector-icon-google {
+  background: var(--dk-surface-2);
+  color: #4285f4;
+}
+/* GitHub, X and Notion draw with currentColor so they stay visible on dark.
+   Light pins each back to its original brand ink. */
+:root[data-theme="light"] .db-connector-icon path[d^="M12 1.5a10.5"] {
+  color: #1f2328;
+}
+:root[data-theme="light"] .db-connector-icon path[d^="M17.75 3h3.07"] {
+  color: #0f1419;
+}
+:root[data-theme="light"] .db-connector-icon svg[fill="none"] > [stroke="currentColor"] {
+  color: #111827;
+}
+:root[data-theme="dark"] .db-connector-icon path[d^="M12 1.5a10.5"],
+:root[data-theme="dark"] .db-connector-icon path[d^="M17.75 3h3.07"],
+:root[data-theme="dark"] .db-connector-icon svg[fill="none"] > [stroke="currentColor"] {
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .db-secondary-btn {
+  background: rgba(255, 255, 255, 0.05);
+}
+:root[data-theme="dark"] .db-secondary-btn:hover:not(:disabled) {
+  background: var(--dk-press);
+}
+:root[data-theme="dark"] .db-connector-row.is-connected {
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+}
+:root[data-theme="dark"] .db-connector-connected-dot {
+  color: var(--dk-accent-text);
+}
+:root[data-theme="dark"] .db-connector-attention {
+  color: var(--dk-warning);
+}
+:root[data-theme="dark"] .db-connector-refresh:hover:not(:disabled) {
+  color: var(--dk-accent-text);
+}
+:root[data-theme="dark"] .db-connector-switch-track {
+  border-color: var(--dk-border-strong);
+  background: rgba(255, 255, 255, 0.1);
+}
+:root[data-theme="dark"] .db-connector-switch-track > span {
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+:root[data-theme="dark"] .db-connector-switch input:checked + .db-connector-switch-track {
+  border-color: var(--db-teal);
+  background: var(--db-teal);
+}
+:root[data-theme="dark"] .db-connector-coming-soon {
+  background: rgba(255, 255, 255, 0.04);
+}
+:root[data-theme="dark"] .db-modal-panel.db-connector-dialog {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
+}
+:root[data-theme="dark"] .db-connector-dialog-body.is-info .db-connector-dialog-icon {
+  color: #7fb4d9;
+}
+:root[data-theme="dark"] .db-connector-dialog-body.is-success .db-connector-dialog-icon {
+  color: var(--dk-accent-text);
+}
+:root[data-theme="dark"] .db-connector-dialog-body.is-error .db-connector-dialog-icon {
+  color: var(--dk-danger);
+}
+
+/* ── Settings pages ── */
+:root[data-theme="dark"] .db-settings-page .db-settings-error,
+:root[data-theme="dark"] .db-settings-inline-error {
+  color: var(--dk-danger);
+}
+:root[data-theme="dark"] .db-account-summary,
+:root[data-theme="dark"] .db-billing-summary {
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+}
+:root[data-theme="dark"] .db-status-pill {
+  background: rgba(255, 255, 255, 0.05);
+}
+:root[data-theme="dark"] .db-status-pill.is-positive {
+  border-color: rgba(46, 224, 196, 0.28);
+  background: var(--dk-accent-soft);
+  color: var(--dk-accent-text);
+}
+:root[data-theme="dark"] .db-status-pill.is-warning {
+  border-color: rgba(240, 192, 96, 0.3);
+  background: var(--dk-warning-soft);
+  color: var(--dk-warning);
+}
+
+/* ── Page toolbar and range chips ── */
+:root[data-theme="dark"] .db-page-toolbar::after {
+  background: linear-gradient(
+    90deg,
+    rgba(190, 235, 222, 0.12),
+    rgba(190, 235, 222, 0.05) 55%,
+    transparent
+  );
+}
+:root[data-theme="dark"] .db-chips::before {
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.4);
+}

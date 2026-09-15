@@ -1,0 +1,604 @@
+/* Dark overrides for onboarding. Owned by src/theme/themes.css; read its header first.
+   Every rule is prefixed :root[data-theme="dark"] and twins each state it touches.
+   The light blocks at the top restore the pre-theming --glass-* values these
+   screens were drawn against, since themes.css now flips them on :root. */
+
+/* ── Light restoration ── the setup Panel's GlassSurface (ring, fill, inherited
+   text-shadow, HotkeyHint keycap border) and the dashboard onboarding shell
+   (SignInForm focus border and error color). Mirrors theme.css :root exactly;
+   the containers' own local re-skins still win below them. */
+:root[data-theme="light"] .glass-surface:has(> .setup-panel),
+:root[data-theme="light"] .db-onboarding {
+  --glass-surface-fill: rgba(16, 16, 20, 0.85);
+  --glass-sheen: rgba(255, 255, 255, 0.08);
+  --glass-border-top: rgba(255, 255, 255, 0.22);
+  --glass-border-bottom: rgba(255, 255, 255, 0.09);
+  --glass-border-flat: rgba(255, 255, 255, 0.19);
+  --glass-field-fill: rgba(255, 255, 255, 0.08);
+  --glass-text-bright: rgba(255, 255, 255, 0.97);
+  --glass-text-dim: rgba(255, 255, 255, 0.66);
+  --glass-icon-idle: rgba(255, 255, 255, 0.76);
+  --glass-danger: #ff8a75;
+  --glass-tooltip-bg: rgba(28, 28, 34, 0.92);
+  --glass-text-shadow: 0 1px 8px rgba(0, 0, 0, 0.4);
+  --glass-accent: #1ec8b0;
+  --glass-accent-lerp-white: #74ddce;
+  --glass-accent-glow: rgba(116, 221, 206, 0.7);
+}
+/* .db-onboarding's own light re-skin, re-declared after the block above so it
+   keeps winning on the same element. */
+:root[data-theme="light"] .db-onboarding {
+  --glass-text-bright: #28231d;
+  --glass-text-dim: #6f655b;
+  --glass-field-fill: rgba(255, 255, 255, 0.56);
+  --glass-border-flat: rgba(92, 72, 47, 0.18);
+  --glass-accent: #76c7b5;
+}
+
+/* ── Dashboard onboarding shell ── */
+:root[data-theme="dark"] .db-onboarding {
+  --glass-text-bright: var(--dk-text);
+  --glass-text-dim: var(--dk-text-dim);
+  --glass-field-fill: var(--dk-field-bg);
+  --glass-border-flat: var(--dk-field-border);
+  --glass-accent: var(--dk-accent);
+  /* The ambient artwork is a light wash, so dark swaps it for mint glows. */
+  background:
+    radial-gradient(60% 70% at 12% 8%, rgba(46, 224, 196, 0.08), transparent 62%),
+    radial-gradient(70% 80% at 92% 96%, rgba(46, 224, 196, 0.05), transparent 58%),
+    var(--dk-bg);
+}
+
+/* ── Account onboarding ── */
+:root[data-theme="dark"] .account-onboarding {
+  background: rgba(19, 32, 28, 0.96);
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .account-onboarding-scroll > p {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .account-onboarding-field > span,
+:root[data-theme="dark"] .account-onboarding-group legend {
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .account-onboarding-field input {
+  border-color: var(--dk-field-border);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.03));
+  box-shadow: var(--dk-glass-inset), 0 5px 16px rgba(0, 0, 0, 0.3);
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .account-onboarding-field input[type="date"] {
+  color-scheme: dark;
+}
+:root[data-theme="dark"] .account-onboarding-field small {
+  color: var(--dk-text-mute);
+}
+:root[data-theme="dark"] .account-onboarding-field .account-onboarding-age-warning {
+  border-color: rgba(255, 138, 128, 0.28);
+  background: var(--dk-danger-soft);
+  color: var(--dk-danger);
+}
+:root[data-theme="dark"] .account-onboarding-choices button {
+  border-color: var(--dk-glass-border);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.03));
+  box-shadow: var(--dk-glass-inset), 0 5px 16px rgba(0, 0, 0, 0.3);
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .account-onboarding-choices button.is-selected {
+  border-color: rgba(46, 224, 196, 0.5);
+  background: linear-gradient(135deg, rgba(46, 224, 196, 0.2), rgba(46, 224, 196, 0.08));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 6px 18px rgba(0, 0, 0, 0.32);
+  color: var(--dk-accent-text);
+}
+:root[data-theme="dark"] .account-onboarding-consent {
+  border-color: rgba(46, 224, 196, 0.24);
+  background: rgba(46, 224, 196, 0.07);
+}
+:root[data-theme="dark"] .account-onboarding-consent small {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .account-onboarding-consent input {
+  border-color: rgba(46, 224, 196, 0.45);
+  background: var(--dk-field-bg);
+  box-shadow: var(--dk-glass-inset), 0 3px 10px rgba(0, 0, 0, 0.3);
+}
+:root[data-theme="dark"] .account-onboarding-consent input:checked {
+  border-color: rgba(47, 159, 145, 0.78);
+  background: linear-gradient(135deg, #76c7b5, #2f9f91);
+}
+:root[data-theme="dark"] .account-onboarding-consent input:focus-visible {
+  outline-color: var(--dk-accent-ring);
+}
+:root[data-theme="dark"] .account-onboarding-consent.is-disabled {
+  border-color: var(--dk-border);
+  background: rgba(255, 255, 255, 0.03);
+}
+:root[data-theme="dark"] .account-onboarding-error {
+  color: var(--dk-danger);
+}
+:root[data-theme="dark"] .account-onboarding-confirmation {
+  background: var(--dk-popover-bg);
+  box-shadow: inset 0 0 0 1px var(--dk-border-strong), var(--dk-shadow-pop);
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .account-onboarding-confirm-secondary {
+  border-color: var(--dk-border-strong);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--dk-text);
+}
+
+/* ── Setup panel (overlay) ── */
+:root[data-theme="dark"] .setup-panel {
+  --glass-text-bright: var(--dk-text);
+  --glass-text-dim: var(--dk-text-dim);
+  --glass-field-fill: var(--dk-field-bg);
+  --glass-border-flat: var(--dk-field-border);
+  --glass-accent: var(--dk-accent);
+  background: var(--dk-bg);
+}
+
+/* ── Onboarding flow ── */
+:root[data-theme="dark"] .onboarding-back-button {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .onboarding-back-button:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--dk-accent-text);
+}
+:root[data-theme="dark"] .onboarding-back-button:focus-visible {
+  outline-color: var(--dk-accent-ring);
+}
+:root[data-theme="dark"] .onboarding-flow button:not(.onboarding-inline-link):not(.onboarding-back-button)::after,
+:root[data-theme="dark"] .onboarding-flow .privacy-choice-card::after {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--dk-sheen-soft),
+    var(--dk-sheen-peak),
+    var(--dk-sheen-soft),
+    transparent
+  );
+}
+:root[data-theme="dark"] .onboarding-welcome-flow {
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .onboarding-welcome-step .onboarding-heading {
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .onboarding-heading-accent {
+  color: var(--dk-accent-text);
+}
+:root[data-theme="dark"] .onboarding-welcome-step .onboarding-body {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .onboarding-trial-note {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+  box-shadow: var(--dk-glass-inset);
+  color: var(--dk-accent-text);
+}
+:root[data-theme="dark"] .onboarding-primary-button {
+  border-color: rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 5px 14px rgba(0, 0, 0, 0.3);
+}
+:root[data-theme="dark"] .onboarding-age-check {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+  box-shadow: var(--dk-glass-inset);
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .onboarding-age-check input {
+  accent-color: var(--dk-accent);
+}
+:root[data-theme="dark"] .onboarding-google-button {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+  color: var(--dk-text);
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
+}
+:root[data-theme="dark"] .onboarding-google-button:hover:not(:disabled) {
+  border-color: var(--dk-glass-border-hover);
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow-hover);
+}
+:root[data-theme="dark"] .onboarding-google-button:focus-visible,
+:root[data-theme="dark"] .onboarding-inline-link:focus-visible,
+:root[data-theme="dark"] .onboarding-age-check:has(input:focus-visible) {
+  outline-color: var(--dk-accent);
+}
+:root[data-theme="dark"] .onboarding-phone-link {
+  color: var(--dk-accent-text);
+}
+:root[data-theme="dark"] .onboarding-phone-pairing {
+  border-color: var(--dk-border);
+  background: rgba(255, 255, 255, 0.04);
+}
+:root[data-theme="dark"] .onboarding-status {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .onboarding-error {
+  color: var(--dk-danger);
+}
+:root[data-theme="dark"] .onboarding-consent-note {
+  color: var(--dk-text-mute);
+}
+:root[data-theme="dark"] .onboarding-inline-link {
+  color: var(--dk-accent-text);
+}
+
+/* ── Privacy setup ── */
+:root[data-theme="dark"] .privacy-setup-step {
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .privacy-setup-heading h2,
+:root[data-theme="dark"] .privacy-section-heading h3 {
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .privacy-setup-heading p {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .privacy-feature-row {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
+}
+:root[data-theme="dark"] .privacy-row-icon-microphone {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .privacy-row-icon-desktop {
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .privacy-row-copy strong,
+:root[data-theme="dark"] .privacy-choice-card strong {
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .privacy-row-copy small,
+:root[data-theme="dark"] .privacy-choice-card small {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .privacy-row-copy .privacy-row-warning {
+  color: var(--dk-danger);
+}
+:root[data-theme="dark"] .privacy-permission-button {
+  border-color: var(--dk-glass-border);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.04));
+  box-shadow: var(--dk-glass-inset);
+  color: var(--dk-accent-text);
+}
+:root[data-theme="dark"] .privacy-permission-button.is-ready,
+:root[data-theme="dark"] .privacy-status-badge {
+  border-color: var(--dk-border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .privacy-row-switch input {
+  border-color: var(--dk-border-strong);
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: var(--dk-glass-inset);
+}
+:root[data-theme="dark"] .privacy-row-switch input::after {
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+}
+:root[data-theme="dark"] .privacy-row-switch input:checked {
+  border-color: rgba(47, 159, 145, 0.7);
+  background: linear-gradient(135deg, rgba(102, 183, 172, 0.96), rgba(47, 159, 145, 0.94));
+}
+:root[data-theme="dark"] .privacy-row-switch input:focus-visible {
+  outline-color: var(--dk-accent);
+}
+:root[data-theme="dark"] .privacy-setup-divider {
+  background: var(--dk-border-strong);
+}
+:root[data-theme="dark"] .privacy-choice-card {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
+}
+:root[data-theme="dark"] .privacy-choice-card.is-selected {
+  border-color: rgba(46, 224, 196, 0.5);
+  background: linear-gradient(135deg, rgba(46, 224, 196, 0.18), rgba(46, 224, 196, 0.07));
+  box-shadow: inset 0 0 0 1px rgba(46, 224, 196, 0.42), var(--dk-glass-inset),
+    0 5px 14px rgba(0, 0, 0, 0.3);
+}
+:root[data-theme="dark"] .privacy-choice-card input {
+  border-color: rgba(190, 235, 222, 0.3);
+  background: var(--dk-field-bg);
+}
+:root[data-theme="dark"] .privacy-choice-card input:checked {
+  border-color: #2f9f91;
+  background: #2f9f91;
+}
+:root[data-theme="dark"] .privacy-setup-error {
+  color: var(--dk-danger);
+}
+:root[data-theme="dark"] .privacy-skip-button {
+  border-color: var(--dk-glass-border);
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.04));
+  box-shadow: var(--dk-glass-inset);
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .privacy-continue-button {
+  border-color: rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 5px 14px rgba(0, 0, 0, 0.3);
+}
+:root[data-theme="dark"] .privacy-confirm-backdrop {
+  background: rgba(11, 20, 18, 0.86);
+}
+:root[data-theme="dark"] .privacy-confirm-dialog {
+  border-color: var(--dk-border-strong);
+  background: var(--dk-surface);
+}
+:root[data-theme="dark"] .privacy-confirm-dialog h3 {
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .privacy-confirm-dialog p {
+  color: var(--dk-text-dim);
+}
+
+/* ── Profile setup ── */
+:root[data-theme="dark"] .onboarding-profile-step {
+  background: var(--dk-surface);
+  color: var(--dk-text);
+  --glass-text-bright: var(--dk-text);
+  --glass-text-dim: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .profile-question legend {
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .profile-question-divider {
+  background: var(--dk-border-strong);
+}
+:root[data-theme="dark"] .profile-choice {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .profile-choice:hover {
+  border-color: rgba(46, 224, 196, 0.4);
+}
+:root[data-theme="dark"] .profile-choice-selected {
+  border-color: rgba(46, 224, 196, 0.5);
+  background: linear-gradient(135deg, rgba(46, 224, 196, 0.18), rgba(46, 224, 196, 0.07));
+  color: var(--dk-accent-text);
+  box-shadow: inset 0 0 0 1px rgba(46, 224, 196, 0.42), var(--dk-glass-inset),
+    0 5px 14px rgba(0, 0, 0, 0.3);
+}
+:root[data-theme="dark"] .profile-other-input {
+  border-color: var(--dk-field-border);
+  background: var(--dk-field-bg);
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .profile-other-input::placeholder {
+  color: var(--dk-text-mute);
+}
+:root[data-theme="dark"] .profile-save-error {
+  color: var(--dk-danger);
+}
+:root[data-theme="dark"] .profile-continue-button {
+  border-color: rgba(255, 255, 255, 0.14);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 5px 14px rgba(0, 0, 0, 0.3);
+}
+
+/* ── Hotkey tour ── */
+:root[data-theme="dark"] .onboarding-step.hotkey-tour-step {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow-hover);
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .hotkey-test-progress span {
+  background: rgba(230, 239, 236, 0.12);
+}
+:root[data-theme="dark"] .hotkey-test-progress span.complete {
+  background: rgba(46, 224, 196, 0.4);
+}
+:root[data-theme="dark"] .hotkey-test-progress span.active {
+  background: var(--dk-accent);
+}
+:root[data-theme="dark"] .hotkey-test-purpose {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .hotkey-test-stage {
+  border-color: var(--dk-border);
+  background: rgba(255, 255, 255, 0.035);
+}
+:root[data-theme="dark"] .hotkey-test-stage-plus {
+  color: var(--dk-text-mute);
+}
+:root[data-theme="dark"] .hotkey-test-stage-keybtn:focus-visible {
+  outline-color: var(--dk-accent);
+}
+:root[data-theme="dark"] .hotkey-test-stage kbd {
+  border-color: var(--dk-glass-border);
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: var(--dk-glass-inset), 0 4px 10px rgba(0, 0, 0, 0.4);
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .hotkey-test-stage kbd.active {
+  background: linear-gradient(145deg, #66b7ac, #2f9f91);
+  color: #fff;
+}
+:root[data-theme="dark"] .hotkey-test-change {
+  border-color: var(--dk-border);
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: var(--dk-shadow-sm);
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .hotkey-test-prompt {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .hotkey-test-prompt.passed {
+  color: var(--dk-accent-text);
+}
+:root[data-theme="dark"] .hotkey-test-unavailable {
+  color: var(--dk-danger);
+}
+:root[data-theme="dark"] .hotkey-list {
+  border-color: var(--dk-border);
+  background: rgba(255, 255, 255, 0.035);
+}
+:root[data-theme="dark"] .hotkey-list-row {
+  border-bottom-color: var(--dk-divider);
+}
+:root[data-theme="dark"] .hotkey-list-keys kbd {
+  border-color: var(--dk-glass-border);
+  background: rgba(255, 255, 255, 0.07);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .hotkey-list-change {
+  border-color: var(--dk-border);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .hotkey-test-skip {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .hotkey-test-skip:hover {
+  color: var(--dk-text);
+}
+
+/* ── Agent demo ── */
+:root[data-theme="dark"] .agent-demo-warning {
+  border-color: rgba(240, 192, 96, 0.28);
+  background: var(--dk-warning-soft);
+  color: var(--dk-warning);
+}
+
+/* ── Voice picker cards ── */
+:root[data-theme="dark"] .voice-card {
+  border-color: color-mix(in srgb, var(--voice-tint) 28%, rgba(190, 240, 225, 0.1));
+  background:
+    linear-gradient(145deg, rgba(30, 48, 43, 0.66), rgba(14, 24, 21, 0.44)),
+    linear-gradient(145deg, var(--voice-tint-soft), var(--voice-tint-faint));
+  box-shadow: var(--dk-glass-inset), 0 12px 28px rgba(0, 0, 0, 0.3);
+}
+:root[data-theme="dark"] .voice-card::before {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--dk-sheen-soft),
+    var(--dk-sheen-peak),
+    var(--dk-sheen-soft),
+    transparent
+  );
+}
+:root[data-theme="dark"] .voice-card:hover {
+  border-color: color-mix(in srgb, var(--voice-tint) 54%, rgba(190, 240, 225, 0.22));
+  box-shadow: var(--dk-glass-inset), 0 15px 32px rgba(0, 0, 0, 0.4);
+}
+:root[data-theme="dark"] .voice-card.is-selected {
+  border-color: color-mix(in srgb, var(--voice-tint) 68%, rgba(190, 240, 225, 0.12));
+  box-shadow: var(--dk-glass-inset), 0 0 0 1px color-mix(in srgb, var(--voice-tint) 30%, transparent),
+    0 15px 34px rgba(0, 0, 0, 0.42);
+}
+:root[data-theme="dark"] .voice-card-choice:focus-visible {
+  outline-color: color-mix(in srgb, var(--voice-tint) 76%, var(--dk-accent));
+}
+:root[data-theme="dark"] .voice-preview-button {
+  border-color: rgba(190, 240, 225, 0.16);
+  background: color-mix(in srgb, var(--voice-tint) 22%, rgba(255, 255, 255, 0.06));
+  color: color-mix(in srgb, var(--voice-tint) 70%, #ffffff);
+  box-shadow: var(--dk-glass-inset);
+}
+:root[data-theme="dark"] .voice-preview-button:hover {
+  background: color-mix(in srgb, var(--voice-tint) 34%, rgba(255, 255, 255, 0.1));
+}
+:root[data-theme="dark"] .voice-preview-button:focus-visible {
+  outline-color: color-mix(in srgb, var(--voice-tint) 70%, var(--dk-accent));
+}
+:root[data-theme="dark"] .voice-card-state {
+  color: color-mix(in srgb, var(--voice-tint) 70%, #ffffff);
+}
+:root[data-theme="dark"] .voice-waveform span {
+  background: rgba(190, 235, 222, 0.28);
+}
+:root[data-theme="dark"] .voice-waveform.is-active span {
+  background: rgba(255, 255, 255, 0.96);
+}
+:root[data-theme="dark"] .voice-card-copy strong {
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .voice-card-copy span {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .voice-picker-status {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .voice-picker-error {
+  color: var(--dk-danger);
+}
+:root[data-theme="dark"] .voice-picker-locked-note {
+  color: var(--dk-accent-text);
+}
+
+/* ── Shortcut editor dialog ── */
+:root[data-theme="dark"] .shortcut-editor-backdrop {
+  background: var(--dk-scrim);
+}
+:root[data-theme="dark"] .shortcut-editor-dialog {
+  border-color: var(--dk-border-strong);
+  background: var(--dk-popover-bg);
+  box-shadow: var(--dk-shadow-pop);
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .shortcut-editor-hint {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .shortcut-editor-candidate b {
+  color: var(--dk-text-mute);
+}
+:root[data-theme="dark"] .shortcut-editor-candidate kbd {
+  border-color: var(--dk-glass-border);
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.04));
+  box-shadow: var(--dk-glass-inset), 0 3px 7px rgba(0, 0, 0, 0.4);
+}
+:root[data-theme="dark"] .shortcut-editor-placeholder {
+  color: var(--dk-text-mute);
+}
+:root[data-theme="dark"] .shortcut-editor-twice {
+  color: var(--dk-text-mute);
+}
+:root[data-theme="dark"] .shortcut-editor-error {
+  color: var(--dk-danger);
+}
+:root[data-theme="dark"] .shortcut-editor-warning {
+  color: var(--dk-warning);
+}
+:root[data-theme="dark"] .shortcut-editor-presets-label {
+  color: var(--dk-text-mute);
+}
+:root[data-theme="dark"] .shortcut-editor-presets-row button {
+  border-color: var(--dk-border);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .shortcut-editor-presets-row button.selected {
+  border-color: #5ba3d9;
+  background: rgba(114, 180, 231, 0.18);
+  color: #8cc4ef;
+}
+:root[data-theme="dark"] .shortcut-editor-permission {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
+}
+:root[data-theme="dark"] .shortcut-editor-permission p {
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .shortcut-editor-permission-button {
+  background: rgba(255, 255, 255, 0.06);
+  color: #8cc4ef;
+}
+:root[data-theme="dark"] .shortcut-editor-permission-note {
+  color: var(--dk-text-dim) !important;
+}
+:root[data-theme="dark"] .shortcut-editor-actions button {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .shortcut-editor-actions button:last-child {
+  background: #5ba3d9;
+  color: #fff;
+}

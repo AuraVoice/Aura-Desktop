@@ -1,0 +1,300 @@
+/* Dark overrides for the dashboard shell: window frame, sidebar, top bar,
+   notifications, account menu, shared cards, settings dialog, tab strip,
+   toggles and modals. Owned by src/theme/themes.css; read its header first.
+   Every rule is prefixed :root[data-theme="dark"] and twins each state it touches. */
+
+/* ── Tokens ── the --db-* set every dashboard rule already reads. Most of the
+   dashboard flips from this block alone; the rules below cover the values
+   that were written as literals. */
+:root[data-theme="dark"] .db-app,
+:root[data-theme="dark"] .db-window {
+  --db-bg: #0b1412;
+  --db-surface: #13201c;
+  --db-content-bg: #0e1916;
+  --db-text: #e6efec;
+  --db-text-dim: #9aaba6;
+  --db-text-mute: #6b7c77;
+  --db-border: rgba(190, 235, 222, 0.1);
+  --db-hover: rgba(255, 255, 255, 0.06);
+  /* A raised mint-black chip rather than an inverted light one: every active
+     state pairs this with literal #fff text, which then keeps working. */
+  --db-active: #24403a;
+  --db-teal: #2ee0c4;
+  /* deep-a is mostly used as TEXT (links, eyebrows), so dark lifts it to a
+     readable mint. The one gradient that uses it (Home hero) is re-set in
+     dashboard-home.dark.css. */
+  --db-teal-deep-a: #5fd6c1;
+  --db-teal-deep-b: #48bfaa;
+  --db-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 1px rgba(0, 0, 0, 0.2);
+  --db-shadow-md: 0 1px 2px rgba(0, 0, 0, 0.3), 0 6px 16px rgba(0, 0, 0, 0.32);
+  --db-shadow-pop: 0 2px 6px rgba(0, 0, 0, 0.35), 0 18px 44px rgba(0, 0, 0, 0.5);
+}
+
+/* ── Window frame ── */
+:root[data-theme="dark"] .db-window {
+  background: var(--dk-bg);
+}
+:root[data-theme="dark"] .db-window-titlebar {
+  background: var(--dk-bg);
+}
+:root[data-theme="dark"] .db-window-sidebar-control .db-collapse {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-window-sidebar-control .db-collapse:hover {
+  background: var(--dk-hover);
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .db-window-sidebar-control .db-collapse:focus-visible {
+  outline-color: var(--dk-accent);
+}
+:root[data-theme="dark"] .db-window-controls button {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.32), 0 1px 2px rgba(0, 0, 0, 0.45);
+}
+:root[data-theme="dark"] .db-window-controls button:focus-visible {
+  outline-color: rgba(230, 239, 236, 0.7);
+}
+
+/* ── Sidebar ── */
+:root[data-theme="dark"] .db-sidebar {
+  background: rgba(11, 20, 18, 0.82);
+}
+:root[data-theme="dark"] .db-nav-item-active,
+:root[data-theme="dark"] .db-nav-item-active:hover {
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 0 0 1px rgba(46, 224, 196, 0.14),
+    0 4px 14px rgba(0, 0, 0, 0.3);
+}
+:root[data-theme="dark"] .db-nav-item-help[data-phase="discord"]:hover:not(.db-nav-item-active) {
+  background: rgba(88, 101, 242, 0.16);
+}
+:root[data-theme="dark"] .db-nav-item-help {
+  --discord: #8891ff;
+}
+:root[data-theme="dark"] .db-nav-help-word {
+  --word-shine: #a3aaff;
+}
+:root[data-theme="dark"] .db-nav-item-active .db-nav-help-word {
+  --word-ink: #fff;
+  --word-shine: #9ff0e2;
+}
+
+/* ── Main area: the content card gets a faint mint glow in its corner so the
+   frosted cards on top have something to frost. ── */
+:root[data-theme="dark"] .db-main {
+  border-color: rgba(190, 240, 225, 0.08);
+  background:
+    radial-gradient(70% 80% at 0% 0%, rgba(46, 224, 196, 0.06), transparent 62%),
+    radial-gradient(90% 100% at 100% 0%, rgba(46, 224, 196, 0.045), transparent 58%),
+    var(--db-content-bg);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 2px 6px rgba(0, 0, 0, 0.3),
+    0 12px 32px rgba(0, 0, 0, 0.35);
+}
+:root[data-theme="dark"] .db-topbar {
+  background: rgba(14, 25, 22, 0.72);
+}
+:root[data-theme="dark"] .db-badge-count {
+  color: #062a24;
+}
+
+/* ── Notifications panel ── */
+:root[data-theme="dark"] .db-notif-panel {
+  border-color: var(--dk-border-strong);
+  background: var(--dk-popover-bg);
+}
+:root[data-theme="dark"] .db-notif-list {
+  scrollbar-color: var(--dk-scroll-thumb) transparent;
+}
+:root[data-theme="dark"] .db-notif-list::-webkit-scrollbar-thumb {
+  background-color: var(--dk-scroll-thumb);
+}
+:root[data-theme="dark"] .db-notif-list::-webkit-scrollbar-thumb:hover {
+  background-color: var(--dk-scroll-thumb-hover);
+}
+:root[data-theme="dark"] .db-notif-row-unread {
+  background: rgba(46, 224, 196, 0.08);
+}
+:root[data-theme="dark"] .db-notif-row-unread:hover {
+  background: rgba(46, 224, 196, 0.12);
+}
+:root[data-theme="dark"] .db-notif-sev-warning .db-notif-accent {
+  background: var(--dk-warning);
+}
+:root[data-theme="dark"] .db-notif-sev-error .db-notif-accent {
+  background: var(--dk-danger);
+}
+:root[data-theme="dark"] .db-notif-dismiss:hover {
+  background: var(--dk-press);
+}
+
+/* ── Account button and popover ── */
+:root[data-theme="dark"] .db-account-btn:hover,
+:root[data-theme="dark"] .db-account-btn-open {
+  border-color: var(--dk-border);
+  background: rgba(255, 255, 255, 0.05);
+}
+:root[data-theme="dark"] .db-popover {
+  border-color: var(--dk-border-strong);
+  background: var(--dk-popover-bg);
+}
+:root[data-theme="dark"] .db-popover-item-danger:hover {
+  background: var(--dk-danger-soft);
+  color: var(--dk-danger);
+}
+
+/* ── Shared glass: panels, briefing, stat cards ── */
+:root[data-theme="dark"] .db-link:hover {
+  background: var(--dk-accent-soft);
+}
+:root[data-theme="dark"] .db-today-briefing {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
+}
+:root[data-theme="dark"] .db-today-briefing-head {
+  border-bottom-color: var(--dk-divider);
+}
+:root[data-theme="dark"] .db-today-briefing-grid > button + button {
+  border-left-color: var(--dk-divider);
+}
+:root[data-theme="dark"] .db-today-briefing-grid > button:hover {
+  background: var(--dk-glass-hover);
+}
+:root[data-theme="dark"] .db-today-briefing-grid > button:focus-visible {
+  outline-color: var(--dk-accent-ring);
+}
+:root[data-theme="dark"] .db-card {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
+  transition: transform 0.2s var(--db-ease), box-shadow 0.2s var(--db-ease),
+    border-color 0.2s var(--db-ease);
+}
+:root[data-theme="dark"] .db-card:hover {
+  border-color: var(--dk-glass-border-hover);
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow-hover);
+}
+:root[data-theme="dark"] .db-card::after {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--dk-sheen-soft),
+    var(--dk-sheen-peak),
+    var(--dk-sheen-soft),
+    transparent
+  );
+}
+:root[data-theme="dark"] .db-card-accent {
+  border-color: rgba(255, 173, 96, 0.3);
+  background: linear-gradient(135deg, rgba(70, 44, 22, 0.62), rgba(38, 26, 16, 0.52));
+}
+:root[data-theme="dark"] .db-card-accent:hover {
+  border-color: rgba(255, 173, 96, 0.45);
+}
+:root[data-theme="dark"] .db-card-icon {
+  color: #3fd9c2;
+}
+:root[data-theme="dark"] .db-card-icon.is-violet {
+  color: #a28dff;
+}
+:root[data-theme="dark"] .db-card-icon.is-cyan {
+  color: #3ccbdd;
+}
+:root[data-theme="dark"] .db-card-icon.is-slate {
+  color: #95a9cf;
+}
+:root[data-theme="dark"] .db-card-icon.is-ember {
+  color: #ff6a45;
+}
+
+/* ── Buttons ── */
+:root[data-theme="dark"] .db-primary-btn:hover:not(:disabled) {
+  background: #2e524a;
+}
+
+/* ── Settings rows and toggles ── */
+:root[data-theme="dark"] .db-setting-toggle {
+  border-color: rgba(190, 235, 222, 0.16);
+  background: rgba(255, 255, 255, 0.1);
+}
+:root[data-theme="dark"] .db-setting-toggle::after {
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+}
+:root[data-theme="dark"] .db-setting-toggle:checked {
+  border-color: var(--db-teal);
+  background: var(--db-teal);
+}
+
+/* ── Sliding tab strip ── */
+:root[data-theme="dark"] .db-tab-strip {
+  border-color: var(--dk-border);
+  background: rgba(255, 255, 255, 0.04);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+:root[data-theme="dark"] .db-tab-strip::before {
+  background: linear-gradient(135deg, rgba(46, 224, 196, 0.24), rgba(46, 224, 196, 0.12));
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 0 0 1px rgba(46, 224, 196, 0.16);
+}
+
+/* ── Settings dialog ── */
+:root[data-theme="dark"] .db-settings-scrim {
+  background: var(--dk-scrim);
+}
+:root[data-theme="dark"] .db-settings-dialog {
+  border-color: var(--dk-border-strong);
+  background: var(--dk-surface);
+}
+:root[data-theme="dark"] .db-settings-dialog-sidebar {
+  background: var(--dk-bg-raised);
+}
+:root[data-theme="dark"] .db-settings-dialog-item:hover {
+  background: var(--dk-hover);
+}
+:root[data-theme="dark"] .db-settings-dialog-item.is-active {
+  background: rgba(46, 224, 196, 0.1);
+}
+:root[data-theme="dark"] .db-settings-update-hint {
+  border-color: var(--dk-border-strong);
+  background: var(--dk-popover-bg);
+}
+:root[data-theme="dark"] .db-settings-update-btn {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-settings-update-btn:hover:not(:disabled) {
+  background: var(--dk-hover);
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .db-settings-dialog-close {
+  background: rgba(255, 255, 255, 0.06);
+}
+:root[data-theme="dark"] .db-settings-dialog-close:hover {
+  background: rgba(255, 255, 255, 0.11);
+}
+
+/* ── Detail modal ── */
+:root[data-theme="dark"] .db-modal-scrim {
+  background: var(--dk-scrim);
+}
+:root[data-theme="dark"] .db-modal-panel {
+  border-color: var(--dk-border-strong);
+}
+:root[data-theme="dark"] .db-modal-head::after {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(190, 235, 222, 0.12) 22%,
+    rgba(190, 235, 222, 0.12) 78%,
+    transparent
+  );
+}
+:root[data-theme="dark"] .db-modal-action:hover {
+  border-color: var(--dk-border-strong);
+}
+:root[data-theme="dark"] .db-modal-body {
+  scrollbar-color: var(--dk-scroll-thumb) transparent;
+}
+:root[data-theme="dark"] .db-modal-body::-webkit-scrollbar-thumb {
+  background-color: var(--dk-scroll-thumb);
+}
+:root[data-theme="dark"] .db-modal-body::-webkit-scrollbar-thumb:hover {
+  background-color: var(--dk-scroll-thumb-hover);
+}

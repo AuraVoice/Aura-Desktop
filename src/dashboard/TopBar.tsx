@@ -8,6 +8,7 @@ import { NOTIFICATION_TOAST_ACTIVATED } from "../lib/ipcEvents";
 import { logError } from "../lib/log";
 import { signOutSession } from "../lib/signOutSession";
 import { NotificationsPanel } from "./NotificationsPanel";
+import { ThemeToggleButton } from "./components/ThemeToggleButton";
 import type { DashboardNotificationsState } from "./useDashboardNotifications";
 import type { StoredNotification } from "../lib/desktopNotifications";
 
@@ -189,6 +190,7 @@ export function TopBar({ title, user, notifications }: TopBarProps) {
     <header className="db-topbar">
       <h1 className="db-topbar-title">{title}</h1>
       <div className="db-topbar-actions">
+        <ThemeToggleButton />
         <div className="db-notif-menu" ref={notifRef}>
           <button
             type="button"

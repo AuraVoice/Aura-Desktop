@@ -8,6 +8,9 @@ import { StatusPill } from "./overlay/StatusPill";
 import { RegionOverlay } from "./region/RegionOverlay";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { initTelemetryForWindow } from "./lib/telemetryInit";
+import { ThemeSync } from "./theme/ThemeSync";
+import { bootTheme } from "./theme/themeEngine";
+import "./theme/themes.css";
 
 // Every window loads the same bundle; route on the window label. "main" is the
 // transparent always-on-top overlay; "dashboard" is the decorated in-app window;
@@ -15,6 +18,14 @@ import { initTelemetryForWindow } from "./lib/telemetryInit";
 // "status-pill" is the brief bottom-middle confirmation for global state toggles;
 // "region" is the fullscreen click-through trail drawn while circling to ask.
 const label = getCurrentWebviewWindow().label;
+
+// Before any render: paint the last known theme so no window opens in the wrong
+// one. ThemeSync reconciles against the stored setting once it loads. The
+// dictation HUD takes the notch's edge, and the notch is dark in both themes.
+if (label === "dictation") {
+  document.documentElement.classList.add("theme-pinned-dark");
+}
+bootTheme();
 
 // Analytics, crash reporting and the consent gate boot per window (each
 // webview is its own JS realm). Never awaited: React renders regardless.
@@ -44,6 +55,7 @@ if (label !== "dashboard") {
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
+    <ThemeSync />
     {root}
   </React.StrictMode>,
 );

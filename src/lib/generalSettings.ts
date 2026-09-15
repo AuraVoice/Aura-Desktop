@@ -11,7 +11,10 @@ export const GENERAL_SETTINGS_KEY = "dashboard_general_settings";
 // assert.
 export const IMPROVEMENT_CONSENT_VERSION = 2;
 
+export type ThemeSetting = "system" | "light" | "dark";
+
 export interface GeneralSettings {
+  theme: ThemeSetting;
   dailyCatchUp: boolean;
   dailyBriefing: boolean;
   calendarInBriefing: boolean;
@@ -38,6 +41,10 @@ export interface GeneralSettings {
 // real registry state rather than the intent. A second copy here would drift
 // the first time a registry write failed.
 export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
+  // Follows the OS until the user picks. Read before first paint by
+  // src/theme/ThemeSync.tsx and, for the dashboard's window background, by
+  // dashboard.rs, so the key name is shared with Rust.
+  theme: "system",
   dailyCatchUp: true,
   dailyBriefing: true,
   calendarInBriefing: true,
@@ -137,6 +144,17 @@ export async function saveGeneralSettings(settings: GeneralSettings): Promise<vo
 export async function setVoiceScreenContext(enabled: boolean): Promise<void> {
   const current = await loadGeneralSettings();
   await saveGeneralSettings({ ...current, voiceScreenContext: enabled });
+}
+
+/** Set only the Appearance choice, from surfaces that do not hold the whole
+ * settings object (the top bar toggle). Reads the raw stored value rather than
+ * loadGeneralSettings, whose failure fallback is the defaults: saving those
+ * back would silently wipe every other preference. */
+export async function setThemeSetting(theme: ThemeSetting): Promise<void> {
+  const store = await Store.load(overlayStorePath);
+  const saved = await store.get<GeneralSettings>(GENERAL_SETTINGS_KEY);
+  await store.set(GENERAL_SETTINGS_KEY, { ...(saved ?? DEFAULT_GENERAL_SETTINGS), theme });
+  await store.save();
 }
 
 export async function subscribeGeneralSettings(

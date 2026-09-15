@@ -1,5 +1,6 @@
 use log::error;
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::window::Color;
+use tauri::{AppHandle, Emitter, Manager, Theme, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_store::StoreExt;
 
 /// The dashboard's own settings store, written by src/lib/generalSettings.ts.
@@ -102,6 +103,7 @@ pub fn open_dashboard_route(
         .shadow(true)
         .always_on_top(false)
         .skip_taskbar(!show_in_taskbar(app))
+        .background_color(initial_background(app))
         .resizable(true)
         .center()
         .build()
@@ -126,6 +128,35 @@ fn show_in_taskbar(app: &AppHandle) -> bool {
                 .and_then(serde_json::Value::as_bool)
         })
         .unwrap_or(true)
+}
+
+/// What the window paints before the webview's first frame. The page itself
+/// is transparent until React mounts, so without this a dark dashboard opens on
+/// a white flash. Mirrors src/theme/themeEngine.ts: only an explicit "light" or
+/// "dark" is honoured, anything else follows the OS, read off the always-present
+/// overlay window. Matches --db-bg for each theme.
+fn initial_background(app: &AppHandle) -> Color {
+    let setting = app.store(OVERLAY_STORE).ok().and_then(|store| {
+        store.get(GENERAL_SETTINGS_KEY).and_then(|settings| {
+            settings
+                .get("theme")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+    });
+    let dark = match setting.as_deref() {
+        Some("dark") => true,
+        Some("light") => false,
+        _ => app
+            .get_webview_window("main")
+            .and_then(|window| window.theme().ok())
+            .is_some_and(|theme| theme == Theme::Dark),
+    };
+    if dark {
+        Color(0x0b, 0x14, 0x12, 0xff)
+    } else {
+        Color(0xf1, 0xf0, 0xea, 0xff)
+    }
 }
 
 /// Settings > System > "Show Aura in the taskbar". Windows analogue of macOS's

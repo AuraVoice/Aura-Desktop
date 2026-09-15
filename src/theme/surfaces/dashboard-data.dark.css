@@ -1,0 +1,472 @@
+/* Dark overrides for dashboard-data. Owned by src/theme/themes.css; read its header first.
+   Every rule is prefixed :root[data-theme="dark"] and twins each state it touches. */
+
+/* ── Async states + lists ── */
+:root[data-theme="dark"] .db-list-item-button:hover {
+  border-color: rgba(46, 224, 196, 0.34);
+}
+
+/* ── Research: tokens ── flipping these covers every var(--research-*) use.
+   teal-dark is mostly TEXT here, so it lifts to mint; the few rules that use it
+   as a filled background are re-set below. The paywall portals into .db-app and
+   declares its own copy, so it gets the same set. */
+:root[data-theme="dark"] .db-research-page,
+:root[data-theme="dark"] .db-modal-panel.db-research-paywall {
+  --research-ink: var(--dk-text);
+  --research-canvas: var(--dk-bg-raised);
+  --research-teal: #3fd9c2;
+  --research-teal-dark: var(--dk-accent-text);
+  --research-teal-soft: rgba(46, 224, 196, 0.12);
+  --research-blue: #7fb3d9;
+  --research-amber: var(--dk-warning);
+  --research-coral: var(--dk-danger);
+  --research-line: rgba(190, 235, 222, 0.12);
+}
+
+/* ── Research: shared buttons and labels ── */
+:root[data-theme="dark"] .db-research-primary {
+  border-color: #1f6f61;
+  background: #1f6f61;
+  box-shadow: 0 5px 14px rgba(0, 0, 0, 0.35);
+}
+:root[data-theme="dark"] .db-research-primary:hover {
+  background: #25806f;
+}
+:root[data-theme="dark"] .db-research-secondary {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+  box-shadow: var(--dk-glass-inset), 0 5px 14px rgba(0, 0, 0, 0.25);
+}
+:root[data-theme="dark"] .db-research-secondary:hover {
+  border-color: var(--dk-glass-border-hover);
+  background: linear-gradient(135deg, rgba(40, 62, 56, 0.8), rgba(18, 30, 26, 0.64));
+}
+:root[data-theme="dark"] .db-research-eyebrow,
+:root[data-theme="dark"] .db-research-section-kicker,
+:root[data-theme="dark"] .db-research-aside-label {
+  color: var(--dk-text-dim);
+}
+
+/* ── Research home ── */
+:root[data-theme="dark"] .db-research-command {
+  border-color: var(--dk-border);
+  background:
+    linear-gradient(rgba(190, 235, 222, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(190, 235, 222, 0.03) 1px, transparent 1px),
+    radial-gradient(70% 120% at 0% 100%, rgba(46, 224, 196, 0.06), transparent 62%),
+    var(--dk-surface);
+  background-size: 24px 24px, 24px 24px, auto, auto;
+}
+:root[data-theme="dark"] .db-research-command::after {
+  border-color: rgba(190, 235, 222, 0.1);
+  box-shadow: inset 0 0 0 44px rgba(255, 255, 255, 0.02), inset 0 0 0 45px rgba(190, 235, 222, 0.05);
+}
+:root[data-theme="dark"] .db-research-command-copy p {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-research-command form {
+  border-color: var(--dk-field-border);
+  background: rgba(8, 15, 13, 0.55);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.3);
+}
+:root[data-theme="dark"] .db-research-command form:focus-within {
+  border-color: rgba(46, 224, 196, 0.55);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.3), 0 0 0 3px rgba(46, 224, 196, 0.14);
+}
+:root[data-theme="dark"] .db-research-command textarea::placeholder {
+  color: var(--dk-text-mute);
+}
+:root[data-theme="dark"] .db-research-composer-foot > span {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-research-starters button {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+  box-shadow: var(--dk-glass-inset), 0 5px 14px rgba(0, 0, 0, 0.25);
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-research-starters button::after {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--dk-sheen-soft),
+    var(--dk-sheen-peak),
+    var(--dk-sheen-soft),
+    transparent
+  );
+}
+:root[data-theme="dark"] .db-research-starters button:hover {
+  color: var(--research-teal-dark);
+  box-shadow: var(--dk-glass-inset), 0 8px 20px rgba(0, 0, 0, 0.35);
+}
+:root[data-theme="dark"] .db-research-active-run {
+  background: var(--dk-glass-fill);
+}
+:root[data-theme="dark"] .db-research-active-run:hover {
+  border-color: rgba(190, 235, 222, 0.24);
+}
+:root[data-theme="dark"] .db-research-active-symbol {
+  background: #1f6f61;
+}
+:root[data-theme="dark"] .db-research-active-symbol.is-legacy {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-research-active-run > span:nth-child(2) > small,
+:root[data-theme="dark"] .db-research-active-meta small {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-research-status {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-research-status.is-searching,
+:root[data-theme="dark"] .db-research-status.is-reading,
+:root[data-theme="dark"] .db-research-status.is-verifying,
+:root[data-theme="dark"] .db-research-status.is-synthesizing {
+  background: var(--research-teal-soft);
+  color: var(--research-teal-dark);
+}
+:root[data-theme="dark"] .db-research-status.is-ready {
+  background: rgba(110, 200, 140, 0.13);
+  color: #8fd6a6;
+}
+:root[data-theme="dark"] .db-research-status.is-awaiting_clarification,
+:root[data-theme="dark"] .db-research-status.is-partial {
+  background: var(--dk-warning-soft);
+  color: var(--dk-warning);
+}
+:root[data-theme="dark"] .db-research-status.is-queued,
+:root[data-theme="dark"] .db-research-status.is-legacy {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-research-status.is-failed {
+  background: var(--dk-danger-soft);
+  color: var(--dk-danger);
+}
+:root[data-theme="dark"] .db-research-history-list > button:hover {
+  background: var(--dk-glass-hover);
+  box-shadow: -2px 0 0 rgba(46, 224, 196, 0.5);
+}
+:root[data-theme="dark"] .db-research-history-icon {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-research-history-icon::before {
+  background: radial-gradient(circle, rgba(154, 171, 166, 0.14), transparent 68%);
+}
+:root[data-theme="dark"] .db-research-history-icon.is-ready {
+  color: #8fd6a6;
+}
+:root[data-theme="dark"] .db-research-history-icon.is-ready::before {
+  background: radial-gradient(circle, rgba(143, 214, 166, 0.14), transparent 68%);
+}
+:root[data-theme="dark"] .db-research-history-icon.is-partial {
+  color: var(--research-amber);
+}
+:root[data-theme="dark"] .db-research-history-icon.is-partial::before {
+  background: radial-gradient(circle, rgba(240, 192, 96, 0.16), transparent 68%);
+}
+:root[data-theme="dark"] .db-research-history-copy > small,
+:root[data-theme="dark"] .db-research-history-marks small,
+:root[data-theme="dark"] .db-research-history-source-count {
+  color: var(--dk-text-dim);
+}
+
+/* ── Research: run header and controls ── */
+:root[data-theme="dark"] .db-research-detail-tools .db-research-secondary {
+  background: none;
+  box-shadow: none;
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-research-detail-tools .db-research-secondary:hover:not(:disabled) {
+  background: none;
+  color: var(--research-ink);
+}
+:root[data-theme="dark"] .db-research-detail-tools .db-row-action {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-research-detail-tools .db-row-action:hover:not(:disabled) {
+  background: var(--dk-hover);
+  color: var(--research-ink);
+}
+:root[data-theme="dark"] .db-research-run-head {
+  border-bottom-color: var(--dk-border);
+}
+:root[data-theme="dark"] .db-research-run-head p,
+:root[data-theme="dark"] .db-research-original-request {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-research-original-request p {
+  background: rgba(255, 255, 255, 0.035);
+  color: rgba(230, 239, 236, 0.84);
+}
+:root[data-theme="dark"] .db-research-run-summary span {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-research-inline-error {
+  border-color: rgba(255, 138, 128, 0.3);
+  background: var(--dk-danger-soft);
+  color: #ffb4ac;
+}
+
+/* ── Research: scope and clarification ── */
+:root[data-theme="dark"] .db-research-legacy {
+  background: var(--dk-surface);
+}
+:root[data-theme="dark"] .db-research-legacy > div > p {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-research-scope-layout {
+  background: var(--dk-surface);
+}
+:root[data-theme="dark"] .db-research-plan-list {
+  border-top-color: var(--dk-divider);
+}
+:root[data-theme="dark"] .db-research-plan-list > div {
+  border-bottom-color: var(--dk-divider);
+}
+:root[data-theme="dark"] .db-research-plan-list > div > span {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-research-choice-input {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+  box-shadow: var(--dk-glass-inset), 0 5px 14px rgba(0, 0, 0, 0.25);
+}
+:root[data-theme="dark"] .db-research-choice-input::placeholder {
+  color: var(--dk-text-mute);
+}
+:root[data-theme="dark"] .db-research-assumptions strong {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-research-assumptions span {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-research-scope-aside {
+  background:
+    linear-gradient(rgba(46, 224, 196, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(46, 224, 196, 0.03) 1px, transparent 1px),
+    var(--dk-bg-raised);
+  background-size: 22px 22px;
+}
+:root[data-theme="dark"] .db-research-scope-aside > div small,
+:root[data-theme="dark"] .db-research-scope-aside > p {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-research-clarification {
+  background: var(--dk-surface);
+}
+:root[data-theme="dark"] .db-research-choice-grid button {
+  background: rgba(255, 255, 255, 0.035);
+}
+:root[data-theme="dark"] .db-research-choice-grid button:hover {
+  border-color: rgba(46, 224, 196, 0.45);
+  background: rgba(46, 224, 196, 0.08);
+}
+:root[data-theme="dark"] .db-research-clarification form > label {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-research-clarification input {
+  border-color: var(--dk-field-border);
+  background: var(--dk-field-bg);
+}
+
+/* ── Research: live workspace ── already drawn dark; only its frame against
+   the dark page changes. */
+:root[data-theme="dark"] .db-research-live-shell {
+  border-color: rgba(46, 224, 196, 0.18);
+  box-shadow: 0 22px 48px rgba(0, 0, 0, 0.45);
+}
+:root[data-theme="dark"] .db-research-live-aside .db-research-aside-label {
+  color: #7ea096;
+}
+
+/* ── Research: finished report ── */
+:root[data-theme="dark"] .db-research-report-nav > button {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-research-report-nav > button:hover {
+  color: var(--research-ink);
+}
+:root[data-theme="dark"] .db-research-report-nav > button.is-active {
+  color: var(--research-teal-dark);
+}
+:root[data-theme="dark"] .db-research-report-summary {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
+}
+:root[data-theme="dark"] .db-research-report-summary > p {
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .db-research-report-meta span {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-research-report-section {
+  border-bottom-color: var(--dk-divider);
+}
+:root[data-theme="dark"] .db-research-report-section p {
+  color: rgba(230, 239, 236, 0.86);
+}
+:root[data-theme="dark"] .db-research-citation {
+  border-color: rgba(46, 224, 196, 0.28);
+}
+:root[data-theme="dark"] .db-research-citation:hover {
+  background: rgba(46, 224, 196, 0.22);
+  box-shadow: 0 3px 8px rgba(0, 0, 0, 0.35);
+}
+:root[data-theme="dark"] .db-research-report-gaps {
+  border-color: rgba(240, 192, 96, 0.26);
+  background: rgba(240, 192, 96, 0.06);
+}
+:root[data-theme="dark"] .db-research-report-gaps > div {
+  border-bottom-color: rgba(240, 192, 96, 0.14);
+  color: #d9c9a3;
+}
+:root[data-theme="dark"] .db-research-report-gaps > div button {
+  border-color: rgba(240, 192, 96, 0.28);
+  background: rgba(240, 192, 96, 0.1);
+  box-shadow: var(--dk-glass-inset);
+  color: var(--dk-warning);
+}
+:root[data-theme="dark"] .db-research-report-gaps > div button:hover {
+  background: rgba(240, 192, 96, 0.18);
+}
+:root[data-theme="dark"] .db-research-disclaimer {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-research-report-sources > button {
+  border-bottom-color: var(--dk-divider);
+}
+:root[data-theme="dark"] .db-research-report-sources > button:hover {
+  background: var(--dk-glass-hover);
+}
+:root[data-theme="dark"] .db-research-report-sources > button small {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-research-report-sources > button > span:nth-child(3) {
+  border-color: rgba(46, 224, 196, 0.28);
+}
+:root[data-theme="dark"] .db-research-report-actions button {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+  box-shadow: var(--dk-glass-inset), 0 5px 14px rgba(0, 0, 0, 0.25);
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-research-report-actions button::after {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--dk-sheen-soft),
+    var(--dk-sheen-peak),
+    var(--dk-sheen-soft),
+    transparent
+  );
+}
+:root[data-theme="dark"] .db-research-report-actions button:hover {
+  color: var(--research-teal-dark);
+  box-shadow: var(--dk-glass-inset), 0 8px 20px rgba(0, 0, 0, 0.35);
+}
+
+/* ── Research: source drawer, terminal states, confirm ── */
+:root[data-theme="dark"] .db-research-drawer-scrim,
+:root[data-theme="dark"] .db-research-confirm-scrim {
+  background: var(--dk-scrim);
+}
+:root[data-theme="dark"] .db-research-source-drawer > aside {
+  background: var(--dk-surface);
+  box-shadow: -16px 0 42px rgba(0, 0, 0, 0.5);
+}
+:root[data-theme="dark"] .db-research-drawer-head small {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-research-drawer-head > button {
+  border-color: var(--dk-glass-border);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-research-drawer-head > button:hover {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--research-ink);
+}
+:root[data-theme="dark"] .db-research-source-drawer blockquote {
+  border-color: var(--dk-border);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(230, 239, 236, 0.86);
+}
+:root[data-theme="dark"] .db-research-terminal {
+  background: var(--dk-surface);
+}
+:root[data-theme="dark"] .db-research-terminal > svg {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-research-terminal.is-failed {
+  border-color: rgba(255, 138, 128, 0.3);
+  background: linear-gradient(rgba(255, 107, 95, 0.08), rgba(255, 107, 95, 0.08)), var(--dk-surface);
+}
+:root[data-theme="dark"] .db-research-terminal.is-failed > svg {
+  color: var(--research-coral);
+}
+:root[data-theme="dark"] .db-research-terminal p {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-research-confirm > div {
+  background: var(--dk-surface);
+}
+:root[data-theme="dark"] .db-research-confirm p {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-research-detail-skeleton span {
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0.04) 25%,
+    rgba(255, 255, 255, 0.08) 50%,
+    rgba(255, 255, 255, 0.04) 75%
+  );
+  background-size: 200% 100%;
+}
+
+/* ── Research paywall ── more opaque than page glass: it floats over a scrim. */
+:root[data-theme="dark"] .db-modal-panel.db-research-paywall {
+  border-color: var(--dk-glass-border);
+  background: linear-gradient(135deg, rgba(30, 48, 43, 0.94), rgba(16, 27, 24, 0.9));
+  box-shadow: var(--dk-glass-inset), var(--dk-shadow-pop);
+}
+:root[data-theme="dark"] .db-research-paywall-glyph::before {
+  background: radial-gradient(circle, rgba(46, 224, 196, 0.16), rgba(46, 224, 196, 0) 68%);
+}
+:root[data-theme="dark"] .db-research-paywall-dismiss:hover {
+  background: var(--dk-hover);
+}
+
+@media (max-width: 820px) {
+  :root[data-theme="dark"] .db-research-report-nav > button {
+    background: rgba(255, 255, 255, 0.05);
+  }
+}
+
+/* ── Help: community panel and Discord button ── */
+:root[data-theme="dark"] .db-settings-page .db-help-discord {
+  border-color: var(--dk-glass-border);
+  background: linear-gradient(135deg, rgba(34, 44, 58, 0.72), rgba(14, 24, 21, 0.56));
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
+}
+:root[data-theme="dark"] .db-help-discord::after {
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--dk-sheen-soft),
+    var(--dk-sheen-peak),
+    var(--dk-sheen-soft),
+    transparent
+  );
+}
+:root[data-theme="dark"] .db-discord-btn {
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.35);
+}
+:root[data-theme="dark"] .db-discord-btn:hover {
+  box-shadow: 0 10px 22px rgba(0, 0, 0, 0.45);
+}

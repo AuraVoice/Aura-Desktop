@@ -200,6 +200,17 @@ Rules that follow from it:
 - Icons sit bare on the glass (tone-colored glyph, optional soft radial `::before` glow), no boxed chip behind them. Idle animations are long-period and low-amplitude; `.db-reduce-motion` already stills everything app-wide, so no per-animation guard.
 - A hand-rolled SVG icon next to lucide glyphs must match lucide's optical live area (~20 of 24 viewBox units); crop the viewBox to the artwork's bounding box rather than redrawing (see `StreakFlameIcon` in `HomePage.tsx`).
 
+### Light and dark (Settings > System > Appearance)
+
+Every window follows one `theme` setting (`system` / `light` / `dark`, in `dashboard_general_settings`). `src/theme/themeEngine.ts` stamps `<html data-theme>` before first paint, `ThemeSync` in `main.tsx` keeps it live, and `dashboard.rs` paints the matching window background so a dark dashboard never opens on a white frame. The full architecture is in the header of `src/theme/themes.css`; the rules a reasonable edit would break:
+
+- **Component CSS stays light.** Dark lives in `src/theme/surfaces/*.dark.css`, one sheet per area, every rule prefixed `:root[data-theme="dark"]`. A new light rule with a literal color needs its dark twin in the matching sheet, built from the `--dk-*` vocabulary (the dark glass recipe is `--dk-glass-fill` / `-border` / `-inset` / `-shadow`, same backdrop-filter). Prefer `--db-*` tokens in new light rules: those flip with no twin at all.
+- **The prefix raises specificity, so twin every state.** A dark base rule beats the light file's `:hover`, `:focus-visible`, `.is-active` and `:checked` rules for the same property. Restate each one in the dark sheet, even when its value does not change.
+- **The overlay is inverted.** Its `--glass-*` tokens were dark from the start, so for overlay cards LIGHT is the override (`overlay-cards.light.css`, `overlay-chat.light.css`), flipped on `:root`. Anything else that reads `--glass-*` in light mode (onboarding, dialogs) must restore the original `theme.css` values locally, or its light look silently changes.
+- **Some surfaces are dark in both themes, via `.theme-pinned-dark`:** the notch (it reads as hardware), the whole dictation window (it takes the notch's edge), and the MeetingPrompt and VoiceRecovery cards (the 2026-09-11 call: they must read as "Aura is asking" over any app). Keep `themes.css`'s pinned block identical to `theme.css`'s `:root` glass values.
+- **Light overlay cards stay near 0.9 opacity.** A transparent Tauri window's `backdrop-filter` blurs only webview pixels, never the desktop behind it.
+- A theme change crossfades through `document.startViewTransition`, falls back to a one-shot `html.theme-switching` color transition, and is instant under reduce motion or while the window is hidden. Never put a permanent `transition` on `*` for this.
+
 ## Dictation history is the one place transcripts touch disk
 
 `src-tauri/src/dictation/history.rs` retains every finished dictation and its

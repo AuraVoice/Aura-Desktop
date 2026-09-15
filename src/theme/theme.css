@@ -30,5 +30,6 @@
   --font-body: "PlusJakartaSans", sans-serif;
   --font-mono: "GeistMono", monospace;
 
-  color-scheme: dark;
+  /* No color-scheme here: themeEngine.ts sets it per window to match
+     <html data-theme>, so native controls follow the Appearance setting. */
 }

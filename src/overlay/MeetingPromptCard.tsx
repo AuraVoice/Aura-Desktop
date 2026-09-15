@@ -90,7 +90,7 @@ export function MeetingPromptCard({
   const starting = status === "starting";
   return (
     <GlassSurface
-      className={`meeting-prompt-card${leaving ? " meeting-prompt-leaving" : ""}`}
+      className={`meeting-prompt-card theme-pinned-dark${leaving ? " meeting-prompt-leaving" : ""}`}
       draggable={false}
     >
       <div className="meeting-prompt-clip">

@@ -1,3 +1,30 @@
+2026-09-14  Turning the overlay light would have silently changed the already-light onboarding
+
+Problem: adding light and dark themes meant flipping the overlay's --glass-* tokens to light
+values on :root in light mode. Those tokens were dark from day one, and several light screens
+(SetupPanel, DashboardOnboarding, ProfileSetupStep, SignInForm inside the pairing box) had been
+built by re-skinning only SOME of them on their own container. Every token they did not re-skin
+(the border ring, the text shadow, the keycap border, focus and error colors) would have changed
+on screens whose light look was supposed to stay exactly the same.
+
+Issue: a token flip on :root is invisible to the files it affects. Nothing in SetupPanel.css
+mentions --glass-border-top, yet the panel's white ring reads it through GlassSurface. A
+token-by-token audit of what each container actually consumes was the only way to find it.
+Separately, the migration brief said "cards hanging off the notch go light", but MeetingPrompt
+and VoiceRecovery were made black on 2026-09-11 precisely so they read over any app, light or
+dark. That reasoning has nothing to do with Aura's own theme, so a generic rule would have
+reversed a deliberate product call.
+
+Solution: light mode restores the original theme.css values on the two affected containers
+(.glass-surface:has(> .setup-panel) and .db-onboarding), and the two cards carry
+.theme-pinned-dark like the notch and the dictation window.
+
+Justification: component sheets stay the light base and themes live in override sheets, which
+keeps light pixel-identical by construction everywhere except where a shared token is flipped.
+Those shared-token flips are the one place light can regress, so they are called out in
+CLAUDE.md. Before generalising a visual rule across components, read each component's header
+comment for a dated product call.
+
 2026-09-14  Company research failed after two minutes with no retry, because the SDK validates mid-stream
 
 Problem: "Aura could not complete the company research" on a fresh run. Cloud Run showed a 200 on

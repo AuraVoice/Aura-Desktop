@@ -5,6 +5,7 @@ import {
   IMPROVEMENT_CONSENT_VERSION,
   loadGeneralSettings,
   saveGeneralSettings,
+  subscribeGeneralSettings,
   type GeneralSettings,
 } from "../../lib/generalSettings";
 import { logError } from "../../lib/log";
@@ -22,6 +23,7 @@ import {
   SettingsPageLayout,
   SettingsSection,
 } from "../components/SettingsPageLayout";
+import { AppearancePicker } from "../components/AppearancePicker";
 
 function ToggleRow({
   label,
@@ -107,6 +109,26 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
       });
     return () => {
       active = false;
+    };
+  }, []);
+
+  // Other surfaces write this store too (the top bar theme toggle, the
+  // overlay's screen-context consent card). Following the store keeps this
+  // page from saving a stale copy of their change back over it.
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    subscribeGeneralSettings((saved) => {
+      if (active) setSettings(saved);
+    })
+      .then((fn) => {
+        if (active) unlisten = fn;
+        else fn();
+      })
+      .catch((err) => logError("GeneralPage: subscribe settings", err));
+    return () => {
+      active = false;
+      unlisten?.();
     };
   }, []);
 
@@ -227,6 +249,16 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
 
       {section === "system" && (
         <>
+          <SettingsSection
+            title="Appearance"
+            description={`Choose how Aura looks. System follows ${osName()}'s light or dark setting.`}
+          >
+            <AppearancePicker
+              value={settings.theme}
+              onChange={(value) => void update("theme", value)}
+            />
+          </SettingsSection>
+
           <SettingsSection
             title="App settings"
             description={`These preferences apply only to this ${osName()} device.`}

@@ -1,0 +1,163 @@
+/* Light overrides for the overlay cards. Owned by src/theme/themes.css; read its header first.
+   Every rule is prefixed :root[data-theme="light"] and twins each state it touches.
+
+   The slot cards render as siblings of .notch-shell, never inside it, so card
+   selectors need no guard. Generic pieces that could land in the notch or the
+   dictation HUD (.bar-icon-button) carry :not(.theme-pinned-dark *).
+   Most of each card flips from the --glass-* tokens alone; what follows are the
+   literals, plus the hovers that used --glass-sheen (white on a white card). */
+
+/* ── Draft card ── */
+:root[data-theme="light"] .draft-card-markdown code {
+  background: rgba(20, 40, 34, 0.06);
+}
+:root[data-theme="light"] .draft-card-markdown pre {
+  background: rgba(20, 40, 34, 0.05);
+}
+:root[data-theme="light"] .draft-card-chip:hover:not(:disabled) {
+  background: var(--lt-press);
+}
+
+/* ── Calendar agenda card ── */
+:root[data-theme="light"] .calendar-agenda-row:hover:not(:disabled) {
+  background: var(--lt-hover);
+}
+/* Solid teal buttons: a notch deeper than #149e8b so white text clears 4.5:1
+   (#0e8272 is 4.7:1, the hover #0b6f62 is 6:1). */
+:root[data-theme="light"] .calendar-agenda-join {
+  color: #fff;
+  background: #0e8272;
+}
+:root[data-theme="light"] .agenda-skeleton-pill {
+  background: linear-gradient(
+    90deg,
+    rgba(20, 40, 34, 0.06) 25%,
+    rgba(20, 40, 34, 0.12) 37%,
+    rgba(20, 40, 34, 0.06) 63%
+  );
+  background-size: 400% 100%;
+}
+:root[data-theme="light"] .calendar-agenda-connect {
+  color: #fff;
+  background: #0e8272;
+}
+:root[data-theme="light"] .calendar-agenda-connect:hover {
+  background: #0b6f62;
+}
+:root[data-theme="light"] .calendar-agenda-retry:hover {
+  background: var(--lt-press);
+}
+
+/* Meeting prompt and voice recovery cards: none. They stay matte black in both
+   themes by the 2026-09-11 product call (they must read as "Aura is asking"
+   over any app), so their roots carry .theme-pinned-dark. */
+
+/* ── Notification inbox card ── */
+:root[data-theme="light"] .notification-inbox-preference {
+  background: rgba(63, 86, 78, 0.06);
+}
+:root[data-theme="light"] .notification-inbox-preference small {
+  color: rgba(20, 28, 26, 0.6);
+}
+/* Teal as text: #149e8b is only 3.3:1 on white, #0e8272 is 4.7:1. */
+:root[data-theme="light"] .notification-permission-actions button:first-child {
+  color: #0e8272;
+}
+:root[data-theme="light"] .notification-inbox-row-action:hover {
+  color: #0e8272;
+}
+
+/* ── Kebab menu ── */
+:root[data-theme="light"] .kebab-menu-upgrade {
+  color: #fff;
+  background: #0e8272;
+}
+:root[data-theme="light"] .kebab-menu-upgrade:hover:not(:disabled) {
+  background: #0b6f62;
+}
+:root[data-theme="light"] .kebab-menu-item:hover:not(:disabled) {
+  background: var(--lt-hover);
+}
+:root[data-theme="light"] .kebab-menu-badge {
+  color: #fff;
+  background: #0e8272;
+}
+
+/* ── Action approval card ── */
+:root[data-theme="light"] .action-card-button:hover:not(:disabled) {
+  background: var(--lt-press);
+}
+:root[data-theme="light"] .action-card-button-primary {
+  color: #0e8272;
+}
+
+/* ── Status pill (its own window, never pinned) ── */
+:root[data-theme="light"] .glass-surface.status-pill {
+  background: rgba(250, 252, 251, 0.97);
+  color: rgba(20, 28, 26, 0.94);
+}
+:root[data-theme="light"] .glass-surface.status-pill::after {
+  background: rgba(63, 86, 78, 0.22);
+}
+:root[data-theme="light"] .status-pill-voice-muted,
+:root[data-theme="light"] .status-pill-voice-change-unconfirmed,
+:root[data-theme="light"] .status-pill-screen-sight-off,
+:root[data-theme="light"] .status-pill-guide-off {
+  color: rgba(20, 28, 26, 0.82);
+}
+:root[data-theme="light"] .status-pill-voice-unmuted,
+:root[data-theme="light"] .status-pill-screen-sight-on,
+:root[data-theme="light"] .status-pill-guide-on {
+  color: #0e8272;
+}
+
+/* ── Bar icon button ── */
+:root[data-theme="light"] .bar-icon-button-active:not(.theme-pinned-dark *) {
+  background: rgba(20, 158, 139, 0.12);
+  border-color: rgba(20, 158, 139, 0.34);
+}
+/* The prefix outranks BarIconButton.css's :hover, which used to win here. */
+:root[data-theme="light"] .bar-icon-button-active:hover:not(.theme-pinned-dark *) {
+  background: var(--glass-field-fill);
+}
+/* ChatSlot keeps its history toggle chromeless in every state; the rules above
+   would otherwise outrank it. */
+:root[data-theme="light"] .bar-icon-button.chat-history-toggle.bar-icon-button-active {
+  border-color: transparent;
+  background: transparent;
+}
+
+/* ── Hotkey hint: only SetupPanel renders it, and SetupPanel re-skins every
+   token it reads except this one. Restores the light look. ── */
+:root[data-theme="light"] .hotkey-keycap {
+  --glass-border-top: rgba(255, 255, 255, 0.22);
+}
+
+/* ── Notch move ghost: it stands in for the black notch, so it stays dark ── */
+:root[data-theme="light"] .notch-move-ghost {
+  --glass-surface-fill: rgba(16, 16, 20, 0.85);
+  --glass-border-top: rgba(255, 255, 255, 0.22);
+}
+
+/* ── Pointing overlay: drawn on the user's screen, not a card. Keeps the
+   bright teal its literal glow was tuned to. ── */
+:root[data-theme="light"] .pointing-overlay {
+  --glass-accent: #1ec8b0;
+}
+
+/* ── Update banner ── */
+:root[data-theme="light"] .update-banner-overlay .update-banner-primary {
+  background: #0e8272;
+  color: #fff;
+}
+/* The dashboard banner's focus ring reads --glass-accent; restore the light look. */
+:root[data-theme="light"] .update-banner-dashboard {
+  --glass-accent: #1ec8b0;
+}
+
+/* ── Region overlay: a trail over a dimmed screenshot, not a card. Restores
+   the light look. ── */
+:root[data-theme="light"] .region-overlay {
+  --glass-accent: #1ec8b0;
+  --glass-accent-lerp-white: #74ddce;
+}

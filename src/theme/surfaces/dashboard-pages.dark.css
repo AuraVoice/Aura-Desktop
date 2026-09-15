@@ -1,0 +1,269 @@
+/* Dark overrides for dashboard-pages: refresh indicator, card grid, skeletons,
+   empty states, detail bodies and tags, local recordings and their confirm
+   dialog, meeting detail, copy button, dictation list and rail, row menu,
+   expanding search and the update dialog. Owned by src/theme/themes.css; read
+   its header first. The detail modal shell (scrim, panel, head, action, body
+   scrollbar) lives in dashboard-shell.dark.css.
+   Every rule is prefixed :root[data-theme="dark"] and twins each state it touches. */
+
+/* ── Refresh indicator ── */
+:root[data-theme="dark"] .db-refresh-stale {
+  color: var(--dk-warning);
+}
+
+/* ── Card grid + card shell ── */
+:root[data-theme="dark"] .db-card2:hover {
+  border-color: var(--dk-border-strong);
+}
+
+/* ── Skeleton ── */
+:root[data-theme="dark"] .db-shimmer::after {
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06), transparent);
+}
+
+/* ── Empty state ── */
+:root[data-theme="dark"] .db-empty2-icon {
+  background: var(--dk-accent-soft);
+}
+
+/* ── Detail tags ── */
+:root[data-theme="dark"] .db-tag,
+:root[data-theme="dark"] .db-tag-ready {
+  background: var(--dk-accent-soft);
+}
+:root[data-theme="dark"] .db-tag-processing {
+  background: var(--dk-warning-soft);
+  color: var(--dk-warning);
+}
+:root[data-theme="dark"] .db-tag-failed {
+  background: var(--dk-danger-soft);
+  color: var(--dk-danger);
+}
+
+/* ── Local recordings ── */
+:root[data-theme="dark"] .db-local-recordings {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.3), var(--dk-glass-inset);
+}
+:root[data-theme="dark"] .db-local-recording {
+  border-color: var(--dk-glass-border);
+  background: rgba(255, 255, 255, 0.03);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2), var(--dk-glass-inset);
+}
+:root[data-theme="dark"] .db-local-warning {
+  color: var(--dk-warning);
+}
+:root[data-theme="dark"] .db-local-recording-actions .db-primary-btn {
+  border-color: var(--dk-border-strong);
+  background: var(--dk-active);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35), var(--dk-glass-inset);
+}
+:root[data-theme="dark"] .db-local-recording-actions .db-primary-btn:hover:not(:disabled) {
+  background: #2e524a;
+  box-shadow: var(--db-shadow-md);
+}
+:root[data-theme="dark"] .db-local-recording-actions .db-secondary-btn {
+  border-color: var(--dk-glass-border);
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2), var(--dk-glass-inset);
+}
+:root[data-theme="dark"] .db-local-recording-actions .db-secondary-btn:hover:not(:disabled) {
+  border-color: var(--dk-glass-border-hover);
+  background: rgba(255, 255, 255, 0.09);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.28), var(--dk-glass-inset);
+}
+:root[data-theme="dark"] .db-local-delete {
+  border-color: rgba(255, 138, 128, 0.26);
+  background: var(--dk-danger-soft);
+  color: var(--dk-danger);
+}
+:root[data-theme="dark"] .db-local-delete:hover:not(:disabled) {
+  border-color: rgba(255, 138, 128, 0.42);
+  background: rgba(255, 107, 95, 0.18);
+  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.3);
+}
+
+/* ── Confirm dialog (also the dictation flag and clear dialogs) ── */
+:root[data-theme="dark"] .db-local-confirm-scrim {
+  background: var(--dk-scrim);
+}
+/* Denser than the page glass: a dialog has to stay readable over whatever sits behind it. */
+:root[data-theme="dark"] .db-local-confirm-panel {
+  border-color: var(--dk-glass-border);
+  background: linear-gradient(145deg, rgba(30, 48, 43, 0.95), rgba(16, 27, 24, 0.92));
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55), var(--dk-glass-inset);
+}
+:root[data-theme="dark"] .db-local-confirm-icon {
+  border-color: rgba(255, 138, 128, 0.22);
+  background: var(--dk-danger-soft);
+  color: var(--dk-danger);
+  box-shadow: var(--dk-glass-inset);
+}
+:root[data-theme="dark"] .db-local-confirm-cancel {
+  border-color: var(--dk-glass-border);
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2), var(--dk-glass-inset);
+}
+:root[data-theme="dark"] .db-local-confirm-cancel:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.1);
+}
+:root[data-theme="dark"] .db-local-confirm-delete {
+  border-color: rgba(255, 138, 128, 0.3);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35), var(--dk-glass-inset);
+}
+:root[data-theme="dark"] .db-local-confirm-delete:hover:not(:disabled) {
+  background: #922b2b;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45), var(--dk-glass-inset);
+}
+
+/* ── Meeting detail ── */
+:root[data-theme="dark"] .db-meeting-caveats {
+  background: var(--dk-warning-soft);
+}
+:root[data-theme="dark"] .db-meeting-state-processing > svg {
+  color: var(--dk-warning);
+}
+:root[data-theme="dark"] .db-meeting-state-failed > svg {
+  color: var(--dk-danger);
+}
+:root[data-theme="dark"] .db-meeting-retry-error {
+  color: var(--dk-danger);
+}
+
+/* ── Copy button ── */
+:root[data-theme="dark"] .db-copy-compact {
+  background: rgba(20, 33, 29, 0.86);
+}
+:root[data-theme="dark"] .db-copy-compact:hover {
+  background: var(--dk-surface-2);
+  border-color: var(--dk-border-strong);
+}
+:root[data-theme="dark"] .db-copy-compact-done {
+  border-color: rgba(46, 224, 196, 0.4);
+}
+
+/* ── Dictation trace notes ── */
+:root[data-theme="dark"] .db-trace-action {
+  border-color: var(--dk-border-strong);
+  background: var(--dk-glass-hover);
+}
+:root[data-theme="dark"] .db-trace-action:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+/* ── Dictation history list ── */
+:root[data-theme="dark"] .db-dictation-day-card {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
+}
+:root[data-theme="dark"] .db-dictation-vrow {
+  border-right-color: var(--dk-glass-border);
+  border-left-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+}
+:root[data-theme="dark"] .db-dictation-vrow.is-first {
+  border-top-color: var(--dk-glass-border);
+  box-shadow: var(--dk-glass-inset);
+}
+:root[data-theme="dark"] .db-dictation-vrow.is-last {
+  border-bottom-color: var(--dk-glass-border);
+  box-shadow: var(--dk-glass-shadow);
+}
+:root[data-theme="dark"] .db-dictation-vrow.is-first.is-last {
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
+}
+:root[data-theme="dark"] .db-dictation-vrow:not(.is-first) .db-dictation-row {
+  border-top-color: var(--dk-divider);
+}
+:root[data-theme="dark"] .db-dictation-row:hover,
+:root[data-theme="dark"] .db-dictation-row.is-active {
+  background: var(--dk-glass-hover);
+}
+:root[data-theme="dark"] .db-dictation-raw {
+  border-top-color: var(--dk-divider);
+}
+:root[data-theme="dark"] .db-row-action-flag:hover:not(:disabled),
+:root[data-theme="dark"] .db-row-action-flag.is-flagged {
+  color: var(--dk-danger);
+}
+:root[data-theme="dark"] .db-row-action-flag:hover:not(:disabled) svg,
+:root[data-theme="dark"] .db-row-action-flag.is-flagged svg {
+  fill: var(--dk-danger);
+}
+/* Twins for the copy button overrides above, which would otherwise put a
+   filled chip back into the row's bare icon cluster. */
+:root[data-theme="dark"] .db-dictation-actions .db-copy-compact,
+:root[data-theme="dark"] .db-dictation-actions .db-copy-compact:hover {
+  background: none;
+}
+
+/* ── Row menu ── */
+:root[data-theme="dark"] .db-row-menu-panel {
+  border-color: var(--dk-border-strong);
+  background: var(--dk-popover-bg);
+  box-shadow: var(--dk-shadow-pop), var(--dk-glass-inset);
+}
+:root[data-theme="dark"] .db-row-menu-item:hover:not(:disabled) {
+  background: var(--dk-hover);
+}
+:root[data-theme="dark"] .db-row-menu-danger {
+  color: var(--dk-danger);
+}
+:root[data-theme="dark"] .db-row-menu-danger:hover:not(:disabled) {
+  background: var(--dk-danger-soft);
+}
+
+/* ── Expanding search ── */
+:root[data-theme="dark"] .db-expanding-search-field input {
+  border-color: var(--dk-field-border);
+  background: rgba(255, 255, 255, 0.06);
+}
+:root[data-theme="dark"] .db-expanding-search-field input::placeholder {
+  color: var(--dk-text-mute);
+}
+
+/* ── Dictation rail ── */
+:root[data-theme="dark"] .db-dictation-rail {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
+}
+:root[data-theme="dark"] .db-dictation-rail-section + .db-dictation-rail-section {
+  border-top-color: var(--dk-divider);
+}
+:root[data-theme="dark"] .db-dictation-rail .db-setting-row + .db-setting-row {
+  border-top-color: var(--dk-divider);
+}
+:root[data-theme="dark"] .db-dictation-rail .db-trace-privacy {
+  border-top-color: var(--dk-divider);
+}
+
+/* ── Dictation feedback dialog ── */
+:root[data-theme="dark"] .db-dictation-feedback textarea {
+  border-color: var(--dk-field-border);
+  background: var(--dk-field-bg);
+}
+:root[data-theme="dark"] .db-dictation-feedback textarea::placeholder {
+  color: var(--dk-text-mute);
+}
+
+/* ── Update dialog ── */
+:root[data-theme="dark"] .db-modal-panel.db-update-dialog {
+  border-color: var(--dk-glass-border);
+  background: linear-gradient(135deg, rgba(30, 48, 43, 0.95), rgba(14, 24, 21, 0.92));
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
+}
+/* #0c594e sinks into the dark glass; these stay above 4.5:1 against the white label. */
+:root[data-theme="dark"] .db-update-dialog-primary {
+  border-color: #1a6f62;
+  background: #1a6f62;
+  box-shadow: 0 5px 14px rgba(0, 0, 0, 0.35);
+}
+:root[data-theme="dark"] .db-update-dialog-primary:hover:not(:disabled) {
+  background: #1d8272;
+}
+:root[data-theme="dark"] .db-update-dialog-dismiss:hover:not(:disabled) {
+  background: var(--dk-hover);
+}
