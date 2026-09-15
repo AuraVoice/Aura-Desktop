@@ -38,7 +38,14 @@ export function CardGrid({
 
   // Reset the window whenever the underlying set identity changes (e.g. a range
   // switch on Conversations) so we never keep a huge window across datasets.
-  const modelKey = useMemo(() => models.map((m) => m.id).join("|"), [models]);
+  // Keyed on the FIRST window only: a background revalidation that appends or
+  // drops a row further down used to change the joined key and collapse the
+  // window back to 12, unmounting everything the user had already scrolled to
+  // and leaving the page blank until the sentinel refilled it batch by batch.
+  const modelKey = useMemo(
+    () => models.slice(0, INITIAL_WINDOW).map((m) => m.id).join("|"),
+    [models],
+  );
   useEffect(() => {
     setWindowSize(INITIAL_WINDOW);
   }, [modelKey]);
@@ -56,7 +63,10 @@ export function CardGrid({
           setWindowSize((n) => Math.min(n + WINDOW_STEP, models.length));
         }
       },
-      { rootMargin: "240px" },
+      // The page scrolls in .db-content, not the window, so the default root
+      // measured against the wrong box and fired late. A lead of roughly a
+      // screen and a half renders the next batch well before it is reached.
+      { root: node.closest(".db-content"), rootMargin: "1200px" },
     );
     observer.observe(node);
     return () => observer.disconnect();
@@ -87,9 +97,10 @@ export function CardGrid({
             model={model}
             onOpen={onOpen}
             tall={tall}
-            // Stagger the entrance a touch, but cap the delay so late items in a
-            // freshly grown window don't wait noticeably.
-            style={{ animationDelay: `${Math.min(i, 8) * 24}ms` }}
+            // Stagger the first screenful only. A card windowed in later starts
+            // from the animation's invisible state, so a delay there reads as
+            // the blank gap this grid is meant to avoid.
+            style={i < INITIAL_WINDOW ? { animationDelay: `${Math.min(i, 8) * 24}ms` } : undefined}
           />
         ))}
       </div>

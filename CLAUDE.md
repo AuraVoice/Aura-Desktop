@@ -190,8 +190,18 @@ Any new card, panel, tile, or surface in the dashboard or onboarding must use th
 border: 1px solid rgba(255, 255, 255, 0.82);
 background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
 box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
-backdrop-filter: blur(18px) saturate(1.2);   /* always with the -webkit- twin */
 ```
+
+**`backdrop-filter` is NOT part of the recipe for an in-page surface.** It belongs only where
+varied content actually sits behind the element: the top bar that content scrolls under, popovers
+and row menus, dialogs and their panels, the onboarding screens over the ambient photo, and the
+overlay windows. A card, tile, row or panel that sits in a page sits on ONE FLAT COLOUR
+(`--db-content-bg`), so blurring it reproduces that colour and buys nothing, while costing a
+resample of everything behind it on every scroll frame. 87 such declarations were what made every
+long page paint blank for half a second while scrolling (2026-09-15, see `lessons-learnt.txt`). The
+frosted look survives without it: the translucent fill, the hairline border and the inset highlight
+are what create it. Repeating card surfaces additionally carry `contain: layout paint`; never
+`content-visibility: auto`, which reintroduces the blank by skipping off-screen rendering.
 
 Rules that follow from it:
 
@@ -204,7 +214,7 @@ Rules that follow from it:
 
 Every window follows one `theme` setting (`system` / `light` / `dark`, in `dashboard_general_settings`). `src/theme/themeEngine.ts` stamps `<html data-theme>` before first paint, `ThemeSync` in `main.tsx` keeps it live, and `dashboard.rs` paints the matching window background so a dark dashboard never opens on a white frame. The full architecture is in the header of `src/theme/themes.css`; the rules a reasonable edit would break:
 
-- **Component CSS stays light.** Dark lives in `src/theme/surfaces/*.dark.css`, one sheet per area, every rule prefixed `:root[data-theme="dark"]`. A new light rule with a literal color needs its dark twin in the matching sheet, built from the `--dk-*` vocabulary (the dark glass recipe is `--dk-glass-fill` / `-border` / `-inset` / `-shadow`, same backdrop-filter). Prefer `--db-*` tokens in new light rules: those flip with no twin at all.
+- **Component CSS stays light.** Dark lives in `src/theme/surfaces/*.dark.css`, one sheet per area, every rule prefixed `:root[data-theme="dark"]`. A new light rule with a literal color needs its dark twin in the matching sheet, built from the `--dk-*` vocabulary (the dark glass recipe is `--dk-glass-fill` / `-border` / `-inset` / `-shadow`, and like the light one it carries no backdrop-filter on an in-page surface). Prefer `--db-*` tokens in new light rules: those flip with no twin at all.
 - **The prefix raises specificity, so twin every state.** A dark base rule beats the light file's `:hover`, `:focus-visible`, `.is-active` and `:checked` rules for the same property. Restate each one in the dark sheet, even when its value does not change.
 - **The overlay is inverted.** Its `--glass-*` tokens were dark from the start, so for overlay cards LIGHT is the override (`overlay-cards.light.css`, `overlay-chat.light.css`), flipped on `:root`. Anything else that reads `--glass-*` in light mode (onboarding, dialogs) must restore the original `theme.css` values locally, or its light look silently changes.
 - **Some surfaces are dark in both themes, via `.theme-pinned-dark`:** the notch (it reads as hardware), the whole dictation window (it takes the notch's edge), and the MeetingPrompt and VoiceRecovery cards (the 2026-09-11 call: they must read as "Aura is asking" over any app). Keep `themes.css`'s pinned block identical to `theme.css`'s `:root` glass values.

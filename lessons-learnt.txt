@@ -964,3 +964,43 @@ FrozenDisplay stores its origin point instead of xcap's Monitor, whose raw HMONI
 and the crop re-resolves the monitor on the worker. Cargo.toml also optimizes image and xcap in
 the dev profile. Lesson: anything slow must never share a thread with a sampler whose gaps are
 invisible until the result is judged.
+
+
+2026-09-15  Every long dashboard page painted blank for half a second while scrolling
+
+Problem: scrolling down Settings, Interview or any other long page left the newly revealed area
+empty for roughly half a second before the content appeared. It happened in both themes, with the
+wheel, Page Down AND a slow scrollbar drag, and the gap was bare page background, never a skeleton.
+
+Issue: backdrop-filter, 37 rules in dashboard.css alone plus 9 in InterviewPage.css, applied to
+surfaces that repeat down a scrolling page and, worse, to ANCESTORS of the scrollers. The settings
+scroller sits inside a full-window blurred scrim; Interview nested 6 to 12 blurred cards inside
+blurred full-height panels; Dictation blurred every virtualized row, 10 to 14 on screen, recycled
+as it scrolled; the sidebar and top bar are permanently blurred and share the scroller's backdrop
+root, so both re-blurred on every scroll frame. Nothing set contain or content-visibility, so
+nothing bounded it. Chromium could not raster the exposed tiles within a frame and showed the
+background instead (checkerboarding). The three symptom answers are what identified it: a slow
+drag gives the renderer all the time it wants, and bare background rather than a placeholder rules
+out data loading, so the cost had to be per-region paint. InterviewPage.css already carried a
+comment from an earlier local fix saying exactly this ("ran WebView2 out of raster budget, so
+content painted blank while scrolling") for one card type; nobody generalised it then.
+
+Solution: backdrop-filter now survives only where varied content really sits behind the element:
+the top bar that content scrolls under, the popover and row menu, the dialogs and the delete
+scrim, the onboarding screens over the ambient photo, and the overlay windows. 87 declarations
+came out of 7 sheets and 11 went back after a second pass caught surfaces whose backdrop is NOT
+flat, which the first sweep had wrongly stripped; every other declaration in those rules is
+untouched. The settings scrim swapped its 3px blur for a slightly deeper plain wash.
+Repeating cards (.db-card, .db-interview-history-card, .db-dictation-vrow) gained contain: layout
+paint, and .db-tab-stage's permanent will-change is now applied only while a tab is swapping.
+CardGrid separately stopped collapsing its window to 12 on every background revalidation, took the
+.db-content scroller as its observer root instead of the viewport, and widened its lead to 1200px.
+
+Justification: a blur is only visible when the backdrop varies, and these surfaces sit on one flat
+page colour, so the blur reproduced that colour at the cost of a resample per scroll frame. The
+glass look survives because it was never the blur doing the work: it is the translucent gradient
+fill, the hairline border and the inset highlight, all of which stayed. content-visibility: auto
+was rejected deliberately: it skips off-screen rendering and would reintroduce the exact blank it
+was meant to remove. The test for any future surface, now written into CLAUDE.md's glass recipe:
+blur only if something varied is actually behind it. A 94%-opaque notification panel and an opaque
+#fff onboarding confirmation failed that test too, and kept their removal.

@@ -184,8 +184,6 @@
   padding: 16px 14px;
   overflow: hidden;
   background: rgba(241, 240, 234, 0.82);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
   transition: width 0.28s var(--db-ease);
 }
 .db-sidebar-collapsed {
@@ -640,8 +638,6 @@
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.94);
   box-shadow: var(--db-shadow-pop);
-  backdrop-filter: blur(24px);
-  -webkit-backdrop-filter: blur(24px);
   animation: db-popover-in 0.18s var(--db-ease) both;
 }
 .db-notif-head {
@@ -899,6 +895,7 @@
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.9);
   box-shadow: var(--db-shadow-pop);
+  /* Kept: floats over page content, so there is a real backdrop to frost. */
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
   animation: db-popover-in 0.18s var(--db-ease) both;
@@ -1146,7 +1143,6 @@
   border-radius: 20px;
   background: rgba(6, 45, 39, 0.25);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  backdrop-filter: blur(18px);
 }
 .db-hero-up-next-slide {
   display: flex;
@@ -1377,8 +1373,6 @@
   border-radius: 22px;
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
-  backdrop-filter: blur(18px) saturate(1.2);
-  -webkit-backdrop-filter: blur(18px) saturate(1.2);
 }
 .db-today-briefing-head {
   display: flex;
@@ -1477,13 +1471,15 @@
   position: relative;
   overflow: hidden;
   isolation: isolate;
+  /* A card cannot affect anything outside itself, so scrolling re-rasters only
+     the cards that moved. Not content-visibility: that skips off-screen work
+     entirely and would bring back the blank-on-scroll this removed. */
+  contain: layout paint;
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
   border: 1px solid rgba(255, 255, 255, 0.82);
   border-radius: 20px;
   padding: 20px 22px;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
-  backdrop-filter: blur(18px) saturate(1.2);
-  -webkit-backdrop-filter: blur(18px) saturate(1.2);
   transition: transform 0.2s var(--db-ease), box-shadow 0.2s var(--db-ease);
 }
 .db-card:hover {
@@ -1789,8 +1785,6 @@
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
   color: var(--research-ink);
-  -webkit-backdrop-filter: blur(18px) saturate(1.2);
-  backdrop-filter: blur(18px) saturate(1.2);
 }
 .db-research-secondary:hover {
   border-color: rgba(255, 255, 255, 0.92);
@@ -1972,8 +1966,6 @@
   font-size: 12.5px;
   font-weight: 600;
   cursor: pointer;
-  -webkit-backdrop-filter: blur(18px) saturate(1.2);
-  backdrop-filter: blur(18px) saturate(1.2);
   transition: color 0.15s var(--db-ease), transform 0.12s var(--db-ease), box-shadow 0.15s var(--db-ease);
 }
 .db-research-starters button::after {
@@ -2496,8 +2488,6 @@
   color: var(--research-ink);
   font-size: 14px;
   font-weight: 650;
-  -webkit-backdrop-filter: blur(18px) saturate(1.2);
-  backdrop-filter: blur(18px) saturate(1.2);
 }
 .db-research-choice-input::placeholder {
   color: #7c8783;
@@ -3141,8 +3131,6 @@
   border-radius: 22px;
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
-  -webkit-backdrop-filter: blur(18px) saturate(1.2);
-  backdrop-filter: blur(18px) saturate(1.2);
 }
 .db-research-report-summary > p {
   margin-top: 11px;
@@ -3337,8 +3325,6 @@
   font-weight: 650;
   text-align: left;
   cursor: pointer;
-  -webkit-backdrop-filter: blur(18px) saturate(1.2);
-  backdrop-filter: blur(18px) saturate(1.2);
   transition: color 0.15s var(--db-ease), transform 0.12s var(--db-ease),
     box-shadow 0.15s var(--db-ease);
 }
@@ -3389,7 +3375,6 @@
   border-radius: 0;
   background: rgba(20, 32, 28, 0.34);
   cursor: default;
-  backdrop-filter: blur(2px);
 }
 .db-research-source-drawer > aside {
   position: absolute;
@@ -3568,6 +3553,7 @@
   border: 1px solid rgba(255, 255, 255, 0.82);
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
+  /* Kept: a dialog frosts the page behind it, and nothing long scrolls inside. */
   backdrop-filter: blur(18px) saturate(1.2);
   -webkit-backdrop-filter: blur(18px) saturate(1.2);
 }
@@ -3893,8 +3879,6 @@
   border: 1px solid rgba(255, 255, 255, 0.82);
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 236, 252, 0.6));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
-  -webkit-backdrop-filter: blur(18px) saturate(1.2);
-  backdrop-filter: blur(18px) saturate(1.2);
 }
 .db-help-discord::after {
   position: absolute;
@@ -4383,8 +4367,6 @@
   border-radius: 50%;
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
-  backdrop-filter: blur(18px) saturate(1.2);
-  -webkit-backdrop-filter: blur(18px) saturate(1.2);
   color: #1d2925;
   cursor: pointer;
   transition: box-shadow 0.18s var(--db-ease), color 0.18s var(--db-ease),
@@ -4441,8 +4423,6 @@
   border: 1px solid rgba(255, 255, 255, 0.82);
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
-  backdrop-filter: blur(24px) saturate(1.2);
-  -webkit-backdrop-filter: blur(24px) saturate(1.2);
 }
 .db-insight-summary-card {
   min-width: 0;
@@ -5726,8 +5706,6 @@
   border-radius: 999px;
   background: color-mix(in srgb, color-mix(in srgb, var(--db-bg) 62%, transparent) 88%, white 12%);
   box-shadow: 0 8px 24px rgba(18, 28, 27, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.58);
-  -webkit-backdrop-filter: blur(16px) saturate(1.08);
-  backdrop-filter: blur(16px) saturate(1.08);
 }
 
 .db-tab-strip::before {
@@ -5806,6 +5784,12 @@
   transform: translateY(0) scale(1);
   transform-origin: top center;
   transition: opacity 210ms ease-out, transform 320ms var(--db-ease);
+}
+
+/* Promoted only while a tab is actually swapping. Left on permanently it kept a
+   page-sized compositing layer alive for the whole session. */
+.db-tab-stage.is-exiting,
+.db-tab-stage.is-entering {
   will-change: opacity, transform;
 }
 
@@ -5845,9 +5829,10 @@
   display: grid;
   padding: 22px;
   place-items: center;
-  background: rgba(31, 35, 40, 0.38);
-  backdrop-filter: blur(3px);
-  -webkit-backdrop-filter: blur(3px);
+  /* Plain, slightly deeper wash instead of a 3px blur. The blur read as almost
+     nothing, but it made this an ancestor of the settings scroller, so every
+     scroll inside the dialog re-evaluated a full-window backdrop. */
+  background: rgba(31, 35, 40, 0.46);
   animation: db-scrim-in 0.16s var(--db-ease) both;
 }
 .db-settings-dialog {
@@ -6803,8 +6788,6 @@
   justify-content: center;
   padding: 32px;
   background: rgba(24, 29, 35, 0.42);
-  backdrop-filter: blur(3px);
-  -webkit-backdrop-filter: blur(3px);
   animation: db-scrim-in 0.16s var(--db-ease) both;
 }
 @keyframes db-scrim-in {
@@ -7037,8 +7020,6 @@
   border-radius: 20px;
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.76), rgba(247, 246, 241, 0.58));
   box-shadow: 0 18px 44px rgba(31, 35, 40, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.82);
-  backdrop-filter: blur(24px) saturate(135%);
-  -webkit-backdrop-filter: blur(24px) saturate(135%);
 }
 .db-local-recordings-heading {
   display: flex;
@@ -7087,8 +7068,6 @@
   border-radius: 16px;
   background: rgba(255, 255, 255, 0.56);
   box-shadow: 0 8px 24px rgba(31, 35, 40, 0.045), inset 0 1px 0 rgba(255, 255, 255, 0.8);
-  backdrop-filter: blur(14px) saturate(125%);
-  -webkit-backdrop-filter: blur(14px) saturate(125%);
 }
 .db-local-recording-copy {
   display: flex;
@@ -7128,8 +7107,6 @@
   padding: 9px 13px;
   border-radius: 12px;
   font-size: 12.5px;
-  backdrop-filter: blur(12px) saturate(130%);
-  -webkit-backdrop-filter: blur(12px) saturate(130%);
 }
 .db-local-recording-actions .db-primary-btn {
   border: 1px solid rgba(255, 255, 255, 0.16);
@@ -7186,9 +7163,9 @@
   border: 0;
   border-radius: 0;
   background: rgba(28, 31, 37, 0.28);
-  cursor: default;
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
+  cursor: default;
 }
 .db-local-confirm-panel {
   position: relative;
@@ -7244,8 +7221,6 @@
   font-size: 13px;
   font-weight: 700;
   cursor: pointer;
-  backdrop-filter: blur(12px) saturate(130%);
-  -webkit-backdrop-filter: blur(12px) saturate(130%);
   transition: background 0.15s var(--db-ease), border-color 0.15s var(--db-ease),
     box-shadow 0.15s var(--db-ease), transform 0.12s var(--db-ease);
 }
@@ -7532,8 +7507,6 @@
   background: rgba(255, 255, 255, 0.86);
   color: var(--db-text-dim);
   cursor: pointer;
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
   transition: background 0.15s var(--db-ease), color 0.15s var(--db-ease),
     border-color 0.15s var(--db-ease), transform 0.12s var(--db-ease);
 }
@@ -7784,8 +7757,10 @@
   letter-spacing: 0.09em;
   text-transform: uppercase;
 }
-/* The bright glass recipe. Every child below sits on alpha, never an opaque
-   fill, or it punches a hole through the blur. */
+/* The bright glass recipe, fill and border only. The blur that used to sit here
+   and on every virtualized row below is gone: 10 to 14 blurred rows on screen,
+   recycled as the list scrolled, is what made new rows paint blank. The rows sit
+   on a flat page colour, so blurring it only reproduced that colour. */
 .db-dictation-day-card {
   /* Deliberately NOT overflow: hidden - that clipped the row overflow menu
      inside the card. The first and last rows round their own corners below so
@@ -7794,8 +7769,6 @@
   border-radius: 18px;
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
-  backdrop-filter: blur(18px) saturate(1.2);
-  -webkit-backdrop-filter: blur(18px) saturate(1.2);
 }
 
 /* The virtualized list. Rows are absolutely positioned inside a spacer of the
@@ -7813,8 +7786,7 @@
   border-right: 1px solid rgba(255, 255, 255, 0.82);
   border-left: 1px solid rgba(255, 255, 255, 0.82);
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
-  backdrop-filter: blur(18px) saturate(1.2);
-  -webkit-backdrop-filter: blur(18px) saturate(1.2);
+  contain: layout paint;
 }
 .db-dictation-vrow.is-first {
   border-top: 1px solid rgba(255, 255, 255, 0.82);
@@ -8001,8 +7973,8 @@
   position: fixed;
   z-index: 300;
   /* Portalled into `.db-app` and placed by RowMenu from the trigger's rect:
-     the virtualized rows are transformed and backdrop-filtered, so an inline
-     panel is trapped behind the rows that follow it. */
+     the virtualized rows are transformed and contained, so an inline panel is
+     trapped behind the rows that follow it. */
   display: flex;
   min-width: 196px;
   flex-direction: column;
@@ -8011,6 +7983,7 @@
   border-radius: 12px;
   background: linear-gradient(145deg, rgba(255, 255, 255, 0.94), rgba(247, 246, 241, 0.86));
   box-shadow: 0 12px 30px rgba(31, 35, 40, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  /* Kept: floats over the rows behind it. */
   backdrop-filter: blur(20px) saturate(135%);
   -webkit-backdrop-filter: blur(20px) saturate(135%);
 }
@@ -8074,8 +8047,6 @@
   font-family: inherit;
   font-size: 13.5px;
   outline: none;
-  backdrop-filter: blur(14px) saturate(125%);
-  -webkit-backdrop-filter: blur(14px) saturate(125%);
 }
 .db-expanding-search-field input::-webkit-search-cancel-button {
   display: none;
@@ -8115,8 +8086,6 @@
   border-radius: 18px;
   background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
-  backdrop-filter: blur(18px) saturate(1.2);
-  -webkit-backdrop-filter: blur(18px) saturate(1.2);
 }
 .db-dictation-rail-section + .db-dictation-rail-section {
   margin-top: 12px;
