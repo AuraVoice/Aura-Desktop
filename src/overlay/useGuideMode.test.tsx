@@ -570,6 +570,11 @@ describe("useGuideMode", () => {
     await mountHook();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
+      // Wait for the stream call asserted on below: a slow runner can finish
+      // the timer tick before the capture chain reaches streamBytes.
+      for (let index = 0; index < 20 && room.streamBytes.mock.calls.length < 1; index += 1) {
+        await Promise.resolve();
+      }
     });
     expect(room.streamBytes.mock.calls[0][0].attributes.change).toBe("1");
   });
@@ -579,6 +584,9 @@ describe("useGuideMode", () => {
     await mountHook();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
+      for (let index = 0; index < 20 && room.streamBytes.mock.calls.length < 1; index += 1) {
+        await Promise.resolve();
+      }
     });
     expect(room.streamBytes.mock.calls[0][0].attributes.change).toBe("0");
   });
