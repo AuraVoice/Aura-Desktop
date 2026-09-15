@@ -242,6 +242,7 @@ export const update = {
   restarting: "Installing the update. Buddy will be right back.",
   deferred: "Buddy is in a call. Try again after it ends.",
   failed: "The update couldn't install. Buddy will retry in the background.",
+  timedOut: `The update is taking longer than it should. If Aura doesn't restart, quit it from the ${trayNoun()} menu and open it again.`,
   blocked:
     "Aura is running from a read-only copy of itself. Quit Aura, open it from the Applications folder, then try again.",
   updatedNotice: (version: string) => `Updated to v${version}. You're on the latest Buddy.`,

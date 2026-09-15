@@ -94,7 +94,7 @@ export function UpdateDialog({
         <h2>{heading}</h2>
         {shown.mode === "prompt" && (
           <>
-            <p role={phase === "failed" || phase === "blocked" ? "alert" : "status"}>
+            <p role={phase === "failed" || phase === "blocked" || phase === "timeout" ? "alert" : "status"}>
               {messageFor(phase)}
             </p>
             <div className="db-update-dialog-actions">

@@ -224,6 +224,10 @@ pub fn install_pending_update(app: &AppHandle) -> Result<bool, String> {
             // returns - there is no "after" in which to write it.
             write_just_updated_marker(app, &update.version);
             crate::telemetry::startup_marker::clean_exit(app);
+            // The last line before the handoff. On Windows a successful install
+            // exits inside the call, so if this is the final line in the log and
+            // the process is still alive, the installer launch itself is stuck.
+            info!("install_pending_update: launching installer for v{}", update.version);
             match update.install(&bytes) {
                 Ok(()) => {
                     info!("install_pending_update: installed, relaunch to apply");

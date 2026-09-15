@@ -25,7 +25,7 @@ export function UpdateBanner({
     <>
       <div
         className="update-banner-copy"
-        role={phase === "failed" || phase === "blocked" ? "alert" : "status"}
+        role={phase === "failed" || phase === "blocked" || phase === "timeout" ? "alert" : "status"}
       >
         <strong>{copy.ready(version)}</strong>
         <span>{messageFor(phase)}</span>
