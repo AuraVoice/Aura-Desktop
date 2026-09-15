@@ -9,8 +9,10 @@ import type {
   InterviewBrief,
   InterviewBriefClaim,
   InterviewBriefSource,
+  InterviewPrepRoom,
   InterviewPreparationInput,
   InterviewStarStory,
+  PracticeMark,
 } from "./interviewBrief";
 import { isPlannedMinutes, isRoundKind } from "./interviewPolicy";
 import type { PlannedMinutes, RoundKind } from "./interviewPolicy";
@@ -36,6 +38,11 @@ export interface InterviewWorkspaceRecord {
   // The round chosen at Start is what the session runs as.
   lastRoundKind?: RoundKind;
   plannedMinutes?: PlannedMinutes;
+  // Same absent-or-valid rule, with one difference: an invalid value is STRIPPED
+  // on load (withoutInvalidPrep) instead of failing the record, because a prep
+  // room is regenerable and must never cost the user their interviews.
+  prepRoom?: InterviewPrepRoom | null;
+  practiceMarks?: Record<string, PracticeMark>;
 }
 
 export interface InterviewWorkspace {
@@ -203,6 +210,86 @@ function interviewBrief(value: unknown): value is InterviewBrief {
   return allClaims.every((claim) => claim.sourceIds.every((sourceId) => sourceIds.has(sourceId)));
 }
 
+function prepLine(value: unknown): boolean {
+  const item = record(value);
+  return Boolean(item && typeof item.text === "string" && strings(item.sourceIds));
+}
+
+function prepAnswer(value: unknown): boolean {
+  const item = record(value);
+  if (!item) return false;
+  const star = item.star === null ? null : record(item.star);
+  return typeof item.answerId === "string"
+    && typeof item.question === "string"
+    && typeof item.whyTheyAsk === "string"
+    && strings(item.whySourceIds)
+    && typeof item.storyTitle === "string"
+    && (item.star === null || Boolean(star && prepLine(star.situation) && prepLine(star.task) && prepLine(star.action) && prepLine(star.result)))
+    && typeof item.spoken === "string"
+    && typeof item.followUp === "string"
+    && typeof item.followUpHint === "string"
+    && (item.avoid === null || prepLine(item.avoid));
+}
+
+function prepFit(value: unknown): boolean {
+  const item = record(value);
+  return Boolean(
+    item
+    && typeof item.fitId === "string"
+    && typeof item.requirement === "string"
+    && typeof item.evidence === "string"
+    && ["strong", "partial", "gap"].includes(String(item.strength))
+    && typeof item.bridge === "string"
+    && strings(item.sourceIds),
+  );
+}
+
+function prepRoom(value: unknown): value is InterviewPrepRoom {
+  const item = record(value);
+  return Boolean(
+    item
+    && item.contractVersion === 1
+    && typeof item.prepId === "string"
+    && typeof item.briefId === "string"
+    && typeof item.generatedAtMs === "number"
+    && Array.isArray(item.companyStory) && item.companyStory.every(prepLine)
+    && Array.isArray(item.mustKnows) && item.mustKnows.every(prepLine)
+    && Array.isArray(item.answers) && item.answers.every(prepAnswer)
+    && Array.isArray(item.fit) && item.fit.every(prepFit)
+    && strings(item.neverSay),
+  );
+}
+
+function practiceMarks(value: unknown): value is Record<string, PracticeMark> {
+  const item = record(value);
+  return Boolean(item && Object.values(item).every((mark) => mark === "confident" || mark === "work"));
+}
+
+/** Drops a prep room or practice marks that fail validation, or a prep room built
+ * for a different brief, before the all-or-nothing workspace check runs. */
+function withoutInvalidPrep(value: unknown): unknown {
+  const item = record(value);
+  if (!item || !Array.isArray(item.interviews)) return value;
+  return {
+    ...item,
+    interviews: item.interviews.map((raw) => {
+      const interview = record(raw);
+      if (!interview) return raw;
+      const next = { ...interview };
+      const brief = record(next.draftBrief);
+      if (
+        next.prepRoom !== undefined
+        && next.prepRoom !== null
+        && (!prepRoom(next.prepRoom) || next.prepRoom.briefId !== brief?.briefId)
+      ) {
+        delete next.prepRoom;
+      }
+      if (next.practiceMarks !== undefined && !practiceMarks(next.practiceMarks)) delete next.practiceMarks;
+      return next;
+    }),
+  };
+}
+
 function interviewRecord(value: unknown): value is InterviewWorkspaceRecord {
   const item = record(value);
   return Boolean(
@@ -246,8 +333,9 @@ function key(uid: string): string {
 
 export async function loadInterviewWorkspace(uid: string): Promise<InterviewWorkspace | null> {
   const cached = await readCache<unknown>(key(uid));
-  if (!cached || !workspace(cached.data)) return null;
-  const { interviews, currentInterviewId, activeInterviewId, activeBrief } = cached.data;
+  const data = cached ? withoutInvalidPrep(cached.data) : null;
+  if (!workspace(data)) return null;
+  const { interviews, currentInterviewId, activeInterviewId, activeBrief } = data;
   return { interviews, currentInterviewId, activeInterviewId, activeBrief };
 }
 

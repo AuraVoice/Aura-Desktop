@@ -520,6 +520,7 @@ pub fn run() {
             interview::clear_interview_resume,
             interview::stop_interview_hacker,
             interview::save_interview_reflection,
+            interview::save_interview_prep,
             interview_store::interview_session_save,
             interview_store::interview_session_checkpoint,
             interview_store::interview_sessions_list,

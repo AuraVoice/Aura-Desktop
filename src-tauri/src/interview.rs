@@ -587,26 +587,82 @@ pub async fn save_interview_reflection(
     app: AppHandle,
     markdown: String,
 ) -> Result<InterviewReflectionExport, String> {
+    save_markdown_export(
+        &app,
+        &markdown,
+        "Interview reflection",
+        "Aura Interview Reflections",
+        format!("interview-reflection-{}.md", crate::meeting::now_ms()),
+    )
+    .await
+}
+
+/// Saves a prep room as Markdown, named for the company so several interviews in
+/// Downloads stay easy to tell apart.
+#[tauri::command]
+pub async fn save_interview_prep(
+    app: AppHandle,
+    markdown: String,
+    company: String,
+) -> Result<InterviewReflectionExport, String> {
+    save_markdown_export(
+        &app,
+        &markdown,
+        "Interview prep",
+        "Aura Interview Prep",
+        format!("{}-prep-{}.md", file_slug(&company), crate::meeting::now_ms()),
+    )
+    .await
+}
+
+fn file_slug(value: &str) -> String {
+    let mut slug = String::new();
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            slug.push(ch.to_ascii_lowercase());
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+        if slug.len() >= 40 {
+            break;
+        }
+    }
+    let slug = slug.trim_end_matches('-');
+    if slug.is_empty() {
+        "interview".to_string()
+    } else {
+        slug.to_string()
+    }
+}
+
+async fn save_markdown_export(
+    app: &AppHandle,
+    markdown: &str,
+    what: &str,
+    folder: &str,
+    file_name: String,
+) -> Result<InterviewReflectionExport, String> {
     let trimmed = markdown.trim();
     if trimmed.is_empty() || trimmed.len() > 64_000 {
-        return Err("Interview reflection is empty or too large.".to_string());
+        return Err(format!("{what} is empty or too large."));
     }
     let ticket = crate::security::authorize(
-        &app,
+        app,
         crate::security::Operation::StartInterviewHacker,
     )?;
     let destination = app
         .path()
         .download_dir()
         .map_err(|error| error.to_string())?
-        .join("Aura Interview Reflections")
-        .join(format!("interview-reflection-{}.md", crate::meeting::now_ms()));
+        .join(folder)
+        .join(file_name);
     let content = format!("{}\n", trimmed);
     let output = destination.clone();
+    let invalid_path = format!("{what} path is invalid.");
     tauri::async_runtime::spawn_blocking(move || {
         let parent = output
             .parent()
-            .ok_or_else(|| "Interview reflection path is invalid.".to_string())?;
+            .ok_or(invalid_path)?;
         std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         let mut file = std::fs::OpenOptions::new()
             .write(true)
@@ -621,7 +677,7 @@ pub async fn save_interview_reflection(
     .await
     .map_err(|error| error.to_string())??;
     crate::security::recheck(
-        &app,
+        app,
         crate::security::Operation::StartInterviewHacker,
         &ticket,
     )?;

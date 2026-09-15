@@ -531,7 +531,9 @@
   border: 1px solid var(--interview-glass-border);
   background: var(--interview-glass-soft);
   box-shadow: 0 9px 26px rgba(18, 28, 27, 0.055), inset 0 1px 0 rgba(255, 255, 255, 0.48);
-  backdrop-filter: blur(16px) saturate(1.05);
+  /* No backdrop-filter here on purpose: these cards sit inside a panel that
+     already blurs, and one blur layer per card (dozens on a big dossier) ran
+     WebView2 out of raster budget, so content painted blank while scrolling. */
 }
 
 .db-interview-summary {
@@ -1305,6 +1307,159 @@
   color: var(--db-text-dim);
   font-size: 11px;
   font-weight: 650;
+}
+
+/* ── Brief build modal ─────────────────────────────────────────────────────
+   Rows appear as the backend reports real steps; only the clock and the phrase
+   under the writing step move on a timer. Nothing inside carries its own
+   backdrop-filter: the glass panel already blurs. */
+.db-modal-panel.db-interview-build {
+  width: min(520px, 100%);
+}
+
+.db-interview-build-clock {
+  margin-right: 4px;
+  color: var(--db-text-dim);
+  font-size: 12px;
+  font-weight: 650;
+  font-variant-numeric: tabular-nums;
+}
+
+.db-interview-build-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.db-interview-build-steps li {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 8px 0;
+  animation: db-interview-build-in 0.32s var(--db-ease) both;
+}
+
+/* The connector between icons, stopping short of the last row. */
+.db-interview-build-steps li:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  top: 42px;
+  bottom: -4px;
+  left: 15px;
+  width: 1px;
+  background: color-mix(in srgb, var(--db-text) 12%, transparent);
+}
+
+.db-interview-build-icon {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 31px;
+  height: 31px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--db-text) 7%, transparent);
+  color: var(--db-text-dim);
+  transition: background 0.2s var(--db-ease), color 0.2s var(--db-ease);
+}
+
+.db-interview-build-steps li.is-done .db-interview-build-icon {
+  background: color-mix(in srgb, var(--db-teal) 16%, transparent);
+  color: var(--db-teal-deep-b);
+}
+
+.db-interview-build-steps li.is-active .db-interview-build-icon {
+  background: var(--db-teal-deep-a);
+  color: #fff;
+}
+
+.db-interview-build-steps li.is-active .db-interview-build-icon::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border: 2px solid color-mix(in srgb, var(--db-teal) 45%, transparent);
+  border-radius: inherit;
+  animation: db-interview-build-pulse 1.6s ease-out infinite;
+}
+
+.db-interview-build-steps li.is-warn .db-interview-build-icon {
+  background: rgba(180, 83, 9, 0.12);
+  color: #8f4409;
+}
+
+.db-interview-build-steps li.is-failed .db-interview-build-icon {
+  background: rgba(185, 28, 28, 0.1);
+  color: #a91f1f;
+}
+
+.db-interview-build-steps li.is-pending {
+  opacity: 0.5;
+}
+
+.db-interview-build-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding-top: 6px;
+}
+
+.db-interview-build-copy strong {
+  color: var(--db-text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.db-interview-build-copy small {
+  color: var(--db-text-dim);
+  font-size: 11.5px;
+  line-height: 1.45;
+  animation: db-interview-build-fade 0.4s var(--db-ease) both;
+}
+
+.db-interview-build-steps li.is-active .db-interview-build-copy small {
+  font-style: italic;
+}
+
+.db-interview-build-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--db-text) 8%, transparent);
+  color: var(--db-text-dim);
+  font-size: 11.5px;
+}
+
+.db-interview-build-foot > button:only-child {
+  margin-left: auto;
+}
+
+.db-interview-build-actions {
+  display: inline-flex;
+  gap: 8px;
+}
+
+@keyframes db-interview-build-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes db-interview-build-pulse {
+  from { opacity: 0.9; transform: scale(0.92); }
+  to { opacity: 0; transform: scale(1.25); }
+}
+
+@keyframes db-interview-build-fade {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
 /* ── Source chips ────────────────────────────────────────────────────────── */

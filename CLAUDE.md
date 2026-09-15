@@ -164,6 +164,10 @@ and only `Some(false)` denies.
 
 A cache that represents "this side effect already happened" (`OverlayState.applied`, the single `AppliedBounds` snapshot in `overlay.rs`) must be written **after** the side effect succeeds, never before. Writing it optimistically means one failed resize/show call permanently desyncs the cache from reality, and every later trigger (hotkey, tray click, second-instance launch) trusts the stale cache and silently no-ops instead of retrying. This exact bug froze the Flutter sibling's desktop overlay from ever showing a window after a first-boot failure - don't reintroduce it here.
 
+## Failures must keep their cause
+
+A model call can "succeed" while failing: a response cut off at `max_tokens` is an HTTP 200, so any fallback keyed only on provider errors never fires, and a schema retry on the same model fails identically (see `OutputTruncatedError` in `juno-backend`'s `model_provider.py`). Every `catch` around a backend or model call must read the typed error or the backend's `reason` and show copy for that cause, never one generic line; "try again" only where a retry can actually help. This shipped as the interview brief's "try again" for a preparation that truncated every time (2026-09-14).
+
 ## Main-thread blocking (Tauri commands)
 
 A `#[tauri::command]` without `async` runs directly on the thread that pumps the native window's messages. Any real work in one of those (screen capture, file IO, network, image/audio encoding) freezes the window, and Windows eventually shows "(Not Responding)". Default new commands to `async fn`; push CPU-bound work into `tauri::async_runtime::spawn_blocking` rather than doing it inline. This exact bug shipped in `capture_cursor_display_with_geometry` (`screenshot.rs`) - synchronous DXGI capture + JPEG encode + base64 on the main thread, triggered on every spoken turn while screen-sight was armed.

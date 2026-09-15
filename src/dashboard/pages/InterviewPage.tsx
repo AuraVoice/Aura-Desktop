@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  AlertTriangle,
   ArrowRight,
   ArrowUpRight,
   BriefcaseBusiness,
@@ -14,8 +15,12 @@ import {
   Loader2,
   Plus,
   Search,
+  Send,
+  ShieldCheck,
+  Sparkles,
   Trash2,
   Upload,
+  type LucideIcon,
 } from "lucide-react";
 import {
   candidateBriefClaims,
@@ -27,7 +32,9 @@ import {
   type InterviewBrief,
   type InterviewBriefClaim,
   type InterviewBriefSource,
+  type InterviewPrepRoom,
   type InterviewPreparationInput,
+  type PracticeMark,
 } from "../../lib/interviewBrief";
 import {
   DEFAULT_PLANNED_MINUTES,
@@ -36,14 +43,19 @@ import {
   ROUND_KIND_OPTIONS,
 } from "../../lib/interviewPolicy";
 import {
-  buildInterviewBrief,
+  InterviewBriefError,
+  streamInterviewBrief,
   streamInterviewCompanyResearch,
+  streamInterviewPrep,
   type CompanyResearchProgress,
+  type InterviewBriefFailureReason,
+  type InterviewBriefProgress,
 } from "../../lib/interviewHackerApi";
 import { DetailModal } from "../components/DetailModal";
 import { SegmentedChoice } from "../components/SegmentedChoice";
 import { SlidingTabs, useTabStage } from "../components/SlidingTabs";
 import { SiteIcon } from "../components/SiteIcon";
+import { PrepRoom } from "./interview/PrepRoom";
 import {
   RESUME_ACCEPT,
   RESUME_MAX_CHARS,
@@ -210,6 +222,25 @@ function InterviewSteps({
   );
 }
 
+/** Keeps a finished section reachable without letting it push the prep room down. */
+function CollapsedWhen({
+  collapsed,
+  summary,
+  children,
+}: {
+  collapsed: boolean;
+  summary: string;
+  children: ReactNode;
+}) {
+  if (!collapsed) return <>{children}</>;
+  return (
+    <details className="db-interview-optional db-prep-collapse">
+      <summary>{summary}</summary>
+      {children}
+    </details>
+  );
+}
+
 function Field({
   label,
   optional = true,
@@ -362,6 +393,59 @@ function CompanyDossier({ research }: { research: CompanyResearchResult }) {
   );
 }
 
+/** One line per real cause. "Try again" only appears where retrying can help;
+ * a preparation that is too long fails the same way every time. */
+function briefFailureCopy(err: unknown): string {
+  const reason = err instanceof InterviewBriefError ? err.reason : "unknown";
+  switch (reason) {
+    case "too_large":
+      return "This preparation is too long to turn into a brief. Shorten the resume or job description, then build again.";
+    case "timed_out":
+      return "Building the brief took too long. Your preparation is still here, so try again in a minute.";
+    case "unavailable":
+      return "The brief service is not responding right now. Your preparation is still here, so try again shortly.";
+    case "invalid_output":
+      return "Aura could not turn this preparation into a clean brief. Try again, or trim the longest section.";
+    case "invalid":
+      return "Aura could not read this preparation. Check the fields, then build again.";
+    default:
+      return "Aura could not build the interview brief. Your preparation is still here, so you can try again.";
+  }
+}
+
+function researchFailureCopy(err: unknown): string {
+  const reason = err instanceof InterviewBriefError ? err.reason : "unknown";
+  switch (reason) {
+    case "timed_out":
+      return "The company research took too long. Your inputs are still here, so try again in a minute.";
+    case "invalid_output":
+      return "Aura found sources but could not assemble them into a dossier this time. Your inputs are still here, so try again.";
+    case "unavailable":
+      return "Company research is not responding right now. Your inputs are still here, so try again shortly.";
+    case "invalid":
+    case "too_large":
+      return "Aura could not read these inputs. Check the company website and job description, then try again.";
+    default:
+      return "Aura could not complete the company research. Your inputs are still here, so you can try again.";
+  }
+}
+
+/** The brief already exists when this copy shows, so every line says so first. */
+function prepFailureCopy(reason: InterviewBriefFailureReason): string {
+  switch (reason) {
+    case "too_large":
+      return "Your brief is ready, but it is too long to turn into a prep room. Shorten the resume or job description, then try again.";
+    case "timed_out":
+      return "Your brief is ready. Writing the prep room took too long, so try again in a minute.";
+    case "invalid_output":
+      return "Your brief is ready. Aura could not turn it into a clean prep room, so try again.";
+    case "invalid":
+      return "Your brief is ready, but Aura could not read it back. Rebuild the brief, then try again.";
+    default:
+      return "Your brief is ready. The prep room could not be written right now, so try again shortly.";
+  }
+}
+
 type ResearchSearchRow = {
   callId: string;
   query: string;
@@ -498,6 +582,281 @@ function ResearchProgressPanel({
         </footer>
       )}
     </section>
+  );
+}
+
+/** Friendly names for the models the brief chain can land on; unknown ids show as-is. */
+const BRIEF_MODEL_LABELS: Record<string, string> = {
+  "claude-sonnet-5": "Claude Sonnet 5",
+  "claude-haiku-4-5-20251001": "Claude Haiku 4.5",
+  "gemini-3.8-flash": "Gemini 3.8 Flash",
+  "gemini-2.5-flash": "Gemini 2.5 Flash",
+};
+
+const briefModelLabel = (model: string) => BRIEF_MODEL_LABELS[model] ?? model;
+
+const BRIEF_SOURCE_LABELS: Array<[kind: string, one: string, many: string]> = [
+  ["resume", "resume", "resumes"],
+  ["job_description", "job description", "job descriptions"],
+  ["company_research", "research fact", "research facts"],
+  ["likely_interviewer_question", "likely question", "likely questions"],
+  ["star_story", "STAR story", "STAR stories"],
+  ["candidate_fact", "highlight", "highlights"],
+  ["metric", "metric", "metrics"],
+];
+
+function briefCountsLabel(counts: Record<string, number>): string {
+  return BRIEF_SOURCE_LABELS.flatMap(([kind, one, many]) => {
+    const count = counts[kind] ?? 0;
+    return count > 0 ? [`${count} ${count === 1 ? one : many}`] : [];
+  }).join(" · ");
+}
+
+const BRIEF_FALLBACK_COPY: Record<string, string> = {
+  max_tokens: "ran out of room",
+  invalid_output: "returned a draft Aura could not use",
+  timeout: "took too long",
+  unavailable: "was unavailable",
+};
+
+/** What the brief prompt asks the model to do. These rotate under the live
+ * Writing step as a description of the task, never as a claim of progress. */
+const BRIEF_WRITING_PHRASES = [
+  "Separating your experience from the company's",
+  "Pairing your STAR stories with the job requirements",
+  "Tagging every claim with the source it came from",
+  "Drafting questions this interviewer may ask",
+  "Leaving out anything your sources do not support",
+];
+
+/** The prep phase's task, shown the same way as the brief's. */
+const PREP_WRITING_PHRASES = [
+  "Matching your stories to each question",
+  "Writing answers you can say out loud",
+  "Mapping your evidence to their requirements",
+  "Picking the facts worth remembering",
+];
+
+const WRITING_PHRASES: Record<string, string[]> = {
+  writing: BRIEF_WRITING_PHRASES,
+  "prep-writing": PREP_WRITING_PHRASES,
+};
+
+type BriefBuildStatus = "running" | "done" | "failed" | "prep_failed";
+type BriefBuildMode = "full" | "prep";
+
+type BriefStepRow = {
+  key: string;
+  tone: "done" | "active" | "pending" | "warn" | "failed";
+  icon: LucideIcon;
+  title: string;
+  detail?: string;
+};
+
+/** One row per model that actually started, plus a row for every real fallback hop. */
+function modelStepRows(
+  events: InterviewBriefProgress[],
+  keyPrefix: string,
+): { rows: BriefStepRow[]; started: boolean } {
+  const rows: BriefStepRow[] = [];
+  let started = false;
+  let lastModel = "";
+  events.forEach((event, index) => {
+    if (event.stage === "model_started") {
+      started = true;
+      // A same-model retry is not a new step worth a row.
+      if (event.model === lastModel) return;
+      lastModel = event.model;
+      rows.push({ key: `${keyPrefix}-model-${index}`, tone: "done", icon: Send, title: `Sent to ${briefModelLabel(event.model)}` });
+    } else if (event.stage === "model_fallback") {
+      rows.push({
+        key: `${keyPrefix}-hop-${index}`,
+        tone: "warn",
+        icon: AlertTriangle,
+        title: `${briefModelLabel(event.from)} ${BRIEF_FALLBACK_COPY[event.reason] ?? "could not finish"}`,
+        detail: `Handing the work to ${briefModelLabel(event.to)}`,
+      });
+    }
+  });
+  return { rows, started };
+}
+
+/**
+ * Live account of a brief build, in a modal.
+ *
+ * Same rule as ResearchProgressPanel: every row comes from a real backend event
+ * (request read, model attempt started, fallback hop, assembly). Only the clock
+ * and the phrase under the live Writing step move on a timer. Closing the modal
+ * does not stop the build; Stop does.
+ */
+function BriefBuildModal({
+  open,
+  startedAtMs,
+  events,
+  status,
+  failure,
+  mode,
+  onClose,
+  onStop,
+  onRetryPrep,
+}: {
+  open: boolean;
+  startedAtMs: number;
+  events: InterviewBriefProgress[];
+  status: BriefBuildStatus;
+  failure: string;
+  mode: BriefBuildMode;
+  onClose: () => void;
+  onStop: () => void;
+  onRetryPrep: () => void;
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  const [endedAtMs, setEndedAtMs] = useState<number | null>(null);
+  const [phraseIndex, setPhraseIndex] = useState(0);
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  // DetailModal re-runs its focus effect whenever onClose changes identity, and
+  // this page re-renders on every progress event.
+  const stableClose = useMemo(() => () => closeRef.current(), []);
+
+  useEffect(() => {
+    if (status !== "running") {
+      setEndedAtMs((current) => current ?? Date.now());
+      return;
+    }
+    setEndedAtMs(null);
+    setNow(Date.now());
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [status, startedAtMs]);
+
+  const rows = useMemo(() => {
+    const done = status === "done";
+    const failed = status === "failed";
+    const prepFailed = status === "prep_failed";
+    // Events before prep_started belong to the brief, events after it to the prep room.
+    const prepAt = events.findIndex((event) => event.stage === "prep_started");
+    const briefEvents = prepAt < 0 ? events : events.slice(0, prepAt);
+    const prepEvents = prepAt < 0 ? [] : events.slice(prepAt + 1);
+    const prepStarted = mode === "prep" || prepAt >= 0;
+    const result: BriefStepRow[] = [];
+
+    if (mode === "full") {
+      const streaming = briefEvents.length > 0;
+      let received: Record<string, number> | null = null;
+      let checking = false;
+      for (const event of briefEvents) {
+        if (event.stage === "received") received = event.counts;
+        if (event.stage === "checking") checking = true;
+      }
+      const models = modelStepRows(briefEvents, "brief");
+      const briefDone = prepStarted || done || prepFailed;
+      if (streaming) {
+        result.push({
+          key: "received",
+          tone: received ? "done" : "active",
+          icon: FileText,
+          title: "Read your preparation",
+          detail: received ? briefCountsLabel(received) : undefined,
+        });
+      }
+      result.push(...models.rows);
+      // Without events (a backend that has not deployed the stream yet) the only
+      // honest state is "writing", with nothing claimed about what came before.
+      result.push({
+        key: "writing",
+        tone: briefDone || checking ? "done" : failed ? "failed" : models.started || !streaming ? "active" : "pending",
+        icon: Sparkles,
+        title: "Writing your brief",
+      });
+      result.push({
+        key: "checking",
+        tone: briefDone ? "done" : checking ? (failed ? "failed" : "active") : "pending",
+        icon: ShieldCheck,
+        title: "Checking every claim against its source",
+      });
+      if (failed) {
+        result.push({ key: "failed", tone: "failed", icon: AlertTriangle, title: "The brief could not be built", detail: failure });
+        return result;
+      }
+    } else {
+      result.push({ key: "brief-ready", tone: "done", icon: FileText, title: "Using your current brief" });
+    }
+
+    result.push(...modelStepRows(prepEvents, "prep").rows);
+    result.push({
+      key: "prep-writing",
+      tone: done ? "done" : prepFailed ? "warn" : prepStarted ? "active" : "pending",
+      icon: prepFailed ? AlertTriangle : Sparkles,
+      title: prepFailed ? "The prep room could not be built" : "Writing your prep room",
+      detail: prepFailed ? failure : undefined,
+    });
+    if (!prepFailed) {
+      result.push({ key: "ready", tone: done ? "done" : "pending", icon: CheckCircle2, title: "Ready to review" });
+    }
+    return result;
+  }, [events, status, failure, mode]);
+
+  const writing = rows.some((row) => row.tone === "active" && row.key in WRITING_PHRASES);
+  useEffect(() => {
+    if (!writing) return;
+    const timer = setInterval(() => setPhraseIndex((index) => index + 1), 3200);
+    return () => clearInterval(timer);
+  }, [writing]);
+
+  return (
+    <DetailModal
+      open={open}
+      title={mode === "prep" ? "Building your prep room" : "Building your interview brief"}
+      onClose={stableClose}
+      panelClassName="db-interview-glass-panel db-interview-build"
+      headerAction={<time className="db-interview-build-clock">{elapsedLabel((endedAtMs ?? now) - startedAtMs)}</time>}
+    >
+      <ol className="db-interview-build-steps" aria-live="polite">
+        {rows.map((row) => {
+          const Icon = row.tone === "done" ? CheckCircle2 : row.icon;
+          const phrases = row.tone === "active" ? WRITING_PHRASES[row.key] : undefined;
+          const detail = phrases ? phrases[phraseIndex % phrases.length] : row.detail;
+          return (
+            <li key={row.key} className={`is-${row.tone}`}>
+              <span className="db-interview-build-icon" aria-hidden>
+                <Icon size={16} />
+              </span>
+              <span className="db-interview-build-copy">
+                <strong>{row.title}</strong>
+                {detail && <small key={detail}>{detail}</small>}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+      <footer className="db-interview-build-foot">
+        {status === "running" ? (
+          <>
+            <span>You can close this. The brief keeps building.</span>
+            <button type="button" className="db-interview-progress-cancel" onClick={onStop}>
+              Stop
+            </button>
+          </>
+        ) : status === "prep_failed" ? (
+          <>
+            <span>Your brief is saved either way.</span>
+            <span className="db-interview-build-actions">
+              <button type="button" className="db-interview-progress-cancel" onClick={stableClose}>
+                Close
+              </button>
+              <button type="button" className="db-interview-progress-cancel" onClick={onRetryPrep}>
+                Retry prep room
+              </button>
+            </span>
+          </>
+        ) : (
+          <button type="button" className="db-interview-progress-cancel" onClick={stableClose}>
+            Close
+          </button>
+        )}
+      </footer>
+    </DetailModal>
   );
 }
 
@@ -1318,6 +1677,15 @@ export function InterviewPage() {
   const [researchPanelDue, setResearchPanelDue] = useState(false);
   const researchAbortRef = useRef<AbortController | null>(null);
   const researchPanelTimer = useRef<number | null>(null);
+  const [briefEvents, setBriefEvents] = useState<InterviewBriefProgress[]>([]);
+  const [briefStartedAtMs, setBriefStartedAtMs] = useState(0);
+  const [briefModalOpen, setBriefModalOpen] = useState(false);
+  const [briefStatus, setBriefStatus] = useState<BriefBuildStatus>("running");
+  const [briefFailure, setBriefFailure] = useState("");
+  const [briefMode, setBriefMode] = useState<BriefBuildMode>("full");
+  const [prepFailure, setPrepFailure] = useState("");
+  const briefAbortRef = useRef<AbortController | null>(null);
+  const briefCloseTimer = useRef<number | null>(null);
   const persistenceRevision = useRef(0);
   const workspaceRef = useRef(workspace);
   workspaceRef.current = workspace;
@@ -1333,6 +1701,10 @@ export function InterviewPage() {
   const input = currentInterview?.input ?? EMPTY_INPUT;
   const research = currentInterview?.research ?? null;
   const brief = currentInterview?.draftBrief ?? null;
+  // A prep room only counts for the brief it was built from.
+  const prepRoom = brief && currentInterview?.prepRoom && currentInterview.prepRoom.briefId === brief.briefId
+    ? currentInterview.prepRoom
+    : null;
   const activeBriefId = workspace.activeBrief?.briefId ?? null;
   const researching = currentInterview ? researchingIds.has(currentInterview.interviewId) : false;
   const building = currentInterview ? buildingIds.has(currentInterview.interviewId) : false;
@@ -1428,7 +1800,12 @@ export function InterviewPage() {
   useEffect(() => () => {
     researchAbortRef.current?.abort();
     if (researchPanelTimer.current !== null) window.clearTimeout(researchPanelTimer.current);
+    briefAbortRef.current?.abort();
+    if (briefCloseTimer.current !== null) window.clearTimeout(briefCloseTimer.current);
   }, []);
+
+  // A prep failure notice belongs to the interview it happened on.
+  useEffect(() => setPrepFailure(""), [workspace.currentInterviewId]);
 
   const setBusy = (
     setter: React.Dispatch<React.SetStateAction<Set<string>>>,
@@ -1459,6 +1836,8 @@ export function InterviewPage() {
       ...interview,
       input: { ...interview.input, [key]: value },
       draftBrief: null,
+      prepRoom: null,
+      practiceMarks: undefined,
     }));
   };
   // Round and planned length are session pacing, not evidence. Unlike `update`
@@ -1477,10 +1856,29 @@ export function InterviewPage() {
       input: { ...interview.input, [key]: value },
       research: null,
       draftBrief: null,
+      prepRoom: null,
+      practiceMarks: undefined,
     }));
   };
   const canResearch = Boolean(currentInterview) && input.company.trim().length > 0 && !researching;
-  const canBuild = Boolean(currentInterview && research) && !building;
+  // Not gated on `building`: while a build runs, the same button reopens its progress.
+  const canBuild = Boolean(currentInterview && research);
+  const setPracticeMark = (answerId: string, mark: PracticeMark | null) => {
+    if (!currentInterview) return;
+    updateInterview(currentInterview.interviewId, (interview) => {
+      const marks = { ...(interview.practiceMarks ?? {}) };
+      if (mark) marks[answerId] = mark;
+      else delete marks[answerId];
+      return { ...interview, practiceMarks: marks };
+    });
+  };
+  const prepMeta = currentInterview
+    ? [
+      input.role.trim(),
+      ROUND_KIND_OPTIONS.find((option) => option.value === (currentInterview.lastRoundKind ?? DEFAULT_ROUND_KIND))?.label ?? "",
+      `${currentInterview.plannedMinutes ?? DEFAULT_PLANNED_MINUTES} min`,
+    ].filter(Boolean).join(" · ")
+    : "";
 
   function createNewInterview() {
     if (currentInterview && !hasInterviewContent(currentInterview)) {
@@ -1576,12 +1974,12 @@ export function InterviewPage() {
       // identity check threw away a finished dossier whenever any unrelated
       // field, candidate notes included, was edited while it ran.
       updateInterview(interviewId, (interview) => targetSignature(interview.input) === signature
-        ? { ...interview, research: result, draftBrief: null }
+        ? { ...interview, research: result, draftBrief: null, prepRoom: null, practiceMarks: undefined }
         : interview);
     } catch (err) {
       if (controller.signal.aborted) return;
       logError("InterviewPage: company research", err);
-      setError("Aura could not complete the company research. Your inputs are still here, so you can try again.");
+      setError(researchFailureCopy(err));
     } finally {
       if (researchAbortRef.current === controller) researchAbortRef.current = null;
       if (researchPanelTimer.current !== null) window.clearTimeout(researchPanelTimer.current);
@@ -1600,26 +1998,112 @@ export function InterviewPage() {
   }
 
   async function build() {
+    if (building) {
+      setBriefModalOpen(true);
+      return;
+    }
     if (!canBuild || !currentInterview || !research) return;
     const interviewId = currentInterview.interviewId;
     const preparationInput = currentInterview.input;
     const companyResearch = research;
-    setBusy(setBuildingIds, interviewId, true);
-    setError("");
+    const controller = startBuild(interviewId, "full");
     try {
-      const builtBrief = await buildInterviewBrief(
-        preparationSources(preparationInput, companyResearch),
-        preparationInput.answerLength,
-      );
-      updateInterview(interviewId, (interview) => interview.input === preparationInput && interview.research === companyResearch
-        ? { ...interview, draftBrief: builtBrief }
-        : interview);
+      const { prep, prepReason } = await streamInterviewBrief({
+        sources: preparationSources(preparationInput, companyResearch),
+        answerLength: preparationInput.answerLength,
+        signal: controller.signal,
+        onProgress: (progress) => setBriefEvents((current) => [...current, progress]),
+        // Saved the moment it lands, before the prep phase, so a prep failure or a
+        // closed connection never costs the brief.
+        onBrief: (builtBrief) => updateInterview(interviewId, (interview) => interview.input === preparationInput && interview.research === companyResearch
+          ? { ...interview, draftBrief: builtBrief, prepRoom: null, practiceMarks: undefined }
+          : interview),
+      });
+      finishPrep(interviewId, prep, prepReason);
     } catch (err) {
+      if (controller.signal.aborted) return;
       logError("InterviewPage: build brief", err);
-      setError("Aura could not build the interview brief. Your preparation is still here, so you can try again.");
+      const copy = briefFailureCopy(err);
+      setError(copy);
+      setBriefFailure(copy);
+      setBriefStatus("failed");
     } finally {
-      setBusy(setBuildingIds, interviewId, false);
+      endBuild(interviewId, controller);
     }
+  }
+
+  /** Prep room only, for a brief the user already has: a retry, or a brief made before prep rooms. */
+  async function buildPrep() {
+    if (building) {
+      setBriefModalOpen(true);
+      return;
+    }
+    if (!currentInterview || !brief) return;
+    const interviewId = currentInterview.interviewId;
+    const targetBrief = brief;
+    const controller = startBuild(interviewId, "prep");
+    try {
+      const prep = await streamInterviewPrep({
+        brief: targetBrief,
+        signal: controller.signal,
+        onProgress: (progress) => setBriefEvents((current) => [...current, progress]),
+      });
+      finishPrep(interviewId, prep, null);
+    } catch (err) {
+      if (controller.signal.aborted) return;
+      logError("InterviewPage: build prep room", err);
+      finishPrep(interviewId, null, err instanceof InterviewBriefError ? err.reason : "unknown");
+    } finally {
+      endBuild(interviewId, controller);
+    }
+  }
+
+  function startBuild(interviewId: string, mode: BriefBuildMode): AbortController {
+    const controller = new AbortController();
+    briefAbortRef.current?.abort();
+    briefAbortRef.current = controller;
+    if (briefCloseTimer.current !== null) window.clearTimeout(briefCloseTimer.current);
+    setBusy(setBuildingIds, interviewId, true);
+    setBriefMode(mode);
+    setBriefEvents([]);
+    setBriefStartedAtMs(Date.now());
+    setBriefStatus("running");
+    setBriefFailure("");
+    setPrepFailure("");
+    setBriefModalOpen(true);
+    setError("");
+    return controller;
+  }
+
+  function finishPrep(
+    interviewId: string,
+    prep: InterviewPrepRoom | null,
+    reason: InterviewBriefFailureReason | null,
+  ) {
+    if (prep) {
+      updateInterview(interviewId, (interview) => interview.draftBrief?.briefId === prep.briefId
+        ? { ...interview, prepRoom: prep, practiceMarks: {} }
+        : interview);
+      setBriefStatus("done");
+      // Long enough to see "Ready to review" tick, short enough not to stand in the way.
+      briefCloseTimer.current = window.setTimeout(() => setBriefModalOpen(false), 900);
+      return;
+    }
+    const copy = prepFailureCopy(reason ?? "unknown");
+    setPrepFailure(copy);
+    setBriefFailure(copy);
+    setBriefStatus("prep_failed");
+  }
+
+  function endBuild(interviewId: string, controller: AbortController) {
+    if (briefAbortRef.current === controller) briefAbortRef.current = null;
+    setBusy(setBuildingIds, interviewId, false);
+  }
+
+  function stopBuild() {
+    briefAbortRef.current?.abort();
+    briefAbortRef.current = null;
+    setBriefModalOpen(false);
   }
 
   async function useBrief() {
@@ -1755,9 +2239,22 @@ export function InterviewPage() {
         )}
       </section>
 
-      {research && <CompanyDossier research={research} />}
+      {prepRoom && brief && (
+        <PrepRoom
+          company={research?.company || input.company.trim()}
+          meta={prepMeta}
+          prep={prepRoom}
+          brief={brief}
+          research={research}
+          marks={currentInterview.practiceMarks ?? {}}
+          onMark={setPracticeMark}
+        />
+      )}
+
+      {research && !prepRoom && <CompanyDossier research={research} />}
 
       {research && (
+        <CollapsedWhen collapsed={Boolean(prepRoom)} summary="Edit preparation">
         <section className="db-interview-builder db-interview-candidate-builder">
           <div className="db-interview-section-head">
             <div>
@@ -1821,14 +2318,30 @@ export function InterviewPage() {
             </div>
             <div className="db-interview-builder-footer">
               <button type="button" disabled={!canBuild} onClick={() => void build()}>
-                {building ? "Building brief" : brief ? "Rebuild brief" : "Build interview brief"}
+                {building ? "Building, view progress" : brief ? "Rebuild brief" : "Build interview brief"}
               </button>
             </div>
+          </div>
+        </section>
+        </CollapsedWhen>
+      )}
+
+      {brief && !prepRoom && (
+        <section className="db-prep-invite">
+          <div>
+            <h3>Turn this brief into a prep room</h3>
+            <p>{prepFailure || "Answers built from your own stories for every likely question, the company in 60 seconds, and where you fit."}</p>
+          </div>
+          <div className="db-interview-builder-footer">
+            <button type="button" onClick={() => void buildPrep()}>
+              {building ? "Building, view progress" : prepFailure ? "Try again" : "Build prep room"}
+            </button>
           </div>
         </section>
       )}
 
       {brief && (
+        <CollapsedWhen collapsed={Boolean(prepRoom)} summary="Evidence Aura can use live">
         <BriefReview
           brief={brief}
           activeBriefId={activeBriefId}
@@ -1839,7 +2352,26 @@ export function InterviewPage() {
           }))}
           onUse={() => void useBrief()}
         />
+        </CollapsedWhen>
       )}
+
+      {research && prepRoom && (
+        <CollapsedWhen collapsed summary="Company research and sources">
+          <CompanyDossier research={research} />
+        </CollapsedWhen>
+      )}
+
+      <BriefBuildModal
+        open={briefModalOpen}
+        mode={briefMode}
+        startedAtMs={briefStartedAtMs}
+        events={briefEvents}
+        status={briefStatus}
+        failure={briefFailure}
+        onClose={() => setBriefModalOpen(false)}
+        onStop={stopBuild}
+        onRetryPrep={() => void buildPrep()}
+      />
         </div>
       ) : null}
       </div>

@@ -8,6 +8,10 @@ import type {
   InterviewBriefClaim,
   InterviewBriefSlice,
   InterviewBriefSource,
+  InterviewPrepRoom,
+  PrepAnswer,
+  PrepFit,
+  PrepLine,
   InterviewClaimScope,
   InterviewSourceKind,
   InterviewStarStory,
@@ -626,7 +630,7 @@ export async function researchInterviewCompany({
     }),
     signal,
   });
-  if (!response.ok) throw new Error(`Company research failed (${response.status}).`);
+  if (!response.ok) throw await briefFailure(response);
   return parseCompanyResearch(await response.json());
 }
 
@@ -721,13 +725,13 @@ export async function streamInterviewCompanyResearch({
   if (response.status === 404 || response.status === 405) {
     return researchInterviewCompany({ company, companyUrl, role, jobDescription, signal });
   }
-  if (!response.ok) throw new Error(`Company research failed (${response.status}).`);
-  if (!response.body) throw new Error("Company research response had no stream.");
+  if (!response.ok) throw await briefFailure(response);
+  if (!response.body) throw new InterviewBriefError(0, "unavailable");
 
   // Held in an object so TypeScript keeps the assignment made inside the frame
   // callback, which it would otherwise narrow away on a plain local.
   const collected: { result: CompanyResearchResult | null } = { result: null };
-  let streamError = "";
+  let streamError: InterviewBriefFailureReason | null = null;
   await readEventStream(response.body, (event, data) => {
     if (data === "[DONE]") return;
     let payload: unknown;
@@ -747,14 +751,126 @@ export async function streamInterviewCompanyResearch({
       return;
     }
     if (event === "error") {
-      const wrapper = payload as { message?: unknown };
-      streamError = typeof wrapper.message === "string" ? wrapper.message : "Company research failed.";
+      // Same reason vocabulary as the brief, so the page says what actually failed.
+      streamError = briefFailureReason(asRecord(payload)?.reason);
     }
   });
 
-  if (streamError) throw new Error(streamError);
-  if (!collected.result) throw new Error("Company research stream ended before a dossier arrived.");
+  if (streamError) throw new InterviewBriefError(503, streamError);
+  if (!collected.result) throw new InterviewBriefError(0, "unavailable");
   return collected.result;
+}
+
+function wireBuildSource(source: InterviewBriefSource) {
+  return {
+    source_id: source.sourceId,
+    kind: source.kind,
+    label: source.label,
+    text: source.text,
+    verification_state: source.verificationState,
+    urls: source.urls,
+    as_of: source.asOf,
+  };
+}
+
+function briefRequestBody(sources: InterviewBriefSource[], answerLength: InterviewAnswerLength): string {
+  return JSON.stringify({
+    contract_version: 3,
+    sources: sources.map(wireBuildSource),
+    answer_length: answerLength,
+  });
+}
+
+/** The full brief the backend's InterviewBrief model accepts. Unlike the answer
+ * slice it carries source text, and it never carries the session profile fields
+ * (the model is extra="forbid"). */
+function wireInterviewBrief(brief: InterviewBrief) {
+  return {
+    ...wireBriefSlice(brief),
+    sources: brief.sources.map(wireBuildSource),
+    reviewed_at_ms: brief.reviewedAtMs,
+  };
+}
+
+function parsePrepLine(value: unknown): PrepLine | null {
+  const item = asRecord(value);
+  const sourceIds = item ? stringList(item.source_ids) : null;
+  if (!item || typeof item.text !== "string" || !sourceIds) return null;
+  return { text: item.text, sourceIds };
+}
+
+function textField(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function parsePrepRoom(value: unknown): InterviewPrepRoom {
+  const item = asRecord(value);
+  if (
+    !item
+    || item.contract_version !== 1
+    || typeof item.prep_id !== "string"
+    || typeof item.brief_id !== "string"
+    || typeof item.generated_at_ms !== "number"
+  ) {
+    throw new Error("Prep room returned an invalid result.");
+  }
+  const lines = (raw: unknown): PrepLine[] => Array.isArray(raw)
+    ? raw.map(parsePrepLine).filter((line): line is PrepLine => line !== null)
+    : [];
+  const answers = Array.isArray(item.answers) ? item.answers.flatMap((raw): PrepAnswer[] => {
+    const answer = asRecord(raw);
+    if (!answer || typeof answer.answer_id !== "string" || typeof answer.question !== "string") return [];
+    const star = asRecord(answer.star);
+    const situation = star ? parsePrepLine(star.situation) : null;
+    const task = star ? parsePrepLine(star.task) : null;
+    const action = star ? parsePrepLine(star.action) : null;
+    const result = star ? parsePrepLine(star.result) : null;
+    return [{
+      answerId: answer.answer_id,
+      question: answer.question,
+      whyTheyAsk: textField(answer.why_they_ask),
+      whySourceIds: stringList(answer.why_source_ids) ?? [],
+      storyTitle: textField(answer.story_title),
+      star: situation && task && action && result ? { situation, task, action, result } : null,
+      spoken: textField(answer.spoken),
+      followUp: textField(answer.follow_up),
+      followUpHint: textField(answer.follow_up_hint),
+      avoid: answer.avoid ? parsePrepLine(answer.avoid) : null,
+    }];
+  }) : [];
+  const fit = Array.isArray(item.fit) ? item.fit.flatMap((raw): PrepFit[] => {
+    const row = asRecord(raw);
+    if (
+      !row
+      || typeof row.fit_id !== "string"
+      || typeof row.requirement !== "string"
+      || (row.strength !== "strong" && row.strength !== "partial" && row.strength !== "gap")
+    ) return [];
+    return [{
+      fitId: row.fit_id,
+      requirement: row.requirement,
+      evidence: textField(row.evidence),
+      strength: row.strength,
+      bridge: textField(row.bridge),
+      sourceIds: stringList(row.source_ids) ?? [],
+    }];
+  }) : [];
+  return {
+    contractVersion: 1,
+    prepId: item.prep_id,
+    briefId: item.brief_id,
+    generatedAtMs: item.generated_at_ms,
+    companyStory: lines(item.company_story),
+    mustKnows: lines(item.must_knows),
+    answers,
+    fit,
+    neverSay: stringList(item.never_say) ?? [],
+  };
+}
+
+async function briefFailure(response: Response): Promise<InterviewBriefError> {
+  const body = asRecord(await response.json().catch(() => null));
+  return new InterviewBriefError(response.status, briefFailureReason(body?.reason));
 }
 
 export async function buildInterviewBrief(
@@ -765,23 +881,199 @@ export async function buildInterviewBrief(
   const response = await authFetch("/interview-companion/brief", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    body: briefRequestBody(sources, answerLength),
+    signal,
+  });
+  if (!response.ok) throw await briefFailure(response);
+  return parseInterviewBrief(await response.json());
+}
+
+/** One real step of a brief build, relayed by the backend as it happens. */
+export type InterviewBriefProgress =
+  | { stage: "received"; counts: Record<string, number> }
+  | { stage: "model_started"; model: string; attempt: number }
+  | { stage: "model_fallback"; from: string; to: string; reason: string }
+  | { stage: "checking" }
+  | { stage: "prep_started" };
+
+function parseBriefProgress(value: unknown): InterviewBriefProgress | null {
+  const item = asRecord(value);
+  if (!item) return null;
+  switch (item.stage) {
+    case "received": {
+      const counts: Record<string, number> = {};
+      for (const [kind, count] of Object.entries(asRecord(item.counts) ?? {})) {
+        if (typeof count === "number") counts[kind] = count;
+      }
+      return { stage: "received", counts };
+    }
+    case "model_started":
+      return typeof item.model === "string"
+        ? { stage: "model_started", model: item.model, attempt: typeof item.attempt === "number" ? item.attempt : 1 }
+        : null;
+    case "model_fallback":
+      return typeof item.from === "string" && typeof item.to === "string"
+        ? { stage: "model_fallback", from: item.from, to: item.to, reason: typeof item.reason === "string" ? item.reason : "" }
+        : null;
+    case "checking":
+      return { stage: "checking" };
+    case "prep_started":
+      return { stage: "prep_started" };
+    default:
+      return null;
+  }
+}
+
+export interface InterviewBriefBuild {
+  brief: InterviewBrief;
+  /** Null when the prep phase failed or never ran; `prepReason` says why. */
+  prep: InterviewPrepRoom | null;
+  prepReason: InterviewBriefFailureReason | null;
+}
+
+/**
+ * Builds the brief, then the prep room, while reporting their real steps.
+ *
+ * `onBrief` fires the moment the brief lands, before prep starts, so a prep
+ * failure or a closed connection can never cost the user their brief. Falls back
+ * to the plain route when the stream is not deployed, in which case no progress
+ * arrives and there is no prep phase.
+ */
+export async function streamInterviewBrief({
+  sources,
+  answerLength,
+  signal,
+  onProgress,
+  onBrief,
+}: {
+  sources: InterviewBriefSource[];
+  answerLength: InterviewAnswerLength;
+  signal?: AbortSignal;
+  onProgress: (progress: InterviewBriefProgress) => void;
+  onBrief: (brief: InterviewBrief) => void;
+}): Promise<InterviewBriefBuild> {
+  const response = await authFetch("/interview-companion/brief/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: briefRequestBody(sources, answerLength),
+    signal,
+  });
+  if (response.status === 404 || response.status === 405) {
+    const brief = await buildInterviewBrief(sources, answerLength, signal);
+    onBrief(brief);
+    return { brief, prep: null, prepReason: "unavailable" };
+  }
+  if (!response.ok) throw await briefFailure(response);
+  if (!response.body) throw new InterviewBriefError(0, "unavailable");
+
+  // Held in an object so TypeScript keeps assignments made inside the frame callback.
+  const collected: {
+    brief: InterviewBrief | null;
+    reason: InterviewBriefFailureReason | null;
+    prep: InterviewPrepRoom | null;
+    prepReason: InterviewBriefFailureReason | null;
+  } = { brief: null, reason: null, prep: null, prepReason: null };
+  await readEventStream(response.body, (event, data) => {
+    if (data === "[DONE]") return;
+    let payload: unknown;
+    try {
+      payload = JSON.parse(data);
+    } catch {
+      return;
+    }
+    if (event === "brief_progress") {
+      const progress = parseBriefProgress(payload);
+      if (progress) onProgress(progress);
+    } else if (event === "brief_done") {
+      collected.brief = parseInterviewBrief(asRecord(payload)?.result);
+      onBrief(collected.brief);
+    } else if (event === "prep_done") {
+      collected.prep = parsePrepRoom(asRecord(payload)?.result);
+    } else if (event === "prep_error") {
+      collected.prepReason = briefFailureReason(asRecord(payload)?.reason);
+    } else if (event === "error") {
+      collected.reason = briefFailureReason(asRecord(payload)?.reason);
+    }
+  });
+
+  if (collected.reason) throw new InterviewBriefError(503, collected.reason);
+  if (!collected.brief) throw new InterviewBriefError(0, "unavailable");
+  return {
+    brief: collected.brief,
+    prep: collected.prep,
+    // A stream that ended after the brief with no prep verdict (a backend without
+    // the prep phase, or a dropped connection) is reported as unavailable.
+    prepReason: collected.prep ? null : collected.prepReason ?? "unavailable",
+  };
+}
+
+/** Builds only the prep room for a brief the user already has. */
+export async function streamInterviewPrep({
+  brief,
+  signal,
+  onProgress,
+}: {
+  brief: InterviewBrief;
+  signal?: AbortSignal;
+  onProgress: (progress: InterviewBriefProgress) => void;
+}): Promise<InterviewPrepRoom> {
+  const response = await authFetch("/interview-companion/prep/stream", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      contract_version: 3,
-      sources: sources.map((source) => ({
-        source_id: source.sourceId,
-        kind: source.kind,
-        label: source.label,
-        text: source.text,
-        verification_state: source.verificationState,
-        urls: source.urls,
-        as_of: source.asOf,
-      })),
-      answer_length: answerLength,
+      contract_version: 1,
+      sources: brief.sources.map(wireBuildSource),
+      brief: wireInterviewBrief(brief),
     }),
     signal,
   });
-  if (!response.ok) throw new Error(`Interview preparation failed (${response.status}).`);
-  return parseInterviewBrief(await response.json());
+  if (response.status === 404 || response.status === 405) {
+    throw new InterviewBriefError(response.status, "unavailable");
+  }
+  if (!response.ok) throw await briefFailure(response);
+  if (!response.body) throw new InterviewBriefError(0, "unavailable");
+
+  const collected: { prep: InterviewPrepRoom | null; reason: InterviewBriefFailureReason | null } = {
+    prep: null,
+    reason: null,
+  };
+  await readEventStream(response.body, (event, data) => {
+    if (data === "[DONE]") return;
+    let payload: unknown;
+    try {
+      payload = JSON.parse(data);
+    } catch {
+      return;
+    }
+    if (event === "brief_progress") {
+      const progress = parseBriefProgress(payload);
+      if (progress) onProgress(progress);
+    } else if (event === "prep_done") {
+      collected.prep = parsePrepRoom(asRecord(payload)?.result);
+    } else if (event === "prep_error" || event === "error") {
+      collected.reason = briefFailureReason(asRecord(payload)?.reason);
+    }
+  });
+
+  if (collected.reason) throw new InterviewBriefError(503, collected.reason);
+  if (!collected.prep) throw new InterviewBriefError(0, "unavailable");
+  return collected.prep;
+}
+
+const BRIEF_FAILURE_REASONS = ["too_large", "timed_out", "invalid_output", "unavailable", "invalid"] as const;
+export type InterviewBriefFailureReason = (typeof BRIEF_FAILURE_REASONS)[number] | "unknown";
+
+function briefFailureReason(value: unknown): InterviewBriefFailureReason {
+  return BRIEF_FAILURE_REASONS.find((known) => known === value) ?? "unknown";
+}
+
+/** Carries the backend's `reason` so the page can say what actually went wrong
+ * instead of one generic line for every cause. */
+export class InterviewBriefError extends Error {
+  constructor(readonly status: number, readonly reason: InterviewBriefFailureReason) {
+    super(`Interview preparation failed (${status}, ${reason}).`);
+    this.name = "InterviewBriefError";
+  }
 }
 
 function stringList(value: unknown): string[] | null {

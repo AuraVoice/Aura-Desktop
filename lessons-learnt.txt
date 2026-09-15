@@ -1,4 +1,67 @@
-2026-09-13  Dictation sharing uploaded nothing, ever, while every drain logged a healthy empty run
+2026-09-14  Company research failed after two minutes with no retry, because the SDK validates mid-stream
+
+Problem: "Aura could not complete the company research" on a fresh run. Cloud Run showed a 200 on
+/company-research/stream after 135s, then "company research stream failed ValidationError", and no
+"streamed parse unusable" warning, so the one-shot retry never ran.
+
+Issue: openai-python (2.44) validates `text_format` INSIDE the stream's event loop, on
+output_text.done and response.completed, not only in get_final_response(). company_research.py only
+guarded get_final_response, so any draft breaking a _CompanyResearchDraft limit (40 facts, 12
+questions, 16 unknowns, 1,200-char statements, 6 URLs) or cut off at max_output_tokens escaped the
+guard and failed the whole request. The warning carried only the exception type, so which rule broke
+was unknowable afterwards, and the page showed one generic line for every cause.
+
+Solution: a before-validation salvage on _CompanyResearchDraft clips and caps instead of rejecting
+(it runs inside the SDK's parse, streamed or not); the stream loop itself now catches ValidationError
+and falls through to the retry; failures log error types and field paths (never content);
+_MAX_OUTPUT_TOKENS rose from 8k to 16k because reasoning spends the same budget; the research error
+carries a `reason` and the page maps it to specific copy.
+
+Justification: same class as the brief truncation earlier today. A structured-output library can
+validate at a point your try/except does not wrap, so read where the SDK parses before trusting a
+fallback, and log which rule failed at the moment it fails.
+
+2026-09-14  Interview brief failed every time for a large preparation, and the dossier blanked on scroll
+
+Problem: "Aura could not build the interview brief" on every attempt. Separately, scrolling the
+Interview page's company dossier and brief review showed blank space for about half a second before
+content painted.
+
+Issue: the backend returned 503 at exactly 90.01s, three times out of three, for a 32.9KB
+preparation; the only success ever was a 21.8KB one at 69s. Cloud Run showed the real sequence: Haiku
+wrote 34,364 chars (the 8,000 max_output_tokens cap), the truncated JSON failed InterviewBriefDraft
+as a generic ValidationError, ModelProvider regenerated with the same prompt, and the handler's 90s
+wait_for killed it. Raising the handler deadline alone would not have helped: model_provider caps
+EVERY attempt at _TIMEOUT_S (90s) both in wait_for and in the AsyncAnthropic client timeout, and
+_attempt_timeout_s only let a caller lower that cap, never raise it. The scroll blanking had nothing
+to do with caching: every inner card carried its own backdrop-filter blur, nested two to three deep
+inside a panel that already blurred, and dozens of backdrop layers ran WebView2 out of raster budget.
+
+Solution: the brief now runs on expert() (Sonnet 5, Gemini 3.8 Flash fallback) with 12k output
+tokens, a 240s per-attempt cap and a 300s handler deadline. _attempt_timeout_s honours an override
+above the default, expert() accepts attempt_timeout_s, the Anthropic client takes the raised timeout
+via with_options, and a stop_reason == "max_tokens" response now logs its own warning. The inner
+Interview cards dropped backdrop-filter; the outer panels keep theirs.
+
+Justification: a structured response cut off at max_tokens is indistinguishable from bad model output
+unless stop_reason is logged, and retrying the same prompt is guaranteed to truncate again. Every
+existing attempt_timeout_s caller passes 20s or less, so lifting the upper clamp changes none of them.
+One blur on the container is visually the same as a blur per card inside it, at a fraction of the cost.
+
+Follow-up, same day: why did the truncation never reach the fallback model, and why did the UI say
+"try again"? The fallback chain in model_provider only hops on provider EXCEPTIONS (404, billing
+400, timeout or retryable errors after retries). A max_tokens cut-off is an HTTP 200, so _call only
+saw a schema ValueError, regenerated on the same model with the same prompt, and raised on the
+second miss without ever hopping. The handler then caught every cause as one 503 "Interview
+preparation failed.", the client turned it into "failed (503)", and the page ignored the error and
+told the user to retry, which could never help. Fix: _call_anthropic raises OutputTruncatedError on
+stop_reason max_tokens for structured calls, and _call hops to the next model on that or on a schema
+miss that survives regeneration (not for tools/history callers, whose Gemini hop would raise).
+The brief handler returns a `reason` (too_large, timed_out, invalid_output, unavailable, invalid),
+its deadline covers the fallback hop (480s), and InterviewPage maps each reason to its own copy.
+Lesson: a fallback chain keyed only on transport errors is blind to every failure the provider
+reports as success, and a catch-all that erases the cause produces advice that is wrong.
+
 
 Problem: production held zero dictation traces and the backend had never received an authenticated
 upload, although the pipeline shipped in 0.15.x and at least one opted-in machine (consent v2,

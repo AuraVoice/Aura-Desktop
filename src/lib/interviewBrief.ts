@@ -128,6 +128,51 @@ export interface InterviewBrief {
   plannedMinutes?: PlannedMinutes;
 }
 
+export type PrepFitStrength = "strong" | "partial" | "gap";
+
+export interface PrepLine {
+  text: string;
+  sourceIds: string[];
+}
+
+export interface PrepAnswer {
+  answerId: string;
+  question: string;
+  whyTheyAsk: string;
+  whySourceIds: string[];
+  storyTitle: string;
+  star: { situation: PrepLine; task: PrepLine; action: PrepLine; result: PrepLine } | null;
+  spoken: string;
+  followUp: string;
+  followUpHint: string;
+  avoid: PrepLine | null;
+}
+
+export interface PrepFit {
+  fitId: string;
+  requirement: string;
+  evidence: string;
+  strength: PrepFitStrength;
+  bridge: string;
+  sourceIds: string[];
+}
+
+/** Candidate-facing preparation built on a brief: what to say, not only what is
+ * true. Cites the brief's own source IDs; never read by the live companion. */
+export interface InterviewPrepRoom {
+  contractVersion: 1;
+  prepId: string;
+  briefId: string;
+  generatedAtMs: number;
+  companyStory: PrepLine[];
+  mustKnows: PrepLine[];
+  answers: PrepAnswer[];
+  fit: PrepFit[];
+  neverSay: string[];
+}
+
+export type PracticeMark = "confident" | "work";
+
 export interface InterviewBriefSlice {
   contractVersion: 3;
   briefId: string;
