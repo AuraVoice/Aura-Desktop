@@ -34,14 +34,42 @@ export interface NotionConnectorStatus {
   lastError: string | null;
 }
 
+/** One status shape for every connector added after Calendar, Gmail and
+ * Notion (backend OAuth2Connector.get_status plus per-provider extras). */
+export interface AccountConnectorStatus {
+  enabled: boolean;
+  canReconnect: boolean;
+  accountLabel: string | null;
+  connectedAt: string | null;
+  lastError: string | null;
+  /** GitHub: where the user picks which repositories Aura can see. */
+  installUrl: string | null;
+  /** LinkedIn: tokens last 60 days and cannot be refreshed. */
+  expiresAt: string | null;
+  bookmarksSyncedAt: string | null;
+  bookmarkCount: number | null;
+}
+
+export type AccountConnectorName = "google_classroom" | "github" | "linkedin" | "x";
+
+export const ACCOUNT_CONNECTOR_NAMES: readonly AccountConnectorName[] = [
+  "github",
+  "linkedin",
+  "x",
+  "google_classroom",
+];
+
 export interface ConnectorsCatalog {
   googleCalendar: GoogleCalendarConnectorStatus;
   gmail: GmailConnectorStatus;
   notion: NotionConnectorStatus;
+  accounts: Record<AccountConnectorName, AccountConnectorStatus>;
 }
 
 export class ConnectorReauthorizationRequiredError extends Error {}
-export type ConnectorName = "google_calendar" | "gmail" | "notion";
+/** A school admin has not allowed Aura to read Google Classroom. */
+export class ConnectorBlockedError extends Error {}
+export type ConnectorName = "google_calendar" | "gmail" | "notion" | AccountConnectorName;
 
 // Per-connector OAuth host allowlist. Never widen to "any https": that turns
 // a backend compromise into an open redirect on the user's machine.
@@ -49,6 +77,17 @@ const TRUSTED_AUTH_HOSTS: Record<ConnectorName, string> = {
   google_calendar: "accounts.google.com",
   gmail: "accounts.google.com",
   notion: "api.notion.com",
+  google_classroom: "accounts.google.com",
+  github: "github.com",
+  linkedin: "www.linkedin.com",
+  x: "x.com",
+};
+
+const ACCOUNT_CONNECTOR_PATHS: Record<AccountConnectorName, string> = {
+  google_classroom: "google-classroom",
+  github: "github",
+  linkedin: "linkedin",
+  x: "x",
 };
 
 export interface ConnectorOAuthAuthorization {
@@ -125,6 +164,23 @@ function parseNotionStatus(raw: RawNotionStatus): NotionConnectorStatus {
   };
 }
 
+function parseAccountStatus(raw: unknown): AccountConnectorStatus {
+  const data = typeof raw === "object" && raw !== null ? raw as Record<string, unknown> : {};
+  const installUrl = optionalString(data.install_url);
+  return {
+    enabled: data.enabled === true,
+    canReconnect: data.can_reconnect === true,
+    accountLabel: optionalString(data.account_label),
+    connectedAt: optionalString(data.connected_at),
+    lastError: optionalString(data.last_error),
+    // Only ever GitHub's own install page reaches openUrl.
+    installUrl: installUrl?.startsWith("https://github.com/apps/") ? installUrl : null,
+    expiresAt: optionalString(data.expires_at),
+    bookmarksSyncedAt: optionalString(data.bookmarks_synced_at),
+    bookmarkCount: typeof data.bookmark_count === "number" ? data.bookmark_count : null,
+  };
+}
+
 export function parseConnectorsCatalog(raw: unknown): ConnectorsCatalog {
   const data = typeof raw === "object" && raw !== null
     ? raw as Record<string, unknown>
@@ -142,6 +198,12 @@ export function parseConnectorsCatalog(raw: unknown): ConnectorsCatalog {
     googleCalendar: parseCalendarStatus(calendar),
     gmail: parseGmailStatus(gmail),
     notion: parseNotionStatus(notion),
+    accounts: {
+      google_classroom: parseAccountStatus(data.google_classroom),
+      github: parseAccountStatus(data.github),
+      linkedin: parseAccountStatus(data.linkedin),
+      x: parseAccountStatus(data.x),
+    },
   };
 }
 
@@ -160,6 +222,12 @@ async function readConnectorStatus<Raw, Status>(
       throw new ConnectorReauthorizationRequiredError("reauthorization_required");
     }
     throw new Error(`${action} failed (409)`);
+  }
+  if (response.status === 403) {
+    const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
+    if (body?.error === "school_blocked") {
+      throw new ConnectorBlockedError("school_blocked");
+    }
   }
   if (!response.ok) {
     throw new Error(`${action} failed (${response.status})`);
@@ -262,4 +330,20 @@ export function enableNotion(): Promise<NotionConnectorStatus> {
 
 export function disableNotion(): Promise<NotionConnectorStatus> {
   return postConnectorAction("/connectors/notion/disable", "Notion disable", parseNotionStatus);
+}
+
+export function enableAccountConnector(name: AccountConnectorName): Promise<AccountConnectorStatus> {
+  return postConnectorAction(
+    `/connectors/${ACCOUNT_CONNECTOR_PATHS[name]}/enable`, `${name} enable`, parseAccountStatus,
+  );
+}
+
+export function disableAccountConnector(name: AccountConnectorName): Promise<AccountConnectorStatus> {
+  return postConnectorAction(
+    `/connectors/${ACCOUNT_CONNECTOR_PATHS[name]}/disable`, `${name} disable`, parseAccountStatus,
+  );
+}
+
+export function syncXBookmarks(): Promise<AccountConnectorStatus> {
+  return postConnectorAction("/connectors/x/sync", "X bookmark sync", parseAccountStatus);
 }

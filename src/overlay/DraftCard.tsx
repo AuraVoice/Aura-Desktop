@@ -41,10 +41,13 @@ export function DraftCard({
   card,
   onHeightChange,
   visible = false,
+  onPost,
 }: {
   card: DraftCardState;
   onHeightChange?: (height: number) => void;
   visible?: boolean;
+  /** Puts an approval card up for this draft's text. Nothing posts from here. */
+  onPost?: (tool: "post_to_x" | "post_to_linkedin", text: string) => void;
 }) {
   const { phase, channel, draft, errorReason, copied, refineFailed } = card;
   const confirmDisplayed = card.confirmDisplayed;
@@ -158,6 +161,13 @@ export function DraftCard({
     : channel === "snippet"
       ? SNIPPET_CHIP_ORDER
       : MESSAGE_REFINE_CHIPS;
+  const postTool = !onPost || !draft || draft.artifactKind
+    ? null
+    : draft.skillId === "tweet"
+      ? "post_to_x" as const
+      : draft.skillId === "linkedin_post"
+        ? "post_to_linkedin" as const
+        : null;
 
   return (
     <GlassSurface className="draft-card ph-no-capture" draggable={false}>
@@ -185,7 +195,7 @@ export function DraftCard({
 
         {body}
 
-        {chips.length > 0 && (
+        {(chips.length > 0 || postTool) && (
           <div className="draft-card-chips">
             {chips.map((chip) => (
               <button
@@ -198,6 +208,16 @@ export function DraftCard({
                 {copyStrings.chips[chip]}
               </button>
             ))}
+            {postTool && draft && (
+              <button
+                type="button"
+                className="draft-card-chip"
+                onClick={() => onPost?.(postTool, draft.text)}
+                disabled={phase !== "shown"}
+              >
+                {postTool === "post_to_x" ? "Post to X" : "Post to LinkedIn"}
+              </button>
+            )}
           </div>
         )}
       </div>

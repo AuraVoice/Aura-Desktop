@@ -1,11 +1,20 @@
-import { Check, CircleAlert, LoaderCircle, RefreshCw } from "lucide-react";
+import { Check, CircleAlert, FolderGit2, LoaderCircle, RefreshCw } from "lucide-react";
 import type { ComponentType } from "react";
 import { useEffect, useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import type {
+  AccountConnectorName,
+  AccountConnectorStatus,
   GmailConnectorStatus,
   GoogleCalendarConnectorStatus,
   NotionConnectorStatus,
 } from "../../lib/connectors";
+import {
+  ACCOUNT_CONNECTOR_BY_NAME,
+  ACCOUNT_CONNECTORS,
+  type AccountConnectorDescriptor,
+} from "../../lib/connectorCatalog";
+import { logError } from "../../lib/log";
 import {
   GmailBrandIcon,
   GoogleCalendarBrandIcon,
@@ -34,7 +43,9 @@ const COMING_SOON_CONNECTORS: Array<{
 
 export function ConnectorsPage() {
   const connectors = useConnectors();
-  const [confirmDisconnect, setConfirmDisconnect] = useState<"calendar" | "gmail" | "notion" | null>(null);
+  const [confirmDisconnect, setConfirmDisconnect] = useState<
+    "calendar" | "gmail" | "notion" | AccountConnectorName | null
+  >(null);
   const calendar = connectors.catalog?.googleCalendar ?? null;
   const gmail = connectors.catalog?.gmail ?? null;
   const notion = connectors.catalog?.notion ?? null;
@@ -129,6 +140,26 @@ export function ConnectorsPage() {
             }}
           />
 
+          {ACCOUNT_CONNECTORS.map((descriptor) => (
+            <AccountConnectorRow
+              key={descriptor.name}
+              descriptor={descriptor}
+              status={connectors.catalog?.accounts[descriptor.name] ?? null}
+              busy={busy}
+              syncing={connectors.action === "syncing_x"}
+              onToggle={(checked) => {
+                if (checked) {
+                  setConfirmDisconnect(null);
+                  void connectors.enableAccount(descriptor.name);
+                } else {
+                  connectors.clearBanner();
+                  setConfirmDisconnect(descriptor.name);
+                }
+              }}
+              onSync={() => void connectors.syncXBookmarks()}
+            />
+          ))}
+
           {COMING_SOON_CONNECTORS.map((connector) => (
             <ComingSoonConnector key={connector.id} {...connector} />
           ))}
@@ -149,7 +180,9 @@ export function ConnectorsPage() {
               ? "Google Calendar"
               : confirmDisconnect === "notion"
                 ? "Notion"
-                : "Gmail"}?
+                : confirmDisconnect === "gmail" || confirmDisconnect === null
+                  ? "Gmail"
+                  : ACCOUNT_CONNECTOR_BY_NAME[confirmDisconnect].label}?
             Buddy will stop using it, but you can reconnect anytime.
           </p>
           <div className="db-update-dialog-actions">
@@ -163,8 +196,10 @@ export function ConnectorsPage() {
                   void connectors.disableCalendar();
                 } else if (target === "notion") {
                   void connectors.disableNotion();
-                } else {
+                } else if (target === "gmail") {
                   void connectors.disableGmail();
+                } else if (target) {
+                  void connectors.disableAccount(target);
                 }
               }}
             >
@@ -397,6 +432,85 @@ function NotionConnectorRow({
           connected={connected}
           busy={busy}
           name="Notion"
+          onToggle={onToggle}
+        />
+      </div>
+    </article>
+  );
+}
+
+function AccountConnectorRow({
+  descriptor,
+  status,
+  busy,
+  syncing,
+  onToggle,
+  onSync,
+}: {
+  descriptor: AccountConnectorDescriptor;
+  status: AccountConnectorStatus | null;
+  busy: boolean;
+  syncing: boolean;
+  onToggle: (checked: boolean) => void;
+  onSync: () => void;
+}) {
+  const connected = status?.enabled === true;
+  const { Icon } = descriptor;
+  const schoolBlocked = status?.lastError === "school_blocked";
+  const installUrl = status?.installUrl ?? null;
+  return (
+    <article className={`db-panel db-connector-row${connected ? " is-connected" : ""}`}>
+      <span className="db-connector-icon">
+        <Icon size={26} />
+      </span>
+      <div className="db-connector-row-copy">
+        <div className="db-connector-title-line">
+          <h2>{descriptor.label}</h2>
+          {connected && <span className="db-connector-connected-dot">Connected</span>}
+        </div>
+        <p>{connected && status ? descriptor.connectedDetail(status) : descriptor.pitch}</p>
+        {schoolBlocked && (
+          <p className="db-connector-attention">
+            Your school hasn't allowed Aura to use Classroom. Your school's IT admin can turn it on.
+          </p>
+        )}
+        {!connected && status?.lastError && !schoolBlocked && (
+          <p className="db-connector-attention">
+            {status.canReconnect
+              ? `${descriptor.label} needs to be reconnected. Turn it on to reconnect.`
+              : status.lastError}
+          </p>
+        )}
+      </div>
+      <div className="db-connector-row-controls">
+        {connected && descriptor.name === "github" && installUrl && (
+          <button
+            type="button"
+            className="db-connector-refresh"
+            onClick={() => void openUrl(installUrl).catch((err) => logError("ConnectorsPage: open GitHub install", err))}
+            disabled={busy}
+            aria-label="Choose GitHub repositories"
+            title="Choose repositories"
+          >
+            <FolderGit2 size={17} aria-hidden />
+          </button>
+        )}
+        {connected && descriptor.name === "x" && (
+          <button
+            type="button"
+            className={`db-connector-refresh${syncing ? " is-refreshing" : ""}`}
+            onClick={onSync}
+            disabled={busy}
+            aria-label="Sync X bookmarks"
+            title="Sync bookmarks"
+          >
+            <RefreshCw size={17} aria-hidden />
+          </button>
+        )}
+        <ConnectorSwitch
+          connected={connected}
+          busy={busy}
+          name={descriptor.label}
           onToggle={onToggle}
         />
       </div>

@@ -1,5 +1,15 @@
 import type { ConnectorName } from "./connectors";
 
+const KNOWN_CONNECTORS: ReadonlySet<string> = new Set<ConnectorName>([
+  "google_calendar",
+  "gmail",
+  "notion",
+  "google_classroom",
+  "github",
+  "linkedin",
+  "x",
+]);
+
 export interface ConnectorOAuthCompletion {
   attemptId: string;
   connector: ConnectorName;
@@ -28,10 +38,11 @@ export function parseConnectorOAuthCompletion(
   const outcome = url.searchParams.get("outcome");
   if (
     !attemptId
-    || (connector !== "google_calendar" && connector !== "gmail" && connector !== "notion")
+    || !connector
+    || !KNOWN_CONNECTORS.has(connector)
     || (outcome !== "success" && outcome !== "cancelled" && outcome !== "failed")
   ) {
     return null;
   }
-  return { attemptId, connector, outcome };
+  return { attemptId, connector: connector as ConnectorName, outcome };
 }

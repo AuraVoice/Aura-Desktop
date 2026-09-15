@@ -81,6 +81,10 @@ export type KnownAgentEventType =
   // screen (see overlay/interview/), because the worker speaks a line to the
   // user off the back of that ack.
   | "interview.material.request"
+  // A connector write (post to X or LinkedIn, GitHub issue) is waiting for the
+  // user's click. Carries only the approval id: usePendingActions reads the
+  // preview from the backend with the user's own token, never from here.
+  | "action.proposed"
   // Desktop control (desktop client only). The verb lives inside
   // payload.id and is validated against the client capability registry
   // (desktopCapabilities.ts), so this stays a single message type no matter
@@ -178,6 +182,7 @@ const KNOWN_TYPES: ReadonlySet<string> = new Set([
   "guide.request",
   "screen_context.request",
   "interview.material.request",
+  "action.proposed",
   "desktop.run",
 ] satisfies KnownAgentEventType[]);
 
@@ -285,6 +290,9 @@ function payloadWithinLimits(type: KnownAgentEventType, payload: Record<string, 
   }
   if (type === "guide.request") {
     return typeof payload.enable === "boolean";
+  }
+  if (type === "action.proposed") {
+    return typeof payload.approval_id === "string" && /^[0-9a-f]{64}$/.test(payload.approval_id);
   }
   if (type === "notion.saved") {
     // page_url is the one field that could reach openUrl someday; only https

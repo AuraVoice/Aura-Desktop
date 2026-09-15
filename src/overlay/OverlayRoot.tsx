@@ -39,6 +39,9 @@ import { GlassSurface } from "./GlassSurface";
 import { SetupPanel } from "./SetupPanel";
 import { PointingOverlay } from "./PointingOverlay";
 import { DraftCard, INITIAL_DRAFT_SLOT_HEIGHT } from "./DraftCard";
+import { ActionApprovalCard } from "./ActionApprovalCard";
+import { usePendingActions } from "./usePendingActions";
+import { PENDING_ACTION_TOOLS, type PendingActionTool } from "../lib/pendingActions";
 import { useInterviewMaterial } from "./interview/useInterviewMaterial";
 import {
   isInterviewCaptureActive,
@@ -300,6 +303,43 @@ export function OverlayRoot() {
   // commands. Native side gates on a live voice session, so no extra guard here.
   useSystemControl(voice.room);
   const draftCard = useDraftCard(voice.room, presentation);
+  // Approval cards for connector writes. Voice announces one over the data
+  // channel; a chat turn that ran an approval tool is noticed here from its
+  // finished activity row; a draft's Post button proposes one directly.
+  const pendingActions = usePendingActions(voice.room, user?.uid ?? null);
+  const finishedApprovalToolKey = chat.messages
+    .filter((message) =>
+      message.kind === "activity"
+      && message.running === false
+      && message.tool !== undefined
+      && PENDING_ACTION_TOOLS.has(message.tool))
+    .map((message) => message.id)
+    .join("|");
+  const refreshPendingActions = pendingActions.refresh;
+  useEffect(() => {
+    if (finishedApprovalToolKey) refreshPendingActions();
+  }, [finishedApprovalToolKey, refreshPendingActions]);
+  const proposePendingAction = pendingActions.propose;
+  const postDraft = useCallback((tool: PendingActionTool, text: string) => {
+    void proposePendingAction(tool, { text })
+      .then((result) => {
+        if (result.kind === "proposed") return;
+        if (result.kind === "notConnected") {
+          openDashboardWindow("/connectors");
+          return;
+        }
+        return invoke("show_actionable_toast", {
+          notificationId: `post-draft-${Date.now()}`,
+          action: null,
+          title: "Aura",
+          body: result.kind === "invalid" && result.reason === "text_too_long"
+            ? "That draft is too long to post. Ask Buddy to shorten it."
+            : "Aura couldn't set up that post. Try again in a moment.",
+          silent: true,
+        });
+      })
+      .catch((err) => logError("OverlayRoot: post draft", err));
+  }, [proposePendingAction]);
   const callLive =
     voice.status !== "disconnected" && voice.status !== "ended" && voice.status !== "error";
   // Meeting capture is a background service. Keep calendar polling, durable
@@ -394,6 +434,16 @@ export function OverlayRoot() {
     && voiceNoticeMessage !== null
     && !showInterviewHacker
     && !showInterviewPaste;
+  // An approval card outranks chat and every card below it: the user just asked
+  // for this post, and it expires if it waits behind anything. It never covers
+  // a live Interview Companion or the job-description box that session asked for.
+  const showApprovalCard =
+    user !== null
+    && pendingActions.current !== null
+    && !showInterviewHacker
+    && !showInterviewPaste;
+  const [approvalCardHeight, setApprovalCardHeight] = useState(INITIAL_DRAFT_SLOT_HEIGHT);
+  const lowerCardsHidden = visibleChatOpen || showApprovalCard;
 
   // Slot priority (CLAUDE.md): active Interview Companion > chat > voice recovery
   // > draft > inbox > update > daily catch-up. The live companion must keep its capture
@@ -509,6 +559,8 @@ export function OverlayRoot() {
     ? interviewHackerHidden ? 0 : interviewHackerHeight
     : showInterviewPaste
       ? interviewSlotHeight
+      : showApprovalCard
+        ? approvalCardHeight
       : showVoiceNotice
         ? VOICE_RECOVERY_CARD_HEIGHT
         : showDraftCard
@@ -528,7 +580,9 @@ export function OverlayRoot() {
                     : showCallbackCard
                       ? CALLBACK_CARD_HEIGHT
                       : null;
-  const appliedSlotHeight = visibleChatOpen ? chatSlotHeight : slotHeight;
+  const appliedSlotHeight = showApprovalCard
+    ? approvalCardHeight
+    : visibleChatOpen ? chatSlotHeight : slotHeight;
 
   useEffect(() => {
     let cancelled = false;
@@ -867,7 +921,10 @@ export function OverlayRoot() {
       }${showInterviewHacker && interviewHackerHidden ? " notch-column-interview-collapsed" : ""
       }`}
     >
-      {visibleChatOpen && (
+      {showApprovalCard && (
+        <ActionApprovalCard actions={pendingActions} onHeightChange={setApprovalCardHeight} />
+      )}
+      {visibleChatOpen && !showApprovalCard && (
         <ChatSlot
           messages={chat.messages}
           focusNonce={chatFocusNonce}
@@ -888,17 +945,17 @@ export function OverlayRoot() {
           onHeightChange={setChatSlotHeight}
         />
       )}
-      {!visibleChatOpen && showInterviewHacker && !interviewHackerHidden && (
+      {!lowerCardsHidden &&showInterviewHacker && !interviewHackerHidden && (
         <InterviewHackerCard hacker={interviewHacker} />
       )}
-      {!visibleChatOpen && !showInterviewHacker && showInterviewPaste && (
+      {!lowerCardsHidden &&!showInterviewHacker && showInterviewPaste && (
         <InterviewPasteCard
           card={interviewMaterial}
           onHeightChange={setInterviewSlotHeight}
           visible={presentation === "bar" || presentation === "companion"}
         />
       )}
-      {!visibleChatOpen && showVoiceNotice && (
+      {!lowerCardsHidden &&showVoiceNotice && (
         <VoiceRecoveryCard
           variant={
             voice.showMicSettingsHint ? "mic" : voice.errorMessage ? "error" : "connecting"
@@ -934,7 +991,7 @@ export function OverlayRoot() {
           onClose={voice.endSession}
         />
       )}
-      {!visibleChatOpen
+      {!lowerCardsHidden
         && !showInterviewHacker
         && !showInterviewPaste
         && !showVoiceNotice
@@ -943,35 +1000,36 @@ export function OverlayRoot() {
             card={draftCard}
             onHeightChange={setDraftCardHeight}
             visible={presentation === "bar" || presentation === "companion"}
+            onPost={postDraft}
           />
         )}
-      {!visibleChatOpen && meetingPromptOnScreen && (
+      {!lowerCardsHidden &&meetingPromptOnScreen && (
         <MeetingPromptCard prompt={meetingPrompt} leaving={meetingPromptPresence.leaving} />
       )}
-      {!visibleChatOpen && showScreenContextConsent && (
+      {!lowerCardsHidden &&showScreenContextConsent && (
         <ScreenContextConsentCard
           onAllow={allowScreenContext}
           onDismiss={dismissScreenContextRequest}
         />
       )}
-      {!visibleChatOpen && showRegionPreview && regionCapture.preview && (
+      {!lowerCardsHidden &&showRegionPreview && regionCapture.preview && (
         <RegionPreviewCard preview={regionCapture.preview} onDismiss={regionCapture.dismiss} />
       )}
-      {!visibleChatOpen && showInbox && (
+      {!lowerCardsHidden &&showInbox && (
         <NotificationInboxCard
           notifications={notifications}
           onClose={() => setInboxOpen(false)}
           onAction={handleNotificationAction}
         />
       )}
-      {!visibleChatOpen && showUpdateBanner && (
+      {!lowerCardsHidden &&showUpdateBanner && (
         <UpdateBanner
           version={updateReady.version}
           updatedVersion={updateReady.updatedNotice}
           surface="overlay"
         />
       )}
-      {!visibleChatOpen && showCallbackCard && <CallbackCard card={callbackCard} />}
+      {!lowerCardsHidden &&showCallbackCard && <CallbackCard card={callbackCard} />}
       {showInterviewHacker ? (
         <InterviewHackerControlBar
           expanded={!interviewHackerHidden}

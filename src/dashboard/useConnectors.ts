@@ -4,22 +4,30 @@ import { CONNECTOR_OAUTH_COMPLETE } from "../lib/ipcEvents";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  ACCOUNT_CONNECTOR_NAMES,
+  ConnectorBlockedError,
   ConnectorReauthorizationRequiredError,
+  disableAccountConnector,
   disableGmail,
   disableGoogleCalendar,
   disableNotion,
+  enableAccountConnector,
   enableGmail,
   enableGoogleCalendar,
   enableNotion,
   fetchConnectors,
   startConnectorOAuth,
   syncGoogleCalendar,
+  syncXBookmarks,
+  type AccountConnectorName,
+  type AccountConnectorStatus,
   type ConnectorName,
   type ConnectorsCatalog,
   type GmailConnectorStatus,
   type GoogleCalendarConnectorStatus,
   type NotionConnectorStatus,
 } from "../lib/connectors";
+import { ACCOUNT_CONNECTOR_BY_NAME } from "../lib/connectorCatalog";
 import { parseConnectorOAuthCompletion } from "../lib/connectorOAuth";
 import { logError } from "../lib/log";
 
@@ -36,7 +44,12 @@ export type ConnectorAction =
   | "enabling_notion"
   | "opening_notion"
   | "waiting_for_notion"
-  | "disabling_notion";
+  | "disabling_notion"
+  | `enabling_${AccountConnectorName}`
+  | `opening_${AccountConnectorName}`
+  | `waiting_for_${AccountConnectorName}`
+  | `disabling_${AccountConnectorName}`
+  | "syncing_x";
 
 export interface ConnectorBanner {
   tone: "info" | "success" | "error";
@@ -61,6 +74,9 @@ export interface ConnectorsState {
   disableGmail: () => Promise<void>;
   enableNotion: () => Promise<void>;
   disableNotion: () => Promise<void>;
+  enableAccount: (name: AccountConnectorName) => Promise<void>;
+  disableAccount: (name: AccountConnectorName) => Promise<void>;
+  syncXBookmarks: () => Promise<void>;
   clearBanner: () => void;
 }
 
@@ -80,19 +96,43 @@ const WAITING_ACTIONS = new Set<ConnectorAction>([
   "waiting_for_google",
   "waiting_for_gmail",
   "waiting_for_notion",
+  ...ACCOUNT_CONNECTOR_NAMES.map((name) => `waiting_for_${name}` as const),
 ]);
 
 const PROVIDER_NAMES: Record<ConnectorName, string> = {
   google_calendar: "Google",
   gmail: "Google",
   notion: "Notion",
+  google_classroom: ACCOUNT_CONNECTOR_BY_NAME.google_classroom.providerName,
+  github: ACCOUNT_CONNECTOR_BY_NAME.github.providerName,
+  linkedin: ACCOUNT_CONNECTOR_BY_NAME.linkedin.providerName,
+  x: ACCOUNT_CONNECTOR_BY_NAME.x.providerName,
 };
 
 const CONNECTED_MESSAGES: Record<ConnectorName, string> = {
   google_calendar: "Google Calendar is connected. Buddy has the latest.",
   gmail: "Gmail is connected. Buddy can now help send email when you ask.",
   notion: "Notion is connected. Say where something on your screen should go and Buddy saves it there.",
+  google_classroom: ACCOUNT_CONNECTOR_BY_NAME.google_classroom.connectedMessage,
+  github: ACCOUNT_CONNECTOR_BY_NAME.github.connectedMessage,
+  linkedin: ACCOUNT_CONNECTOR_BY_NAME.linkedin.connectedMessage,
+  x: ACCOUNT_CONNECTOR_BY_NAME.x.connectedMessage,
 };
+
+const SCHOOL_BLOCKED_MESSAGE =
+  "Your school hasn't allowed Aura to use Google Classroom. Your school's IT admin can turn it on.";
+
+function connectedByName(catalog: ConnectorsCatalog): Record<ConnectorName, boolean> {
+  return {
+    google_calendar: catalog.googleCalendar.enabled,
+    gmail: catalog.gmail.enabled,
+    notion: catalog.notion.enabled,
+    google_classroom: catalog.accounts.google_classroom.enabled,
+    github: catalog.accounts.github.enabled,
+    linkedin: catalog.accounts.linkedin.enabled,
+    x: catalog.accounts.x.enabled,
+  };
+}
 
 export function useConnectors(): ConnectorsState {
   const [catalog, setCatalog] = useState<ConnectorsCatalog | null>(null);
@@ -140,11 +180,7 @@ export function useConnectors(): ConnectorsState {
       void fetchConnectors().then((next) => {
         if (!mountedRef.current) return;
         if (pendingOAuthRef.current?.attemptId !== attemptId) return;
-        const connected: Record<ConnectorName, boolean> = {
-          google_calendar: next.googleCalendar.enabled,
-          gmail: next.gmail.enabled,
-          notion: next.notion.enabled,
-        };
+        const connected = connectedByName(next);
         setCatalog(next);
         if (!connected[connector]) return;
         // Claim the attempt so the deep link, if it ever turns up, does not
@@ -187,6 +223,13 @@ export function useConnectors(): ConnectorsState {
     setCatalog((current) => current ? { ...current, notion } : current);
   }, []);
 
+  const applyAccount = useCallback((name: AccountConnectorName, status: AccountConnectorStatus) => {
+    if (!mountedRef.current) return;
+    setCatalog((current) => current
+      ? { ...current, accounts: { ...current.accounts, [name]: status } }
+      : current);
+  }, []);
+
   const reload = useCallback(async () => {
     if (mountedRef.current) {
       setLoading(true);
@@ -221,6 +264,7 @@ export function useConnectors(): ConnectorsState {
     openingMessage: string;
     waitingMessage: string;
     openFailedMessage: string;
+    blockedMessage?: string;
   }) => {
     // A browser wait is not real work, so it never blocks a new request: the
     // click that lands during one is the user asking to start over.
@@ -237,6 +281,12 @@ export function useConnectors(): ConnectorsState {
       setBanner({ tone: "success", message: flow.connectedMessage });
     } catch (err) {
       if (!mountedRef.current) return;
+      if (err instanceof ConnectorBlockedError && flow.blockedMessage) {
+        setAction(null);
+        setBanner({ tone: "error", message: flow.blockedMessage });
+        void reload();
+        return;
+      }
       if (!(err instanceof ConnectorReauthorizationRequiredError)) {
         logError(`useConnectors: enable ${flow.logLabel}`, err);
         setAction(null);
@@ -263,7 +313,7 @@ export function useConnectors(): ConnectorsState {
         setBanner({ tone: "error", message: flow.openFailedMessage });
       }
     }
-  }, [action, clearBannerTimer, clearOAuthWait, waitForOAuth]);
+  }, [action, clearBannerTimer, clearOAuthWait, reload, waitForOAuth]);
 
   /** The shared disable/refresh flow, same deduplication rationale. */
   const runAction = useCallback(async <Status,>(flow: {
@@ -395,6 +445,50 @@ export function useConnectors(): ConnectorsState {
     failedMessage: "Notion stayed connected because the disconnect did not finish. Try again.",
   }), [runAction, applyNotion]);
 
+  const enableAccount = useCallback((name: AccountConnectorName) => {
+    const descriptor = ACCOUNT_CONNECTOR_BY_NAME[name];
+    return runEnable({
+      connector: name,
+      enablingAction: `enabling_${name}`,
+      openingAction: `opening_${name}`,
+      waitingAction: `waiting_for_${name}`,
+      enable: () => enableAccountConnector(name),
+      apply: (status: AccountConnectorStatus) => applyAccount(name, status),
+      logLabel: descriptor.label,
+      checkingMessage: `Checking your saved ${descriptor.label} connection.`,
+      connectedMessage: descriptor.connectedMessage,
+      enableFailedMessage: `${descriptor.label} could not connect just now. Nothing changed, so you can try again.`,
+      openingMessage: descriptor.openingMessage,
+      waitingMessage: descriptor.waitingMessage,
+      openFailedMessage: `The secure ${descriptor.providerName} page could not open. Nothing changed, so you can try again.`,
+      blockedMessage: name === "google_classroom" ? SCHOOL_BLOCKED_MESSAGE : undefined,
+    });
+  }, [runEnable, applyAccount]);
+
+  const disableAccount = useCallback((name: AccountConnectorName) => {
+    const descriptor = ACCOUNT_CONNECTOR_BY_NAME[name];
+    return runAction({
+      actionName: `disabling_${name}`,
+      run: () => disableAccountConnector(name),
+      apply: (status: AccountConnectorStatus) => applyAccount(name, status),
+      logLabel: `disable ${descriptor.label}`,
+      startMessage: `Turning ${descriptor.label} off for Buddy.`,
+      doneMessage: `${descriptor.label} is off. You can reconnect anytime.`,
+      failedMessage: `${descriptor.label} stayed connected because the disconnect did not finish. Try again.`,
+    });
+  }, [runAction, applyAccount]);
+
+  const syncX = useCallback(() => runAction({
+    actionName: "syncing_x",
+    run: syncXBookmarks,
+    apply: (status: AccountConnectorStatus) => applyAccount("x", status),
+    logLabel: "sync X bookmarks",
+    startMessage: "Pulling in your latest X bookmarks.",
+    doneMessage: "Your X bookmarks are up to date.",
+    failedMessage: "Aura couldn't sync your bookmarks just now. You may have reached this month's limit.",
+    autoClearDoneMs: 4_000,
+  }), [runAction, applyAccount]);
+
   // Stable identity: the page keys its success auto-close timer on this, and a
   // per-render closure would restart that timer on every catalog poll.
   const clearBanner = useCallback(() => {
@@ -435,13 +529,8 @@ export function useConnectors(): ConnectorsState {
       const next = await fetchConnectors();
       if (!mountedRef.current) return;
       setCatalog(next);
-      const connectedByName: Record<ConnectorName, boolean> = {
-        google_calendar: next.googleCalendar.enabled,
-        gmail: next.gmail.enabled,
-        notion: next.notion.enabled,
-      };
       setAction(null);
-      setBanner(connectedByName[completion.connector]
+      setBanner(connectedByName(next)[completion.connector]
         ? {
             tone: "success",
             message: CONNECTED_MESSAGES[completion.connector],
@@ -502,6 +591,9 @@ export function useConnectors(): ConnectorsState {
     disableGmail: disableGmailConnector,
     enableNotion: enableNotionConnector,
     disableNotion: disableNotionConnector,
+    enableAccount,
+    disableAccount,
+    syncXBookmarks: syncX,
     clearBanner,
   };
 }

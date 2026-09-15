@@ -65,6 +65,52 @@ export function SlackBrandIcon({ size = 26, className }: BrandIconProps) {
   );
 }
 
+export function GitHubBrandIcon({ size = 24, className }: BrandIconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden className={className}>
+      <path
+        fill="currentColor"
+        d="M12 1.5a10.5 10.5 0 0 0-3.32 20.46c.53.1.72-.23.72-.5v-1.86c-2.92.63-3.54-1.24-3.54-1.24-.48-1.22-1.17-1.54-1.17-1.54-.95-.65.07-.64.07-.64 1.06.07 1.61 1.08 1.61 1.08.94 1.6 2.46 1.14 3.06.87.1-.68.37-1.14.66-1.4-2.33-.27-4.78-1.17-4.78-5.19 0-1.15.41-2.08 1.08-2.82-.1-.26-.47-1.33.1-2.78 0 0 .88-.28 2.89 1.08a10 10 0 0 1 5.26 0c2.01-1.36 2.89-1.08 2.89-1.08.57 1.45.21 2.52.1 2.78.67.74 1.08 1.67 1.08 2.82 0 4.03-2.46 4.92-4.8 5.18.38.33.71.97.71 1.96v2.9c0 .28.19.61.73.5A10.5 10.5 0 0 0 12 1.5Z"
+      />
+    </svg>
+  );
+}
+
+export function LinkedInBrandIcon({ size = 24, className }: BrandIconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden className={className}>
+      <rect x="2" y="2" width="20" height="20" rx="4" fill="#0a66c2" />
+      <path
+        fill="#fff"
+        d="M7.1 9.6h2.4V17H7.1V9.6Zm1.2-3.7a1.4 1.4 0 1 1 0 2.8 1.4 1.4 0 0 1 0-2.8Zm2.9 3.7h2.3v1c.32-.6 1.1-1.22 2.27-1.22 2.43 0 2.88 1.6 2.88 3.68V17h-2.4v-3.54c0-.85-.02-1.94-1.18-1.94-1.18 0-1.36.92-1.36 1.88V17h-2.4V9.6Z"
+      />
+    </svg>
+  );
+}
+
+export function XBrandIcon({ size = 22, className }: BrandIconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden className={className}>
+      <path
+        fill="currentColor"
+        d="M17.75 3h3.07l-6.7 7.66L22 21h-6.17l-4.83-6.32L5.47 21H2.4l7.17-8.2L2 3h6.33l4.37 5.77L17.75 3Zm-1.08 16.18h1.7L7.4 4.73H5.58l11.09 14.45Z"
+      />
+    </svg>
+  );
+}
+
+export function GoogleClassroomBrandIcon({ size = 24, className }: BrandIconProps) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden className={className}>
+      <rect x="2" y="4" width="20" height="16" rx="2" fill="#0f9d58" />
+      <rect x="4" y="6" width="16" height="12" rx="1" fill="#57bb8a" />
+      <circle cx="12" cy="10.5" r="1.8" fill="#fff" />
+      <path fill="#fff" d="M8.8 15.5c.4-1.6 1.7-2.5 3.2-2.5s2.8.9 3.2 2.5H8.8Z" />
+      <rect x="14" y="18" width="5" height="1.4" rx=".7" fill="#fff" />
+    </svg>
+  );
+}
+
 export function NotionBrandIcon({ size = 24, className }: BrandIconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden className={className}>

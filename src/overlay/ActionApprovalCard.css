@@ -1,0 +1,149 @@
+/* The approval card shares DraftCard's glass tokens and slot behaviour; it
+   measures its content and OverlayRoot grows the native slot to match. */
+
+.glass-surface.action-card {
+  flex: 1 1 auto;
+  min-height: 0;
+  border-radius: 28px;
+  animation: draft-card-enter 0.22s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+
+.action-card-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+  padding: 14px 18px;
+  box-sizing: border-box;
+}
+
+.action-card-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.action-card-title {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--glass-text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.action-card-text {
+  flex: 0 1 auto;
+  min-height: 0;
+  margin: 0;
+  max-height: 260px;
+  overflow-y: auto;
+  padding-right: 6px;
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--glass-text-bright);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  -webkit-user-select: text;
+  user-select: text;
+  cursor: text;
+}
+
+.action-card-text::-webkit-scrollbar {
+  width: 6px;
+}
+
+.action-card-text::-webkit-scrollbar-thumb {
+  background: var(--glass-border-flat);
+  border-radius: 3px;
+}
+
+.action-card-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: 11.5px;
+  color: var(--glass-text-dim);
+}
+
+.action-card-issue-title {
+  flex-basis: 100%;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--glass-text-bright);
+}
+
+.action-card-warning {
+  padding: 1px 8px;
+  border: 1px solid var(--glass-border-flat);
+  border-radius: 999px;
+  color: var(--glass-text-bright);
+}
+
+.action-card-outcome {
+  flex-shrink: 0;
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--glass-text-bright);
+}
+
+.action-card-outcome-error {
+  color: var(--glass-danger);
+}
+
+.action-card-buttons {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.action-card-buttons:empty {
+  display: none;
+}
+
+.action-card-button {
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--glass-text-bright);
+  background: var(--glass-field-fill);
+  border: 1px solid var(--glass-border-flat);
+  border-radius: var(--button-radius);
+  padding: 6px 14px;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.action-card-button:hover:not(:disabled) {
+  background: var(--glass-sheen);
+}
+
+.action-card-button-primary {
+  color: var(--glass-accent);
+  border-color: var(--glass-accent);
+}
+
+.action-card-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .glass-surface.action-card {
+    animation: none;
+  }
+}
