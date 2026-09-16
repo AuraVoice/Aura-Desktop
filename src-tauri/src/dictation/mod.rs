@@ -109,8 +109,8 @@ impl DictationStatus {
 }
 
 pub use platform::{
-    chat_slot_open, composer_focused, is_holding_text, set_chat_slot_open, set_composer_focused,
-    signal, start, DictationHandle,
+    chat_slot_open, composer_focused, held_text_copied, is_holding_text, set_chat_slot_open,
+    set_composer_focused, signal, start, DictationHandle,
 };
 
 /// Read by telemetry.rs for the heartbeat: the same silent health check the
@@ -228,6 +228,11 @@ mod platform {
 
     enum Message {
         Chord(ChordSignal),
+        /// The HUD's Copy button was pressed while text was being held for a
+        /// text box. The words are on the clipboard now, so the hold ends:
+        /// otherwise the paste lands in a field, the next probe sees that
+        /// field as typable, and the same words are typed a second time.
+        HeldTextCopied,
         Shutdown,
     }
 
@@ -245,7 +250,10 @@ mod platform {
             Ok(Message::Chord(ChordSignal::Release)) | Ok(Message::Chord(ChordSignal::Cancel)) => {
                 Signal::Ended
             }
-            Ok(Message::Chord(_)) => Signal::None,
+            // A Copy click that raced a new hold: the held text it referred to
+            // was already superseded when the hold armed, so there is nothing
+            // left to release.
+            Ok(Message::Chord(_)) | Ok(Message::HeldTextCopied) => Signal::None,
             Err(TryRecvError::Empty) => Signal::None,
             Err(TryRecvError::Disconnected) => Signal::Shutdown,
         }
@@ -310,6 +318,17 @@ mod platform {
             // Once only: the hook fires this on every press, and a dead worker
             // would otherwise fill the whole readable log tail.
             error!("dictation: worker thread is gone, the chord is dead until restart");
+        }
+    }
+
+    /// Called from the HUD's Copy button (a Tauri command) while text is held.
+    /// A no-op when nothing is held, so a stale click costs one atomic load.
+    pub fn held_text_copied() {
+        if !is_holding_text() {
+            return;
+        }
+        if let Some(tx) = CHORD_TX.get() {
+            let _ = tx.send(Message::HeldTextCopied);
         }
     }
 
@@ -487,7 +506,7 @@ mod platform {
                 Message::Chord(ChordSignal::Arm) | Message::Chord(ChordSignal::CancelPending)
             ) {
                 if let Some(held) = pending.take() {
-                    discard_pending(&app, held, "superseded");
+                    discard_pending(&app, held, "superseded", NO_TEXT_BOX_HUD);
                 }
                 if let Some(utterance) = failed.take() {
                     discard_failed(utterance, "superseded");
@@ -502,6 +521,15 @@ mod platform {
             }
             match message {
                 Message::Shutdown => break,
+                Message::HeldTextCopied => {
+                    // The transcript is on the clipboard. Close the hold and say
+                    // so; the recovery card keeps the words on screen a while
+                    // longer in case the paste goes wrong.
+                    if let Some(held) = pending.take() {
+                        discard_pending(&app, held, "copied", "Copied. Nothing was typed.");
+                    }
+                    set_holding(pending.is_some() || failed.is_some());
+                }
                 Message::Chord(ChordSignal::CancelPending) => {
                     // Already dropped above. The signal only fires while
                     // something is held, so there is nothing else to do.
@@ -544,7 +572,7 @@ mod platform {
             }
         }
         if let Some(held) = pending.take() {
-            discard_pending(&app, held, "shutting down");
+            discard_pending(&app, held, "shutting down", NO_TEXT_BOX_HUD);
         }
         if let Some(utterance) = failed.take() {
             discard_failed(utterance, "shutting down");
@@ -707,15 +735,18 @@ mod platform {
             }
         }
         if Instant::now() >= held.expires_at {
-            discard_pending(app, held, "no text box appeared");
+            discard_pending(app, held, "no text box appeared", NO_TEXT_BOX_HUD);
             return None;
         }
         Some(held)
     }
 
+    const NO_TEXT_BOX_HUD: &str = "No text box appeared, so nothing was typed.";
+
     /// Stops waiting for a text box and offers the held transcript for copying.
-    /// The transcript itself is never logged, only the reason.
-    fn discard_pending(app: &AppHandle, held: PendingText, reason: &str) {
+    /// `reason` is logged; `message` is what the recovery card says. The
+    /// transcript itself is never logged.
+    fn discard_pending(app: &AppHandle, held: PendingText, reason: &str, message: &str) {
         info!(
             "dictation: held text released for recovery ({reason}) chars={}",
             held.text.chars().count()
@@ -725,7 +756,7 @@ mod platform {
             held.generation,
             HudUpdate::new(HudPhase::Recovery)
                 .with_text(held.text)
-                .with_message("No text box appeared, so nothing was typed."),
+                .with_message(message),
             RECOVERY_LINGER,
         );
     }
@@ -1515,7 +1546,7 @@ mod platform {
                 Ok(Message::Shutdown) => return Awaited::Shutdown,
                 Ok(Message::Chord(ChordSignal::Release))
                 | Ok(Message::Chord(ChordSignal::Cancel)) => return Awaited::Released,
-                Ok(Message::Chord(_)) => {}
+                Ok(Message::Chord(_)) | Ok(Message::HeldTextCopied) => {}
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => return Awaited::Shutdown,
             }
@@ -1538,7 +1569,7 @@ mod platform {
                 Ok(Message::Shutdown) => return true,
                 Ok(Message::Chord(ChordSignal::Release))
                 | Ok(Message::Chord(ChordSignal::Cancel)) => return false,
-                Ok(Message::Chord(_)) => {}
+                Ok(Message::Chord(_)) | Ok(Message::HeldTextCopied) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return true,
             }
@@ -1796,6 +1827,14 @@ pub fn dictation_hud_state() -> hud::HudUpdate {
 #[tauri::command]
 pub fn dictation_set_hud_hovered(app: tauri::AppHandle, hovered: bool) {
     hud::set_hovered(&app, hovered);
+}
+
+/// The HUD copied held text to the clipboard, so the wait for a text box is
+/// over. Without this the paste would land in a field the next probe judges
+/// typable and the words would be typed a second time behind it.
+#[tauri::command]
+pub fn dictation_held_text_copied() {
+    held_text_copied();
 }
 
 /// React reports chat-composer focus so a hold started there is delivered into

@@ -44,11 +44,13 @@ const HOVER_SIDE_HEIGHT: f64 = 46.0;
 const HOVER_TOP_WIDTH: f64 = 164.0;
 const HOVER_TOP_HEIGHT: f64 = 63.0;
 
-/// The message pill. Used by `Error` and `Pending`; live recognition stays a
-/// compact waveform because the final transcript belongs in the focused field.
+/// The message pill. Used by `Error`; live recognition stays a compact
+/// waveform because the final transcript belongs in the focused field.
+/// `Pending` and `Recovery` share the taller card because both carry the
+/// transcript and a Copy button as their last row.
 const MESSAGE_WIDTH: f64 = 340.0;
 const MESSAGE_HEIGHT: f64 = 44.0;
-const PENDING_HEIGHT: f64 = 78.0;
+const PENDING_HEIGHT: f64 = 112.0;
 const RECOVERY_HEIGHT: f64 = 112.0;
 /// The one-time online-dictation consent prompt. Wider and taller than any
 /// other state because it is the only one that has to carry a disclosure the
@@ -124,11 +126,15 @@ pub enum HudPhase {
 /// Whether the HUD should receive mouse input in this phase.
 ///
 /// Almost every phase is a passive caption that must not steal clicks from the
-/// window underneath, which is the whole point of a dictation HUD. The three
+/// window underneath, which is the whole point of a dictation HUD. The
 /// exceptions need clicks to do their job: the resting pill's hover affordance,
-/// the recovery card's Copy button, and the consent prompt's buttons.
+/// the Copy button on the pending and recovery cards, and the consent prompt's
+/// buttons.
 fn accepts_clicks(phase: HudPhase) -> bool {
-    matches!(phase, HudPhase::Idle | HudPhase::Recovery | HudPhase::Consent)
+    matches!(
+        phase,
+        HudPhase::Idle | HudPhase::Pending | HudPhase::Recovery | HudPhase::Consent
+    )
 }
 
 /// Whether this phase should borrow the notch edge from the Bar. A hold that
@@ -243,7 +249,7 @@ fn build_window(app: &AppHandle) -> Result<(), String> {
 
 /// Whether this phase needs the window to be activatable.
 ///
-/// Recovery and Consent have controls. Every other phase is hover only or
+/// Pending, Recovery and Consent have controls. Every other phase is hover only or
 /// click-through, which is why `apply_no_activate` was safe to set once at build
 /// and forget: a window that cannot activate cannot hand its WebView2 child
 /// focus, and a click into an unfocused WebView2 never reaches the DOM. That is
@@ -255,7 +261,7 @@ fn build_window(app: &AppHandle) -> Result<(), String> {
 /// same predicate drives the panel's `canBecomeKeyWindow` through
 /// `prepare_activation`.
 fn needs_activation(phase: HudPhase) -> bool {
-    matches!(phase, HudPhase::Recovery | HudPhase::Consent)
+    matches!(phase, HudPhase::Pending | HudPhase::Recovery | HudPhase::Consent)
 }
 
 /// The half of activation that has to run BEFORE `window.show()`. On macOS

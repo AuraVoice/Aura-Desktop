@@ -138,15 +138,42 @@ function DictationConsent() {
   );
 }
 
-function DictationRecovery({ text, message }: { text: string; message?: string }) {
+/// The Copy button shared by the pending and recovery cards. `onCopied` runs
+/// after the clipboard write succeeds, so a caller can end a hold only once
+/// the words are actually somewhere the user can retrieve them.
+function CopyTranscriptButton({
+  text,
+  site,
+  onCopied,
+}: {
+  text: string;
+  site: string;
+  onCopied?: () => void;
+}) {
   const [copied, setCopied] = useState(false);
 
   const copyTranscript = () => {
     void writeText(text)
-      .then(() => setCopied(true))
-      .catch((error) => logError("DictationRecovery: copy transcript", error));
+      .then(() => {
+        setCopied(true);
+        onCopied?.();
+      })
+      .catch((error) => logError(`${site}: copy transcript`, error));
   };
 
+  return (
+    <button type="button" className="dictation-message__copy" onClick={copyTranscript}>
+      {copied && (
+        <span className="dictation-message__copy-check" aria-hidden="true">
+          ✓
+        </span>
+      )}
+      {copied ? "Copied" : "Copy"}
+    </button>
+  );
+}
+
+function DictationRecovery({ text, message }: { text: string; message?: string }) {
   return (
     <GlassSurface className="dictation-message is-recovery" draggable={false}>
       <div className="dictation-message__row">
@@ -156,18 +183,32 @@ function DictationRecovery({ text, message }: { text: string; message?: string }
         </span>
       </div>
       <p className="dictation-message__text">{text}</p>
-      <button
-        type="button"
-        className="dictation-message__copy"
-        onClick={copyTranscript}
-      >
-        {copied && (
-          <span className="dictation-message__copy-check" aria-hidden="true">
-            ✓
-          </span>
-        )}
-        {copied ? "Copied" : "Copy"}
-      </button>
+      <CopyTranscriptButton text={text} site="DictationRecovery" />
+    </GlassSurface>
+  );
+}
+
+/// Held text: the words are waiting for a text box, and the user can either
+/// click into one (Rust types them there) or copy them now. Copying tells Rust
+/// to end the hold, so a paste can never be followed by the same words typed a
+/// second time.
+function DictationPending({ text, message }: { text: string; message?: string }) {
+  const endHold = () => {
+    void invoke("dictation_held_text_copied").catch((error) =>
+      logError("DictationPending: end hold after copy", error),
+    );
+  };
+
+  return (
+    <GlassSurface className="dictation-message is-pending" draggable={false}>
+      <div className="dictation-message__row">
+        <span className="dictation-message__dot" aria-hidden="true" />
+        <span className="dictation-message__label">
+          {message ?? "Waiting for a text box"}
+        </span>
+      </div>
+      <p className="dictation-message__text">{text}</p>
+      <CopyTranscriptButton text={text} site="DictationPending" onCopied={endHold} />
     </GlassSurface>
   );
 }
@@ -220,21 +261,12 @@ export function DictationHud() {
     return <DictationConsent />;
   }
 
-  // Held text: the only place the transcript is shown, because the user has to
-  // know both that something is waiting and what it says. Rust has already
-  // resized the window to the taller pill for this phase.
+  // Held text: the transcript is shown because the user has to know both that
+  // something is waiting and what it says, with Copy available from the first
+  // frame rather than only after the wait expires. Rust has already resized
+  // the window to the card for this phase.
   if (update.phase === "pending") {
-    return (
-      <GlassSurface className="dictation-message is-pending" draggable={false}>
-        <div className="dictation-message__row">
-          <span className="dictation-message__dot" aria-hidden="true" />
-          <span className="dictation-message__label">
-            {update.message ?? "Waiting for a text box"}
-          </span>
-        </div>
-        <p className="dictation-message__text">{update.text}</p>
-      </GlassSurface>
-    );
+    return <DictationPending text={update.text} message={update.message} />;
   }
 
   if (update.phase === "recovery") {
