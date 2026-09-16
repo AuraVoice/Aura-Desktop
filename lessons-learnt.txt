@@ -118,6 +118,15 @@ daytime drain is idempotent and quota-bounded server side, and the busy gate kee
 audio. Automatic retention and account-switch pruning deliberately do not delete server copies:
 they are not a request to erase, and the ledger keeps those copies withdrawable.
 
+Follow-up 2026-09-15: the catch-up was not enough either. Production still held zero traces from
+zero users a week later, because the catch-up only fires once 24 h pass without a completed daily
+drain, on an interval tick, and a laptop that sleeps every night and is used every day never
+crosses that line cleanly. The clock is gone: the bulk drain now runs whenever the machine has been
+idle five minutes (`system_idle_ms`, GetLastInputInfo) and is on power, which is a state the
+machine is actually in for hours a day. The same pass fixed the second lie in the payload: the
+desktop asserted labelSource observed_field while observing nothing. The observer (observer.rs)
+now re-reads the field and the label says inserted_only unless it did.
+
 ---
 
 2026-09-11  Every sign-in and every dev launch replayed a week of notifications as fresh toasts

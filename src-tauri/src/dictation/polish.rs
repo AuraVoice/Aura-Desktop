@@ -51,6 +51,54 @@ const WAIT_BUDGET: Duration = Duration::from_millis(2500);
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(1000);
 const REQUEST_TIMEOUT: Duration = Duration::from_millis(2300);
 
+/// Where the dictation is going, so the formatter can match the destination
+/// instead of guessing from an exe name. The same shape the backend's
+/// `TraceContext` accepts on `/dictation/polish` and stores on a V3 training
+/// trace, so the formatter sees exactly what a future formatter trains on.
+/// Every field is optional: a password field, a control with no text pattern
+/// or a window of Aura's own yields less, never an error.
+///
+/// Not `Debug`: `prefix_text` is up to 200 characters of the user's own
+/// document.
+#[derive(Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PolishContext {
+    /// Lowercase exe stem on Windows, bundle id on macOS.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app: Option<String>,
+    /// The foreground window's title with the app name stripped, capped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_title_stem: Option<String>,
+    /// UI Automation control type name of the focused field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub control_role: Option<String>,
+    /// Reserved for the Android producer's input-type class.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub field_kind: Option<String>,
+    /// Up to 200 characters immediately before the caret.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prefix_text: Option<String>,
+    /// BCP-47 tag of the recognizer language.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+}
+
+impl PolishContext {
+    /// JSON for the sealed history column, or `None` when nothing was learned
+    /// so an empty object is never stored.
+    pub fn to_json(&self) -> Option<String> {
+        if self.app.is_none()
+            && self.window_title_stem.is_none()
+            && self.control_role.is_none()
+            && self.prefix_text.is_none()
+            && self.language.is_none()
+        {
+            return None;
+        }
+        serde_json::to_string(self).ok()
+    }
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PolishSettings {
@@ -201,10 +249,12 @@ async fn request_polish(
     token: String,
     text: String,
     app_name: Option<String>,
+    context: PolishContext,
 ) -> Result<String, PolishError> {
     let body = serde_json::json!({
         "text": text,
         "app": app_name,
+        "context": context,
     });
     let response = client()
         .post(format!("{API_BASE_URL}/dictation/polish"))
@@ -273,15 +323,21 @@ fn validate(input: &str, output: &str) -> Option<String> {
 /// Formats the transcript, or returns None and the caller types the raw text.
 /// Blocks the worker for at most `WAIT_BUDGET`. Logs outcome, duration and
 /// character counts only.
-pub fn format_transcript(app: &AppHandle, text: &str, app_name: Option<&str>) -> Option<String> {
+pub fn format_transcript(
+    app: &AppHandle,
+    text: &str,
+    app_name: Option<&str>,
+    context: &PolishContext,
+) -> Option<String> {
     let polish_handle = handle(app)?;
     let token = polish_handle.usable()?;
     let started = Instant::now();
     let (tx, rx) = std::sync::mpsc::channel();
     let owned_text = text.to_string();
     let owned_app = app_name.map(|name| name.to_string());
+    let owned_context = context.clone();
     tauri::async_runtime::spawn(async move {
-        let result = request_polish(token, owned_text, owned_app).await;
+        let result = request_polish(token, owned_text, owned_app, owned_context).await;
         let _ = tx.send(result);
     });
     let result = match rx.recv_timeout(WAIT_BUDGET) {

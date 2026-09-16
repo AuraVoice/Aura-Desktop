@@ -81,7 +81,7 @@ const STATE_FAILED: i64 = 3;
 /// Everything the JS pump needs to upload one dictation, in the exact shape the
 /// backend expects as its metadata body. Serialized straight through to the
 /// request, so this struct IS the wire format - changing a field name here
-/// changes the API. Mirrors the backend's TracePayloadV2, which is
+/// changes the API. Mirrors the backend's TracePayloadV3, which is
 /// `strict=True, extra="forbid"`: every field must be present and typed exactly.
 ///
 /// Deliberately NOT `Debug`, same discipline as `credential.rs`: it carries four
@@ -94,6 +94,8 @@ const STATE_FAILED: i64 = 3;
 pub struct TraceUploadLease {
     pub trace_id: String,
     pub schema_version: u32,
+    /// Always `desktop` from here; Android sends its own text-only traces.
+    pub platform: String,
     pub recorded_at_ms: i64,
     pub duration_ms: i64,
     /// SHA-256 of the FLAC body the pump will send, so the server can reject a
@@ -106,18 +108,47 @@ pub struct TraceUploadLease {
     pub provider_model: String,
     pub raw_transcript: String,
     pub inserted_text: String,
+    /// What the field held when the observer last read it, or the inserted
+    /// text when it never could (`label_source` says which).
     pub final_text: String,
+    /// The inserted text with only recognition-class edits applied: the label
+    /// a model should have produced. Equal to `final_text` for a clean
+    /// correction, equal to `inserted_text` for a rewrite.
     pub training_text: String,
-    /// Always empty. The backend requires the key (TracePayloadV2 is
-    /// `extra="forbid"`) but the history store records the text before and
-    /// after polish, not the operations between them, so there is nothing to
-    /// put in it and no typed element worth declaring.
+    /// The classified diff from `edits.rs`, empty when nothing changed or
+    /// nothing was observed.
     pub edits: Vec<serde_json::Value>,
     pub label_source: String,
     pub label_quality: String,
     pub normalization_version: u32,
     pub consent_version: u32,
+    /// Desktop never has a Clean-up-undo gesture; the field exists so the
+    /// payload matches the Android producer's shape exactly.
+    pub cleanup_undone: bool,
+    /// The hold context (`polish::PolishContext`) or JSON null.
+    pub context: serde_json::Value,
 }
+
+/// Whether sharing consent is currently on, as React last reported it. The
+/// consent record lives in the frontend settings store; this is the one
+/// Rust-side mirror, read at hold start to decide whether to park a baseline
+/// and hand the utterance to the observer. False until told otherwise, so a
+/// fresh launch observes nothing until the overlay has loaded settings.
+static SHARING_HINT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn sharing_hint() -> bool {
+    SHARING_HINT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn set_sharing_hint(sharing: bool) {
+    SHARING_HINT.store(sharing, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Rows younger than this and not yet settled by the observer are left alone
+/// by the queue, so a lease can never race a read-back. Past it the row goes
+/// up as `inserted_only`: the observer died, the app quit, or the row predates
+/// observation.
+const OBSERVATION_GRACE_MS: i64 = 30_000;
 
 /// What the nightly pump needs to decide whether to do anything at all. The
 /// caller already knows whether sharing is on - it passed that in - so echoing
@@ -197,8 +228,15 @@ pub fn enqueue_backlog(app: &AppHandle, uid: &str) -> Result<usize, String> {
                 AND audio_bytes > 0
                 AND audio_bytes <= ?3
                 AND duration_ms > 0
-                AND duration_ms <= ?4",
-            params![STATE_PENDING, uid, MAX_AUDIO_BYTES, MAX_DURATION_MS],
+                AND duration_ms <= ?4
+                AND (observed_at_ms IS NOT NULL OR recorded_at_ms <= ?5)",
+            params![
+                STATE_PENDING,
+                uid,
+                MAX_AUDIO_BYTES,
+                MAX_DURATION_MS,
+                now_ms() - OBSERVATION_GRACE_MS
+            ],
         )
         .map_err(|e| e.to_string())?;
     if queued > 0 {
@@ -414,35 +452,71 @@ fn claim_one(
         return Ok(ClaimStep::Empty);
     }
 
-    type ClaimRow = (String, i64, i64, Vec<u8>, Option<Vec<u8>>, String, Option<String>);
+    struct ClaimRow {
+        id: String,
+        recorded_at_ms: i64,
+        duration_ms: i64,
+        sealed_text: Vec<u8>,
+        sealed_raw: Option<Vec<u8>>,
+        relative: String,
+        digest: Option<String>,
+        sealed_final: Option<Vec<u8>>,
+        sealed_training: Option<Vec<u8>>,
+        sealed_edits: Option<Vec<u8>>,
+        sealed_context: Option<Vec<u8>>,
+        label_source: Option<String>,
+        label_quality: Option<String>,
+    }
     let row: Option<ClaimRow> = conn
         .query_row(
             // Literal share_state, same reason as pump_state above. Also selects
             // the persisted digest rather than recomputing it, which is what
             // used to force a full read and decrypt of the clip on every claim.
-            "SELECT id, recorded_at_ms, duration_ms, text, raw_text, audio_path, audio_sha256
+            "SELECT id, recorded_at_ms, duration_ms, text, raw_text, audio_path, audio_sha256,
+                    final_text, training_text, edits, context, label_source, label_quality
                FROM transcripts
               WHERE uid = ?1 AND share_state = 1 AND share_next_attempt_ms <= ?2
                 AND audio_path IS NOT NULL
                 AND (?3 = 0 OR share_attempts > 0)
+                AND (observed_at_ms IS NOT NULL OR recorded_at_ms <= ?4)
               ORDER BY recorded_at_ms ASC
               LIMIT 1",
-            params![uid, now, i64::from(retries_only)],
+            params![uid, now, i64::from(retries_only), now - OBSERVATION_GRACE_MS],
             |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                    row.get(6)?,
-                ))
+                Ok(ClaimRow {
+                    id: row.get(0)?,
+                    recorded_at_ms: row.get(1)?,
+                    duration_ms: row.get(2)?,
+                    sealed_text: row.get(3)?,
+                    sealed_raw: row.get(4)?,
+                    relative: row.get(5)?,
+                    digest: row.get(6)?,
+                    sealed_final: row.get(7)?,
+                    sealed_training: row.get(8)?,
+                    sealed_edits: row.get(9)?,
+                    sealed_context: row.get(10)?,
+                    label_source: row.get(11)?,
+                    label_quality: row.get(12)?,
+                })
             },
         )
         .optional()
         .map_err(|e| e.to_string())?;
-    let Some((id, recorded_at_ms, duration_ms, sealed_text, sealed_raw, relative, digest)) = row
+    let Some(ClaimRow {
+        id,
+        recorded_at_ms,
+        duration_ms,
+        sealed_text,
+        sealed_raw,
+        relative,
+        digest,
+        sealed_final,
+        sealed_training,
+        sealed_edits,
+        sealed_context,
+        label_source,
+        label_quality,
+    }) = row
     else {
         return Ok(ClaimStep::Empty);
     };
@@ -521,34 +595,103 @@ fn claim_one(
     )
     .map_err(|e| e.to_string())?;
 
-    let label_quality = if raw_transcript == trimmed {
-        "unchanged_silver"
-    } else {
-        "corrected_silver"
+    // The observer's verdict, when it reached the row. Anything sealed that
+    // will not unseal reads as absent, which downgrades the label rather than
+    // failing the row: a missing observation is always better than an
+    // invented one.
+    let unseal_slot = |sealed: Option<Vec<u8>>, slot: &str| -> Option<String> {
+        sealed.and_then(|bytes| unseal(&key, &bytes, &history::row_aad(uid, &id, slot)).ok())
     };
+    let observed_final = unseal_slot(sealed_final, "final");
+    let observed_training = unseal_slot(sealed_training, "training");
+    let edits: Vec<serde_json::Value> = unseal_slot(sealed_edits, "edits")
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or_default();
+    let context: serde_json::Value = unseal_slot(sealed_context, "context")
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or(serde_json::Value::Null);
+    let language = context
+        .get("language")
+        .and_then(|value| value.as_str())
+        .filter(|tag| !tag.is_empty())
+        .unwrap_or(LANGUAGE_TAG)
+        .to_string();
+
+    let observed = label_source.as_deref() == Some(history::LABEL_SOURCE_OBSERVED)
+        && observed_final.is_some();
+    let silver = if raw_transcript == trimmed {
+        history::LABEL_UNCHANGED_SILVER
+    } else {
+        history::LABEL_CORRECTED_SILVER
+    };
+    let (label_source, label_quality, final_text, training_text, edits) = if observed {
+        let final_text = observed_final.unwrap_or_else(|| trimmed.clone());
+        let training_text = observed_training.unwrap_or_else(|| trimmed.clone());
+        // A stored gold label is only honoured when the row still carries what
+        // justifies it; otherwise it falls back to silver on this side too,
+        // matching the backend validator rather than being refused by it.
+        let quality = match label_quality.as_deref() {
+            Some(history::LABEL_CORRECTED_GOLD) if !edits.is_empty() => {
+                history::LABEL_CORRECTED_GOLD
+            }
+            Some(history::LABEL_CONFIRMED_GOLD) if final_text == trimmed => {
+                history::LABEL_CONFIRMED_GOLD
+            }
+            _ => silver,
+        };
+        (
+            history::LABEL_SOURCE_OBSERVED,
+            quality,
+            final_text,
+            training_text,
+            edits,
+        )
+    } else {
+        (
+            history::LABEL_SOURCE_INSERTED_ONLY,
+            silver,
+            trimmed.clone(),
+            trimmed.clone(),
+            Vec::new(),
+        )
+    };
+    if final_text.chars().count() > MAX_TEXT_CHARS
+        || training_text.chars().count() > MAX_TEXT_CHARS
+    {
+        mark_ineligible(&conn, uid, &id)?;
+        warn!("dictation.share: row skipped, observed text oversized id={id}");
+        return Ok(ClaimStep::Skipped);
+    }
 
     Ok(ClaimStep::Ready(Box::new(TraceUploadLease {
         trace_id,
-        schema_version: 2,
+        schema_version: 3,
+        platform: "desktop".to_string(),
         recorded_at_ms,
         duration_ms,
         audio_sha256,
         sample_rate_hz: 16_000,
         channels: 1,
-        language: "en-US".to_string(),
+        language,
         provider: "deepgram".to_string(),
         provider_model: PROVIDER_MODEL.to_string(),
         raw_transcript,
-        inserted_text: trimmed.clone(),
-        final_text: trimmed.clone(),
-        training_text: trimmed,
-        edits: Vec::new(),
-        label_source: "observed_field".to_string(),
+        inserted_text: trimmed,
+        final_text,
+        training_text,
+        edits,
+        label_source: label_source.to_string(),
         label_quality: label_quality.to_string(),
         normalization_version: 1,
         consent_version,
+        cleanup_undone: false,
+        context,
     })))
 }
+
+/// The recognizer's language when the hold context did not record one. Must
+/// track `asr/deepgram.rs` `LANGUAGE`, which is monolingual English today.
+const LANGUAGE_TAG: &str = "en-US";
 
 /// What produced the transcripts this store holds. The history row does not
 /// record the model, so this is the one place the value is stated; it must
@@ -912,6 +1055,9 @@ pub async fn dictation_share_pump_state(
     sharing: bool,
     retries_only: bool,
 ) -> Result<SharePumpState, String> {
+    // The pump already knows the answer every five minutes; mirroring it here
+    // means the hint stays right even if the explicit set call was missed.
+    set_sharing_hint(sharing);
     tauri::async_runtime::spawn_blocking(move || {
         if sharing {
             // Cheap and idempotent: an already-queued row is not re-queued, so
@@ -929,6 +1075,15 @@ pub async fn dictation_share_pump_state(
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// React reports the consent record's current verdict so hold-time decisions
+/// (park a baseline, hand the utterance to the observer) can be made on the
+/// dictation worker without an IPC round trip. Called on overlay mount and
+/// whenever `dictationSharingActive` changes.
+#[tauri::command]
+pub fn dictation_set_sharing(sharing: bool) {
+    set_sharing_hint(sharing);
 }
 
 #[tauri::command]

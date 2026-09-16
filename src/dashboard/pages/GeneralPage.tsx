@@ -491,7 +491,7 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
             <div className="db-panel db-settings-panel">
               <ToggleRow
                 label="Conversation samples"
-                description="Send dictation recordings and their transcripts so Aura gets better at hearing you."
+                description="Send finished dictations so Aura gets better at hearing you: the recording and transcript, the app and kind of field you dictated into, up to 200 characters already in that field before the cursor, and the edits you make to what Aura typed."
                 checked={settings.improveConversations}
                 onChange={(value) => void updateImprovementChoice("improveConversations", value)}
               />

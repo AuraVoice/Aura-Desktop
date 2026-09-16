@@ -118,6 +118,15 @@ stateDiagram-v2
 | `dictation_history_delete` / `dictation_history_clear` | `uid[, id]` | Removes one entry, or the whole history, including the clip files |
 | `dictation_history_export_audio` / `dictation_history_export_text` | `uid, id` | Writes a decrypted `.flac`/`.txt` into `Downloads/Aura Dictation` and returns the path for `openPath` |
 | `dictation_history_settings` / `dictation_history_set_settings` | `uid[, enabled]` | The retention toggle plus the current entry count and retained audio size |
+| `dictation_share_pump_state` | `uid, sharing, retriesOnly` | Folds the newly eligible backlog into the sharing queue and counts what a claim in that mode could take (`pendingUploads`, `pendingDeletions`, `pendingNew`) |
+| `dictation_claim_trace_upload` / `dictation_resolve_trace_upload` / `dictation_fail_trace_upload` | `uid, consentVersion, retriesOnly` / `uid, traceId` / `uid, traceId, retryable` | Leases one queued dictation as a V3 `TraceUploadLease` (observed final text, edits, context, labels), marks it uploaded, or backs it off |
+| `dictation_trace_upload_audio` | `uid, traceId` | The claimed dictation's FLAC bytes as an `ArrayBuffer` for the audio `PUT` |
+| `dictation_pause_trace_uploads` | `uid, blockedUntilMs` | Quota pause after a 429 until the server's stated reset |
+| `dictation_claim_trace_deletion` / `dictation_resolve_trace_deletion` / `dictation_fail_trace_deletion` | `uid[, traceId]` | The server-deletion queue that withdrawal, erase and Clear history feed |
+| `dictation_record_share_drain` / `dictation_share_stats` | `uid[, outcome]` | Persists one drain's counters (never a trace id or text) and reads them back |
+| `dictation_revoke_trace_sharing` | `uid` | Turning Conversation samples off: queues a server delete for every copy in the `share_uploaded` ledger |
+| `dictation_set_sharing` | `sharing` | React's consent verdict, mirrored into Rust so a hold can decide without IPC whether to park a read-back baseline and hand the utterance to the observer |
+| `system_idle_ms` | - | Milliseconds since the last keyboard or mouse input (`GetLastInputInfo`), or `null` when unknown; the share pump only bulk-uploads when the machine has been idle five minutes and is on power |
 
 **Selected events** (Rust emits, React listens with `listen("name", cb)`):
 

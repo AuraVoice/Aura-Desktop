@@ -5,11 +5,15 @@ import { logError } from "./log";
 export const GENERAL_SETTINGS_KEY = "dashboard_general_settings";
 // Bumped to 2 when uploads actually became real. Version 1 was recorded
 // against copy that said "Uploads are not active yet", so it is not consent
-// to send anything; anyone still at 1 is treated as not opted in and must
-// choose again. Matches CONSENT_VERSION in the backend's
-// services/dictation/fields.py, which is the value the upload payload has to
-// assert.
-export const IMPROVEMENT_CONSENT_VERSION = 2;
+// to send anything. Bumped to 3 when the sample widened beyond audio and
+// transcripts to the app dictated into, the kind of field, up to 200
+// characters already in that field before the cursor, and the edits made
+// afterwards (architectures/dictation-model-plan.md, Phase 0); consent given
+// against the version 2 copy does not cover that, so anyone at 2 reads as not
+// opted in until they choose again against the copy that now applies. Matches
+// CONSENT_VERSION in the backend's services/dictation/fields.py, which is the
+// value the upload payload has to assert.
+export const IMPROVEMENT_CONSENT_VERSION = 3;
 
 export type ThemeSetting = "system" | "light" | "dark";
 

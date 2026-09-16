@@ -15,14 +15,29 @@
 //! pixels, so screen awareness degrades to exactly the previous behaviour
 //! rather than quietly getting worse.
 //!
-//! Privacy posture: capture is gated by the same `CaptureTurnScreen`
-//! authorization as a screenshot, so nothing is read unless screen sight is
-//! armed; password and protected values are never fetched in the first place;
-//! Aura's own windows are excluded; and no extracted text is ever logged.
+//! Privacy posture. Three things read field CONTENT here, and each has its own
+//! gate:
+//!
+//! * The context walk (`tree.rs`) is gated by the same `CaptureTurnScreen`
+//!   authorization as a screenshot, so nothing is read unless screen sight is
+//!   armed.
+//! * The dictation hold-context read (`anchor.rs::hold_context`) reads the
+//!   focused field's role, owning app and up to 200 characters before the
+//!   caret when the chord goes down, so the formatter can match the
+//!   destination. That text reaches `/dictation/polish` (no-store) and, only
+//!   under sharing consent v3, the local sealed history row.
+//! * The dictation read-back (`anchor.rs`) re-reads a field Aura typed into,
+//!   only while sharing consent is on, and only what the user turned Aura's
+//!   words into crosses back out of this thread.
+//!
+//! Password and protected values are never fetched in the first place; Aura's
+//! own windows are excluded; and no extracted text is ever logged.
 //!
 //! Read-only. This module never invokes a UI Automation pattern that acts on
 //! the user's applications.
 
+#[cfg(windows)]
+mod anchor;
 pub mod contract;
 #[cfg(windows)]
 mod focus;
@@ -32,6 +47,8 @@ mod focus_ax;
 /// whichever platform produced it.
 mod focus_verdict;
 #[cfg(windows)]
+mod span;
+#[cfg(windows)]
 mod tree;
 #[cfg(windows)]
 mod worker;
@@ -39,6 +56,8 @@ mod worker;
 use log::info;
 use tauri::AppHandle;
 
+#[cfg(windows)]
+pub use anchor::{AnchorId, AnchorOutcome, FieldIdentity, HoldContext, SpanObservation, SpanOutcome};
 pub use contract::StructuredContext;
 pub use focus_verdict::{FocusProbe, FocusVerdict};
 #[cfg(windows)]
@@ -57,6 +76,53 @@ impl UiaWorker {
     pub fn start() -> Self {
         Self
     }
+}
+
+// The read-back vocabulary off Windows. The types exist so the observer and
+// the dictation worker compile everywhere; every call answers "nothing was
+// observed", which the labels record honestly as `inserted_only`. The macOS
+// AX implementation is a later phase of architectures/dictation-model-plan.md.
+#[cfg(not(windows))]
+pub type AnchorId = u64;
+
+#[cfg(not(windows))]
+#[derive(Clone, Debug, Default)]
+pub struct HoldContext {
+    pub role: Option<String>,
+    pub app: Option<String>,
+    pub prefix: Option<String>,
+    pub baseline_parked: bool,
+}
+
+#[cfg(not(windows))]
+#[derive(Clone, Debug, Default)]
+pub struct FieldIdentity {
+    pub field_id: String,
+    pub app: String,
+    pub role: String,
+}
+
+#[cfg(not(windows))]
+#[derive(Clone, Debug)]
+pub struct AnchorOutcome {
+    pub anchor_id: Option<AnchorId>,
+    pub identity: FieldIdentity,
+    pub refusal: Option<&'static str>,
+}
+
+#[cfg(not(windows))]
+#[derive(Clone, Debug)]
+pub enum SpanOutcome {
+    Located { text: String, exact: bool },
+    Removed,
+    Lost,
+}
+
+#[cfg(not(windows))]
+#[derive(Clone, Debug)]
+pub struct SpanObservation {
+    pub trace_id: String,
+    pub outcome: SpanOutcome,
 }
 
 /// Asks whether the focused control can accept typed text, for dictation's
@@ -86,6 +152,75 @@ pub fn probe_focus(app: &AppHandle) -> FocusProbe {
 #[cfg(target_os = "macos")]
 pub fn probe_focus(_app: &AppHandle) -> FocusProbe {
     focus_ax::probe()
+}
+
+/// The focused field's role, app and caret prefix when a dictation hold
+/// starts, plus a parked baseline when `park` is set. Blocking and bounded;
+/// call it from the dictation worker thread.
+#[cfg(windows)]
+pub fn hold_context(app: &AppHandle, park: bool, prefix_chars: usize) -> HoldContext {
+    use tauri::Manager;
+
+    match app.try_state::<UiaWorker>() {
+        Some(worker) => worker.hold_context(park, prefix_chars),
+        None => HoldContext::default(),
+    }
+}
+
+#[cfg(not(windows))]
+pub fn hold_context(_app: &AppHandle, _park: bool, _prefix_chars: usize) -> HoldContext {
+    HoldContext::default()
+}
+
+/// Confirms where a freshly typed string landed and starts watching the field.
+/// Blocking; call it from the observer thread, never from the thread that
+/// pumps window messages.
+#[cfg(windows)]
+pub fn anchor_insert(app: &AppHandle, trace_id: &str, inserted: &str) -> AnchorOutcome {
+    use tauri::Manager;
+
+    match app.try_state::<UiaWorker>() {
+        Some(worker) => worker.anchor_insert(trace_id, inserted),
+        None => AnchorOutcome {
+            anchor_id: None,
+            identity: FieldIdentity::default(),
+            refusal: Some("uia_unavailable"),
+        },
+    }
+}
+
+#[cfg(not(windows))]
+pub fn anchor_insert(_app: &AppHandle, _trace_id: &str, _inserted: &str) -> AnchorOutcome {
+    AnchorOutcome {
+        anchor_id: None,
+        identity: FieldIdentity::default(),
+        refusal: Some("uia_unavailable"),
+    }
+}
+
+/// Re-reads watched fields and retires finished anchors in one round trip.
+/// Blocking; call it from the observer thread.
+#[cfg(windows)]
+pub fn anchor_observe(
+    app: &AppHandle,
+    read: Vec<AnchorId>,
+    retire: Vec<AnchorId>,
+) -> Vec<SpanObservation> {
+    use tauri::Manager;
+
+    match app.try_state::<UiaWorker>() {
+        Some(worker) => worker.anchor_observe(read, retire),
+        None => Vec::new(),
+    }
+}
+
+#[cfg(not(windows))]
+pub fn anchor_observe(
+    _app: &AppHandle,
+    _read: Vec<AnchorId>,
+    _retire: Vec<AnchorId>,
+) -> Vec<SpanObservation> {
+    Vec::new()
 }
 
 /// Reads the focused element (pointer element as fallback) and its bounded

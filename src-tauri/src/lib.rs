@@ -70,6 +70,7 @@ mod telemetry;
 mod site_icons;
 mod status_pill;
 mod system_control;
+mod system_idle;
 mod toast;
 mod tray;
 mod uia;
@@ -494,6 +495,8 @@ pub fn run() {
             dictation::share::dictation_fail_trace_deletion,
             dictation::share::dictation_resolve_trace_deletion,
             dictation::share::dictation_revoke_trace_sharing,
+            dictation::share::dictation_set_sharing,
+            system_idle::system_idle_ms,
             dictation::history::dictation_history_list,
             dictation::history::dictation_history_audio,
             dictation::history::dictation_history_set_flag,
@@ -595,6 +598,12 @@ pub fn run() {
             // on macOS, where the focus probe reads the accessibility tree
             // directly and needs no apartment thread (uia/focus_ax.rs).
             app.manage(uia::UiaWorker::start());
+
+            // The dictation read-back (observer.rs): watches the field Aura
+            // just typed into and records what the user turned the words
+            // into. After the UIA worker, which it talks to; its own thread,
+            // so no round trip ever lands on the dictation worker.
+            app.manage(dictation::observer::start(app.handle().clone()));
 
             app.manage(voice_toggle_key::start(app.handle().clone()));
             // After the listener, so the first status the UI sees already

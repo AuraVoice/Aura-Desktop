@@ -13,12 +13,33 @@ import { IMPROVEMENT_CONSENT_VERSION } from "./generalSettings";
  * a second one.
  */
 
+/** One classified change between what Aura typed and what the field held
+ * afterwards (Rust `edits::EditOp`, backend `EditPayload`). */
+interface TraceEdit {
+  class: "verbatim" | "casing" | "punctuation" | "disfluency" | "style";
+  from: string;
+  to: string;
+  wordIndex: number;
+}
+
+/** Where the dictation went (Rust `polish::PolishContext`, backend
+ * `TraceContext`). Null when the hold learned nothing. */
+interface TraceContext {
+  app?: string;
+  windowTitleStem?: string;
+  controlRole?: string;
+  fieldKind?: string;
+  prefixText?: string;
+  language?: string;
+}
+
 /** Exactly the metadata body the backend expects. Mirrors Rust's
  * `TraceUploadLease`, which is serialized straight into the request, and the
- * backend's `TracePayloadV2`, which is strict and forbids extra keys. */
+ * backend's `TracePayloadV3`, which is strict and forbids extra keys. */
 interface TraceUploadLease {
   traceId: string;
   schemaVersion: number;
+  platform: "desktop";
   recordedAtMs: number;
   durationMs: number;
   audioSha256: string;
@@ -31,15 +52,17 @@ interface TraceUploadLease {
   insertedText: string;
   finalText: string;
   trainingText: string;
-  /** Always empty. Required by the backend, which forbids both extra and
-   * missing keys, but nothing records edit operations. */
-  edits: never[];
-  labelSource: "observed_field";
-  /** The only two labels a client can produce. "human_gold" is reviewer-only,
-   * written server-side, so no client can assert its own data is gold. */
-  labelQuality: "unchanged_silver" | "corrected_silver";
+  edits: TraceEdit[];
+  /** `observed_field` only when the observer re-found the inserted text in
+   * the destination field; `inserted_only` otherwise. */
+  labelSource: "observed_field" | "inserted_only";
+  /** Gold only with `observed_field`. "human_gold" is reviewer-only, written
+   * server-side, so no client can assert its own data is gold. */
+  labelQuality: "unchanged_silver" | "corrected_silver" | "confirmed_gold" | "corrected_gold";
   normalizationVersion: number;
   consentVersion: number;
+  cleanupUndone: boolean;
+  context: TraceContext | null;
 }
 
 interface SharePumpState {

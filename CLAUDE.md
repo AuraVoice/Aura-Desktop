@@ -10,6 +10,8 @@ This client is one of three codebases in the Aura system, alongside Aura (mobile
 See [`../Aura/ECOSYSTEM.md`](../Aura/ECOSYSTEM.md) for how they fit together at a system level; this file and `README.md` already cover the desktop-specific detail, including the full three-repo Google sign-in sequence below.
 Update that shared file when a change here alters a cross-repo contract (a `/devices/*` or `/voice/token` call shape, the GitHub Releases update/download contract, or shared Firebase identity), not for internal-only changes.
 
+Dictation work (the HUD, `src-tauri/src/dictation/`, `src-tauri/src/uia/`, the share pump, every `/dictation/*` call) follows the phase gate in [`../Aura/architectures/dictation-model-plan.md`](../Aura/architectures/dictation-model-plan.md). Read the current phase first; later-phase ideas go in that document's backlog, not in code.
+
 ## Architecture
 
 The runtime has three Tauri webview windows:
@@ -249,6 +251,29 @@ about storage. The reversal is narrow and the invariants around it are not:
   and the page filters in memory.
 - Turning history off stops future capture and deliberately keeps existing rows.
   Clearing is a separate, confirmed action. Do not conflate them.
+- **The row is also the training trace, and the observer labels it honestly.**
+  `dictation/observer.rs` re-reads the field Aura typed into at 2 s, 6 s, 20 s
+  and when the next hold starts, through the read-back modules on the UIA
+  worker (`uia/anchor.rs`, `uia/span.rs`). An edit is recorded only when the
+  inserted span is re-found by its surrounding characters; time is never
+  ground truth. What it finds lands in sealed `final_text`, `training_text`
+  and `edits` columns plus plaintext `label_source` and `label_quality`;
+  `share.rs` sends `observed_field` and a gold label only for rows the
+  observer actually settled, and `inserted_only` with a silver label for the
+  rest (a field that emptied after Enter, a window that closed, a control with
+  no text pattern). Observation and the parked baseline happen only while
+  `share::sharing_hint()` is on, which React sets from consent version 3.
+- **`context` is stored, sealed, and read by `share.rs` alone.** App stem,
+  window-title stem, control role, up to 200 characters before the caret and
+  the language tag (`polish::PolishContext`), captured once per hold before
+  the HUD shows and sent to `/dictation/polish` for everyone. It is never
+  listed, searched or shown in the UI; the module doc's old "app name is not
+  stored" rule became this narrower one when consent v3 named each field.
+- **Uploads run when the machine is idle and on power, never on a clock.**
+  `useDictationUpload.ts` bulk-drains when `system_idle_ms` >= 5 min, the
+  battery is charging (or absent), the network is unmetered and no call,
+  recording or interview is live; retries sweep hourly. The 03:00 window and
+  its catch-up produced zero uploads in production (lessons 2026-09-14).
 
 The flag button writes to the `user_feedback` Firestore collection directly via
 the Firebase SDK (`src/lib/dictationFeedback.ts`), the same way the Flutter app

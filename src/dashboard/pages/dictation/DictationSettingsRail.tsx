@@ -275,8 +275,10 @@ export function DictationSettingsRail({
         {sharingDictation ? (
           <>
             Online transcription runs only while you hold the keys. Because you turned on
-            Conversation samples, finished dictations and their audio are also sent to help
-            improve Aura. Turn it off in Settings to stop that and delete what was sent.
+            Conversation samples, finished dictations are also sent to help improve Aura:
+            the audio, the app and field they went into, a little of the text before the
+            cursor, and the edits you make afterwards. Turn it off in Settings to stop that
+            and delete what was sent.
           </>
         ) : (
           <>

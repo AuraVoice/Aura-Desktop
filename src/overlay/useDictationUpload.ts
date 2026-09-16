@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   claimTraceDeletion,
   claimTraceUpload,
@@ -22,47 +23,48 @@ import { trackEvent } from "../lib/analytics";
  *
  * Two cadences, because there are two different jobs:
  *
- *  - **Nightly**, in a jittered 03:00 window: the bulk drain of new traces.
- *    Uploading speech audio is deferrable work with no deadline, and the
- *    standard shape for that is one scheduled wake under network and battery
- *    constraints rather than a poll.
+ *  - **Bulk**, whenever the machine is idle and on power: the drain of new
+ *    traces. Uploading speech audio is deferrable work with no deadline, and
+ *    the right moment for it is "the user has stepped away and the laptop is
+ *    plugged in", not a clock time. The previous design used a jittered 03:00
+ *    window, and production held zero traces after weeks of it: the laptop
+ *    was asleep at 03:00 every night, and the catch-up path only ran once a
+ *    day had passed without a drain, which a machine that sleeps nightly and
+ *    is used all day never quite reaches. Idle plus power is a condition the
+ *    machine is actually in for hours every day.
  *  - **Hourly**: retries only, for rows already attempted and now due. Without
- *    it the first five steps of the backoff table (30s through 2h) are all
- *    shorter than the gap between windows and collapse into "try again
- *    tomorrow", so a five-second network blip costs a whole day.
- *  - **Catch-up**, once a day has passed without a completed daily drain: the
- *    same bulk drain, taken on the next ordinary tick. A laptop asleep at 3 AM
- *    used to upload nothing at all, ever, because the hourly sweep only
- *    retries rows that were already attempted.
+ *    it the first five steps of the backoff table (30s through 2h) would
+ *    collapse into "try again at the next idle", so a five-second network
+ *    blip could cost hours.
  *
- * Neither runs while a call, a meeting recording or an interview is live: a
- * catch-up can land in the daytime, and FLAC uploads must not take bandwidth
- * from audio the user is in the middle of.
+ * Neither runs while a call, a meeting recording or an interview is live:
+ * FLAC uploads must not take bandwidth from audio the user is in the middle of.
  *
  * Rust owns the queue, the backoff and the persisted attempt counts, so this
  * hook holds no durable state. Missing a tick costs nothing.
  */
 
-/** Local hour the nightly window opens, and how long it stays open. */
-const WINDOW_START_HOUR = 3;
-const WINDOW_HOURS = 1;
-
-/** How often to consider doing anything. Cheap: a clock comparison, and at most
- * once an hour one Rust call that counts rows off a covering index. */
+/** How often to consider doing anything. Cheap: two kernel calls for the idle
+ * time, a battery read, and at most one Rust call that counts rows off a
+ * covering index. */
 const TICK_MS = 5 * 60 * 1000;
 
-/** Ceiling for the nightly bulk drain, comfortably inside the backend's
- * 500/month cap while still clearing a large backlog in a few nights. */
-const MAX_PER_NIGHT = 100;
+/** How long the user must have been away before a bulk drain starts. Long
+ * enough that a coffee refill does not trigger it, short enough that a lunch
+ * break always does. */
+const IDLE_BEFORE_BULK_MS = 5 * 60 * 1000;
+
+/** Ceiling for one bulk drain, comfortably inside the backend's 500/month cap
+ * while still clearing a large backlog in a couple of idle periods. */
+const MAX_PER_BULK = 100;
 /** Ceiling for an hourly retry sweep. Small on purpose: it exists to recover
  * from a blip, not to become a second uploader. */
 const MAX_PER_RETRY_SWEEP = 10;
 
-/** A day without a completed daily drain is a missed window, made up on the
- * next tick. A laptop asleep at 3 AM is the normal case, not an edge case. */
-const CATCH_UP_AFTER_MS = 24 * 60 * 60 * 1000;
-/** Per account, so one account's drain never stands in for another's. */
-const LAST_DAILY_DRAIN_KEY = "dictationShareLastDailyDrainMs:";
+/** A bulk drain that found work is followed by another one after this gap
+ * while the conditions hold, so a large backlog drains across one idle
+ * period rather than one per day. */
+const BULK_REPEAT_MS = 10 * 60 * 1000;
 
 /**
  * How many traces upload at once.
@@ -77,53 +79,6 @@ const LAST_DAILY_DRAIN_KEY = "dictationShareLastDailyDrainMs:";
  */
 const CONCURRENCY = 3;
 
-/** Per-install offset so every client does not hit the backend at 03:00:00
- * exactly. Persisted, because a fresh offset each launch would defeat it. */
-const JITTER_KEY = "dictationShareJitterMs";
-
-function installJitterMs(): number {
-  try {
-    const stored = globalThis.localStorage?.getItem(JITTER_KEY);
-    if (stored) {
-      const parsed = Number(stored);
-      if (Number.isFinite(parsed) && parsed >= 0) return parsed;
-    }
-    const fresh = Math.floor(Math.random() * WINDOW_HOURS * 60 * 60 * 1000);
-    globalThis.localStorage?.setItem(JITTER_KEY, String(fresh));
-    return fresh;
-  } catch {
-    return 0;
-  }
-}
-
-function dailyDrainOverdue(uid: string, nowMs: number): boolean {
-  try {
-    const stored = Number(globalThis.localStorage?.getItem(LAST_DAILY_DRAIN_KEY + uid));
-    // Missing, unreadable, or in the future (a clock set back) all read as
-    // overdue: one extra drain is idempotent, a stalled queue is not.
-    if (!Number.isFinite(stored) || stored <= 0 || stored > nowMs) return true;
-    return nowMs - stored >= CATCH_UP_AFTER_MS;
-  } catch {
-    return true;
-  }
-}
-
-function recordDailyDrain(uid: string, atMs: number): void {
-  try {
-    globalThis.localStorage?.setItem(LAST_DAILY_DRAIN_KEY + uid, String(atMs));
-  } catch {
-    // Unwritable storage costs at most one extra drain a day.
-  }
-}
-
-function windowIsOpen(jitterMs: number): boolean {
-  const now = new Date();
-  const start = new Date(now);
-  start.setHours(WINDOW_START_HOUR, 0, 0, 0);
-  const open = start.getTime() + jitterMs;
-  return now.getTime() >= open && now.getTime() < open + WINDOW_HOURS * 60 * 60 * 1000;
-}
-
 /**
  * Why the machine will not upload right now, or null when it will.
  *
@@ -134,7 +89,7 @@ function windowIsOpen(jitterMs: number): boolean {
  * Feature-detected throughout: these APIs are optional, and a missing one must
  * read as "no objection", never as a block that disables sharing forever.
  */
-async function uploadBlockedBy(busy: boolean): Promise<string | null> {
+async function uploadBlockedBy(busy: boolean, bulk: boolean): Promise<string | null> {
   if (busy) return "busy";
   if (typeof navigator !== "undefined" && navigator.onLine === false) return "offline";
 
@@ -158,9 +113,27 @@ async function uploadBlockedBy(busy: boolean): Promise<string | null> {
     try {
       const battery = await getBattery.call(navigator);
       if (!battery.charging && battery.level < 0.2) return "low_battery";
+      // A bulk drain waits for power. A desktop with no battery reports
+      // charging: true from this API, so it is never blocked here; a laptop
+      // on battery is, however full it is, because the user did not choose to
+      // spend that charge on our uploads.
+      if (bulk && !battery.charging) return "on_battery";
     } catch {
       // No battery information is not an objection.
     }
+  }
+
+  if (bulk) {
+    // Idle time comes from Rust (GetLastInputInfo). `null` means the platform
+    // could not say, which reads as "no objection": failing closed here is
+    // exactly the 03:00 mistake in a new costume.
+    let idleMs: number | null = null;
+    try {
+      idleMs = await invoke<number | null>("system_idle_ms");
+    } catch {
+      idleMs = null;
+    }
+    if (idleMs !== null && idleMs < IDLE_BEFORE_BULK_MS) return "not_idle";
   }
   return null;
 }
@@ -201,12 +174,21 @@ export function useDictationUpload(
     busyRef.current = busy;
   }, [busy]);
   const lastSkipReasonRef = useRef<string | null>(null);
-  const lastNightlyDayRef = useRef<string | null>(null);
+  const lastBulkAtRef = useRef<number>(0);
   const lastRetryHourRef = useRef<string | null>(null);
+
+  // Rust needs the consent verdict at hold time (to park a read-back baseline
+  // and hand the utterance to the observer) without an IPC round trip on the
+  // dictation worker. Told on mount and on every change; the pump's own state
+  // call repeats it every tick as a backstop.
+  useEffect(() => {
+    invoke("dictation_set_sharing", { sharing }).catch((err) =>
+      logError("useDictationUpload: set sharing hint", err),
+    );
+  }, [sharing]);
 
   useEffect(() => {
     if (!ownerUid) return;
-    const jitterMs = installJitterMs();
     let cancelled = false;
 
     async function drain(uid: string, retriesOnly: boolean): Promise<void> {
@@ -224,12 +206,12 @@ export function useDictationUpload(
       // a newly-eligible backlog into the queue so turning sharing on needs no
       // separate signal.
       const state = await sharePumpState(uid, sharing, retriesOnly);
-      const cap = retriesOnly ? MAX_PER_RETRY_SWEEP : MAX_PER_NIGHT;
+      const cap = retriesOnly ? MAX_PER_RETRY_SWEEP : MAX_PER_BULK;
 
       // Deletions first, and regardless of `sharing`: withdrawing consent
       // creates an obligation to remove what was already sent, and the switch
       // that created it being off must not block discharging it. Sequential,
-      // because there are rarely more than a handful. Nightly only: a retry
+      // because there are rarely more than a handful. Bulk only: a retry
       // sweep exists to recover an upload, not to re-walk this queue.
       if (!retriesOnly) {
         const deletions = Math.min(cap, state.pendingDeletions);
@@ -255,8 +237,8 @@ export function useDictationUpload(
       }
 
       if (sharing && retriesOnly && state.pendingUploads === 0 && state.pendingNew > 0) {
-        // Not idle: new dictations are waiting for the daily drain.
-        outcome.lastErrorReason = "awaiting_daily";
+        // Not idle: new dictations are waiting for an idle, on-power moment.
+        outcome.lastErrorReason = "awaiting_idle";
       }
 
       if (sharing && state.pendingUploads > 0) {
@@ -317,7 +299,7 @@ export function useDictationUpload(
 
       outcome.durationMs = Date.now() - startedAt;
       // Persisted before reporting: counters outlive the 200-line log tail,
-      // which one busy night would otherwise flush entirely. The Rust side logs
+      // which one busy drain would otherwise flush entirely. The Rust side logs
       // the one summary line.
       await recordShareDrain(uid, outcome).catch((err) =>
         logError("useDictationUpload: record drain", err),
@@ -325,7 +307,7 @@ export function useDictationUpload(
       // Counts and durations only. No trace id and no text: this leaves the
       // device, and telemetry never carries content.
       trackEvent("desktop_dictation_share_drain", {
-        mode: retriesOnly ? "retry" : "nightly",
+        mode: retriesOnly ? "retry" : "bulk",
         uploaded: outcome.uploaded,
         failed_terminal: outcome.failedTerminal,
         failed_retryable: outcome.failedRetryable,
@@ -334,39 +316,49 @@ export function useDictationUpload(
       });
     }
 
-    async function tick(fromInterval: boolean): Promise<void> {
+    async function tick(): Promise<void> {
       if (runningRef.current || cancelled || !ownerUid) return;
 
       const now = new Date();
-      const today = now.toDateString();
-      const thisHour = `${today}:${now.getHours()}`;
-      // Catch-up waits for an interval tick, so it never lands on app startup.
-      const catchUpDue = fromInterval && dailyDrainOverdue(ownerUid, now.getTime());
-      const nightlyDue =
-        lastNightlyDayRef.current !== today && (windowIsOpen(jitterMs) || catchUpDue);
-      const retryDue = !nightlyDue && lastRetryHourRef.current !== thisHour;
-      if (!nightlyDue && !retryDue) return;
+      const thisHour = `${now.toDateString()}:${now.getHours()}`;
+      // A bulk drain is considered on every tick once the previous one is far
+      // enough behind; whether it actually runs is decided by the machine's
+      // state below, not by the clock.
+      const bulkDue = now.getTime() - lastBulkAtRef.current >= BULK_REPEAT_MS;
+      const retryDue = lastRetryHourRef.current !== thisHour;
+      if (!bulkDue && !retryDue) return;
 
-      const blockedBy = await uploadBlockedBy(busyRef.current);
-      if (blockedBy) {
-        // Named, because "offline", "on a hotspot" and "battery low" used to be
-        // indistinguishable from "nothing to do". Once per reason: a tick every
-        // five minutes repeated it until it filled the log tail.
-        if (lastSkipReasonRef.current !== blockedBy) {
-          lastSkipReasonRef.current = blockedBy;
-          logError("useDictationUpload: drain skipped", new Error(blockedBy));
+      // Bulk needs idle and power; a retry sweep needs only the network and
+      // battery floor, because it moves at most ten small rows.
+      const bulkBlockedBy = bulkDue ? await uploadBlockedBy(busyRef.current, true) : "not_due";
+      const runBulk = bulkBlockedBy === null;
+      if (!runBulk && !retryDue) {
+        // Named, because "offline", "on a hotspot" and "still in use" used to
+        // be indistinguishable from "nothing to do". Once per reason: a tick
+        // every five minutes repeated it until it filled the log tail.
+        if (lastSkipReasonRef.current !== bulkBlockedBy) {
+          lastSkipReasonRef.current = bulkBlockedBy;
+          logError("useDictationUpload: bulk drain skipped", new Error(bulkBlockedBy));
         }
         return;
+      }
+      if (!runBulk) {
+        const retryBlockedBy = await uploadBlockedBy(busyRef.current, false);
+        if (retryBlockedBy) {
+          if (lastSkipReasonRef.current !== retryBlockedBy) {
+            lastSkipReasonRef.current = retryBlockedBy;
+            logError("useDictationUpload: retry sweep skipped", new Error(retryBlockedBy));
+          }
+          return;
+        }
       }
       lastSkipReasonRef.current = null;
 
       runningRef.current = true;
-      if (nightlyDue) lastNightlyDayRef.current = today;
+      if (runBulk) lastBulkAtRef.current = now.getTime();
       else lastRetryHourRef.current = thisHour;
       try {
-        await drain(ownerUid, !nightlyDue);
-        // Stamped after the drain completes, never before it starts.
-        if (nightlyDue && !cancelled) recordDailyDrain(ownerUid, Date.now());
+        await drain(ownerUid, !runBulk);
       } catch (err) {
         // The drain handles per-item failures itself; anything reaching here is
         // the pump failing as a whole, which must not stop future ticks.
@@ -376,8 +368,8 @@ export function useDictationUpload(
       }
     }
 
-    const timer = setInterval(() => void tick(true), TICK_MS);
-    void tick(false);
+    const timer = setInterval(() => void tick(), TICK_MS);
+    void tick();
     return () => {
       cancelled = true;
       clearInterval(timer);

@@ -63,6 +63,8 @@ mod insert;
 mod usage;
 mod keystore;
 pub mod polish;
+pub mod edits;
+pub mod observer;
 
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
@@ -491,6 +493,12 @@ mod platform {
                     discard_failed(utterance, "superseded");
                 }
                 set_holding(false);
+                // A new hold is the natural end of the previous dictation's
+                // correction window: whatever the field holds now is the final
+                // reading. Non-blocking; the observer does the round trip.
+                if matches!(message, Message::Chord(ChordSignal::Arm)) {
+                    super::observer::observe_now(&app);
+                }
             }
             match message {
                 Message::Shutdown => break,
@@ -922,6 +930,35 @@ mod platform {
             }
         };
 
+        // Hold context: which field this is and what already sits before the
+        // caret, for the formatter, plus (only while sharing consent is on) a
+        // parked "before" text so the insert can be verified and the user's
+        // edits read back afterwards. One bounded UI Automation round trip,
+        // before the HUD and before the first word, so nothing new sits
+        // between the recognizer's final and the keystrokes.
+        let context_started = Instant::now();
+        let sharing = super::share::sharing_hint();
+        let hold_context = crate::uia::hold_context(app, sharing, POLISH_PREFIX_CHARS);
+        let polish_context = polish::PolishContext {
+            // The window snapshot's exe stem, or the focused element's owning
+            // process when the window lookup gave nothing (a UWP host, say).
+            app: app_key.clone().or_else(|| hold_context.app.clone()),
+            window_title_stem: window_title_stem(target, app_key.as_deref()),
+            control_role: hold_context.role.clone(),
+            field_kind: None,
+            prefix_text: hold_context.prefix.clone(),
+            language: Some(DICTATION_LANGUAGE_TAG.to_string()),
+        };
+        // Presence and timing only, never the values.
+        info!(
+            "dictation: phase=context ms={} role={} title={} prefix={} baseline={}",
+            context_started.elapsed().as_millis(),
+            polish_context.control_role.is_some(),
+            polish_context.window_title_stem.is_some(),
+            polish_context.prefix_text.is_some(),
+            hold_context.baseline_parked
+        );
+
         hud::show(app, target);
         hud::publish(app, HudUpdate::new(HudPhase::Listening));
         // From here until finish_with, transcript text may be in memory on
@@ -1249,7 +1286,7 @@ mod platform {
         // this step can never hang the utterance or lose words. Runs before
         // the focus probe so the pending path below inherits the result.
         let polish_result = if polish::wants(app) {
-            polish::format_transcript(app, &corrected, app_key.as_deref())
+            polish::format_transcript(app, &corrected, app_key.as_deref(), &polish_context)
         } else {
             None
         };
@@ -1270,6 +1307,9 @@ mod platform {
         // SendInput still reports success). Hand the text to React, which
         // drops it into the composer at the caret and refocuses it. To
         // dictate into another app, close the chat first.
+        // Monotonic start of the correction window, taken the moment the
+        // keystrokes land rather than after history encodes the clip.
+        let mut typed_at = Instant::now();
         let outcome = if composer_focused() || chat_slot_open() {
             let _ = app.emit(crate::events::DICTATION_COMPOSER_INSERT, final_text.clone());
             info!(
@@ -1284,6 +1324,7 @@ mod platform {
             // answer. Bounded and fails open; see uia/focus.rs.
             let probe = crate::uia::probe_focus(app);
             let outcome = insert::insert_text(&final_text, target, probe.verdict);
+            typed_at = Instant::now();
             info!(
                 "dictation: phase=insert hold_ms={hold_ms} frames={captured_frames} chars={} \
                  role={} verdict={:?} outcome={outcome:?}",
@@ -1315,10 +1356,10 @@ mod platform {
             // consent - consent is checked in share.rs. A dictation that never
             // reached a field (focus moved, keys still held, insertion blocked)
             // is archived so the user can recover it, but it must never upload:
-            // the payload asserts labelSource "observed_field", and for these
-            // rows nothing was ever observed in one.
+            // there is no field for the observer to read back, so it could
+            // only ever be mislabelled.
             let shareable = matches!(outcome, InsertOutcome::Inserted);
-            history::record_later(
+            let row_id = history::record_later(
                 app,
                 final_text.clone(),
                 raw_for_history,
@@ -1326,7 +1367,28 @@ mod platform {
                 hold_ms as i64,
                 usage::word_count(&final_text),
                 shareable,
+                polish_context.to_json(),
             );
+            // The read-back. Only for text that actually reached a field, only
+            // while sharing consent is on (the baseline was parked under the
+            // same hint), and only when there is a row to write the verdict
+            // to. The observer thread does every round trip; this is a struct
+            // and a send.
+            if shareable && sharing {
+                if let (Some(row_id), Some(uid)) =
+                    (row_id, crate::security::current_uid(app))
+                {
+                    super::observer::observe(
+                        app,
+                        super::observer::Observation {
+                            uid,
+                            row_id,
+                            inserted_text: final_text.clone(),
+                            typed_at,
+                        },
+                    );
+                }
+            }
         }
 
         // The one outcome that does not end the utterance. The words are kept
@@ -1383,6 +1445,56 @@ mod platform {
         };
         finish_with(app, generation, update, linger);
         shutting_down
+    }
+
+    /// How much of the field before the caret the formatter is told about.
+    /// Matches the backend's `MAX_CONTEXT_PREFIX_CHARS` and the consent copy.
+    const POLISH_PREFIX_CHARS: usize = 200;
+
+    /// The recognizer's language as a BCP-47 tag. Must track
+    /// `asr/deepgram.rs` `LANGUAGE`, which is monolingual English today.
+    const DICTATION_LANGUAGE_TAG: &str = "en-US";
+
+    /// The foreground window's title reduced to the part that is about the
+    /// document rather than the app: "Q3 plan - Google Docs - Chrome" becomes
+    /// "Q3 plan". Segments that name the app itself are dropped, the first
+    /// remaining segment wins, and the result is capped at 64 characters.
+    fn title_stem(title: &str, app_key: Option<&str>) -> Option<String> {
+        let app = app_key.unwrap_or("").to_lowercase();
+        let normalized = title
+            .replace(" | ", "\u{1}")
+            .replace(" - ", "\u{1}")
+            .replace(" \u{2014} ", "\u{1}")
+            .replace(" \u{2013} ", "\u{1}");
+        normalized
+            .split('\u{1}')
+            .map(str::trim)
+            .filter(|segment| !segment.is_empty())
+            .find(|segment| app.is_empty() || !segment.to_lowercase().contains(&app))
+            .map(|segment| segment.chars().take(64).collect::<String>())
+    }
+
+    #[cfg(windows)]
+    fn window_title_stem(target: isize, app_key: Option<&str>) -> Option<String> {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextLengthW, GetWindowTextW};
+
+        let hwnd = HWND(target as *mut core::ffi::c_void);
+        let length = unsafe { GetWindowTextLengthW(hwnd) };
+        if length <= 0 {
+            return None;
+        }
+        let mut buffer = vec![0_u16; length as usize + 1];
+        let copied = unsafe { GetWindowTextW(hwnd, &mut buffer) };
+        let title = String::from_utf16_lossy(&buffer[..copied.max(0) as usize]);
+        title_stem(&title, app_key)
+    }
+
+    /// The macOS target token is a pid, not a window; the title read lands
+    /// with the macOS half of the read-back work.
+    #[cfg(not(windows))]
+    fn window_title_stem(_target: isize, _app_key: Option<&str>) -> Option<String> {
+        None
     }
 
     enum Awaited {

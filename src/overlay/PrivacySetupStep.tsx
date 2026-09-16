@@ -252,7 +252,7 @@ export function PrivacySetupStep({
           <label className={`privacy-choice-card${settings.improveConversations ? " is-selected" : ""}`}>
             <span>
               <strong>Conversation samples</strong>
-              <small>Send dictation recordings and their transcripts so Aura gets better at hearing you. Kept for 180 days, then deleted. You can turn this off any time and what was sent is deleted too.</small>
+              <small>Send finished dictations so Aura gets better at hearing you: the recording and transcript, the app and kind of field you dictated into, up to 200 characters already in that field before the cursor, and the edits you make to what Aura typed. Kept for 180 days, then deleted. You can turn this off any time and what was sent is deleted too.</small>
             </span>
             <input
               type="checkbox"

@@ -23,11 +23,24 @@
 //!   typing it. See the outcome match in `mod.rs`.
 //! - **Failed holds.** No transcript means a row that says nothing. The
 //!   in-memory `FailedUtterance` recovery buffer is unchanged.
-//! - **The target application name.** `mod.rs` already computes an app key for
-//!   biasing, so it would be free to take, but it is the one field that turns a
-//!   transcript log into a browsing-and-activity log. It appears nowhere in the
-//!   UI, and `usage.rs` documents application names as deliberately excluded.
-//!   Adding it later is a non-destructive `ALTER TABLE ... ADD COLUMN`.
+//! - **The target application name, in the clear.** It is the one field that
+//!   turns a transcript log into a browsing-and-activity log, so it appears
+//!   nowhere in the UI and `usage.rs` documents application names as
+//!   deliberately excluded. Since Phase 0 of the dictation model plan a sealed
+//!   `context` column (app stem, window-title stem, control role, up to 200
+//!   characters before the caret, language) IS stored, upload-only, under
+//!   sharing consent v3 which names each of those fields; it is never listed,
+//!   searched or shown, and `share.rs` is its only reader.
+//!
+//! ## What the observer adds after insertion
+//!
+//! `observer.rs` re-reads the field Aura typed into and writes back what it
+//! found: `final_text` (what the field held), `training_text` (the inserted
+//! text with only recognition-class edits applied), `edits` (the classified
+//! diff as JSON), `label_source` and `label_quality`, and `observed_at_ms`.
+//! All three text columns are sealed like `text`. A row with `observed_at_ms`
+//! NULL is one the observer never settled; `share.rs` treats it as
+//! `inserted_only` once it is older than 30 s.
 //!
 //! ## Retention: two independent caps
 //!
@@ -327,7 +340,42 @@ const ADDED_TRANSCRIPT_COLUMNS: &[(&str, &str)] = &[
     ),
     ("shared_at_ms", "shared_at_ms INTEGER"),
     ("share_trace_id", "share_trace_id TEXT"),
+    // Phase 0 of the dictation model plan: the observed field and its diff,
+    // plus the hold context. Sealed BLOBs where they hold text; the labels
+    // are enumerations and stay plaintext so the queue can filter on them.
+    ("final_text", "final_text BLOB"),
+    ("training_text", "training_text BLOB"),
+    ("edits", "edits BLOB"),
+    ("context", "context BLOB"),
+    ("label_source", "label_source TEXT"),
+    ("label_quality", "label_quality TEXT"),
+    ("observed_at_ms", "observed_at_ms INTEGER"),
 ];
+
+/// Label vocabulary shared with the upload payload (backend
+/// `services/dictation/fields.py`). Spelled once here; `observer.rs` picks,
+/// `share.rs` sends.
+pub const LABEL_SOURCE_OBSERVED: &str = "observed_field";
+pub const LABEL_SOURCE_INSERTED_ONLY: &str = "inserted_only";
+pub const LABEL_UNCHANGED_SILVER: &str = "unchanged_silver";
+pub const LABEL_CORRECTED_SILVER: &str = "corrected_silver";
+pub const LABEL_CONFIRMED_GOLD: &str = "confirmed_gold";
+pub const LABEL_CORRECTED_GOLD: &str = "corrected_gold";
+
+/// What the observer concluded about one row.
+pub enum ObservationVerdict {
+    /// The field was never read successfully after insertion. The row keeps
+    /// its inserted text as final and is labelled `inserted_only`.
+    Unobserved,
+    /// The field was read and the inserted span re-found.
+    Observed {
+        final_text: String,
+        training_text: String,
+        /// JSON array of `edits::EditOp`.
+        edits_json: String,
+        label_quality: &'static str,
+    },
+}
 
 /// Brings a table created by an older build up to the canonical shape. Reads
 /// the live column list first and alters only what is missing, so this is a
@@ -484,6 +532,11 @@ fn sweep(app: &AppHandle, conn: &Connection, uid: &str) -> Result<(), String> {
 /// Every failure here is swallowed after a warn. The words were already typed
 /// by the time this runs, so a full disk must never surface in the HUD or
 /// change what the user just saw happen.
+///
+/// Returns the row id when a row will be written, so the observer can update
+/// it later; the insert itself still runs on the blocking pool. `context` is
+/// the hold context as JSON (`polish::PolishContext`), sealed on the row and
+/// read only by `share.rs`.
 #[allow(clippy::too_many_arguments)]
 pub fn record_later(
     app: &AppHandle,
@@ -493,14 +546,21 @@ pub fn record_later(
     duration_ms: i64,
     words: u64,
     shareable: bool,
-) {
+    context: Option<String>,
+) -> Option<String> {
     if !ENCRYPTION_AVAILABLE || text.trim().is_empty() || !is_enabled(app) {
-        return;
+        return None;
     }
-    let Some(uid) = crate::security::current_uid(app) else {
-        return;
+    let uid = crate::security::current_uid(app)?;
+    let id = match new_id() {
+        Ok(id) => id,
+        Err(error) => {
+            warn!("dictation.history: could not mint a row id ({error})");
+            return None;
+        }
     };
     let app = app.clone();
+    let row_id = id.clone();
     tauri::async_runtime::spawn_blocking(move || {
         // `record` both inserts and then sweeps, so a failure here does not
         // mean the entry was lost - it may well have been written and the
@@ -508,34 +568,97 @@ pub fn record_later(
         if let Err(error) = record(
             &app,
             &uid,
+            &id,
             &text,
             raw_text.as_deref(),
             &samples,
             duration_ms,
             words,
             shareable,
+            context.as_deref(),
         ) {
             warn!("dictation.history: record or retention failed ({error})");
         }
     });
+    Some(row_id)
+}
+
+/// Writes the observer's verdict onto an existing row. Runs on the observer
+/// thread, so it may block. A row that no longer exists (erased by the user
+/// in the meantime) is a silent no-op: there is nothing left to label.
+pub fn record_observation(
+    app: &AppHandle,
+    uid: &str,
+    id: &str,
+    verdict: ObservationVerdict,
+) -> Result<(), String> {
+    if !ENCRYPTION_AVAILABLE {
+        return Ok(());
+    }
+    let conn = open(app)?;
+    match verdict {
+        ObservationVerdict::Unobserved => {
+            conn.execute(
+                "UPDATE transcripts
+                    SET label_source = ?1, observed_at_ms = ?2
+                  WHERE uid = ?3 AND id = ?4 AND observed_at_ms IS NULL",
+                params![LABEL_SOURCE_INSERTED_ONLY, now_ms(), uid, id],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        ObservationVerdict::Observed {
+            final_text,
+            training_text,
+            edits_json,
+            label_quality,
+        } => {
+            let key = load_or_create_key(app)?;
+            let sealed_final = seal(&key, &final_text, &row_aad(uid, id, "final"))?;
+            let sealed_training = seal(&key, &training_text, &row_aad(uid, id, "training"))?;
+            let sealed_edits = seal(&key, &edits_json, &row_aad(uid, id, "edits"))?;
+            conn.execute(
+                "UPDATE transcripts
+                    SET final_text = ?1, training_text = ?2, edits = ?3,
+                        label_source = ?4, label_quality = ?5, observed_at_ms = ?6
+                  WHERE uid = ?7 AND id = ?8",
+                params![
+                    sealed_final,
+                    sealed_training,
+                    sealed_edits,
+                    LABEL_SOURCE_OBSERVED,
+                    label_quality,
+                    now_ms(),
+                    uid,
+                    id,
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
 fn record(
     app: &AppHandle,
     uid: &str,
+    id: &str,
     text: &str,
     raw_text: Option<&str>,
     samples: &[f32],
     duration_ms: i64,
     words: u64,
     shareable: bool,
+    context: Option<&str>,
 ) -> Result<(), String> {
     let key = load_or_create_key(app)?;
-    let id = new_id()?;
-    let sealed_text = seal(&key, text, &row_aad(uid, &id, "text"))?;
+    let sealed_text = seal(&key, text, &row_aad(uid, id, "text"))?;
     let sealed_raw = match raw_text {
-        Some(raw) => Some(seal(&key, raw, &row_aad(uid, &id, "raw"))?),
+        Some(raw) => Some(seal(&key, raw, &row_aad(uid, id, "raw"))?),
+        None => None,
+    };
+    let sealed_context = match context {
+        Some(context) => Some(seal(&key, context, &row_aad(uid, id, "context"))?),
         None => None,
     };
 
@@ -545,9 +668,9 @@ fn record(
     let mut audio_bytes: i64 = 0;
     let mut audio_sha256: Option<String> = None;
     if !samples.is_empty() {
-        match store_clip(app, &key, uid, &id, samples) {
+        match store_clip(app, &key, uid, id, samples) {
             Ok(stored) => {
-                relative = Some(clip_relative(&id));
+                relative = Some(clip_relative(id));
                 audio_bytes = stored.sealed_bytes;
                 audio_sha256 = Some(stored.plain_sha256);
             }
@@ -559,8 +682,9 @@ fn record(
     conn.execute(
         "INSERT INTO transcripts (
             uid, id, recorded_at_ms, word_count, duration_ms, text,
-            flagged, audio_path, audio_bytes, raw_text, shareable, audio_sha256
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, ?9, ?10, ?11)",
+            flagged, audio_path, audio_bytes, raw_text, shareable, audio_sha256,
+            context
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, ?9, ?10, ?11, ?12)",
         params![
             uid,
             id,
@@ -573,6 +697,7 @@ fn record(
             sealed_raw,
             i64::from(shareable),
             audio_sha256,
+            sealed_context,
         ],
     )
     .map_err(|e| e.to_string())?;
