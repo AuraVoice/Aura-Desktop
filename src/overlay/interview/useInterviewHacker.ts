@@ -9,6 +9,7 @@ import {
   mintInterviewCredential,
   createInterviewReflection,
   streamInterviewAnswer,
+  type AnswerIntent,
   type InterviewAnswerAction,
   type InterviewReflection,
   type InterviewScreenSightFrame,
@@ -40,6 +41,7 @@ import {
 } from "../../lib/resumeText";
 import { loadInterviewWorkspace, type InterviewWorkspaceRecord } from "../../lib/interviewWorkspace";
 import { interviewKeyterms } from "../../lib/interviewKeyterms";
+import { retrieveFocus } from "../../lib/interviewProfile";
 import {
   checkpointInterviewSession,
   saveInterviewSession,
@@ -62,6 +64,7 @@ import { buildSelfPitch, type SelfPitch } from "../../lib/selfPitch";
 import { toBase64 } from "../../lib/chatScreenCapture";
 import { asArrayBuffer, parseCapturedFrame } from "../../lib/screenFrame";
 import { trackEvent } from "../../lib/analytics";
+import { auth } from "../../lib/firebase";
 import { logError, logInfo } from "../../lib/log";
 
 /** Tauri rejects Rust `Result<T, String>` commands with the bare string. */
@@ -147,6 +150,27 @@ const MAX_CREDENTIAL_RETRIES = 3;
 // Tauri's invoke has no deadline of its own. Past this, Start is treated as
 // failed and cancelled rather than left on "Starting..." indefinitely.
 const START_TIMEOUT_MS = 20_000;
+// An automatic answer waits behind the candidate's own voice until their
+// final arrives. If it never does (a mic stall, a dropped socket mid-sentence)
+// the held text was invisible forever; past this the hold releases on its own.
+const FROZEN_HOLD_MAX_MS = 15_000;
+
+/** The backend's error frame now names why (the provider-health classifier
+ * reason), so "busy, retry" and "down for ten minutes" no longer share copy. */
+function answerFailureCopy(reason: string | null, fallback: string): string {
+  switch (reason) {
+    case "rate_limited":
+    case "slow_first_token":
+    case "provider_outage":
+    case "connection_failure":
+      return "Aura's answer service is busy. Press Answer now to retry.";
+    case "provider_access":
+    case "credits_or_quota":
+      return "Aura's answer service is unavailable right now.";
+    default:
+      return fallback;
+  }
+}
 // Live-session checkpoint cadence: a crash loses at most this much.
 const CHECKPOINT_EVERY_MS = 30_000;
 // Cosmetic-only since Start no longer waits on this (see openPreflight), so
@@ -220,6 +244,7 @@ interface TurnTiming {
   visibleAtMs: number | null;
   frozenHoldMs: number;
   model: string | null;
+  hedged: boolean | null;
   reported: boolean;
 }
 
@@ -263,6 +288,12 @@ export interface InterviewHackerState {
   answer: string;
   interimQuestion: string;
   briefReady: boolean;
+  /** Company and role on the attached brief, so the card can name WHICH brief
+   * is live rather than only that one is. Null when the brief has none. */
+  briefCompany: string | null;
+  briefRole: string | null;
+  /** The register the answer model chose for the answer on screen. */
+  answerIntent: AnswerIntent;
   /** Word count of the attached resume, or null when none is attached. */
   resumeWords: number | null;
   attachingResume: boolean;
@@ -372,6 +403,9 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   const [recoverable, setRecoverable] = useState(false);
   const [canSuggest, setCanSuggest] = useState(false);
   const [drafting, setDrafting] = useState(false);
+  // The register the answer model chose on its first line, echoed on the
+  // decision frame. Drives the card's chip and the taller walkthrough slot.
+  const [answerIntent, setAnswerIntent] = useState<AnswerIntent>("unknown");
   const [questionPending, setQuestionPending] = useState(false);
   const identityRef = useRef<{ sessionId: string; epoch: number } | null>(null);
   const recentRef = useRef<InterviewTranscriptTurn[]>([]);
@@ -483,6 +517,9 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   const candidateSpeakingRef = useRef(false);
   const frozenDeltasRef = useRef("");
   const replaceAfterSpeechRef = useRef(false);
+  const frozenReleaseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // One silent token refresh per failed answer; cleared by the next decision.
+  const authRetriedRef = useRef(false);
   const acceptNativeEventsRef = useRef(false);
   const startAttemptRef = useRef(0);
   const preflightAttemptRef = useRef(0);
@@ -593,6 +630,16 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     const breakdown = {
       action: timing.action,
       model: timing.model,
+      // Broken down by provider so an incident where every turn silently rides
+      // the fallback (a retired primary id, a tripped circuit) is one chart.
+      provider: timing.model === null
+        ? null
+        : timing.model.startsWith("claude")
+          ? "anthropic"
+          : timing.model.includes("/")
+            ? "groq"
+            : "other",
+      hedged: timing.hedged,
       stt_final_lag_ms: timing.finalWordAtMs !== null
         ? Math.max(0, timing.queuedAtMs - timing.finalWordAtMs)
         : null,
@@ -1310,12 +1357,26 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   ) => {
     flushAnswerSync();
     const previousAnswer = answerRef.current;
+    // Read before activate() moves activeAnswerTurnRef to this turn. A
+    // "suggest" on a NEW question used to ship the previous question's answer
+    // as current_answer, which the backend read as a re-roll and ran hot.
+    const sameTurn = activeAnswerTurnRef.current?.turnId === turn.turnId;
     if (
       action !== "automatic"
       && action !== "suggest"
       && action !== "screen_sight"
       && !previousAnswer.trim()
     ) return;
+    // Retrieval focus: the project the question most likely concerns, ranked
+    // lexically against the question plus the interviewer's previous turn (a
+    // reference Deepgram split across two finals still counts). Evidence
+    // selection only; the model decides the register on its first line.
+    const recentRemote = recentTurns
+      .filter((recent) => recent.source === "remote" && recent.turnId !== turn.turnId)
+      .slice(-2)
+      .map((recent) => recent.text)
+      .join(" ");
+    const focus = retrieveFocus(briefRef.current, turn.text, recentRemote);
     const sequence = ++requestSequenceRef.current;
     const controller = new AbortController();
     evaluationsRef.current.add(controller);
@@ -1335,6 +1396,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       visibleAtMs: null,
       frozenHoldMs: 0,
       model: null,
+      hedged: null,
       reported: false,
     };
 
@@ -1379,6 +1441,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       // The answered question is set HERE, not from the raw transcript, so a
       // turn the gate rejects can never re-label the answer already on screen.
       setQuestion(turn.text);
+      setAnswerIntent("unknown");
       setInterimQuestion("");
       setQuestionPending(false);
       activated = true;
@@ -1409,8 +1472,11 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       // avoided is no longer the cost it was guarding against.
       resume: resumeTextRef.current ?? "",
       answerShape: answerShapeRef.current,
+      focus,
       action,
-      currentAnswer: previousAnswer,
+      // A first answer to a new question carries no current answer, even in
+      // manual mode: only a re-roll of the SAME question is a re-roll.
+      currentAnswer: action === "suggest" && !sameTurn ? "" : previousAnswer,
       screenSight,
       screenNotes: screenNotesRef.current,
       signal: controller.signal,
@@ -1419,6 +1485,12 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
         if (frame.type === "decision") {
           timing.decisionAtMs = Date.now();
           timing.model = frame.model;
+          timing.hedged = frame.hedged;
+          authRetriedRef.current = false;
+          // The backend ran this turn with no candidate evidence and no resume
+          // (a reviewed brief with nothing confirmed), so it answered in
+          // bracket-slot mode; badge it like a turn with no brief at all.
+          if (frame.grounded === false) activeUnverifiedRef.current = true;
           if (action === "automatic") {
             if (metricsRef.current) {
               if (frame.accepted) metricsRef.current.accepted += 1;
@@ -1447,6 +1519,8 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
           }
           if (frame.accepted) {
             if (!activated) activate();
+            // After activate(), which resets the chip for a new question.
+            if (frame.intent) setAnswerIntent(frame.intent as AnswerIntent);
           } else {
             const activeTurn = activeAnswerTurnRef.current;
             const sameSpeaker = (activeTurn?.remoteSpeakerId ?? null)
@@ -1497,7 +1571,37 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
           // clicked one (Answer now, Shorter, Screen Sight) is an explicit ask
           // and lands while they read.
           if (candidateSpeakingRef.current && action === "automatic") {
-            if (timing.frozenAtMs === null) timing.frozenAtMs = Date.now();
+            if (timing.frozenAtMs === null) {
+              timing.frozenAtMs = Date.now();
+              if (frozenReleaseTimerRef.current !== null) {
+                clearTimeout(frozenReleaseTimerRef.current);
+              }
+              frozenReleaseTimerRef.current = setTimeout(() => {
+                frozenReleaseTimerRef.current = null;
+                if (!candidateSpeakingRef.current || generationRef.current !== controller) return;
+                // The candidate's final never came. Release the hold the way
+                // the final would have, so the answer stops being invisible.
+                candidateSpeakingRef.current = false;
+                setCandidateSpeaking(false);
+                flushAnswerSync();
+                const frozen = frozenDeltasRef.current;
+                frozenDeltasRef.current = "";
+                if (replaceAfterSpeechRef.current) {
+                  answerRef.current = frozen;
+                  setAnswer(frozen);
+                } else if (frozen) {
+                  answerRef.current += frozen;
+                  setAnswer((current) => current + frozen);
+                }
+                replaceAfterSpeechRef.current = false;
+                if (timing.visibleAtMs === null) {
+                  timing.visibleAtMs = Date.now();
+                  timing.frozenHoldMs = timing.visibleAtMs - (timing.frozenAtMs ?? timing.visibleAtMs);
+                  reportTurnLatency(timing);
+                }
+                setDrafting(false);
+              }, FROZEN_HOLD_MAX_MS);
+            }
             frozenDeltasRef.current += frame.delta;
           } else {
             if (timing.visibleAtMs === null) {
@@ -1514,13 +1618,31 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
             action,
             generated: frame.generated,
             answer_ms: frame.answerMs,
+            answer_ttft_ms: frame.answerTtftMs,
+            model: timing.model,
+            truncated: frame.truncated,
           });
-          setMessage(frame.generated ? null : "No answer needed for that turn.");
+          // A skipped turn keeps the question addressable: Answer now already
+          // sends lastRemoteTurnRef, so the copy names the way out instead of
+          // reading as a verdict.
+          setMessage(
+            !frame.generated
+              ? "Skipped that turn. Press Answer now if it was for you."
+              : frame.truncated
+                ? "Answer was cut short. Press Shorter for a tighter version."
+                : null,
+          );
         } else if (frame.type === "error") {
           if (metricsRef.current) metricsRef.current.errors += 1;
-          trackEvent("interview_companion_error", { code: frame.code, stage: "answer" });
+          trackEvent("interview_companion_error", {
+            code: frame.code,
+            reason: frame.reason,
+            stage: "answer",
+          });
           if (generationRef.current === controller) setDrafting(false);
-          if (activated || generationRef.current === null) setMessage(frame.message);
+          if (activated || generationRef.current === null) {
+            setMessage(answerFailureCopy(frame.reason, frame.message));
+          }
         }
       },
     }).catch((error) => {
@@ -1534,8 +1656,29 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       }
       pendingAnswerDeltaRef.current = "";
       if (controller.signal.aborted) return;
+      // A rejected ID token is a refresh away, not a dead turn: refresh once
+      // and re-run the same evaluation. Only the second failure is shown.
+      if (error instanceof AuthRequiredError && !authRetriedRef.current) {
+        authRetriedRef.current = true;
+        void auth.currentUser?.getIdToken(true)
+          .then(() => {
+            if (generationRef.current === controller) generationRef.current = null;
+            evaluationsRef.current.delete(controller);
+            evaluate(turn, recentTurns, action, screenSight, queuedAtMs);
+          })
+          .catch((refreshError) => {
+            logError("Interview Companion: token refresh", refreshError);
+            setMessage("Your sign-in expired. Sign in again to keep getting answers.");
+          });
+        return;
+      }
       if (metricsRef.current) metricsRef.current.errors += 1;
-      trackEvent("interview_companion_error", { code: "stream_failed", stage: "answer" });
+      const code = error instanceof TimeoutError
+        ? "stream_timeout"
+        : error instanceof AuthRequiredError
+          ? "auth_expired"
+          : "stream_failed";
+      trackEvent("interview_companion_error", { code, stage: "answer" });
       if (activated && action !== "automatic" && previousAnswer && !candidateSpeakingRef.current) {
         answerRef.current = previousAnswer;
         setAnswer(previousAnswer);
@@ -1547,7 +1690,13 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       }
       logError("Interview Companion: answer stream", error);
       if (activated || generationRef.current === null) {
-        setMessage("Aura could not draft an answer for that turn.");
+        setMessage(
+          code === "stream_timeout"
+            ? "Aura's answer took too long. Press Answer now to retry."
+            : code === "auth_expired"
+              ? "Your sign-in expired. Sign in again to keep getting answers."
+              : "Aura could not draft an answer for that turn.",
+        );
       }
     }).finally(() => {
       evaluationsRef.current.delete(controller);
@@ -1903,6 +2052,10 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
         }
         candidateSpeakingRef.current = false;
         setCandidateSpeaking(false);
+        if (frozenReleaseTimerRef.current !== null) {
+          clearTimeout(frozenReleaseTimerRef.current);
+          frozenReleaseTimerRef.current = null;
+        }
         // A pre-speech delta can still be buffered (scheduleAnswerDelta) when
         // speech starts; fold it in before splicing on the frozen (held-during-
         // speech) text, or the two chunks land out of chronological order.
@@ -2028,6 +2181,9 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     answer,
     interimQuestion,
     briefReady: brief !== null && brief.reviewedAtMs !== null,
+    briefCompany: brief?.company?.text.trim() || null,
+    briefRole: brief?.role?.text.trim() || null,
+    answerIntent,
     resumeWords: resumeText ? resumeStats(resumeText).words : null,
     attachingResume,
     resumeError,

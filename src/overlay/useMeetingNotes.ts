@@ -61,8 +61,17 @@ interface MeetingNotesInputs {
   draftActive: boolean;
   activities: MeetingActivity[];
   retryUpload: (meetingId: string) => void;
+  /** Advances the local activity row once the server has a terminal outcome,
+   * so "processing" never outlives the meeting it describes. */
+  settleActivity?: (meetingId: string, status: "ready" | "excluded" | "failed") => void;
   /** Ready/attention events arriving after the foreground polling window. */
   notificationMeetingIds: string[];
+}
+
+type TerminalStatus = "ready" | "excluded" | "failed";
+
+function terminalStatus(status: string): TerminalStatus | null {
+  return status === "ready" || status === "excluded" || status === "failed" ? status : null;
 }
 
 /**
@@ -82,6 +91,7 @@ export function useMeetingNotes(inputs: MeetingNotesInputs): MeetingNotesState {
     draftActive,
     activities,
     retryUpload,
+    settleActivity,
     notificationMeetingIds,
   } = inputs;
 
@@ -156,7 +166,9 @@ export function useMeetingNotes(inputs: MeetingNotesInputs): MeetingNotesState {
       if (cancelled || Date.now() > deadline) return;
       const fetched = await fetchMeeting(processingActivity.meetingId, FETCH_BUDGET_MS);
       if (cancelled) return;
-      if (fetched && (fetched.status === "ready" || fetched.status === "excluded" || fetched.status === "failed")) {
+      const terminal = fetched ? terminalStatus(fetched.status) : null;
+      if (fetched && terminal) {
+        settleActivity?.(fetched.meetingId, terminal);
         void present(fetched);
         return; // terminal either way - stop polling
       }
@@ -167,7 +179,7 @@ export function useMeetingNotes(inputs: MeetingNotesInputs): MeetingNotesState {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [signedIn, processingActivity?.meetingId, present]);
+  }, [signedIn, processingActivity?.meetingId, present, settleActivity]);
 
   // Durable local queue state is immediately user-visible and survives restart.
   useEffect(() => {
@@ -201,6 +213,10 @@ export function useMeetingNotes(inputs: MeetingNotesInputs): MeetingNotesState {
       notificationMeetingIds.map((meetingId) => fetchMeeting(meetingId, FETCH_BUDGET_MS)),
     ).then((rows) => {
       if (cancelled) return;
+      for (const row of rows) {
+        const status = row ? terminalStatus(row.status) : null;
+        if (row && status) settleActivity?.(row.meetingId, status);
+      }
       const terminal = rows.find((row) =>
         row !== null && ["ready", "excluded", "failed"].includes(row.status));
       if (terminal) void present(terminal);
@@ -208,7 +224,7 @@ export function useMeetingNotes(inputs: MeetingNotesInputs): MeetingNotesState {
     return () => {
       cancelled = true;
     };
-  }, [signedIn, notificationMeetingIds, present]);
+  }, [signedIn, notificationMeetingIds, present, settleActivity]);
 
   // Trigger 2: entering the signed-in panel, latest ready-and-unseen note.
   useEffect(() => {
@@ -223,6 +239,10 @@ export function useMeetingNotes(inputs: MeetingNotesInputs): MeetingNotesState {
         await ensureSeenLoaded();
         const recent = await fetchRecentMeetings(RECENT_LIMIT, FETCH_BUDGET_MS);
         if (cancelled || recent === null) return;
+        for (const item of recent) {
+          const status = terminalStatus(item.status);
+          if (status) settleActivity?.(item.meetingId, status);
+        }
         const candidate = recent.find((item) =>
           ["ready", "excluded", "failed"].includes(item.status)
           && (item.status !== "ready" || item.note !== null)
@@ -237,7 +257,7 @@ export function useMeetingNotes(inputs: MeetingNotesInputs): MeetingNotesState {
     return () => {
       cancelled = true;
     };
-  }, [presentation, signedIn, callLive, draftActive, getStore, ensureSeenLoaded, present]);
+  }, [presentation, signedIn, callLive, draftActive, getStore, ensureSeenLoaded, present, settleActivity]);
 
   const reset = useCallback(() => {
     if (!visibleRef.current) return;

@@ -187,6 +187,10 @@ fn build_continuous_url(config: &ContinuousSessionConfig) -> String {
         query.append_pair("mip_opt_out", "true");
         query.append_pair("no_delay", "true");
         if config.diarize {
+            // `diarize_model` alone never switched diarization on: every
+            // interview transcript arrived with no speaker id, so the
+            // crosstalk short-circuit and the same-speaker merge were dead.
+            query.append_pair("diarize", "true");
             query.append_pair("diarize_model", "latest");
         }
         for term in config.keyterms.iter().take(MAX_KEYTERMS) {

@@ -1213,12 +1213,14 @@ function BriefReview({
   brief,
   activeBriefId,
   saving,
+  hasResume,
   onChange,
   onUse,
 }: {
   brief: InterviewBrief;
   activeBriefId: string | null;
   saving: boolean;
+  hasResume: boolean;
   onChange: (brief: InterviewBrief) => void;
   onUse: () => void;
 }) {
@@ -1276,9 +1278,11 @@ function BriefReview({
 
       <div className="db-interview-review-footer">
         <span>
-          {activeBriefId && !isActive
-            ? "Your previous reviewed brief remains in use until you apply this one."
-            : "Ready for Interview Companion."}
+          {verifiedCount === 0 && !hasResume
+            ? "No confirmed claims and no resume: Aura will leave blanks for your experience instead of guessing. Confirm claims above or add your resume."
+            : activeBriefId && !isActive
+              ? "Your previous reviewed brief remains in use until you apply this one."
+              : "Ready for Interview Companion."}
         </span>
         <button type="button" disabled={saving || isActive} onClick={onUse}>
           {isActive ? "Brief in use" : saving ? "Saving" : "Use reviewed brief"}
@@ -1772,6 +1776,17 @@ export function InterviewPage() {
       const restoredTab = restoredActiveInterviewId ? "current" : restoredHasHistory ? "preparation" : "current";
       stage.jumpTo(restoredTab);
       setPersistenceReady(true);
+      // Said out loud rather than hidden: a row that would not decrypt or
+      // validate stays on disk and is simply not listed, and pretending it
+      // never existed is how the old loader lost a whole preparation.
+      const unreadable = storedWorkspace?.unreadable ?? 0;
+      if (unreadable > 0) {
+        setError(
+          unreadable === 1
+            ? "One saved interview on this device could not be read and is not listed."
+            : `${unreadable} saved interviews on this device could not be read and are not listed.`,
+        );
+      }
     })().catch((err) => {
       logError("InterviewPage: load local workspace", err);
       if (!active) return;
@@ -2346,6 +2361,7 @@ export function InterviewPage() {
           brief={brief}
           activeBriefId={activeBriefId}
           saving={saving}
+          hasResume={currentInterview.input.resume.trim() !== ""}
           onChange={(next) => updateInterview(currentInterview.interviewId, (interview) => ({
             ...interview,
             draftBrief: { ...next, reviewedAtMs: null },

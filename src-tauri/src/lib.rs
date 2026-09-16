@@ -40,6 +40,7 @@ mod fsx;
 mod guide;
 mod hotkeys;
 mod interview;
+mod interview_prep_store;
 mod interview_store;
 mod logging;
 #[cfg(target_os = "macos")]
@@ -479,6 +480,7 @@ pub fn run() {
             dictation::dictation_clear_credential,
             dictation::dictation_hud_state,
             dictation::dictation_set_hud_hovered,
+            dictation::dictation_held_text_copied,
             dictation::dictation_set_composer_focused,
             dictation::dictation_set_chat_open,
             // registered ahead of UI: dictation vocabulary management has no
@@ -531,6 +533,10 @@ pub fn run() {
             interview_store::interview_session_delete,
             interview_store::interview_reflection_save,
             interview_store::interview_sessions_clear,
+            interview_prep_store::interview_prep_load,
+            interview_prep_store::interview_prep_upsert,
+            interview_prep_store::interview_prep_delete,
+            interview_prep_store::interview_prep_set_meta,
             dictation::polish_commands::dictation_polish_settings,
             dictation::polish_commands::dictation_set_polish_settings,
             dictation::polish_commands::dictation_set_polish_credential,

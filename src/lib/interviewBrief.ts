@@ -92,11 +92,54 @@ export interface InterviewStarStory {
   result: InterviewBriefClaim;
 }
 
+export type InterviewProfileNodeKind =
+  | "project"
+  | "employer"
+  | "role"
+  | "skill"
+  | "tool"
+  | "metric"
+  | "education";
+
+export type InterviewProfileRelation = "at" | "used" | "measured_by" | "required_by" | "part_of";
+
+export interface InterviewProfileNode {
+  nodeId: string;
+  kind: InterviewProfileNodeKind;
+  label: string;
+  text: string;
+  sourceIds: string[];
+  /** 0 is the most recent or most substantial of its kind (projects). */
+  rank: number;
+}
+
+export interface InterviewProfileEdge {
+  fromId: string;
+  toId: string;
+  relation: InterviewProfileRelation;
+}
+
+/**
+ * The candidate's history as a small typed graph, built by the brief call
+ * from candidate sources only. The overlay retrieves a per-question focus from
+ * it (see interviewProfile.ts): the one project a deep dive is about and the
+ * nodes one edge away, so the answer names the right project in the order the
+ * interviewer asked. It never enters InterviewBriefSlice (extra="forbid" on the
+ * server); the focus rides the answer request as its own top-level field.
+ */
+export interface InterviewProfileGraph {
+  nodes: InterviewProfileNode[];
+  edges: InterviewProfileEdge[];
+}
+
 export interface InterviewBrief {
   contractVersion: 3;
   briefId: string;
   company: InterviewBriefClaim | null;
   role: InterviewBriefClaim | null;
+  /** Absent on briefs built before the graph shipped; null when the builder
+   * found no candidate nodes. Both mean "no focus", today's behaviour. */
+  profile?: InterviewProfileGraph | null;
   sources: InterviewBriefSource[];
   targetFacts: InterviewBriefClaim[];
   candidateFacts: InterviewBriefClaim[];
@@ -255,7 +298,12 @@ export function preparationSources(
 
   add("company", "Target company", research.company || input.company, "verified");
   add("role", "Target role", input.role, "verified");
-  add("resume", "Resume", input.resume, "unverified");
+  // The resume is the user's own document, so claims drawn only from it arrive
+  // confirmed. Left unverified, every resume-derived fact, project, metric and
+  // STAR story was filtered out of the live answer slice until the user ticked
+  // it by hand, and a reviewed brief with nothing ticked and no resume text
+  // gave the model nothing to ground against (2026-09-16).
+  add("resume", "Resume", input.resume, "verified");
   add("job_description", "Job description", input.jobDescription, "unverified");
   research.facts.forEach((fact) => add(
     "company_research",

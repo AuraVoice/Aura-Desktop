@@ -1,9 +1,5 @@
-import {
-  dashboardCacheKey,
-  deleteCache,
-  readCache,
-  writeCache,
-} from "./dashboardCache";
+import { invoke } from "@tauri-apps/api/core";
+import { dashboardCacheKey, readCache } from "./dashboardCache";
 import type {
   CompanyResearchResult,
   InterviewBrief,
@@ -11,13 +7,24 @@ import type {
   InterviewBriefSource,
   InterviewPrepRoom,
   InterviewPreparationInput,
+  InterviewProfileGraph,
   InterviewStarStory,
   PracticeMark,
 } from "./interviewBrief";
 import { isPlannedMinutes, isRoundKind } from "./interviewPolicy";
 import type { PlannedMinutes, RoundKind } from "./interviewPolicy";
+import { logError } from "./log";
 
-const WORKSPACE_KEY = "interview-companion:workspace:v1";
+/**
+ * Preparations live in the encrypted `interview-preparations.sqlite3` store
+ * (Rust `interview_prep_store`), one row per interview, and are read back and
+ * validated ONE RECORD AT A TIME. They used to be one JSON key in the dashboard
+ * cache with an all-or-nothing loader: a single record failing a shape check
+ * made the whole workspace load as empty, the page then built a fresh one and
+ * its autosave wrote that over every interview the user had prepared. That key
+ * is now read once, as a legacy import, and never written again.
+ */
+const LEGACY_WORKSPACE_KEY = "interview-companion:workspace:v1";
 const WORKSPACE_VERSION = 2;
 let mutationQueue: Promise<unknown> = Promise.resolve();
 
@@ -28,11 +35,9 @@ export interface InterviewWorkspaceRecord {
   input: InterviewPreparationInput;
   research: CompanyResearchResult | null;
   draftBrief: InterviewBrief | null;
-  // Optional, and they must stay optional. `workspace()` below is
-  // all-or-nothing: one failed check makes loadInterviewWorkspace return null,
-  // InterviewPage builds a fresh workspace, and the next save overwrites every
-  // interview the user prepared. Requiring these, or bumping WORKSPACE_VERSION
-  // for them, would silently wipe every existing user.
+  // Optional, and they must stay optional: a record that fails validation is
+  // dropped from the list (and counted in `unreadable`), so requiring a field
+  // that older records lack would hide every interview prepared before it.
   //
   // `lastRoundKind` is the picker's remembered default, never the authority.
   // The round chosen at Start is what the session runs as.
@@ -50,10 +55,22 @@ export interface InterviewWorkspace {
   currentInterviewId: string | null;
   activeInterviewId: string | null;
   activeBrief: InterviewBrief | null;
+  /** Rows on disk that would not decrypt or validate. Left in place; surfaced
+   * so the page can say so rather than pretend they never existed. */
+  unreadable?: number;
 }
 
-interface StoredInterviewWorkspace extends InterviewWorkspace {
-  version: number;
+interface PreparationRow {
+  interviewId: string;
+  updatedAtMs: number;
+  body: unknown;
+}
+
+interface PreparationWorkspace {
+  records: PreparationRow[];
+  currentInterviewId: string | null;
+  activeInterviewId: string | null;
+  unreadable: number;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
@@ -265,29 +282,54 @@ function practiceMarks(value: unknown): value is Record<string, PracticeMark> {
   return Boolean(item && Object.values(item).every((mark) => mark === "confident" || mark === "work"));
 }
 
-/** Drops a prep room or practice marks that fail validation, or a prep room built
- * for a different brief, before the all-or-nothing workspace check runs. */
-function withoutInvalidPrep(value: unknown): unknown {
+function profileNode(value: unknown): boolean {
   const item = record(value);
-  if (!item || !Array.isArray(item.interviews)) return value;
-  return {
-    ...item,
-    interviews: item.interviews.map((raw) => {
-      const interview = record(raw);
-      if (!interview) return raw;
-      const next = { ...interview };
-      const brief = record(next.draftBrief);
-      if (
-        next.prepRoom !== undefined
-        && next.prepRoom !== null
-        && (!prepRoom(next.prepRoom) || next.prepRoom.briefId !== brief?.briefId)
-      ) {
-        delete next.prepRoom;
-      }
-      if (next.practiceMarks !== undefined && !practiceMarks(next.practiceMarks)) delete next.practiceMarks;
-      return next;
-    }),
-  };
+  return Boolean(
+    item
+    && typeof item.nodeId === "string"
+    && item.nodeId.length > 0
+    && typeof item.kind === "string"
+    && typeof item.label === "string"
+    && typeof item.text === "string"
+    && strings(item.sourceIds)
+    && typeof item.rank === "number",
+  );
+}
+
+function profileGraph(value: unknown): value is InterviewProfileGraph {
+  const item = record(value);
+  if (!item || !Array.isArray(item.nodes) || !Array.isArray(item.edges)) return false;
+  if (!item.nodes.every(profileNode)) return false;
+  const ids = new Set(item.nodes.map((node) => (node as { nodeId: string }).nodeId));
+  return item.edges.every((raw) => {
+    const edge = record(raw);
+    return edge
+      && typeof edge.fromId === "string" && ids.has(edge.fromId)
+      && typeof edge.toId === "string" && ids.has(edge.toId)
+      && typeof edge.relation === "string";
+  });
+}
+
+/** Drops a prep room or practice marks that fail validation, a prep room built
+ * for a different brief, or a malformed profile graph, before the record check
+ * runs. All three are regenerable and must never cost the user the interview. */
+function withoutInvalidPrepRecord(raw: unknown): unknown {
+  const interview = record(raw);
+  if (!interview) return raw;
+  const next = { ...interview };
+  const brief = record(next.draftBrief);
+  if (
+    next.prepRoom !== undefined
+    && next.prepRoom !== null
+    && (!prepRoom(next.prepRoom) || next.prepRoom.briefId !== brief?.briefId)
+  ) {
+    delete next.prepRoom;
+  }
+  if (next.practiceMarks !== undefined && !practiceMarks(next.practiceMarks)) delete next.practiceMarks;
+  if (brief && brief.profile !== undefined && brief.profile !== null && !profileGraph(brief.profile)) {
+    next.draftBrief = { ...brief, profile: null };
+  }
+  return next;
 }
 
 function interviewRecord(value: unknown): value is InterviewWorkspaceRecord {
@@ -307,47 +349,183 @@ function interviewRecord(value: unknown): value is InterviewWorkspaceRecord {
   );
 }
 
-function workspace(value: unknown): value is StoredInterviewWorkspace {
-  const item = record(value);
-  if (
-    !item
-    || item.version !== WORKSPACE_VERSION
-    || !Array.isArray(item.interviews)
-    || !item.interviews.every(interviewRecord)
-    || !(item.currentInterviewId === null || typeof item.currentInterviewId === "string")
-    || !(item.activeInterviewId === null || typeof item.activeInterviewId === "string")
-    || !(item.activeBrief === null || interviewBrief(item.activeBrief))
-  ) return false;
-  const ids = item.interviews.map((interview) => interview.interviewId);
-  const uniqueIds = new Set(ids);
-  if (uniqueIds.size !== ids.length) return false;
-  if (item.currentInterviewId !== null && !uniqueIds.has(item.currentInterviewId)) return false;
-  if (item.activeInterviewId !== null && !uniqueIds.has(item.activeInterviewId)) return false;
-  return (item.activeInterviewId === null) === (item.activeBrief === null)
-    && (item.activeBrief === null || item.activeBrief.reviewedAtMs !== null);
+/** Per-record salvage: the records that validate, in the order given, with
+ * duplicates by id dropped. Everything else is counted, never fatal. */
+function salvageRecords(raw: unknown[]): { interviews: InterviewWorkspaceRecord[]; dropped: number } {
+  const interviews: InterviewWorkspaceRecord[] = [];
+  const seen = new Set<string>();
+  let dropped = 0;
+  for (const value of raw) {
+    const candidate = withoutInvalidPrepRecord(value);
+    if (!interviewRecord(candidate) || seen.has(candidate.interviewId)) {
+      dropped += 1;
+      continue;
+    }
+    seen.add(candidate.interviewId);
+    interviews.push(candidate);
+  }
+  return { interviews, dropped };
 }
 
-function key(uid: string): string {
-  return dashboardCacheKey(uid, WORKSPACE_KEY);
+/** Resolves the two meta ids against the records that survived, and derives
+ * the active brief from the active record. The brief is never stored twice:
+ * the record's reviewed `draftBrief` is the one source, so the store can not
+ * disagree with itself the way the old separate `activeBrief` field could. */
+function assemble(
+  interviews: InterviewWorkspaceRecord[],
+  currentInterviewId: string | null,
+  activeInterviewId: string | null,
+  unreadable: number,
+): InterviewWorkspace {
+  const ids = new Set(interviews.map((interview) => interview.interviewId));
+  const active = activeInterviewId !== null && ids.has(activeInterviewId)
+    ? interviews.find((interview) => interview.interviewId === activeInterviewId) ?? null
+    : null;
+  const activeBrief = active?.draftBrief?.reviewedAtMs != null ? active.draftBrief : null;
+  return {
+    interviews,
+    currentInterviewId: currentInterviewId !== null && ids.has(currentInterviewId) ? currentInterviewId : null,
+    activeInterviewId: activeBrief ? activeInterviewId : null,
+    activeBrief,
+    unreadable,
+  };
+}
+
+/** The one-time read of the pre-store dashboard-cache key. Never deleted, so a
+ * rollback to an older build still finds it; never written again. */
+async function loadLegacyWorkspace(uid: string): Promise<InterviewWorkspace | null> {
+  const cached = await readCache<unknown>(dashboardCacheKey(uid, LEGACY_WORKSPACE_KEY));
+  const item = record(cached?.data);
+  if (!item || item.version !== WORKSPACE_VERSION || !Array.isArray(item.interviews)) return null;
+  const { interviews, dropped } = salvageRecords(item.interviews);
+  if (interviews.length === 0) return null;
+  return assemble(
+    interviews,
+    typeof item.currentInterviewId === "string" ? item.currentInterviewId : null,
+    typeof item.activeInterviewId === "string" ? item.activeInterviewId : null,
+    dropped,
+  );
+}
+
+// Change detection for the autosave: InterviewPage saves the whole workspace
+// 300 ms after any change, so without this every keystroke in the job
+// description would re-seal and rewrite every prepared interview.
+const savedHashes = new Map<string, string>();
+const savedMeta = new Map<string, string>();
+
+function hashRecord(value: unknown): string {
+  const json = JSON.stringify(value) ?? "";
+  let h = 0x811c9dc5;
+  for (let i = 0; i < json.length; i++) {
+    h ^= json.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(36);
+}
+
+function hashKey(uid: string, interviewId: string): string {
+  return `${uid} ${interviewId}`;
+}
+
+function rememberSaved(uid: string, value: InterviewWorkspace): void {
+  for (const interview of value.interviews) {
+    savedHashes.set(hashKey(uid, interview.interviewId), hashRecord(interview));
+  }
+  savedMeta.set(uid, `${value.currentInterviewId ?? ""} ${value.activeInterviewId ?? ""}`);
 }
 
 export async function loadInterviewWorkspace(uid: string): Promise<InterviewWorkspace | null> {
-  const cached = await readCache<unknown>(key(uid));
-  const data = cached ? withoutInvalidPrep(cached.data) : null;
-  if (!workspace(data)) return null;
-  const { interviews, currentInterviewId, activeInterviewId, activeBrief } = data;
-  return { interviews, currentInterviewId, activeInterviewId, activeBrief };
+  const stored = await invoke<PreparationWorkspace>("interview_prep_load", { uid });
+  const { interviews, dropped } = salvageRecords(stored.records.map((row) => row.body));
+  const unreadable = stored.unreadable + dropped;
+  if (interviews.length === 0 && unreadable === 0) {
+    const legacy = await loadLegacyWorkspace(uid).catch((error) => {
+      logError("interviewWorkspace: legacy import", error);
+      return null;
+    });
+    if (!legacy) return null;
+    // Import as a normal save so the records land in the store under their
+    // own ids and every later autosave is an ordinary change-detected write.
+    await saveInterviewWorkspace(uid, legacy);
+    return legacy;
+  }
+  const workspace = assemble(interviews, stored.currentInterviewId, stored.activeInterviewId, unreadable);
+  rememberSaved(uid, workspace);
+  return workspace;
 }
 
+/** Writes only what changed since the last load or save for this account:
+ * changed records are upserted, records that disappeared are deleted, and the
+ * meta row is rewritten when either id moved. Serialised so a slow write can
+ * never land after a newer one. Resolves false when any write failed. */
 export async function saveInterviewWorkspace(uid: string, value: InterviewWorkspace): Promise<boolean> {
-  const stored: StoredInterviewWorkspace = { version: WORKSPACE_VERSION, ...value };
-  const operation = mutationQueue.then(() => writeCache(key(uid), stored, Date.now()));
+  const operation = mutationQueue.then(async () => {
+    let ok = true;
+    const present = new Set<string>();
+    for (const interview of value.interviews) {
+      present.add(interview.interviewId);
+      const key = hashKey(uid, interview.interviewId);
+      const hash = hashRecord(interview);
+      if (savedHashes.get(key) === hash) continue;
+      try {
+        await invoke("interview_prep_upsert", {
+          uid,
+          interviewId: interview.interviewId,
+          updatedAtMs: interview.updatedAtMs,
+          body: interview,
+        });
+        savedHashes.set(key, hash);
+      } catch (error) {
+        logError("interviewWorkspace: save record", error);
+        ok = false;
+      }
+    }
+    const prefix = hashKey(uid, "");
+    for (const key of [...savedHashes.keys()]) {
+      if (!key.startsWith(prefix)) continue;
+      const interviewId = key.slice(prefix.length);
+      if (present.has(interviewId)) continue;
+      try {
+        await invoke("interview_prep_delete", { uid, interviewId });
+        savedHashes.delete(key);
+      } catch (error) {
+        logError("interviewWorkspace: delete record", error);
+        ok = false;
+      }
+    }
+    const meta = `${value.currentInterviewId ?? ""} ${value.activeInterviewId ?? ""}`;
+    if (savedMeta.get(uid) !== meta) {
+      try {
+        await invoke("interview_prep_set_meta", {
+          uid,
+          currentInterviewId: value.currentInterviewId,
+          activeInterviewId: value.activeInterviewId,
+        });
+        savedMeta.set(uid, meta);
+      } catch (error) {
+        logError("interviewWorkspace: save meta", error);
+        ok = false;
+      }
+    }
+    return ok;
+  });
   mutationQueue = operation;
   return operation;
 }
 
 export async function clearInterviewWorkspace(uid: string): Promise<void> {
-  const operation = mutationQueue.then(() => deleteCache(key(uid)));
+  const operation = mutationQueue.then(async () => {
+    const stored = await invoke<PreparationWorkspace>("interview_prep_load", { uid });
+    for (const row of stored.records) {
+      await invoke("interview_prep_delete", { uid, interviewId: row.interviewId });
+    }
+    await invoke("interview_prep_set_meta", { uid, currentInterviewId: null, activeInterviewId: null });
+    const prefix = hashKey(uid, "");
+    for (const key of [...savedHashes.keys()]) {
+      if (key.startsWith(prefix)) savedHashes.delete(key);
+    }
+    savedMeta.delete(uid);
+  });
   mutationQueue = operation;
   await operation;
 }

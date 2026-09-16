@@ -1,3 +1,104 @@
+2026-09-16  A real screening call: one register for six kinds of question, and a brief that vanished
+
+Problem: Varun ran the companion on a real recruiter screen (17 minutes, recorded by Meeting
+Notes, so the transcript exists). The interviewer asked six things: on-site OK, walk me through a
+recent AIML project in detail, RAG vs generative AI, tips against hallucination, why MCP instead
+of REST, and what YOUR MCP actually did. Every answer came out in the same four-to-six-sentence
+"Yeah, so" register; the walkthrough was short and generic, the MCP comparison was "MCP gives you
+context" mush, and the deep dive named no project. Separately, the brief he had prepared was gone:
+opening the companion from the notch after a relaunch showed only "add resume", and the dashboard
+cache held no preparation at all.
+
+Issue: (1) answer_shape is chosen once from the round kind at Start and never changes, so a
+logistics check, a ninety-second script and a comparison all ran under one style row, one 260
+token cap and one model; (2) INTERVIEW_SPOKEN_RULE asked for contractions, a lead-in and "..."
+pauses on every question, including the ones where precision is the whole answer; (3) manual
+"Answer now" is action=suggest, which ran at temperature 0.7 because the only other use of
+suggest was a re-roll; (4) the whole resume rode the cached prefix but nothing said WHICH project
+the question was about or in what ORDER to cover the parts the interviewer listed, so "your
+recent project" resolved to nothing in particular; (5) the reviewed brief lived only in a Rust
+memory slot that was filled ONLY when the dashboard Interview page mounted, so a relaunch plus the
+notch path ran brief-less; (6) the workspace was one JSON key in the dashboard cache whose loader
+was all-or-nothing, and the page then built a fresh workspace and autosaved it over whatever had
+been there, which the file's own comment admitted; (7) model_provider.stream_text always sent
+temperature, and Sonnet 5 returns a hard 400 for it, so no Sonnet 5 leg could ever have streamed
+an answer; (8) useMeetingNotes and MeetingNotesCard turned out to be unmounted since the notch
+redesign (5856569), so the "processing" rows in meeting-activity.json were read by nothing.
+
+Solution: a per-question INTENT table instead of a per-round shape, with the MODEL choosing the
+row. The first attempt put a regex cue table on the desktop (interviewIntent.ts) and a probe on
+the real questions showed it drifting inside the hour: the walkthrough tied two intents and
+abstained, and "why MCP instead of REST" flipped between compare and project_detail on wording.
+That is the exact failure interviewPolicy.ts bans, so it was deleted. Now the answer model writes
+ANSWER|<intent> on the first line it already used for ANSWER/SKIP (manual actions write the same
+line without the skip option), the parser clamps and fails open to unknown, and the row it picked
+from the cached intent_styles table sets register and length. The desktop only retrieves a focus
+bundle from a profile graph the brief builder now emits (interviewProfile.ts: the one project by
+lexical overlap with a rank-0 prior plus its adjacent tools, employer and metrics), which is
+evidence selection, not a decision; the model is told to ignore it for generic questions.
+Per-intent model routing (Sonnet for concept and compare) is deferred: it cannot be decided before
+the stream without a classifier, and the honest version is the tied-request pattern (Dean and
+Barroso, The Tail at Scale), which is a second pass. A first suggest runs at 0.25.
+stream_text omits temperature for models that reject it. Preparations
+moved to an encrypted per-account sqlite store with per-record salvage and a one-time legacy
+import, and security::session_changed hydrates the brief and resume slots at sign-in so the
+companion has the brief whichever window mounts first; the card now says "Brief attached:
+company / role". Meeting Notes gained a kind (auto, meeting, interview) with an interview debrief
+section: each question, how it was answered, what to do next time.
+
+Justification: "unknown" reproduces the old behaviour exactly, so a misread question costs a
+register, never grounding; a new question type is one row in the prompt table plus one word in
+the parser's vocabulary, not a code path, and no pattern anywhere decides what the model does.
+The graph is JSON on the device and not a vector store because a resume is 20k chars and
+already fits the prompt: recall was never the failure, focus and order were. A store whose
+loader can lose everything on one bad record is not a store; the count of unreadable rows is
+shown rather than hidden for the same reason.
+
+2026-09-16  The live answer invented a career, stalled eight seconds on turn one, and never diarized
+
+Problem: a stress test through the real answer pipeline with Varun's resume and a Grid JD
+(26 turns, three stages) found four failures a code read alone had not: with a reviewed brief,
+zero confirmed claims and no resume text, the "grounded" prompt produced a LightGBM fraud model,
+a 22 percent false-positive cut and $300k a month in savings, none of it in the resume and all of
+it steered by the JD; the first turn of a cold process took 6.5 to 8.1s to first text; one turn
+in three behind a full brief missed the 2.0s Groq cutoff and the circuit then put every later
+turn on Haiku; and a direct "how much fine-tuning experience do you have" was SKIPped.
+
+Issue: (1) grounded = candidate OR target OR resume, and target evidence (company, role, JD)
+is always present once a brief exists, so a candidate with nothing confirmed got the prompt
+whose only rule is "cite the evidence", with no evidence. The resume source was also submitted
+"unverified", so every resume-derived claim was filtered out of the live slice until ticked by
+hand, and "Use reviewed brief" is enabled at zero ticked. (2) _get_groq_client did
+`from openai import AsyncOpenAI` (2.8s) plus client construction (0.9s) synchronously on the
+event loop; asyncio.wait_for cannot fire while the loop is blocked, which is why a 2.0s timeout
+reported 6.5s elapsed. (3) The fallback was serial: a slow start burned the whole window, THEN
+the fallback started cold, and two slow starts opened a 30s circuit whose every re-close cost a
+real question a fresh 2s stall. (4) The decision instruction listed no not_a_question reason,
+so statements landed on `self`, and nothing said thin background is not a skip reason. Also
+found on the way: deepgram.rs sent diarize_model=latest and never diarize=true, so speaker ids
+were always null and the crosstalk short-circuit, another-interviewer invalidation and
+same-speaker merge had been dead since they shipped; the answer stream had no desktop timeout
+at all; and stream_text never read stop_reason, so a capped answer streamed as a success.
+
+Solution: grounded now keys on candidate evidence OR resume only; the unverified prompt makes
+every self-fact a [bracket] slot and forbids digits outside brackets; the resume source is
+"verified" (it is the user's own document); the review footer warns at zero confirmed with no
+resume. The SDK import moved to module top and ModelProvider.warm() opens every client's TLS at
+startup and at the stt-token mint. _answer_stream hedges: the fallback starts at 1.2s with no
+visible text (0s for a model whose circuit just expired), first visible text wins, the loser is
+cancelled; the first-token window is 4.0s and is no longer a kill. Slow-start counts decay after
+120s; a plain 429 is rate_limited (30s), not credits (600s). The decision instruction gained
+not_a_question and "thin background is never a reason to skip"; targets are clamped to the
+closed set. Frames now carry hedged, grounded, truncated and reason; the desktop has a 25s
+first-frame / 8s idle watchdog, a 15s frozen-hold release, one silent token refresh on 401,
+per-reason copy, and the diarize=true parameter.
+
+Justification: every one of these was an HTTP 200 or a clean SKIP from the outside. Only
+driving the real pipeline with a real resume and reading the answers back against it exposed
+them; the desktop had zero tests on this surface and the backend's only "interview" test is the
+LiveKit mock interview. A fail-closed guard with an empty evidence set does not fail closed, it
+fails inventive, and no unit test on the prompt string would have shown that.
+
 2026-09-14  Turning the overlay light would have silently changed the already-light onboarding
 
 Problem: adding light and dark themes meant flipping the overlay's --glass-* tokens to light

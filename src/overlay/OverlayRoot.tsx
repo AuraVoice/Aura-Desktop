@@ -54,6 +54,7 @@ import {
   INTERVIEW_HACKER_PITCH_SLOT_HEIGHT,
   INTERVIEW_HACKER_PREFLIGHT_SLOT_HEIGHT,
   INTERVIEW_HACKER_BRIEF_MENU_SLOT_HEIGHT,
+  INTERVIEW_HACKER_LONG_ANSWER_SLOT_HEIGHT,
 } from "./interview/InterviewHackerCard";
 import {
   InterviewPasteCard,
@@ -362,6 +363,9 @@ export function OverlayRoot() {
   const meetingCapture = useMeetingCapture({
     uid: user?.uid ?? null,
     appHidden: presentation !== "bar",
+    // A capture started while the companion is live is an interview, and the
+    // claim says so up front so the note comes back as a debrief.
+    interviewLive: showInterviewHacker,
   });
   // Daily drain of the dictation sharing queue. Mounted here rather than in
   // the dashboard because the overlay is the window that is always alive;
@@ -548,8 +552,15 @@ export function OverlayRoot() {
     && !showUpdateBanner;
   // The opening pitch needs room the resting card does not have, so the slot
   // grows while it is expanded and returns when it auto-collapses.
+  // A walkthrough script is roughly twice a normal answer, and the thread
+  // scrolls, so this is headroom for reading it without scrolling mid-call
+  // rather than a hard requirement.
+  const interviewLongAnswer = interviewHacker.answerIntent === "project_walkthrough"
+    && (interviewHacker.drafting || interviewHacker.answer.trim() !== "");
   const interviewHackerHeight = interviewHacker.pitch !== null && interviewHacker.pitchExpanded
     ? INTERVIEW_HACKER_PITCH_SLOT_HEIGHT
+    : interviewLongAnswer
+      ? INTERVIEW_HACKER_LONG_ANSWER_SLOT_HEIGHT
     : interviewHacker.briefMenuOpen
       ? INTERVIEW_HACKER_BRIEF_MENU_SLOT_HEIGHT
       : interviewHacker.phase === "preflight"

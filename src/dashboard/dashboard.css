@@ -7448,6 +7448,40 @@
 .db-meeting-caveats p + p {
   margin-top: 4px;
 }
+/* Interview debrief: one row per question, the answer as given, then the
+   one thing to change. Divider and tint are alpha so the glass stays glass. */
+.db-meeting-debrief {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.db-meeting-debrief-item {
+  padding: 10px 0;
+}
+.db-meeting-debrief-item + .db-meeting-debrief-item {
+  border-top: 1px solid rgba(63, 86, 78, 0.1);
+}
+.db-meeting-debrief-item p {
+  margin: 0;
+}
+.db-meeting-debrief-question {
+  font-weight: 600;
+  color: var(--db-text);
+  margin-bottom: 4px;
+}
+.db-meeting-debrief-improve {
+  margin-top: 6px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(217, 151, 20, 0.09);
+  color: var(--db-text-dim);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.db-meeting-debrief-improve span {
+  font-weight: 600;
+  color: var(--db-text);
+}
 .db-meeting-state {
   display: flex;
   align-items: flex-start;

@@ -83,6 +83,16 @@ export interface TranscriptTurn {
   endS?: number;
 }
 
+export type MeetingKind = "meeting" | "interview";
+
+/** One question from an interview, how it was actually answered, and what to
+ * do differently next time. Only an "interview" note carries these. */
+export interface DebriefItem {
+  question: string;
+  answered: string;
+  improve: string;
+}
+
 export interface MeetingNote {
   summary: string;
   decisions: string[];
@@ -93,6 +103,9 @@ export interface MeetingNote {
   oneSided: boolean;
   /** Some captured segments carried gaps (device change mid-segment). */
   partial: boolean;
+  /** Notes published before kinds shipped read as plain meetings. */
+  kind: MeetingKind;
+  debrief: DebriefItem[];
 }
 
 export type MeetingStatus =
@@ -161,6 +174,9 @@ export async function claimMeeting(args: {
   endTime: string;
   installationId: string;
   runtimeInstanceId: string;
+  /** What the client already knows this call is. Omitted, the backend decides
+   * from the transcript ("auto"). */
+  kind?: MeetingKind | "auto";
 }): Promise<MeetingClaim> {
   const response = await authFetch("/meetings/claim", {
     method: "POST",
@@ -172,6 +188,7 @@ export async function claimMeeting(args: {
       end_time: args.endTime,
       installation_id: args.installationId,
       runtime_instance_id: args.runtimeInstanceId,
+      ...(args.kind ? { kind: args.kind } : {}),
     }),
   });
   if (response.status === 402) {
@@ -537,6 +554,18 @@ function parseNote(raw: unknown): MeetingNote | null {
     language: typeof row.language === "string" ? row.language : "",
     oneSided: row.one_sided === true,
     partial: row.partial === true,
+    kind: row.kind === "interview" ? "interview" : "meeting",
+    debrief: Array.isArray(row.debrief)
+      ? row.debrief.flatMap((item) => {
+          const entry = item as Record<string, unknown> | null;
+          return entry
+            && typeof entry.question === "string"
+            && typeof entry.answered === "string"
+            && typeof entry.improve === "string"
+            ? [{ question: entry.question, answered: entry.answered, improve: entry.improve }]
+            : [];
+        })
+      : [],
   };
 }
 

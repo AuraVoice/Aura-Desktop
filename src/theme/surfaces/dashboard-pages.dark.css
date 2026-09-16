@@ -121,6 +121,12 @@
 :root[data-theme="dark"] .db-meeting-caveats {
   background: var(--dk-warning-soft);
 }
+:root[data-theme="dark"] .db-meeting-debrief-improve {
+  background: var(--dk-warning-soft);
+}
+:root[data-theme="dark"] .db-meeting-debrief-item + .db-meeting-debrief-item {
+  border-top-color: rgba(255, 255, 255, 0.1);
+}
 :root[data-theme="dark"] .db-meeting-state-processing > svg {
   color: var(--dk-warning);
 }

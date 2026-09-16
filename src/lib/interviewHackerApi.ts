@@ -1,6 +1,20 @@
-import { authFetch, authFetchWithTimeout } from "./api";
+import { TimeoutError, authFetch, authFetchWithTimeout } from "./api";
 import { readSseFrames } from "./sseStream";
 import type { AnswerShape } from "./interviewPolicy";
+import type { InterviewFocus } from "./interviewProfile";
+
+/** The register the answer model chose on its first line (ANSWER|<intent>),
+ * echoed on the decision frame. Never decided on the desktop. */
+export type AnswerIntent =
+  | "logistics"
+  | "self_intro"
+  | "project_walkthrough"
+  | "project_detail"
+  | "concept"
+  | "compare"
+  | "behavioral"
+  | "company"
+  | "unknown";
 import { RESUME_MAX_CHARS } from "./resumeText";
 import type {
   InterviewAnswerLength,
@@ -68,11 +82,23 @@ export type InterviewAnswerFrame =
       /** Which provider model produced this turn's answer. Absent until the
        *  backend deploy that adds it, so always optional. */
       model: string | null;
+      /** True when the fallback leg was started alongside the primary. */
+      hedged: boolean | null;
+      /** False when the answer ran with no candidate evidence and no resume,
+       *  so the card can badge it even though a brief is attached. */
+      grounded: boolean | null;
     }
   | { type: "answer_delta"; delta: string }
   | { type: "screen_note"; note: string }
-  | { type: "answer_done"; generated: boolean; answerMs: number | null }
-  | { type: "error"; code: string; message: string }
+  | {
+      type: "answer_done";
+      generated: boolean;
+      answerMs: number | null;
+      answerTtftMs: number | null;
+      /** The provider cut the answer at its output cap: it ends mid-sentence. */
+      truncated: boolean;
+    }
+  | { type: "error"; code: string; reason: string | null; message: string }
   | { type: "terminator" };
 
 export interface InterviewCredential {
@@ -93,6 +119,12 @@ const MIN_USEFUL_TTL_SECONDS = 15;
 /** Start waits on this call; without a deadline a stalled connection leaves
  * the card on "Starting..." with no way to tell. */
 const MINT_TIMEOUT_MS = 15_000;
+// The answer stream had no deadline at all, so a socket the backend accepted
+// and then stalled on left the card on "Drafting..." until the next question.
+// The backend's own worst case is ~24s to first text (4s first-token window
+// plus a 20s stream deadline) and it goes idle for at most 4s between frames.
+const ANSWER_FIRST_FRAME_TIMEOUT_MS = 25_000;
+const ANSWER_IDLE_TIMEOUT_MS = 8_000;
 
 export async function mintInterviewCredential(): Promise<InterviewCredential> {
   const response = await authFetchWithTimeout(
@@ -184,6 +216,8 @@ function parseFrame(
             target: typeof frame.target === "string" ? frame.target : null,
             intent: typeof frame.intent === "string" ? frame.intent : null,
             model: typeof frame.model === "string" ? frame.model : null,
+            hedged: typeof frame.hedged === "boolean" ? frame.hedged : null,
+            grounded: typeof frame.grounded === "boolean" ? frame.grounded : null,
           }
         : null;
     case "answer_delta":
@@ -200,12 +234,15 @@ function parseFrame(
         type: "answer_done",
         generated: frame.generated,
         answerMs: typeof frame.answer_ms === "number" ? frame.answer_ms : null,
+        answerTtftMs: typeof frame.answer_ttft_ms === "number" ? frame.answer_ttft_ms : null,
+        truncated: frame.truncated === true,
       };
     case "error":
       return typeof frame.message === "string"
         ? {
             type: "error",
             code: typeof frame.code === "string" ? frame.code : "stream_error",
+            reason: typeof frame.reason === "string" ? frame.reason : null,
             message: frame.message,
           }
         : null;
@@ -220,6 +257,7 @@ export async function streamInterviewAnswer({
   brief,
   resume = "",
   answerShape,
+  focus = null,
   action = "automatic",
   currentAnswer = "",
   screenSight = null,
@@ -234,6 +272,10 @@ export async function streamInterviewAnswer({
    *  ground against. Truncated to the backend's own limit. */
   resume?: string;
   answerShape: AnswerShape;
+  /** The project the question most likely concerns and its neighbours
+   *  (interviewProfile.ts), ranked lexically. Volatile by nature, so
+   *  top-level, never in the brief slice. The model decides whether to use it. */
+  focus?: InterviewFocus | null;
   action?: InterviewAnswerAction;
   currentAnswer?: string;
   screenSight?: InterviewScreenSightFrame | null;
@@ -246,7 +288,33 @@ export async function streamInterviewAnswer({
   if (turn.source !== "remote" || !turn.isFinal) {
     throw new Error("Only completed remote turns can request an interview answer.");
   }
-  const response = await authFetch("/interview-companion/answer", {
+  const watchdog = new AbortController();
+  let watchdogTimer: ReturnType<typeof setTimeout> | null = null;
+  let watchdogFired = false;
+  const onCallerAbort = () => watchdog.abort();
+  signal.addEventListener("abort", onCallerAbort, { once: true });
+  const arm = (ms: number) => {
+    if (watchdogTimer !== null) clearTimeout(watchdogTimer);
+    watchdogTimer = setTimeout(() => {
+      watchdogFired = true;
+      watchdog.abort();
+    }, ms);
+  };
+  const disarm = () => {
+    if (watchdogTimer !== null) clearTimeout(watchdogTimer);
+    watchdogTimer = null;
+    signal.removeEventListener("abort", onCallerAbort);
+  };
+  // Only the watchdog's own abort becomes a TimeoutError; the caller's abort
+  // (a newer question, session end) stays an AbortError and stays silent.
+  const translate = (err: unknown): unknown =>
+    watchdogFired && !signal.aborted && err instanceof DOMException && err.name === "AbortError"
+      ? new TimeoutError("interview answer stream timed out")
+      : err;
+  arm(ANSWER_FIRST_FRAME_TIMEOUT_MS);
+  let response: Response;
+  try {
+    response = await authFetch("/interview-companion/answer", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -255,6 +323,15 @@ export async function streamInterviewAnswer({
       brief: brief ? wireBriefSlice(brief) : null,
       resume: resume.slice(0, RESUME_MAX_CHARS),
       answer_shape: answerShape,
+      focus: focus ? {
+        nodes: focus.nodes.map((node) => ({
+          node_id: node.nodeId,
+          kind: node.kind,
+          label: node.label,
+          text: node.text,
+          links: node.links,
+        })),
+      } : null,
       action,
       current_answer: currentAnswer,
       screen_notes: screenNotes.slice(-3),
@@ -266,12 +343,18 @@ export async function streamInterviewAnswer({
         captured_at_ms: screenSight.capturedAtMs,
       } : null,
     }),
-    signal,
+    signal: watchdog.signal,
   });
+  } catch (err) {
+    disarm();
+    throw translate(err);
+  }
   if (!response.ok) {
+    disarm();
     throw new Error(`Interview answer request failed (${response.status}).`);
   }
   if (!response.body) {
+    disarm();
     throw new Error("Interview answer response had no stream.");
   }
 
@@ -289,6 +372,7 @@ export async function streamInterviewAnswer({
         const frame = parseFrame(buffer.slice(0, separator), turn);
         buffer = buffer.slice(separator + 2);
         if (frame) {
+          arm(ANSWER_IDLE_TIMEOUT_MS);
           onFrame(frame);
           if (frame.type === "terminator") terminated = true;
         }
@@ -296,7 +380,10 @@ export async function streamInterviewAnswer({
       }
       if (done) break;
     }
+  } catch (err) {
+    throw translate(err);
   } finally {
+    disarm();
     reader.releaseLock();
   }
   if (buffer.trim()) {

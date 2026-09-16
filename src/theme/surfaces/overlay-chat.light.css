@@ -311,6 +311,10 @@
 :root[data-theme="light"] .interview-hacker-unverified {
   color: #9a6700;
 }
+:root[data-theme="light"] .interview-hacker-intent {
+  background: rgba(20, 28, 26, 0.08);
+  color: rgba(20, 28, 26, 0.62);
+}
 :root[data-theme="light"] .interview-hacker-thread-empty {
   color: rgba(20, 28, 26, 0.55);
 }

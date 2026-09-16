@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { logError } from "../../lib/log";
+import { openDashboardWindow } from "../../lib/dashboardWindow";
 import { GlassSurface } from "../GlassSurface";
 import { ChevronDownIcon, DocumentIcon, DownArrowIcon, MicIcon, MicOffIcon, StopSquareIcon, UploadArrowIcon } from "../icons";
 import { callVisual } from "./callIcons";
@@ -35,6 +36,23 @@ export const INTERVIEW_HACKER_PITCH_SLOT_HEIGHT = 480;
  * OverlayRoot's slotHeight - the overlay window is physically resized to
  * this, it is not free CSS overflow. */
 export const INTERVIEW_HACKER_BRIEF_MENU_SLOT_HEIGHT = 620;
+/** Taller slot while a project walkthrough is on screen: a 60 to 90 second
+ * script is about twice a normal answer, and reading it mid-call should not
+ * need a scroll. The thread still scrolls, so this is headroom. */
+export const INTERVIEW_HACKER_LONG_ANSWER_SLOT_HEIGHT = 560;
+
+/** The chip next to an answer naming the register it was drafted in, so the
+ * candidate knows before reading whether this is a script, a definition or a
+ * comparison. Intents with no chip read as ordinary answers. */
+const INTENT_CHIP: Partial<Record<string, string>> = {
+  project_walkthrough: "Walkthrough",
+  project_detail: "Your project",
+  concept: "Concept",
+  compare: "Compare",
+  behavioral: "Story",
+  company: "Company",
+  logistics: "Logistics",
+};
 
 /**
  * Segmented picker local to the overlay.
@@ -84,11 +102,13 @@ function Exchange({
   question,
   answer,
   unverified,
+  intent,
   live = false,
 }: {
   question: string;
   answer: string;
   unverified: boolean;
+  intent?: string;
   live?: boolean;
 }) {
   return (
@@ -101,6 +121,9 @@ function Exchange({
           className="interview-hacker-bubble is-answer"
           aria-live={live ? "polite" : undefined}
         >
+          {intent && INTENT_CHIP[intent] && (
+            <span className="interview-hacker-intent">{INTENT_CHIP[intent]}</span>
+          )}
           {unverified && (
             <span className="interview-hacker-unverified">Not from your brief</span>
           )}
@@ -256,6 +279,18 @@ function BriefMenu({
                 ? "Attach a resume"
                 : "Replace resume"}
           </button>
+          {/* The dashboard is where a brief is prepared; without this the only
+              way there from a brief-less companion was the tray. */}
+          <button
+            type="button"
+            className="interview-hacker-brief-menu-open"
+            onClick={() => {
+              hacker.closeBriefMenu();
+              void openDashboardWindow("/interview");
+            }}
+          >
+            Open Interview page
+          </button>
         </div>
       </GlassSurface>
     </div>
@@ -263,14 +298,17 @@ function BriefMenu({
 }
 
 function BriefSource({ hacker }: { hacker: InterviewHackerState }) {
+  // Names WHICH brief is attached. "Reviewed and ready" used to be the whole
+  // caption, so a brief for the wrong company, or a relaunch that came back
+  // with no brief at all, read the same as a good one until the first answer.
   const caption = hacker.briefReady
-    ? "Reviewed and ready"
+    ? `Brief attached: ${[hacker.briefCompany, hacker.briefRole].filter(Boolean).join(" / ") || "reviewed"}`
     : hacker.attachingResume
       ? "Reading resume..."
       : hacker.resumeError
         ?? (hacker.resumeWords !== null
-          ? `Resume added, ${hacker.resumeWords} words`
-          : "Add your resume");
+          ? `Resume only, ${hacker.resumeWords} words. Attach a brief`
+          : "No brief. Prepare one or add a resume");
   const body = (
     <>
       <div className="interview-hacker-source-body">
@@ -613,6 +651,7 @@ export function InterviewHackerCard({
                   question={hacker.question}
                   answer={hacker.answer}
                   unverified={!hacker.briefReady}
+                  intent={hacker.answerIntent}
                   live
                 />
               )}

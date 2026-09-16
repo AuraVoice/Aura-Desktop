@@ -198,6 +198,24 @@ function MeetingInsights({ note }: { note: MeetingNote }) {
           <p className="db-detail-text">{note.summary}</p>
         </section>
       )}
+      {note.kind === "interview" && note.debrief.length > 0 && (
+        <section className="db-meeting-section">
+          <h2>{meetingNotes.debriefHeading}</h2>
+          <ol className="db-meeting-debrief">
+            {note.debrief.map((item, index) => (
+              <li key={index} className="db-meeting-debrief-item">
+                <p className="db-meeting-debrief-question">{item.question}</p>
+                <p className="db-detail-text">{item.answered}</p>
+                {item.improve && (
+                  <p className="db-meeting-debrief-improve">
+                    <span>{meetingNotes.debriefImprove}</span> {item.improve}
+                  </p>
+                )}
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
       {note.decisions.length > 0 && (
         <section className="db-meeting-section">
           <h2>{meetingNotes.decisionsHeading}</h2>

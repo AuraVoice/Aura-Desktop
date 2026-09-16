@@ -56,6 +56,9 @@ export const meetingNotes = {
   cardTitle: "Meeting notes",
   actionItemsHeading: "Action items",
   decisionsHeading: "Decisions",
+  // Interview notes: one row per question asked, and what to do next time.
+  debriefHeading: "Interview debrief",
+  debriefImprove: "Next time",
   oneSidedCaveat: "Only your side of the call was captured, so this may be partial.",
   partialCaveat: "Part of the audio may be missing from an audio device change.",
   languageCaveat: (language: string) =>

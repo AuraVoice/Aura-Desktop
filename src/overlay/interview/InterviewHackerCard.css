@@ -455,6 +455,36 @@
   opacity: 0.6;
 }
 
+.interview-hacker-brief-menu-open {
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  color: var(--text-muted, rgba(255, 255, 255, 0.62));
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.interview-hacker-brief-menu-open:hover,
+.interview-hacker-brief-menu-open:focus-visible {
+  color: var(--accent, rgba(150, 190, 255, 0.92));
+}
+
+/* The register chip on an answer bubble ("Walkthrough", "Compare"). Sits
+   beside the "Not from your brief" badge and shares its size. */
+.interview-hacker-intent {
+  display: inline-block;
+  margin: 0 6px 4px 0;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--surface-raised, rgba(255, 255, 255, 0.1));
+  color: var(--text-muted, rgba(255, 255, 255, 0.62));
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .interview-hacker-meter span {
     transition: none;

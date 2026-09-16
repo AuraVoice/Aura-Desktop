@@ -620,6 +620,13 @@ pub fn session_changed(app: &AppHandle, signed_in: bool, uid: Option<String>) {
     // same crash-safe boundary: the backend never holds these transcripts, so
     // this is the only thing that isolates them across accounts.
     crate::interview_store::retain_only_for_session(app, session_uid.clone());
+    // Preparations are per-account too, and the reviewed brief has to be in
+    // the Rust slot before either window asks for it, so the same boundary
+    // that prunes the other account's rows also hydrates this one's.
+    crate::interview_prep_store::retain_only_for_session(app, session_uid.clone());
+    if let Some(uid) = session_uid.clone() {
+        crate::interview::hydrate_preparation(app, uid);
+    }
     // Dictation history holds transcripts AND audio clips for one account, and
     // the backend has no copy of either, so this hook is the only thing that
     // isolates them across accounts. It deletes clip files as well as rows.

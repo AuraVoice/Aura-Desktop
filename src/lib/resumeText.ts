@@ -9,8 +9,8 @@
 // silently lose the assignment.
 import workerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 
-/** Matches the backend's own resume field limit in CompanyResearchRequest. */
-export const RESUME_MAX_CHARS = 12_000;
+/** Matches the backend's two resume limits: InterviewAnswerRequest.resume and BriefBuildSource.text. */
+export const RESUME_MAX_CHARS = 20_000;
 
 export type ResumeExtractionCode = "unsupported" | "unreadable" | "empty";
 

@@ -22,7 +22,7 @@ use crate::events::{
     INTERVIEW_HACKER_TRANSCRIPT as TRANSCRIPT_EVENT, INTERVIEW_RESUME_UPDATED as RESUME_EVENT,
 };
 const MAX_BRIEF_BYTES: usize = 128_000;
-// Generous next to the 12,000 characters the backend accepts, so a resume is
+// Generous next to the 20,000 characters the backend accepts, so a resume is
 // rejected by the extractor's own limit rather than truncated silently here.
 const MAX_RESUME_BYTES: usize = 64_000;
 const ENDPOINTING_MS: u16 = 300;
@@ -533,6 +533,67 @@ pub fn clear_preparation(app: &AppHandle) {
     }
 }
 
+/// Fills the brief and resume slots from the on-disk preparation store at
+/// sign-in, so the companion runs with the reviewed brief whichever window
+/// mounts first. Before this the slots were filled only when the dashboard
+/// Interview page mounted: a relaunch followed by opening the companion from
+/// the notch ran with no brief and showed "add resume" (2026-09-16). Same
+/// shape checks as `set_interview_hacker_brief`; a record that fails them
+/// leaves the slots empty and the page's own restore path does what it did.
+/// Fire-and-forget off the main thread: the session hook runs inside a sync
+/// command and the store read decrypts a quarter megabyte at most.
+pub fn hydrate_preparation(app: &AppHandle, uid: String) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let loaded = {
+            let app = app.clone();
+            let uid = uid.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                crate::interview_prep_store::active_preparation(&app, &uid)
+            })
+            .await
+        };
+        let record = match loaded {
+            Ok(Ok(Some(record))) => record,
+            Ok(Ok(None)) => return,
+            Ok(Err(error)) => {
+                log::warn!("interview: preparation hydrate failed: {error}");
+                return;
+            }
+            Err(error) => {
+                log::warn!("interview: preparation hydrate join failed: {error}");
+                return;
+            }
+        };
+        let Some(handle) = app.try_state::<InterviewHandle>() else {
+            return;
+        };
+        let brief = record.get("draftBrief").cloned().filter(|brief| {
+            brief.as_object().is_some_and(|object| {
+                object.get("contractVersion").and_then(serde_json::Value::as_u64) == Some(3)
+                    && object.get("briefId").and_then(serde_json::Value::as_str).is_some()
+                    && object.get("reviewedAtMs").and_then(serde_json::Value::as_u64).is_some()
+                    && serde_json::to_vec(brief).map(|bytes| bytes.len() <= MAX_BRIEF_BYTES).unwrap_or(false)
+            })
+        });
+        let resume = record
+            .get("input")
+            .and_then(|input| input.get("resume"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty() && text.len() <= MAX_RESUME_BYTES)
+            .map(str::to_string);
+        if let Some(brief) = brief {
+            *handle.2.lock().unwrap_or_else(|error| error.into_inner()) = Some(brief.clone());
+            let _ = app.emit(BRIEF_EVENT, brief);
+        }
+        if let Some(resume) = resume {
+            *handle.3.lock().unwrap_or_else(|error| error.into_inner()) = Some(resume.clone());
+            let _ = app.emit(RESUME_EVENT, resume);
+        }
+    });
+}
+
 #[tauri::command]
 pub fn stop_interview_hacker(app: AppHandle) -> InterviewStatusPayload {
     request_stop(&app, "user");
@@ -881,6 +942,7 @@ fn run_worker_loop(
     };
     let mut paused = false;
     let mut reconnects = provider.retry_floor();
+    let mut rebinding = false;
     let mut retry_at = Instant::now()
         + if streams.is_some() {
             Duration::ZERO
@@ -996,7 +1058,11 @@ fn run_worker_loop(
             };
             let switched_provider = provider != next_provider;
             provider = next_provider;
-            reconnects += 1;
+            if rebinding {
+                rebinding = false;
+            } else {
+                reconnects += 1;
+            }
             match open_streams(provider, &credentials, &keyterms) {
                 Ok(next_streams) => {
                     streams = Some(next_streams);
@@ -1109,6 +1175,10 @@ fn run_worker_loop(
                     CaptureEvent::DeviceRebound { source } => {
                         candidate_start = None;
                         remote_start = None;
+                        // A headphone swap is not a provider failure: reopen at
+                        // once and leave the reconnect budget alone, or four
+                        // device changes walk the session to terminal `error`.
+                        rebinding = true;
                         failure = Some(AsrError::Provider);
                         failure_reason = Some(match source {
                             AudioSource::Microphone => "candidate_device_switch",
@@ -1189,8 +1259,12 @@ fn run_worker_loop(
                     );
                 }
             } else {
-                retry_at = Instant::now()
-                    + reconnect_delay((reconnects % DEEPGRAM_RECONNECTS).saturating_add(1));
+                retry_at = if rebinding {
+                    Instant::now()
+                } else {
+                    Instant::now()
+                        + reconnect_delay((reconnects % DEEPGRAM_RECONNECTS).saturating_add(1))
+                };
                 let fallback_ready = provider == TranscriptionProvider::Deepgram
                     && reconnects >= DEEPGRAM_RECONNECTS
                     && !credentials.openai.trim().is_empty();

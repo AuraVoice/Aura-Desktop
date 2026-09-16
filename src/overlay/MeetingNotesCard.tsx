@@ -26,13 +26,19 @@ export function MeetingNotesCard({ card }: { card: MeetingNotesState }) {
       : note?.language && !note.language.startsWith("en")
         ? copy.languageCaveat(note.language)
         : null;
+  // An interview card leads with what to do differently next time; that is
+  // the part of a debrief a candidate wants at a glance.
+  const debrief = note && note.kind === "interview" ? note.debrief : [];
   const bullets = note
-    ? note.actionItems.length > 0
-      ? note.actionItems
-      : note.decisions
+    ? debrief.length > 0
+      ? debrief.slice(0, 3).map((item) => item.improve)
+      : note.actionItems.length > 0
+        ? note.actionItems
+        : note.decisions
     : [];
-  const bulletsHeading =
-    note && note.actionItems.length > 0 ? copy.actionItemsHeading : copy.decisionsHeading;
+  const bulletsHeading = debrief.length > 0
+    ? copy.debriefImprove
+    : note && note.actionItems.length > 0 ? copy.actionItemsHeading : copy.decisionsHeading;
   const statusMessage = activity
     ? activity.phase === "saved_local"
       ? copy.savedLocal(activity.segmentCount)

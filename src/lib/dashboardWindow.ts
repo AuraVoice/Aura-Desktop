@@ -5,6 +5,7 @@ export type DashboardRoute =
   | "/home"
   | "/history"
   | "/meetings"
+  | "/interview"
   | "/research"
   | "/insights"
   | "/general"

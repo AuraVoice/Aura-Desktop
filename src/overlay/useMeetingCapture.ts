@@ -175,11 +175,18 @@ export interface MeetingCaptureState {
   /** Clear local backoff and safely re-run the idempotent upload pump. Returns
    *  false when there is no retryable local recording left to retry. */
   retryNow: (meetingId: string) => boolean;
+  /** Move a local row to the server's terminal outcome. The rows are written
+   * by this hook up to "processing" and nothing used to advance them past it,
+   * so a finished meeting kept reading as processing on this device. */
+  settleActivity: (meetingId: string, status: "ready" | "excluded" | "failed") => void;
 }
 
 interface MeetingCaptureInputs {
   uid: string | null;
   appHidden: boolean;
+  /** The Interview Companion is running, so a capture started now is an
+   * interview and the claim says so; the note then carries a debrief. */
+  interviewLive?: boolean;
 }
 
 /**
@@ -196,7 +203,7 @@ interface MeetingCaptureInputs {
  * and a Record press, whose outcome the card reports.
  */
 export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureState {
-  const { uid, appHidden } = inputs;
+  const { uid, appHidden, interviewLive = false } = inputs;
 
   const [recording, setRecording] = useState(false);
   const [paused, setPaused] = useState(false);
@@ -211,6 +218,8 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
   uidRef.current = uid;
   const appHiddenRef = useRef(appHidden);
   appHiddenRef.current = appHidden;
+  const interviewLiveRef = useRef(interviewLive);
+  interviewLiveRef.current = interviewLive;
   const identityEpochRef = useRef(0);
 
   const recordingRef = useRef(false);
@@ -296,6 +305,23 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
     [uid],
   );
 
+  const settleActivity = useCallback(
+    (meetingId: string, status: "ready" | "excluded" | "failed") => {
+      const row = activitiesRef.current.find((item) => item.meetingId === meetingId);
+      if (!row) return;
+      if (row.phase === "ready" || row.phase === "excluded" || row.phase === "failed") return;
+      recordActivity({
+        ...row,
+        phase: status,
+        // A failure the server already judged is not one the pump can fix.
+        retryable: status === "failed" ? row.retryable : false,
+        nextRetryAt: null,
+        updatedAt: Date.now(),
+      });
+    },
+    [recordActivity],
+  );
+
   // ── Claim + capture ─────────────────────────────────────────────────────
   const startCaptureFor = useCallback(
     async (
@@ -324,6 +350,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
               endTime,
               installationId: runtimeStatus.installationId,
               runtimeInstanceId: runtimeStatus.runtimeInstanceId,
+              kind: interviewLiveRef.current ? "interview" : "auto",
             });
             if (!isCurrent()) return "skipped";
             claimsRef.current.set(eventId, claim);
@@ -888,5 +915,6 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
     stopCapture,
     activities,
     retryNow,
+    settleActivity,
   };
 }
