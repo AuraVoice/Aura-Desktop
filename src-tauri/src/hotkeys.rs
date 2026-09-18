@@ -713,7 +713,20 @@ pub fn handle(app: &AppHandle, shortcut: &Shortcut) {
             if let Err(e) = dashboard::toggle_dashboard_window(app) { log::error!("hotkeys: toggle dashboard failed: {e}"); }
         }
         Some("signOut") => overlay::sign_out_requested(app),
-        Some("screenSight") => security::toggle_screen_sight(app),
+        Some("screenSight") => {
+            // During an interview this key means "look at my screen NOW", not
+            // "arm screen context for the next spoken voice turn". The latter
+            // is meaningless in an interview and is useless in one with no
+            // audio at all, where this is the only trigger that does not need
+            // the mouse on the overlay.
+            if crate::interview::is_active(app) {
+                if let Err(e) = app.emit(crate::events::INTERVIEW_SCREEN_SIGHT_REQUESTED, ()) {
+                    log::error!("hotkeys: emit interview screen sight failed: {e}");
+                }
+            } else {
+                security::toggle_screen_sight(app);
+            }
+        }
         Some("guide") => guide::toggle(app),
         Some("outputMute") => overlay::request_output_mute_toggle(app),
         _ => {}

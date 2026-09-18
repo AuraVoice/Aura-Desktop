@@ -171,6 +171,92 @@
   font-size: 13.5px;
 }
 
+/* The live indicator. Sits above the status line inside the header's centered
+   column, so it holds one spot regardless of what the status line is doing.
+   Colours follow the app's capture vocabulary (see .notch-guide-indicator in
+   NotchBar.css): amber while starting or recovering, red while actually
+   listening. Deliberately NOT --glass-accent, which reads as "armed toggle"
+   everywhere else in the overlay. */
+.interview-hacker-live {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
+
+.interview-hacker-live-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.interview-hacker-live-label {
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.interview-hacker-live[data-phase="starting"] .interview-hacker-live-dot,
+.interview-hacker-live[data-phase="degraded"] .interview-hacker-live-dot {
+  background: #f59e0b;
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.8);
+}
+
+.interview-hacker-live[data-phase="starting"] .interview-hacker-live-label,
+.interview-hacker-live[data-phase="degraded"] .interview-hacker-live-label {
+  color: rgba(245, 158, 11, 0.95);
+}
+
+.interview-hacker-live[data-phase="listening"] .interview-hacker-live-dot {
+  background: #ef4444;
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.95);
+}
+
+.interview-hacker-live[data-phase="listening"] .interview-hacker-live-label {
+  color: rgba(239, 68, 68, 0.95);
+}
+
+/* Paused is the one state that must not pulse OR glow: a mic that is not
+   capturing should not look like one that is. */
+.interview-hacker-live[data-phase="paused"] .interview-hacker-live-dot {
+  background: rgba(239, 68, 68, 0.45);
+}
+
+.interview-hacker-live[data-phase="paused"] .interview-hacker-live-label {
+  color: var(--text-muted, rgba(255, 255, 255, 0.52));
+}
+
+.interview-hacker-live[data-phase="listening"] .interview-hacker-live-dot,
+.interview-hacker-live[data-phase="degraded"] .interview-hacker-live-dot {
+  animation: interview-hacker-live-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes interview-hacker-live-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* Shown only when the platform did not confirm the overlay is excluded from
+   screen capture. */
+.interview-hacker-capture-warning {
+  margin: 6px 0 0;
+  text-align: center;
+  font-size: 12.5px;
+  color: var(--warning, rgba(255, 196, 120, 0.95));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .interview-hacker-live-dot {
+    animation: none !important;
+  }
+}
+
 .interview-hacker-preflight {
   display: grid;
   /* Pinned at its content height. Without this the row would shrink to feed
@@ -702,6 +788,53 @@
 .interview-hacker-answer-actions button.is-primary:not(:disabled) {
   background: rgba(255, 255, 255, 0.96);
   color: rgba(18, 20, 27, 0.95);
+}
+
+/* Ask: type the question when nothing was spoken. Sits under the action row and
+   borrows its pill vocabulary so it reads as part of the same family. */
+.interview-hacker-ask {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.interview-hacker-ask input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 1px solid var(--surface-border, rgba(255, 255, 255, 0.14));
+  border-radius: 999px;
+  padding: 6px 12px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-primary, rgba(255, 255, 255, 0.92));
+  font: inherit;
+  font-size: 13px;
+}
+
+.interview-hacker-ask input::placeholder {
+  color: var(--text-muted, rgba(255, 255, 255, 0.42));
+}
+
+.interview-hacker-ask input:focus-visible {
+  outline: 2px solid rgba(126, 216, 255, 0.9);
+  outline-offset: 1px;
+}
+
+.interview-hacker-ask button {
+  flex: 0 0 auto;
+  border: 1px solid var(--surface-border, rgba(255, 255, 255, 0.14));
+  border-radius: 999px;
+  padding: 5px 12px;
+  background: rgba(255, 255, 255, 0.96);
+  color: rgba(18, 20, 27, 0.95);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.interview-hacker-ask button:disabled {
+  opacity: 0.38;
+  cursor: default;
 }
 
 /* Next moves offered by a Screen Sight answer. Same pill shape as the action

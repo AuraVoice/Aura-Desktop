@@ -1,4 +1,5 @@
-use std::sync::Mutex;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 use log::{error, info, warn};
@@ -7,7 +8,9 @@ use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewWi
 use tauri_plugin_store::StoreExt;
 
 #[cfg(target_os = "windows")]
-use windows::Win32::UI::WindowsAndMessaging::{SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE};
+use windows::Win32::UI::WindowsAndMessaging::{
+    GetWindowDisplayAffinity, SetWindowDisplayAffinity, WDA_EXCLUDEFROMCAPTURE,
+};
 
 use crate::win_focus;
 
@@ -270,13 +273,88 @@ pub(crate) fn main_window(app: &AppHandle) -> Option<WebviewWindow> {
     app.get_webview_window(MAIN_WINDOW)
 }
 
+/// What the last capture-exclusion attempt actually achieved for one window,
+/// as READ BACK from the platform rather than as asked for. `Unknown` is the
+/// state before any attempt; a window that was never put through
+/// `exclude_from_capture` reports it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CaptureExclusion {
+    Unknown,
+    Applied,
+    Failed,
+}
+
+/// Per-window record of the last verified outcome, keyed by window label.
+/// `exclude_from_capture` is the only writer and it writes AFTER the read-back
+/// agrees, never before: a cache that claims a side effect that did not happen
+/// is the bug that froze the Flutter sibling's overlay, and here it would have
+/// the app telling a user the overlay is hidden from a screen share when it is
+/// not.
+/// The outcome plus, when it failed, the reason to show and log.
+type CaptureExclusionEntry = (CaptureExclusion, Option<String>);
+
+static CAPTURE_EXCLUSION: OnceLock<Mutex<HashMap<String, CaptureExclusionEntry>>> = OnceLock::new();
+
+fn capture_exclusion_map() -> &'static Mutex<HashMap<String, CaptureExclusionEntry>> {
+    CAPTURE_EXCLUSION.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn record_capture_exclusion(label: &str, outcome: &Result<(), String>) {
+    let entry = match outcome {
+        Ok(()) => (CaptureExclusion::Applied, None),
+        Err(e) => (CaptureExclusion::Failed, Some(e.clone())),
+    };
+    let mut map = capture_exclusion_map()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    map.insert(label.to_string(), entry);
+}
+
+/// Excludes a window from screen capture and screen sharing, then CONFIRMS it
+/// by reading the platform's own value back. A set call that reports success
+/// but does not take (an OS build without the flag, a compositor that ignored
+/// it) has to read as a failure here: every caller treats `Ok` as "the user
+/// cannot be screen-sharing this window", and nothing else checks.
+///
+/// Despite the name this is applied to every window the app builds, not just
+/// `main`; see `window_util::build_accessory_window`.
+pub fn exclude_from_capture(window: &WebviewWindow) -> Result<(), String> {
+    let outcome = exclude_from_capture_inner(window);
+    record_capture_exclusion(window.label(), &outcome);
+    outcome
+}
+
+/// The last verified outcome for `label`, or `Unknown` if it was never tried.
+pub fn capture_exclusion_for(label: &str) -> CaptureExclusionEntry {
+    capture_exclusion_map()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(label)
+        .cloned()
+        .unwrap_or((CaptureExclusion::Unknown, None))
+}
+
 #[cfg(target_os = "windows")]
-pub fn exclude_main_window_from_capture(window: &WebviewWindow) -> Result<(), String> {
+fn exclude_from_capture_inner(window: &WebviewWindow) -> Result<(), String> {
     let hwnd = window
         .hwnd()
         .map_err(|e| format!("failed to get main window HWND: {e}"))?;
     unsafe { SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE) }
-        .map_err(|e| format!("SetWindowDisplayAffinity failed: {e}"))
+        .map_err(|e| format!("SetWindowDisplayAffinity failed: {e}"))?;
+    // The read-back is the point. WDA_EXCLUDEFROMCAPTURE needs Windows 10 2004
+    // or newer, and the setter is not the only thing that can leave the window
+    // capturable, so trusting the call's own return value would be trusting a
+    // request rather than a result.
+    let mut affinity: u32 = 0;
+    unsafe { GetWindowDisplayAffinity(hwnd, &mut affinity) }
+        .map_err(|e| format!("GetWindowDisplayAffinity failed: {e}"))?;
+    if affinity != WDA_EXCLUDEFROMCAPTURE.0 {
+        return Err(format!(
+            "display affinity read back as {affinity:#x}, expected WDA_EXCLUDEFROMCAPTURE"
+        ));
+    }
+    Ok(())
 }
 
 /// `sharingType = .none` is macOS's WDA_EXCLUDEFROMCAPTURE: the window keeps
@@ -284,13 +362,16 @@ pub fn exclude_main_window_from_capture(window: &WebviewWindow) -> Result<(), St
 /// sharing, so Screen Sight and Guide Mode never photograph the overlay that
 /// triggered them.
 #[cfg(target_os = "macos")]
-pub fn exclude_main_window_from_capture(window: &WebviewWindow) -> Result<(), String> {
-    crate::macos_window::set_shares_screen_content(window, false);
-    Ok(())
+fn exclude_from_capture_inner(window: &WebviewWindow) -> Result<(), String> {
+    // NOT the fire-and-forget `set_shares_screen_content`: off the main thread
+    // that one queues the closure and returns before AppKit has been touched,
+    // so any Ok it produced would be a claim about scheduling rather than
+    // about the window.
+    crate::macos_window::set_and_verify_shares_screen_content(window, false)
 }
 
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-pub fn exclude_main_window_from_capture(_window: &WebviewWindow) -> Result<(), String> {
+fn exclude_from_capture_inner(_window: &WebviewWindow) -> Result<(), String> {
     Ok(())
 }
 
@@ -924,6 +1005,14 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
     // touch the style mask, so the re-assert is cheap and macos_window skips the
     // write when the mask is already right.
     reassert_native_window_style(&window);
+    // Capture exclusion is in the same class of hazard as the style re-assert
+    // above and was previously applied exactly once per window, at creation,
+    // then trusted forever across every show, hide, move and monitor change.
+    // Re-applying is idempotent and both calls are cheap, so this is the spot
+    // that keeps the recorded state honest rather than merely initial.
+    if let Err(e) = exclude_from_capture(&window) {
+        warn!("overlay: main window not excluded from screen capture: {e}");
+    }
     // apply() is the sole path back to a normal presentation. The chained
     // result above includes restoring cursor input after a pointing takeover,
     // so the applied cache is written only once every window operation worked.

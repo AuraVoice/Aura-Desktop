@@ -32,8 +32,12 @@ pub(crate) fn build_accessory_window(
         .map_err(|error| error.to_string())?;
 
     let _ = window.set_ignore_cursor_events(ignore_cursor_events);
-    // Same display-affinity treatment the overlay gets.
-    let _ = crate::overlay::exclude_main_window_from_capture(&window);
+    // Same display-affinity treatment the overlay gets. Never swallowed: this
+    // is the guarantee that keeps the window out of a screen share, and a
+    // silent failure here is one the user only discovers in a recording.
+    if let Err(e) = crate::overlay::exclude_from_capture(&window) {
+        log::warn!("{label}: not excluded from screen capture: {e}");
+    }
     apply_no_activate(&window);
     log::info!("{label}: window created");
     Ok(window)

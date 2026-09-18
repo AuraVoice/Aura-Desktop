@@ -59,6 +59,24 @@ export const dictationConsent = {
   offNotice: "The dictation keys will not transcribe until this is back on.",
 } as const;
 
+/** Interview Companion's live state, said out loud on the card.
+ *
+ * Steady-state "listening" deliberately has no status caption (the card
+ * explains why), which left the running/paused/finished states looking
+ * identical once the answer area filled. These labels are the state itself,
+ * not a caption about it, so they are short enough to sit beside the dot. */
+export const interviewLive = {
+  starting: "Starting",
+  listening: "Listening",
+  paused: "Paused",
+  degraded: "Reconnecting",
+  /** Shown only when the platform did NOT confirm the overlay is hidden from
+   * screen capture. Deliberately says "may": at this point the app genuinely
+   * does not know, and a user who is about to share their screen deserves the
+   * uncertainty rather than a guess in either direction. */
+  captureWarning: "Aura may be visible if you share your screen.",
+} as const;
+
 /** The chord's user-facing prose.
  *
  * ONE source of truth for the same reason `dictationConsent` is: Settings >

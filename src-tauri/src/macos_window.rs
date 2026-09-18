@@ -388,6 +388,49 @@ pub fn set_shares_screen_content(window: &WebviewWindow, shares: bool) {
     });
 }
 
+/// The same write, but on the CALLING thread and with the value read back, so
+/// the caller learns whether the window is really excluded.
+///
+/// `set_shares_screen_content` cannot tell anyone: it returns `()`, and off the
+/// main thread `with_ns_window` queues the closure and returns before AppKit
+/// has been touched. Capture exclusion is a guarantee the UI repeats to the
+/// user, so it needs an answer rather than a dispatch receipt, and it must fail
+/// closed when it cannot get one. Callers are already on the main thread (the
+/// Tauri `setup` closure, and `window_util::build_accessory_window`, whose doc
+/// comment requires it), so demanding it here costs nothing.
+pub fn set_and_verify_shares_screen_content(
+    window: &WebviewWindow,
+    shares: bool,
+) -> Result<(), String> {
+    let wanted = if shares {
+        NSWindowSharingType::ReadOnly
+    } else {
+        NSWindowSharingType::None
+    };
+    if MainThreadMarker::new().is_none() {
+        return Err("set_and_verify_shares_screen_content called off the main thread".into());
+    }
+    let ptr = window
+        .ns_window()
+        .map_err(|e| format!("failed to get NSWindow: {e}"))?;
+    if ptr.is_null() {
+        // The silent case in `with_ns_window`. A window with no native handle
+        // yet is not an excluded window, so say so instead of returning Ok.
+        return Err("window has no NSWindow yet".into());
+    }
+    // Borrowed, never retained: the window belongs to Tauri, and taking
+    // ownership here would over-release it at the end of this scope.
+    let ns_window: &NSWindow = unsafe { &*(ptr as *const NSWindow) };
+    ns_window.setSharingType(wanted);
+    let actual = ns_window.sharingType();
+    if actual != wanted {
+        return Err(format!(
+            "sharingType read back as {actual:?}, expected {wanted:?}"
+        ));
+    }
+    Ok(())
+}
+
 /// Brings the window forward and gives it keyboard focus WITHOUT activating
 /// Aura. This is the hotkey/chat summon path: the notch is a passive HUD and
 /// the app the user was working in must keep its foreground status. For an

@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
   INTERVIEW_HACKER_STATUS,
+  INTERVIEW_SCREEN_SIGHT_REQUESTED,
   INTERVIEW_HACKER_TRANSCRIPT,
 } from "../../lib/ipcEvents";
 import {
@@ -84,6 +85,20 @@ export interface InterviewExchange {
   question: string;
   answer: string;
   unverified: boolean;
+}
+
+/** Who a question came from. Not every question is spoken: a silent AI
+ *  interview produces them from a screenshot or from the candidate typing one,
+ *  and the thread must not attribute either to the interviewer. */
+export type QuestionSource = "interviewer" | "screen" | "typed";
+
+/** Turn ids are `${epoch}-${kind}-${n}` for everything Aura mints itself, and
+ *  `${epoch}-remote-${n}` for a real ASR turn, so the id alone says where a
+ *  question came from and nothing has to be threaded alongside it. */
+export function questionSourceOf(turnId: string): QuestionSource {
+  if (turnId.includes("-screen-")) return "screen";
+  if (turnId.includes("-typed-")) return "typed";
+  return "interviewer";
 }
 
 export type InterviewHackerPhase =
@@ -349,6 +364,10 @@ export interface InterviewHackerState {
   stop: () => void;
   shorter: () => void;
   screenSight: () => void;
+  questionSource: QuestionSource;
+  /** Ask: the candidate types the question themselves. Works with no audio
+   *  and no screenshot, which is the only input a silent interview has. */
+  askTyped: (text: string) => void;
   reflect: () => void;
   saveReflection: () => void;
   dismissReflection: () => void;
@@ -375,6 +394,11 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   const activeInterviewIdRef = useRef<string | null>(null);
   const [history, setHistory] = useState<InterviewExchange[]>([]);
   const [question, setQuestion] = useState("");
+  /** Where the live question came from. A question Aura minted from a
+   *  screenshot or from typed text must never be attributed to the
+   *  interviewer in the thread. Derived from the turn id, which already
+   *  encodes the kind. */
+  const [questionSource, setQuestionSource] = useState<QuestionSource>("interviewer");
   const [answer, setAnswer] = useState("");
   const [interimQuestion, setInterimQuestion] = useState("");
   const [answerMode, setAnswerModeState] = useState<AnswerMode>("auto");
@@ -596,6 +620,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     setSavingReflection(false);
     setHistory([]);
     setQuestion("");
+    setQuestionSource("interviewer");
     resetAnswer();
     setInterimQuestion("");
     setCallName(null);
@@ -1478,6 +1503,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       // The answered question is set HERE, not from the raw transcript, so a
       // turn the gate rejects can never re-label the answer already on screen.
       setQuestion(turn.text);
+      setQuestionSource(questionSourceOf(turn.turnId));
       setAnswerIntent("unknown");
       setInterimQuestion("");
       setQuestionPending(false);
@@ -1792,10 +1818,82 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     evaluate(turn, recentTurns, "more_technical", null, Date.now(), steer);
   }, [evaluate]);
 
-  const screenSight = useCallback(() => {
-    const turn = lastRemoteTurnRef.current;
+  /**
+   * A question that reached the candidate without passing through the mic.
+   *
+   * An AI interview can be entirely silent: the questions are text on screen and
+   * nobody ever speaks. Everything that reaches `evaluate` used to come from a
+   * remote ASR final, so in that interview the companion had no input at all -
+   * Screen Sight returned on its first line and its button never enabled.
+   *
+   * The turn has to survive three validators on the way out, so none of this is
+   * decorative: the client transport and the backend both reject anything that
+   * is not a FINAL REMOTE turn, and the backend's text field is min_length=1, so
+   * an empty question is a 422 rather than an answer about the screenshot.
+   * `kind` only varies the id, and the id has to be unique per send: sharing one
+   * would make the next send read as a re-roll of the last, skip archiving the
+   * exchange before it, and leak the previous screen note and pills into it.
+   */
+  const syntheticTurnSeqRef = useRef(0);
+  const mintSyntheticRemoteTurn = useCallback((
+    kind: "screen" | "typed",
+    text: string,
+  ): InterviewTranscriptTurn | null => {
     const identity = identityRef.current;
-    if (!turn || !identity || phase !== "listening" || screenCaptureInFlightRef.current) return;
+    if (!identity || !text.trim()) return null;
+    const now = Date.now();
+    return {
+      sessionId: identity.sessionId,
+      epoch: identity.epoch,
+      turnId: `${identity.epoch}-${kind}-${++syntheticTurnSeqRef.current}`,
+      source: "remote",
+      startMs: now,
+      endMs: now,
+      text: text.trim(),
+      isFinal: true,
+      remoteSpeakerId: null,
+      speakerOverlap: false,
+      finalWordAtMs: null,
+    };
+  }, []);
+
+  /** Registers a synthetic turn everywhere a flushed ASR turn would land, so the
+   *  actions that key off "a question exists" (Suggest, Shorter, the follow-up
+   *  pills) come alive for a silent interview too. */
+  const adoptSyntheticTurn = useCallback((turn: InterviewTranscriptTurn) => {
+    const recentTurns = recentRef.current.filter((item) => item.turnId !== turn.turnId);
+    recentRef.current = [...recentTurns, turn].slice(-12);
+    rememberReflectionTurn(turn);
+    lastRemoteTurnRef.current = turn;
+    setCanSuggest(true);
+    setQuestionPending(false);
+    return recentTurns;
+  }, [rememberReflectionTurn]);
+
+  /** The Ask button: the candidate types or pastes the question themselves.
+   *  The cleanest input of the three - real text, no ASR, no vision. */
+  const askTyped = useCallback((text: string) => {
+    const turn = mintSyntheticRemoteTurn("typed", text);
+    if (!turn) return;
+    const recentTurns = adoptSyntheticTurn(turn);
+    evaluate(turn, recentTurns, "suggest");
+  }, [adoptSyntheticTurn, evaluate, mintSyntheticRemoteTurn]);
+
+  const screenSightRef = useRef<(() => void) | null>(null);
+  const screenSight = useCallback(() => {
+    const identity = identityRef.current;
+    // No spoken question is the NORMAL case in a text-based AI interview, not an
+    // error: the screenshot is the question. This used to require a prior remote
+    // turn and return silently without one, which made the control dead for a
+    // whole class of interview and said nothing about why.
+    const turn = lastRemoteTurnRef.current
+      ?? mintSyntheticRemoteTurn("screen", "What's on my screen?");
+    if (!identity || !turn) return;
+    if (phase !== "listening") {
+      setMessage("Screen Sight needs the session to be listening.");
+      return;
+    }
+    if (screenCaptureInFlightRef.current) return;
     const sequence = ++screenCaptureSequenceRef.current;
     screenCaptureInFlightRef.current = true;
     setCapturingScreen(true);
@@ -1822,12 +1920,13 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
           outcome: "captured",
           image_bytes: Math.round(frame.data.length * 0.75),
         });
-        evaluate(
-          turn,
-          recentRef.current.filter((item) => item.turnId !== turn.turnId),
-          "screen_sight",
-          frame,
-        );
+        // Register a turn we minted ourselves the same way a flushed ASR turn
+        // is registered, so Suggest, Shorter and the follow-up pills all work
+        // afterwards in an interview where nobody ever speaks.
+        const recentTurns = lastRemoteTurnRef.current === turn
+          ? recentRef.current.filter((item) => item.turnId !== turn.turnId)
+          : adoptSyntheticTurn(turn);
+        evaluate(turn, recentTurns, "screen_sight", frame);
       })
       .catch((error) => {
         if (sequence !== screenCaptureSequenceRef.current) return;
@@ -1840,7 +1939,8 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
         screenCaptureInFlightRef.current = false;
         setCapturingScreen(false);
       });
-  }, [evaluate, phase]);
+  }, [adoptSyntheticTurn, evaluate, mintSyntheticRemoteTurn, phase]);
+  screenSightRef.current = screenSight;
 
   const reflect = useCallback(() => {
     if (!reflectionSnapshot || phase === "reflecting" || reflectionRequestRef.current) return;
@@ -1914,6 +2014,27 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     setReflection(null);
     setMessage(null);
     setPhase("idle");
+  }, []);
+
+  // Ctrl+Alt+S while an interview is live. The only Screen Sight trigger that
+  // does not need the mouse on the overlay, which matters because reaching for
+  // it can blur the interview window, and because a silent AI interview has no
+  // other way in at all.
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen(INTERVIEW_SCREEN_SIGHT_REQUESTED, () => {
+      screenSightRef.current?.();
+    })
+      .then((stop) => {
+        if (disposed) stop();
+        else unlisten = stop;
+      })
+      .catch((error) => logError("Interview Companion: screen sight hotkey", error));
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
   }, []);
 
   useEffect(() => {
@@ -2333,6 +2454,8 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     stop,
     shorter: () => runManualAction("shorter"),
     screenSight,
+    askTyped,
+    questionSource,
     answerMode,
     setAnswerMode,
     reflect,

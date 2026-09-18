@@ -71,6 +71,11 @@ pub const MEETING_CALL_GONE: &str = "meeting-call-gone";
 // interview.rs
 pub const INTERVIEW_HACKER_STATUS: &str = "interview-hacker-status";
 pub const INTERVIEW_HACKER_TRANSCRIPT: &str = "interview-hacker-transcript";
+/// The Screen Sight hotkey pressed while an interview is live. Fires the
+/// interview's own one-shot capture rather than the voice arming toggle: a
+/// silent AI interview has no speech to arm anything for, and reaching the
+/// overlay with the mouse can blur the interview window.
+pub const INTERVIEW_SCREEN_SIGHT_REQUESTED: &str = "interview-screen-sight-requested";
 pub const INTERVIEW_BRIEF_UPDATED: &str = "interview-brief-updated";
 pub const INTERVIEW_RESUME_UPDATED: &str = "interview-resume-updated";
 

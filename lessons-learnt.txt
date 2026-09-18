@@ -1371,3 +1371,42 @@ Justification: `focus_note`, five lines below in the same function, already ends
 a new mechanism. The `grounded` flip that a non-empty resume triggers was left
 alone deliberately: it is what stops fabrication, and weakening it re-opens the
 gpt-oss hallucination the model-routing comment documents.
+
+2026-09-18 - The screen-capture exclusion was asserted, never verified, and
+failed in two opposite ways
+
+Problem: the overlay is kept out of screen shares by one function, and nothing
+anywhere could tell you whether it had worked. A user could be screen-sharing
+the overlay with no sign of it.
+
+Issue: three separate defects in the same short path.
+`exclude_main_window_from_capture` returned the result of the set call and never
+read the value back, so a call that reported success on an OS that ignored the
+flag still read as applied. Its macOS body returned a hardcoded `Ok(())` around
+`set_shares_screen_content`, which returns `()`, and whose `with_ns_window`
+helper swallows a null NSWindow silently AND queues the closure when off the
+main thread, so any Ok it produced was a statement about dispatch, not about the
+window. The two call sites then took opposite wrong branches: `window_util.rs`
+discarded the Result with `let _ =` and logged nothing, while `lib.rs`'s setup
+used `?`, so a Windows failure aborted app launch entirely and the user got no
+window at all. Nobody caught the `?` because the only branch that could return
+Err was Windows, and the branch anyone testing on a Mac would hit could not fail
+by construction. Affinity was also applied exactly once per window, at creation,
+and never re-asserted across show, hide, move or monitor change, even though the
+GWL_EXSTYLE hazard right beside it in `apply_result` is re-asserted for exactly
+that reason.
+
+Solution: read the value back on both platforms (`GetWindowDisplayAffinity`,
+and a new main-thread-only `set_and_verify_shares_screen_content` that compares
+`sharingType()` against what was asked for), record the verified outcome per
+window label after the read-back agrees, re-apply and re-verify alongside the
+existing style re-assert in `apply_result`, warn at both call sites instead of
+swallowing or aborting, and surface it through `capture_exclusion_status` so the
+Interview Companion card can say the overlay may be visible.
+
+Justification: a guarantee the UI repeats to the user has to be a fact, not a
+request. The read-back is what converts it, and it fails closed at every layer:
+`Unknown` is not `applied`, a null NSWindow is an Err rather than a silent
+no-op, and the JS helper returns false when the status cannot be read, because
+claiming "hidden" on an invoke error would make the warning unreachable. The
+`?` was downgraded deliberately: launching with a warning beats not launching.

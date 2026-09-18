@@ -8,8 +8,10 @@ import { callVisual } from "./callIcons";
 import { useMicPreflightLevel } from "./useMicPreflightLevel";
 import { RESUME_ACCEPT } from "../../lib/resumeText";
 import { PLANNED_MINUTES_OPTIONS, ROUND_KIND_OPTIONS } from "../../lib/interviewPolicy";
-import { isInterviewCaptureActive } from "./useInterviewHacker";
-import type { AnswerMode, InterviewExchange, InterviewHackerState } from "./useInterviewHacker";
+import { isInterviewCaptureActive, questionSourceOf } from "./useInterviewHacker";
+import type { AnswerMode, InterviewExchange, InterviewHackerPhase, InterviewHackerState, QuestionSource } from "./useInterviewHacker";
+import { captureExclusionApplied } from "../../lib/captureExclusion";
+import { interviewLive } from "../../lib/copy";
 import "./InterviewHackerCard.css";
 
 // The overlay is always-on-top by a static, once-at-creation setting (see
@@ -98,24 +100,32 @@ function OverlayChoice<T extends string | number>({
  * scrolled back and must not be yanked forward by the next delta. */
 const FOLLOW_THRESHOLD_PX = 48;
 
+const QUESTION_SOURCE_LABEL: Record<QuestionSource, string> = {
+  interviewer: "Interviewer",
+  screen: "From your screen",
+  typed: "You asked",
+};
+
 function Exchange({
   question,
   answer,
   unverified,
   intent,
+  source = "interviewer",
   live = false,
 }: {
   question: string;
   answer: string;
   unverified: boolean;
   intent?: string;
+  source?: QuestionSource;
   live?: boolean;
 }) {
   return (
     <>
       {question && (
         <div className="interview-hacker-bubble is-question">
-          <span className="interview-hacker-who">Interviewer</span>
+          <span className="interview-hacker-who">{QUESTION_SOURCE_LABEL[source]}</span>
           {question}
         </div>
       )}
@@ -366,6 +376,33 @@ function BriefSource({ hacker }: { hacker: InterviewHackerState }) {
   );
 }
 
+/** Which live state the dot shows. Only the four capture-active phases have
+ * one; everything else renders no indicator at all, which is what keeps
+ * "finished" from looking like "running". */
+const LIVE_LABEL: Partial<Record<InterviewHackerPhase, string>> = {
+  starting: interviewLive.starting,
+  listening: interviewLive.listening,
+  paused: interviewLive.paused,
+  degraded: interviewLive.degraded,
+};
+
+/** The one thing on the card that says a session is running, in a spot that
+ * does not move as the answer area fills. The colour vocabulary is the app's
+ * existing capture one (amber starting/recovering, red live) rather than the
+ * teal `--glass-accent`, which already means "armed toggle" elsewhere. */
+function LiveIndicator({ phase }: { phase: InterviewHackerPhase }) {
+  const label = LIVE_LABEL[phase];
+  if (!label) return null;
+  return (
+    <div className="interview-hacker-live" data-phase={phase}>
+      {/* The dot is decoration; the label is the accessible text, so a screen
+          reader gets "Listening" once rather than a dot it cannot describe. */}
+      <span className="interview-hacker-live-dot" aria-hidden="true" />
+      <span className="interview-hacker-live-label" aria-live="polite">{label}</span>
+    </div>
+  );
+}
+
 export function InterviewHackerControlBar({
   expanded,
   onToggle,
@@ -489,6 +526,26 @@ export function InterviewHackerCard({
   }, [hacker.history, hacker.question, hacker.answer, hacker.interimQuestion, hacker.drafting]);
 
   const active = isInterviewCaptureActive(hacker.phase);
+  // Read once per session rather than continuously: Rust settles this at
+  // startup and re-verifies on every overlay apply, so by the time a session
+  // is live the answer is already final. Starts null so a card that has not
+  // heard back yet shows nothing rather than flashing a warning it may have to
+  // take back a frame later.
+  const [captureHidden, setCaptureHidden] = useState<boolean | null>(null);
+  // Ask: type the question instead of waiting for one to be spoken. Open state
+  // is local because it is pure card chrome - the hook only needs the text.
+  const [askOpen, setAskOpen] = useState(false);
+  const [askText, setAskText] = useState("");
+  useEffect(() => {
+    if (!active) return;
+    let cancelled = false;
+    void captureExclusionApplied().then((applied) => {
+      if (!cancelled) setCaptureHidden(applied);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [active]);
   const threadIsEmpty =
     hacker.history.length === 0
     && !hacker.question
@@ -514,13 +571,28 @@ export function InterviewHackerCard({
   return (
     <GlassSurface className="interview-hacker-card">
       <div className="interview-hacker-inner">
-        {(status || (active && hacker.pacingCaption)) && (
+        {/* `active ||` is the change that makes the header unconditional while
+            a session runs. The status line below it still speaks only in the
+            actionable states, so steady-state listening stays as quiet as it
+            was; the indicator is state, not caption. */}
+        {(active || status) && (
           <div className="interview-hacker-header">
-            <div>{status && <div className="interview-hacker-status">{status}</div>}</div>
+            <div>
+              {active && <LiveIndicator phase={hacker.phase} />}
+              {status && <div className="interview-hacker-status">{status}</div>}
+            </div>
             {active && hacker.pacingCaption && (
               <div className="interview-hacker-pacing" aria-live="polite">{hacker.pacingCaption}</div>
             )}
           </div>
+        )}
+
+        {/* Strictly `=== false`: null means the status has not come back yet,
+            and "not yet known" must not render as "not hidden". */}
+        {active && captureHidden === false && (
+          <p className="interview-hacker-capture-warning" role="status">
+            {interviewLive.captureWarning}
+          </p>
         )}
 
         {hacker.phase === "preflight" && (
@@ -661,6 +733,7 @@ export function InterviewHackerCard({
                   question={exchange.question}
                   answer={exchange.answer}
                   unverified={exchange.unverified}
+                  source={questionSourceOf(exchange.id)}
                 />
               ))}
               {(hacker.question || hacker.answer) && (
@@ -669,6 +742,7 @@ export function InterviewHackerCard({
                   answer={hacker.answer}
                   unverified={!hacker.briefReady}
                   intent={hacker.answerIntent}
+                  source={hacker.questionSource}
                   live
                 />
               )}
@@ -684,9 +758,12 @@ export function InterviewHackerCard({
               )}
               {threadIsEmpty && (
                 <div className="interview-hacker-thread-empty">
+                  {/* Both strings used to assume somebody talks. A silent AI
+                      interview never gets a spoken question, so the empty state
+                      has to name the two controls that work without one. */}
                   {hacker.answerMode === "manual"
-                    ? "Everything the interviewer says collects here. Press Answer now when you want an answer."
-                    : "Questions and answers appear here."}
+                    ? "Everything the interviewer says collects here. Press Answer now when you want an answer. No audio? Use Ask or Screen Sight."
+                    : "Questions and answers appear here. If nobody speaks, press Ask to type the question or Screen Sight to read it off your screen."}
                 </div>
               )}
             </div>
@@ -744,12 +821,56 @@ export function InterviewHackerCard({
             <button type="button" disabled={!hacker.answer} onClick={hacker.shorter}>Shorter</button>
             <button
               type="button"
-              disabled={!hacker.canSuggest || hacker.capturingScreen || hacker.phase !== "listening"}
+              className={askOpen ? "is-primary" : undefined}
+              disabled={hacker.phase !== "listening"}
+              onClick={() => setAskOpen((open) => !open)}
+              title="Type or paste the question yourself"
+            >
+              Ask
+            </button>
+            {/* Deliberately NOT gated on canSuggest. That means "somebody asked
+                something out loud", which is the wrong precondition for the one
+                control that has to work when nothing was said: in a text-based
+                AI interview it never becomes true, and this button stayed grey
+                for the whole session. */}
+            <button
+              type="button"
+              disabled={hacker.capturingScreen || hacker.phase !== "listening"}
               onClick={hacker.screenSight}
             >
               {hacker.capturingScreen ? "Looking..." : "Screen Sight"}
             </button>
           </div>
+        )}
+
+        {active && askOpen && (
+          <form
+            className="interview-hacker-ask"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const text = askText.trim();
+              if (!text) return;
+              hacker.askTyped(text);
+              setAskText("");
+              setAskOpen(false);
+            }}
+          >
+            <input
+              type="text"
+              value={askText}
+              autoFocus
+              placeholder="Type or paste the question"
+              onChange={(event) => setAskText(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  setAskText("");
+                  setAskOpen(false);
+                }
+              }}
+            />
+            <button type="submit" disabled={!askText.trim()}>Send</button>
+          </form>
         )}
 
         {reflectionMode && hacker.phase !== "reflection" && (

@@ -204,6 +204,24 @@
   color: rgba(20, 28, 26, 0.6);
 }
 
+/* Live indicator. The dots keep their dark-mode amber/red, which carry on a
+   light ground too, but the labels were tuned for a dark card and go muddy on
+   one, so each is darkened to hold contrast. Paused reads as text, not as a
+   state colour, so it follows the muted body colour above. */
+:root[data-theme="light"] .interview-hacker-live[data-phase="starting"] .interview-hacker-live-label,
+:root[data-theme="light"] .interview-hacker-live[data-phase="degraded"] .interview-hacker-live-label {
+  color: rgba(146, 90, 4, 0.95);
+}
+:root[data-theme="light"] .interview-hacker-live[data-phase="listening"] .interview-hacker-live-label {
+  color: rgba(176, 30, 30, 0.95);
+}
+:root[data-theme="light"] .interview-hacker-live[data-phase="paused"] .interview-hacker-live-label {
+  color: rgba(20, 28, 26, 0.6);
+}
+:root[data-theme="light"] .interview-hacker-capture-warning {
+  color: rgba(146, 90, 4, 0.95);
+}
+
 /* ── Preflight ── */
 :root[data-theme="light"] .interview-hacker-preflight {
   border-color: rgba(63, 86, 78, 0.14);

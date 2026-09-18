@@ -81,7 +81,7 @@ mod voice_toggle_key;
 mod win_focus;
 mod window_util;
 
-use log::{error, info};
+use log::{error, info, warn};
 use tauri::{AppHandle, Manager, WindowEvent};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_global_shortcut::ShortcutState;
@@ -264,6 +264,35 @@ fn cancel_pointing(app: AppHandle) {
     overlay::cancel_pointing(&app);
 }
 
+/// Whether a window is confirmed absent from screen captures and screen
+/// shares, as last READ BACK from the platform. Defaults to the overlay, which
+/// is the window that hosts every card.
+///
+/// Cheap enough to stay synchronous: one mutex read of a small map, no native
+/// call. The verification itself already happened, at window creation and on
+/// every `overlay::apply`.
+#[tauri::command]
+fn capture_exclusion_status(label: Option<String>) -> CaptureExclusionStatus {
+    let label = label.unwrap_or_else(|| "main".to_string());
+    let (state, detail) = overlay::capture_exclusion_for(&label);
+    CaptureExclusionStatus {
+        applied: state == overlay::CaptureExclusion::Applied,
+        state,
+        detail,
+    }
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CaptureExclusionStatus {
+    /// The only field a caller should gate on. `Unknown` is not `true`: a
+    /// window nobody ever excluded is a window that shows up in a share.
+    applied: bool,
+    state: overlay::CaptureExclusion,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+}
+
 /// Docks the notch to a screen edge (top/bottom/left/right) and persists it.
 #[tauri::command]
 fn set_notch_edge(app: AppHandle, edge: NotchEdge) {
@@ -392,6 +421,7 @@ pub fn run() {
             dismiss_idle_bar,
             point_at,
             cancel_pointing,
+            capture_exclusion_status,
             // registered ahead of UI: docking flows natively through
             // begin/commit_notch_move; no frontend invoke yet
             set_notch_edge,
@@ -670,7 +700,13 @@ pub fn run() {
                     macos_window::make_non_activating_panel(&window);
                     macos_window::refresh_screen_cache(&window);
                 }
-                overlay::exclude_main_window_from_capture(&window)?;
+                // Not `?`: a failure here used to abort setup and leave the
+                // user with no app at all. Launching with the overlay
+                // capturable is the better of two bad outcomes, because the
+                // recorded state drives an on-screen warning that says so.
+                if let Err(e) = overlay::exclude_from_capture(&window) {
+                    warn!("main: not excluded from screen capture: {e}");
+                }
                 let moved_handle = handle.clone();
                 window.on_window_event(move |event| {
                     if let WindowEvent::Moved(position) = event {
