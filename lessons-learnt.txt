@@ -1266,3 +1266,108 @@ audio-derived text, so the message is safe to log where a provider body would no
 diagnostics-first on purpose: guessing at which field drifted would be the same mistake that left
 the interview 400 undiagnosed for two days. Worth noting the contrast with Interview Companion -
 this fallback actually works, which is why nothing was lost and nobody noticed.
+
+
+2026-09-18 - Fixing the Deepgram 400 cost 45% of interview exchanges, because four
+speaker-id branches had never once run
+
+Problem: the first session on 0.15.21 transcribed cleanly (no 400s, no reconnect
+spam, 13 answers generated) but stored only 6 exchanges from 11 interviewer turns.
+The user saw a question missing from the middle of the thread with its neighbours
+intact.
+
+Issue: `source`, `seq` and `at_ms` are plaintext in interview-sessions.sqlite3, and
+AES-GCM ciphertext length is plaintext length plus a fixed overhead, so exchange
+questions can be matched to remote turns by byte length without decrypting
+anything. That identified the drops exactly: seq 5 (263B), seq 7 (283B), one of
+seq 9/10 (33B each), and seq 16 (256B, the one reported). The control was
+decisive: the 09-16 session, the last before diarization worked, kept 5 of 5
+remote turns (100%) and its turns were whole questions (304, 443, 167, 394, 433
+bytes), while 09-18 produced fragments and kept 55%. Same round kind, same ~10
+minutes, double the remote turns.
+
+Cause: `remoteSpeakerId` had been null on every turn for the whole life of the
+feature, first because `diarize_model=latest` alone emitted no speaker ids and
+then because the diarize pair 400'd. Four branches that compare it had therefore
+never executed in production, and restoring diarization turned all four on at
+once. The worst is `queueRemoteTurn` (useInterviewHacker.ts): `sameSpeaker` was
+permanently true so consecutive remote finals always merged into one whole
+question; with real ids, Deepgram relabelling mid-sentence flushed half a question
+that the backend gate then rejected as a fragment. The interim-extension gate
+(:2128) had the same shape, and `deepgram.rs` forces `speaker_id = None` on
+overlap, punching null holes that compared unequal to "speaker-0" exactly when the
+far side was busiest. Separately `another_interviewer` became reachable for the
+first time and erases the live exchange without archiving it, and the archive in
+`activate()` required `previousAnswer.trim()`, so any question whose answer never
+rendered was silently dropped.
+
+Solution: a speaker id is no longer a question boundary anywhere. `queueRemoteTurn`
+merges unconditionally, the interim extension no longer checks the id, and a null
+id counts as the same speaker rather than a different one (null means "overlap,
+unknown", not "somebody else"). `another_interviewer` archives before it erases.
+One `archiveActiveExchange` helper now serves both call sites and archives the
+question even with an empty answer, and the card renders that as "No answer for
+this one" instead of a hole. `rememberReflectionTurn` dedupes on turn id, which
+is what produced the duplicate row carrying an earlier `at_ms` out of order.
+
+Justification: silence ends a question, a relabel does not. Diarization is kept on
+because the crosstalk logic and the speaker labels need it, but it is a display
+and gating signal rather than a segmentation one. Turning diarize back off was
+rejected: candidate-vs-interviewer attribution is physical (one ASR socket per
+device), so diarization only distinguishes multiple interviewers and disabling it
+would not have been a fix, only a second regression in the other direction.
+`flushAnswerSync()` had to stay unconditional in `activate()` even though the
+archive it guarded is now conditional; making it conditional lets a buffered delta
+land after the reset and leak the old answer's tail into the new one.
+
+Also logged along the way: `interview_companion_question_decision` already carries
+`accepted`, `target`, `remote_speaker_present` and `speaker_overlap` - exactly what
+identifies a dropped question - but went to PostHog only, which is why this needed
+store forensics instead of a log read. It is now mirrored to `logInfo` as
+`interview-decision`, with a character count and never the text.
+
+2026-09-18 - The Screen Sight caption was being spoken as part of the answer
+
+Problem: Screen Sight answers read badly. The prompt requires a first line of
+`SCREEN|<caption>` that the client renders as "Looked at: ...".
+
+Issue: `_read_screen_note` was only ever called AFTER the streaming loop, on a
+buffer that the loop's own `yield buffer; buffer = ""` had emptied on every
+iteration. So `decision["screen_note"]` was never set, the `screen_note` frame
+never fired, and the marker line was streamed to the candidate as the opening
+words of their own spoken answer. `awaiting_screen_note` was initialised and
+consumed but never consulted inside the loop at all.
+
+Solution: strip the marker inside the loop, before anything is yielded, mirroring
+the `awaiting_decision` block directly above it. The post-loop call stays as the
+final=True settle for a stream that ended before the marker resolved.
+
+Justification: the fail-open contract is what makes this safe to do mid-stream - a
+model that ignores the instruction returns ("", buffer) and keeps its whole answer,
+and a partial prefix returns None so a real answer is never held hostage to a
+marker that is not coming. Verified against full, absent and partial inputs before
+wiring the new NEXT| line through the same path.
+
+2026-09-18 - Interview answers were anchored on the resume even for conceptual
+questions
+
+Problem: asked anything, including pure concept questions, the answers reached for
+the candidate's projects.
+
+Issue: `resume_note` in `_answer_prompt` said "treat it as their real history and
+answer with specifics from it", appended to the per-turn task for every action and
+every intent. It sits in the volatile user message in last position, the highest
+salience slot. The only counterweight was a clause on two rows of the cached
+`intent_styles` table ("Do not plug in personal projects unless the question asks
+for them"), which applies only if the model happened to write `concept` or
+`compare` as its intent.
+
+Solution: reword it so the resume is the source of truth for who the candidate is,
+to be drawn on when the question is about them and explicitly ignored when the
+question is conceptual, technical, hypothetical, or about the target company.
+
+Justification: `focus_note`, five lines below in the same function, already ends
+"When the question is generic, ignore focus." The fix is the symmetric clause, not
+a new mechanism. The `grounded` flip that a non-empty resume triggers was left
+alone deliberately: it is what stops fabrication, and weakening it re-opens the
+gpt-oss hallucination the model-routing comment documents.

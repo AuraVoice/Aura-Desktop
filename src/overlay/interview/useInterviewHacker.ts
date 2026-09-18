@@ -326,6 +326,9 @@ export interface InterviewHackerState {
   capturingScreen: boolean;
   /** What Aura saw on the last screen it was shown, for the current answer. */
   screenNote: string | null;
+  /** Next moves from the last Screen Sight answer; empty on every other path. */
+  followups: string[];
+  runFollowup: (steer: string) => void;
   savingReflection: boolean;
   reflection: InterviewReflection | null;
   message: string | null;
@@ -385,6 +388,9 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   const [candidateSpeaking, setCandidateSpeaking] = useState(false);
   const [capturingScreen, setCapturingScreen] = useState(false);
   const [screenNote, setScreenNote] = useState<string | null>(null);
+  /** Next moves offered by the last Screen Sight answer. Cleared whenever the
+   *  screen note is, because they describe that one screen. */
+  const [followups, setFollowups] = useState<string[]>([]);
   const [savingReflection, setSavingReflection] = useState(false);
   const [reflectionSnapshot, setReflectionSnapshot] = useState<ReflectionSnapshot | null>(null);
   const [reflection, setReflection] = useState<InterviewReflection | null>(null);
@@ -566,6 +572,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     reflectionTurnsRef.current = [];
     screenNotesRef.current = [];
     setScreenNote(null);
+    setFollowups([]);
     lastRemoteTurnRef.current = null;
     setCanSuggest(false);
     activeUnverifiedRef.current = false;
@@ -660,7 +667,14 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   }, []);
 
   const rememberReflectionTurn = useCallback((turn: InterviewTranscriptTurn) => {
-    const next = [...reflectionTurnsRef.current, turn].slice(-120);
+    // A turn can reach here twice - a re-flushed assembly, or a replayed final -
+    // and the saved session showed it as a duplicate row carrying the earlier
+    // turn's at_ms, landing out of order after later turns. Identity is the
+    // turn id, which is a per-source monotonic counter, so this cannot collapse
+    // two genuinely different turns that happen to share text.
+    const previous = reflectionTurnsRef.current;
+    if (previous.some((item) => item.turnId === turn.turnId)) return;
+    const next = [...previous, turn].slice(-120);
     let characters = next.reduce((total, item) => total + item.text.length, 0);
     while (next.length > 1 && characters > 40_000) {
       characters -= next.shift()?.text.length ?? 0;
@@ -682,7 +696,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     const archived = historyRef.current;
     const liveTurn = activeAnswerTurnRef.current;
     const liveAnswer = answerRef.current.trim();
-    if (!liveTurn || !liveAnswer) return archived;
+    if (!liveTurn) return archived;
     if (archived.some((exchange) => exchange.id === liveTurn.turnId)) return archived;
     return [...archived, {
       id: liveTurn.turnId,
@@ -690,6 +704,34 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       answer: liveAnswer,
       unverified: activeUnverifiedRef.current,
     }].slice(-MAX_HISTORY_EXCHANGES);
+  }, []);
+
+  /**
+   * Moves whatever exchange is on screen into history. An exchange is the
+   * QUESTION plus whatever answer it got, so a question whose answer never
+   * rendered - a stream that errored, deltas still frozen behind the
+   * candidate's own speech, a turn the gate invalidated - is still archived
+   * with an empty answer. Dropping those is what left a hole in the middle of
+   * the thread with the exchanges either side intact. Idempotent on turn id,
+   * because Shorter / Another example / More technical refine one answer in
+   * place and must never stack up as duplicates.
+   */
+  const archiveActiveExchange = useCallback(() => {
+    flushAnswerSync();
+    const previousTurn = activeAnswerTurnRef.current;
+    if (!previousTurn) return;
+    const answer = answerRef.current;
+    const unverified = activeUnverifiedRef.current;
+    setHistory((current) => (
+      current.some((exchange) => exchange.id === previousTurn.turnId)
+        ? current
+        : [...current, {
+          id: previousTurn.turnId,
+          question: previousTurn.text,
+          answer,
+          unverified,
+        }].slice(-MAX_HISTORY_EXCHANGES)
+    ));
   }, []);
 
   const reflectionSnapshotForCurrentSession = useCallback((): ReflectionSnapshot | null => {
@@ -1354,6 +1396,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     action: InterviewAnswerAction,
     screenSight: InterviewScreenSightFrame | null = null,
     queuedAtMs: number = Date.now(),
+    steer: string = "",
   ) => {
     flushAnswerSync();
     const previousAnswer = answerRef.current;
@@ -1418,22 +1461,16 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       // Must run before reading answerRef.current below: a delta can be
       // buffered (scheduleAnswerDelta) but not yet committed to state, and the
       // archive/reset that follows must never silently drop that last chunk.
+      // Unconditional, including on the same-turn refine path where nothing is
+      // archived: the reset still follows, and a buffered delta landing after
+      // it would leak the old answer's tail into the new one.
       flushAnswerSync();
       const previousTurn = activeAnswerTurnRef.current;
-      const previousAnswer = answerRef.current;
-      const previousUnverified = activeUnverifiedRef.current;
-      if (previousTurn && previousTurn.turnId !== turn.turnId && previousAnswer.trim()) {
-        setHistory((current) => [
-          ...current,
-          {
-            id: previousTurn.turnId,
-            question: previousTurn.text,
-            answer: previousAnswer,
-            unverified: previousUnverified,
-          },
-        ].slice(-MAX_HISTORY_EXCHANGES));
+      if (previousTurn && previousTurn.turnId !== turn.turnId) {
+        archiveActiveExchange();
+        setScreenNote(null);
+        setFollowups([]);
       }
-      if (previousTurn && previousTurn.turnId !== turn.turnId) setScreenNote(null);
       activeAnswerTurnRef.current = turn;
       activeAnswerActionRef.current = action;
       activeUnverifiedRef.current =
@@ -1479,6 +1516,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       currentAnswer: action === "suggest" && !sameTurn ? "" : previousAnswer,
       screenSight,
       screenNotes: screenNotesRef.current,
+      steer,
       signal: controller.signal,
       onFrame: (frame) => {
         if (controller.signal.aborted) return;
@@ -1507,7 +1545,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
                 setPitchExpanded(false);
               }
             }
-            trackEvent("interview_companion_question_decision", {
+            const decision = {
               accepted: frame.accepted,
               action,
               gate_ms: frame.gateMs,
@@ -1515,7 +1553,17 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
               intent: frame.intent,
               remote_speaker_present: Boolean(turn.remoteSpeakerId),
               speaker_overlap: Boolean(turn.speakerOverlap),
-            });
+            };
+            trackEvent("interview_companion_question_decision", decision);
+            // Also to the durable log, the way interview-latency already is.
+            // This event carries exactly what identifies a dropped question,
+            // and its being analytics-only is why diagnosing one meant reading
+            // the encrypted session store instead of the log. `chars` rather
+            // than the text: nothing here may carry transcript content.
+            logInfo("interview-decision", JSON.stringify({
+              ...decision,
+              chars: turn.text.trim().length,
+            }));
           }
           if (frame.accepted) {
             if (!activated) activate();
@@ -1523,8 +1571,14 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
             if (frame.intent) setAnswerIntent(frame.intent as AnswerIntent);
           } else {
             const activeTurn = activeAnswerTurnRef.current;
-            const sameSpeaker = (activeTurn?.remoteSpeakerId ?? null)
-              === (turn.remoteSpeakerId ?? null);
+            const activeSpeaker = activeTurn?.remoteSpeakerId ?? null;
+            const turnSpeaker = turn.remoteSpeakerId ?? null;
+            // An absent id means "overlapping voices, unknown", not "somebody
+            // else". Treating null as a distinct speaker made this compare
+            // unequal exactly when the far side was busiest.
+            const sameSpeaker = activeSpeaker === null
+              || turnSpeaker === null
+              || activeSpeaker === turnSpeaker;
             const invalidatesEarlier = frame.target === "crosstalk"
               || frame.target === "media_playback"
               || frame.target === "another_interviewer"
@@ -1537,6 +1591,13 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
               acceptedSequenceRef.current = sequence;
               generationRef.current?.abort();
               generationRef.current = null;
+              // The question still happened and the candidate may still want to
+              // read it back. Erasing it outright removed it from the thread,
+              // from the saved session and from the reflection, which is the
+              // same hole a dropped turn leaves. `another_interviewer` only
+              // became reachable once diarization started feeding real speaker
+              // ids to the gate, so this path had never run in production.
+              archiveActiveExchange();
               activeAnswerTurnRef.current = null;
               activeAnswerActionRef.current = null;
               setDrafting(false);
@@ -1553,6 +1614,9 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
           if (!activated || generationRef.current !== controller) return;
           screenNotesRef.current = [...screenNotesRef.current, frame.note].slice(-3);
           setScreenNote(frame.note);
+        } else if (frame.type === "followups") {
+          if (!activated || generationRef.current !== controller) return;
+          setFollowups(frame.items);
         } else if (frame.type === "answer_delta") {
           if (!activated || generationRef.current !== controller) return;
           if (!firstDeltaTracked) {
@@ -1711,6 +1775,21 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     if (!turn) return;
     const recentTurns = recentRef.current.filter((item) => item.turnId !== turn.turnId);
     evaluate(turn, recentTurns, action);
+  }, [evaluate]);
+
+  /**
+   * A follow-up pill from the last Screen Sight answer. Runs as
+   * `more_technical` on the same question, with the pill's own words as the
+   * steer, so the new answer covers the thing the candidate picked rather than
+   * re-rolling the same one. The pills clear immediately: they describe the
+   * answer being replaced.
+   */
+  const runFollowup = useCallback((steer: string) => {
+    const turn = lastRemoteTurnRef.current;
+    if (!turn || !steer.trim()) return;
+    setFollowups([]);
+    const recentTurns = recentRef.current.filter((item) => item.turnId !== turn.turnId);
+    evaluate(turn, recentTurns, "more_technical", null, Date.now(), steer);
   }, [evaluate]);
 
   const screenSight = useCallback(() => {
@@ -1903,19 +1982,23 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       }
       const pending = assemblyRef.current;
       if (pending) {
-        const sameSpeaker = (pending.turn.remoteSpeakerId ?? null)
-          === (turn.remoteSpeakerId ?? null);
-        if (sameSpeaker) {
-          if (pending.timer !== null) clearTimeout(pending.timer);
-          const merged = mergeRemoteTurns(pending.turn, turn);
-          assemblyRef.current = {
-            turn: merged,
-            timer: setTimeout(flushRemoteTurn, flushDelayFor(merged.text)),
-            queuedAtMs: pending.queuedAtMs,
-          };
-          return;
-        }
-        flushRemoteTurn();
+        // A speaker id is NOT a question boundary. This used to split the
+        // pending turn whenever the id changed, which was dead code for the
+        // whole life of the feature (diarization never actually ran, so every
+        // remoteSpeakerId was null and this always merged). The moment
+        // diarization started working, Deepgram's ids drifting mid-sentence
+        // began flushing half a question, which the backend gate then rejected
+        // as a fragment: 45% of interviewer questions never became exchanges
+        // (11 remote turns, 6 exchanges) against 100% on the last session
+        // before it. Silence ends a question, not a relabel.
+        if (pending.timer !== null) clearTimeout(pending.timer);
+        const merged = mergeRemoteTurns(pending.turn, turn);
+        assemblyRef.current = {
+          turn: merged,
+          timer: setTimeout(flushRemoteTurn, flushDelayFor(merged.text)),
+          queuedAtMs: pending.queuedAtMs,
+        };
+        return;
       }
       setQuestionPending(true);
       assemblyRef.current = {
@@ -2125,12 +2208,14 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
             return;
           }
           setInterimQuestion(turn.text);
-          // The speaker is demonstrably still talking, so a pending flush from
-          // their earlier fragment waits for the final this interim precedes.
-          if (
-            pending
-            && (pending.turn.remoteSpeakerId ?? null) === (turn.remoteSpeakerId ?? null)
-          ) {
+          // Someone on the far side is demonstrably still talking, so a pending
+          // flush from the earlier fragment waits for the final this interim
+          // precedes. Deliberately not gated on the speaker id matching: an
+          // interim that overlaps two voices reports no id at all
+          // (deepgram.rs forces speaker_id to None on overlap), so that gate
+          // failed exactly when the far side was busiest and let the pending
+          // question flush mid-sentence.
+          if (pending) {
             if (pending.timer !== null) clearTimeout(pending.timer);
             pending.timer = setTimeout(flushRemoteTurn, INTERIM_EXTEND_MS);
           }
@@ -2226,6 +2311,8 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     sendNow,
     capturingScreen,
     screenNote,
+    followups,
+    runFollowup,
     savingReflection,
     reflection,
     message,

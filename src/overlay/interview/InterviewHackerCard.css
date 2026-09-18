@@ -579,6 +579,26 @@
   color: var(--text-muted, rgba(255, 255, 255, 0.74));
 }
 
+/* Who said it. The side already implies it, but once a question can sit in the
+   thread with no answer under it, side alone stops being unambiguous. Inherits
+   colour so it needs no light-theme twin. */
+.interview-hacker-who {
+  display: block;
+  margin-bottom: 2px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  opacity: 0.45;
+}
+
+/* A question the gate declined, or whose stream produced no text. */
+.interview-hacker-bubble.is-answer.is-unanswered {
+  color: var(--text-muted, rgba(255, 255, 255, 0.45));
+  font-size: 13px;
+  font-style: italic;
+}
+
 /* Heard but not yet answered: either still being spoken, or a turn the gate
    declined. Muted so it never reads as a question that got an answer. */
 .interview-hacker-bubble.is-question.is-pending {
@@ -682,6 +702,34 @@
 .interview-hacker-answer-actions button.is-primary:not(:disabled) {
   background: rgba(255, 255, 255, 0.96);
   color: rgba(18, 20, 27, 0.95);
+}
+
+/* Next moves offered by a Screen Sight answer. Same pill shape as the action
+   row below so they read as one control family, and wrapping rather than
+   scrolling because the card is narrow and these are short by contract. */
+.interview-hacker-followups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.interview-hacker-followups button {
+  border: 1px solid var(--surface-border, rgba(255, 255, 255, 0.14));
+  border-radius: 999px;
+  padding: 4px 10px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-primary, rgba(255, 255, 255, 0.9));
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.interview-hacker-followups button:disabled {
+  opacity: 0.38;
+  cursor: default;
 }
 
 .interview-hacker-answer-actions button {

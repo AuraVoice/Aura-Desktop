@@ -90,6 +90,10 @@ export type InterviewAnswerFrame =
     }
   | { type: "answer_delta"; delta: string }
   | { type: "screen_note"; note: string }
+  /** Screen Sight only: 2-3 short next moves the candidate could make with
+   *  what is on the screen. Absent on every other action, and absent from an
+   *  older backend, so the card must render fine without it. */
+  | { type: "followups"; items: string[] }
   | {
       type: "answer_done";
       generated: boolean;
@@ -233,6 +237,15 @@ function parseFrame(
       return typeof frame.note === "string" && frame.note.trim() !== ""
         ? { type: "screen_note", note: frame.note }
         : null;
+    case "followups": {
+      if (!Array.isArray(frame.items)) return null;
+      const items = frame.items
+        .filter((item: unknown): item is string => typeof item === "string")
+        .map((item) => item.trim())
+        .filter((item) => item !== "")
+        .slice(0, 3);
+      return items.length > 0 ? { type: "followups", items } : null;
+    }
     case "answer_done":
       if (typeof frame.generated !== "boolean") return null;
       return {
@@ -267,6 +280,7 @@ export async function streamInterviewAnswer({
   currentAnswer = "",
   screenSight = null,
   screenNotes = [],
+  steer = "",
   signal,
   onFrame,
 }: {
@@ -282,6 +296,9 @@ export async function streamInterviewAnswer({
    *  top-level, never in the brief slice. The model decides whether to use it. */
   focus?: InterviewFocus | null;
   action?: InterviewAnswerAction;
+  /** A follow-up the candidate tapped, verbatim from a NEXT| line an earlier
+   *  Screen Sight answer produced. Empty for every other path. */
+  steer?: string;
   currentAnswer?: string;
   screenSight?: InterviewScreenSightFrame | null;
   /** Captions of screens shown earlier this round, so a later question about
@@ -338,6 +355,7 @@ export async function streamInterviewAnswer({
         })),
       } : null,
       action,
+      steer,
       current_answer: currentAnswer,
       screen_notes: screenNotes.slice(-3),
       screen_sight: screenSight ? {

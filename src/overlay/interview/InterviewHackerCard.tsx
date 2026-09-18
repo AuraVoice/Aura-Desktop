@@ -114,13 +114,17 @@ function Exchange({
   return (
     <>
       {question && (
-        <div className="interview-hacker-bubble is-question">{question}</div>
+        <div className="interview-hacker-bubble is-question">
+          <span className="interview-hacker-who">Interviewer</span>
+          {question}
+        </div>
       )}
-      {answer && (
+      {answer ? (
         <div
           className="interview-hacker-bubble is-answer"
           aria-live={live ? "polite" : undefined}
         >
+          <span className="interview-hacker-who">You</span>
           {intent && INTENT_CHIP[intent] && (
             <span className="interview-hacker-intent">{INTENT_CHIP[intent]}</span>
           )}
@@ -129,6 +133,15 @@ function Exchange({
           )}
           <div className="interview-hacker-answer-text">{answer}</div>
         </div>
+      ) : (
+        // An archived question with no answer: the gate declined it, or its
+        // stream never produced text. Shown rather than omitted, because a
+        // silently missing exchange looks identical to one that never happened.
+        !live && question && (
+          <div className="interview-hacker-bubble is-answer is-unanswered">
+            No answer for this one
+          </div>
+        )
       )}
     </>
   );
@@ -694,6 +707,24 @@ export function InterviewHackerCard({
         {active && hacker.screenNote && (
           <div className="interview-hacker-screen-note">
             Looked at: {hacker.screenNote}
+          </div>
+        )}
+
+        {/* What to do next with the screen Aura just looked at. Only Screen
+            Sight produces these, and tapping one re-answers the same question
+            steered at that move. */}
+        {active && hacker.followups.length > 0 && (
+          <div className="interview-hacker-followups">
+            {hacker.followups.map((item) => (
+              <button
+                key={item}
+                type="button"
+                disabled={hacker.phase !== "listening"}
+                onClick={() => hacker.runFollowup(item)}
+              >
+                {item}
+              </button>
+            ))}
           </div>
         )}
 
