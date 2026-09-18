@@ -1,7 +1,7 @@
 {
   "name": "aura-desktop",
   "private": true,
-  "version": "0.15.23",
+  "version": "0.15.24",
   "type": "module",
   "scripts": {
     "dev": "vite",
