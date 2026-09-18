@@ -269,6 +269,11 @@ function toChatReminder(reminder: Record<string, unknown>, animate = false): Cha
 export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSessionOptions) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sending, setSending] = useState(false);
+  // The same fact as `sending`, named. The activity rail treats a tool
+  // failure as live progress, so it needs to know WHICH turn is in flight,
+  // not just whether one is. Only ever one at a time: runTurn refuses to
+  // start while activeRequestRef is set.
+  const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const [limitReached, setLimitReached] = useState(false);
   const lane: ChatLane = "cold";
   // Explicitly a plain string: a conversation id adopted from the server on
@@ -329,6 +334,7 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
     setTextHandoffProvider(null);
     setMessages([]);
     setSending(false);
+    setActiveTurnId(null);
     setLimitReached(false);
     setOlderCursor(null);
     setSessions([]);
@@ -593,6 +599,7 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
     const controller = new AbortController();
     activeRequestRef.current = { clientMessageId, controller };
     setSending(true);
+    setActiveTurnId(clientMessageId);
 
     const assistantId = `${clientMessageId}:assistant`;
     let terminalFrameSeen = false;
@@ -891,6 +898,7 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
       if (activeRequestRef.current?.clientMessageId === clientMessageId) {
         activeRequestRef.current = null;
         setSending(false);
+        setActiveTurnId(null);
       }
     }
   }, []);
@@ -1138,6 +1146,7 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
     setChatConversationId(conversationId);
     setMessages([]);
     setSending(false);
+    setActiveTurnId(null);
     setLimitReached(false);
     setOlderCursor(null);
     setConversationLoading(false);
@@ -1148,6 +1157,7 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
   return {
     messages,
     sending,
+    activeTurnId,
     limitReached,
     lane,
     send,

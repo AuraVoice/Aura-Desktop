@@ -951,6 +951,7 @@ export function OverlayRoot() {
           onRetry={chat.retry}
           onClarification={chat.submitClarification}
           sending={chat.sending}
+          activeTurnId={chat.activeTurnId}
           limitReached={chat.limitReached}
           lane={chat.lane}
           onHeightChange={setChatSlotHeight}

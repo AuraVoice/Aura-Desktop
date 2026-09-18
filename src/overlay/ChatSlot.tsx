@@ -156,6 +156,49 @@ function turnsSignallingProgress(messages: ChatMessage[]): Set<string> {
   return turnIds;
 }
 
+/** Failed tool rows that a later success for the SAME tool has made irrelevant.
+ *
+ * The backend lets the model retry a tool inside one user turn (claude_client's
+ * six-turn loop), and every retry is a fresh provider tool_use id, so the rail
+ * opens a SECOND row for what the user experienced as one action. Left alone
+ * that reads as a glitch: "Searching the web" twice, the first one struck out.
+ *
+ * Keyed on the tool NAME because there is nothing else to key on - the backend
+ * fills `detail` only for web_surf and start_research, so every other tool
+ * arrives with an empty one and two calls are indistinguishable.
+ *
+ * `ok` is generous about what counts as a failure (the backend computes it as
+ * "the result dict has an error key", which catches policy refusals, deliberate
+ * no-ops, free-tier gating and empty lookups), which is the other reason a
+ * later success is allowed to erase one.
+ *
+ * Only reaches rows still in `messages`: a focus refresh hydrates from the
+ * server and drops every activity row but the in-flight turn's, so the rail is
+ * already ephemeral and this is not a durable rewrite of history.
+ */
+function supersededActivityIds(messages: ChatMessage[]): Set<string> {
+  const superseded = new Set<string>();
+  // Tool name -> ids of its failed rows that nothing has superseded yet.
+  const pendingFailures = new Map<string, string[]>();
+  for (const message of messages) {
+    // An unnamed tool is skipped rather than bucketed under "": one shared
+    // bucket would let an unrelated success erase an unrelated failure.
+    if (message.kind !== "activity" || !message.tool) continue;
+    if (message.ok === false) {
+      const failures = pendingFailures.get(message.tool);
+      if (failures) failures.push(message.id);
+      else pendingFailures.set(message.tool, [message.id]);
+      continue;
+    }
+    // Undefined rather than true: still running, or settled by a terminal path
+    // that never saw a tool_end. Neither supersedes anything.
+    if (message.ok !== true) continue;
+    for (const id of pendingFailures.get(message.tool) ?? []) superseded.add(id);
+    pendingFailures.delete(message.tool);
+  }
+  return superseded;
+}
+
 /** Icon per tool for the activity rail. A tool with no entry falls back to the
  * generic one rather than rendering nothing, so an added tool degrades to a
  * plain row instead of a hole in the list. */
@@ -177,10 +220,16 @@ const TOOL_ICONS: Record<string, LucideIcon> = {
  *
  * Kept rather than cleared because "it searched the web to answer this" stays
  * true once the answer lands; the v1 status pill deleted itself at the end of
- * the turn, so the transcript ended up claiming less than actually happened. */
-function ActivityRow({ message }: { message: ChatMessage }) {
+ * the turn, so the transcript ended up claiming less than actually happened.
+ *
+ * The FAILURE is not kept, though, which is the one place this parts company
+ * with the rule above. "It tried and could not" answers "what is Aura doing
+ * right now"; once the turn is over it is a red badge making a standing claim
+ * that something is broken, long after Aura recovered or moved on. So it
+ * renders only while `live`. */
+function ActivityRow({ message, live }: { message: ChatMessage; live: boolean }) {
   const Icon = TOOL_ICONS[message.tool ?? ""] ?? Wrench;
-  const failed = message.running !== true && message.ok === false;
+  const failed = live && message.running !== true && message.ok === false;
   return (
     <div className={`chat-activity${message.running ? " is-running" : ""}${failed ? " is-failed" : ""}`}>
       <Icon className="chat-activity-icon" size={12} aria-hidden="true" />
@@ -269,6 +318,9 @@ interface ChatSlotProps {
   onRetry: (messageId: string) => void;
   onClarification: (messageId: string, selectedOptions: string[]) => void;
   sending: boolean;
+  /** The one turn in flight, or null. The activity rail shows a tool failure
+   * as live progress only, so it needs turn identity and not just `sending`. */
+  activeTurnId: string | null;
   limitReached: boolean;
   lane: ChatLane;
   /** Bumped every time the chat hotkey fires, including while the slot is
@@ -548,6 +600,7 @@ export function ChatSlot({
   onRetry,
   onClarification,
   sending,
+  activeTurnId,
   limitReached,
   lane,
   focusNonce,
@@ -666,6 +719,9 @@ export function ChatSlot({
 
   const chipVisible = screenChipVisible(lane, screen);
   const signallingTurns = turnsSignallingProgress(messages);
+  // Deliberately NOT fed the filtered list below: a superseded row always
+  // settled, so it never counted towards progress in the first place.
+  const superseded = supersededActivityIds(messages);
 
   // A readback of what the browser already drew, not a prediction of it: CSS
   // sizes the card to its content, and the window is told that exact number. A
@@ -794,8 +850,8 @@ export function ChatSlot({
               Load earlier messages
             </button>
           )}
-          {displayOrder(messages).map((item) => item.kind === "activity" ? (
-            <ActivityRow key={item.id} message={item} />
+          {displayOrder(messages.filter((item) => !superseded.has(item.id))).map((item) => item.kind === "activity" ? (
+            <ActivityRow key={item.id} message={item} live={item.turnId === activeTurnId} />
           ) : item.kind === "thinking" ? (
             <ReasoningRow key={item.id} message={item} />
           ) : (
