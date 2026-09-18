@@ -100,6 +100,15 @@ function OverlayChoice<T extends string | number>({
  * scrolled back and must not be yanked forward by the next delta. */
 const FOLLOW_THRESHOLD_PX = 48;
 
+/** "This device" is the ordinary case: the call plays through this machine, so
+ *  the interviewer arrives on render loopback. "In the room" covers a phone on
+ *  the desk, a speakerphone, or a second laptop - their voice reaches the
+ *  microphone instead, and nothing reaches loopback at all. */
+const INTERVIEWER_AUDIO_OPTIONS = [
+  { value: "device", label: "This device" },
+  { value: "room", label: "In the room" },
+] as const;
+
 const QUESTION_SOURCE_LABEL: Record<QuestionSource, string> = {
   interviewer: "Interviewer",
   screen: "From your screen",
@@ -645,6 +654,17 @@ export function InterviewHackerCard({
               options={PLANNED_MINUTES_OPTIONS}
               value={hacker.plannedMinutes}
               onChange={hacker.setPlannedMinutes}
+            />
+            {/* Which device carries the interviewer. Attribution is physical -
+                one ASR socket per device - so if they are on a phone on the desk
+                their voice arrives on the MIC, gets transcribed as the
+                candidate, and no question is ever answered. Frozen at Start
+                because it decides which socket each device feeds. */}
+            <OverlayChoice
+              label="Interviewer audio"
+              options={INTERVIEWER_AUDIO_OPTIONS}
+              value={hacker.roomAudio ? "room" : "device"}
+              onChange={(value) => hacker.setRoomAudio(value === "room")}
             />
           </div>
         )}

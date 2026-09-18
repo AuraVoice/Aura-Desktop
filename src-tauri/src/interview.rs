@@ -220,6 +220,12 @@ pub async fn start_interview_hacker(
     access_token: String,
     openai_access_token: Option<String>,
     keyterms: Option<Vec<String>>,
+    // The interviewer is in the room or on a second device, so their voice
+    // arrives through the MICROPHONE rather than through this machine's audio.
+    // Attribution here is physical - one socket per device - so without this
+    // the interviewer is transcribed as the candidate, no remote turn is ever
+    // produced, and nothing is ever answered.
+    room_audio: Option<bool>,
 ) -> Result<InterviewStatusPayload, String> {
     let credentials = TranscriptionCredentials {
         deepgram: access_token,
@@ -302,6 +308,7 @@ pub async fn start_interview_hacker(
                     session_id,
                     app_name,
                     epoch,
+                    room_audio.unwrap_or(false),
                     command_rx,
                 );
             })
@@ -879,6 +886,7 @@ fn source_failure_code(source: TranscriptSource, error: AsrError) -> &'static st
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_worker(
     app: AppHandle,
     credentials: TranscriptionCredentials,
@@ -886,6 +894,7 @@ fn run_worker(
     session_id: String,
     app_name: String,
     epoch: u64,
+    room_audio: bool,
     commands: mpsc::Receiver<RuntimeCommand>,
 ) {
     // A panic anywhere in the loop must still release the handle and tell the
@@ -899,6 +908,7 @@ fn run_worker(
             session_id.clone(),
             app_name.clone(),
             epoch,
+            room_audio,
             commands,
         )
     }));
@@ -932,6 +942,7 @@ fn run_worker(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_worker_loop(
     app: AppHandle,
     mut credentials: TranscriptionCredentials,
@@ -939,6 +950,7 @@ fn run_worker_loop(
     session_id: String,
     app_name: String,
     epoch: u64,
+    room_audio: bool,
     commands: mpsc::Receiver<RuntimeCommand>,
 ) -> Option<&'static str> {
     let started_at = Instant::now();
@@ -1193,11 +1205,22 @@ fn run_worker_loop(
                     CaptureEvent::Frame(frame) => {
                         let pcm = to_i16(&frame.samples);
                         let captured_at_ms = frame.captured_at_unix_ms;
-                        let result = match frame.source {
-                            AudioSource::Microphone => {
-                                live.candidate.send_pcm(&pcm, captured_at_ms)
-                            }
-                            AudioSource::Loopback => live.remote.send_pcm(&pcm, captured_at_ms),
+                        // In room audio the microphone carries the INTERVIEWER
+                        // (a phone on the desk, a speaker in the room), so it
+                        // feeds the question leg. The candidate's own voice
+                        // arrives on the same mic and cannot be split out
+                        // acoustically; the backend gate already skips a turn it
+                        // reads as the candidate's own speech (SKIP|self), which
+                        // is the same judgement it makes for a speakerphone on a
+                        // normal call.
+                        let to_remote = match frame.source {
+                            AudioSource::Microphone => room_audio,
+                            AudioSource::Loopback => true,
+                        };
+                        let result = if to_remote {
+                            live.remote.send_pcm(&pcm, captured_at_ms)
+                        } else {
+                            live.candidate.send_pcm(&pcm, captured_at_ms)
                         };
                         if let Err(error) = result {
                             failure_reason = Some(source_failure_code(

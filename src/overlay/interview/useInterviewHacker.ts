@@ -349,6 +349,8 @@ export interface InterviewHackerState {
   message: string | null;
   errorDetail: string | null;
   roundKind: RoundKind;
+  roomAudio: boolean;
+  setRoomAudio: (value: boolean) => void;
   plannedMinutes: PlannedMinutes;
   setRoundKind: (value: RoundKind) => void;
   setPlannedMinutes: (value: PlannedMinutes) => void;
@@ -421,6 +423,10 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   const [message, setMessage] = useState<string | null>(null);
   const [errorDetail, setErrorDetail] = useState<string | null>(null);
   const [roundKind, setRoundKind] = useState<RoundKind>(DEFAULT_ROUND_KIND);
+  /** The interviewer is in the room or on a second device, so their voice
+   *  reaches this machine through the MICROPHONE and not through its audio.
+   *  Frozen at Start, because it decides which ASR socket each device feeds. */
+  const [roomAudio, setRoomAudio] = useState(false);
   const [plannedMinutes, setPlannedMinutes] = useState<PlannedMinutes>(DEFAULT_PLANNED_MINUTES);
   const [pitch, setPitch] = useState<SelfPitch | null>(null);
   const [pitchExpanded, setPitchExpanded] = useState(true);
@@ -984,6 +990,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
               role: prepInputRef.current?.role,
               jobDescription: prepInputRef.current?.jobDescription,
             }),
+            roomAudio,
           }).then(
             (status) => {
               clearTimeout(deadline);
@@ -1061,7 +1068,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
         setMessage(message);
         setErrorDetail(`Start error: ${raw}`);
       });
-  }, [armCredentialRefresh, phase, plannedMinutes, roundKind]);
+  }, [armCredentialRefresh, phase, plannedMinutes, roomAudio, roundKind]);
 
   const pause = useCallback(() => {
     invoke("pause_interview_hacker").catch((error) => {
@@ -2439,6 +2446,8 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     message,
     errorDetail,
     roundKind,
+    roomAudio,
+    setRoomAudio,
     plannedMinutes,
     setRoundKind,
     setPlannedMinutes,
