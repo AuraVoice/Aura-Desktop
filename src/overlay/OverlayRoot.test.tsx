@@ -124,6 +124,7 @@ describe("OverlayRoot meeting background services", () => {
     expect(mocks.useMeetingCapture).toHaveBeenCalledWith({
       uid: "user-1",
       appHidden: true,
+      interviewLive: false,
     });
     expect(mocks.useMeetingPrompt).toHaveBeenCalledWith({
       uid: "user-1",
