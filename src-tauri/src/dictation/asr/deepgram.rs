@@ -114,12 +114,21 @@ impl AsrProvider for DeepgramProvider {
             return Err(AsrError::NotAuthenticated);
         }
         let url = build_continuous_url(&config);
+        // The same session with diarization off, kept as the one retry the
+        // handshake is allowed. Built here rather than in the socket task so
+        // the socket never has to know how a URL is assembled.
+        let plain_url = config.diarize.then(|| {
+            build_continuous_url(&ContinuousSessionConfig {
+                diarize: false,
+                ..config.clone()
+            })
+        });
         let credential = config.credential;
         let (command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel::<Command>();
         let (event_tx, event_rx) = std::sync::mpsc::channel::<ContinuousAsrEvent>();
 
         tauri::async_runtime::spawn(async move {
-            run_continuous_socket(url, credential, command_rx, event_tx).await;
+            run_continuous_socket(url, plain_url, credential, command_rx, event_tx).await;
         });
 
         Ok(Box::new(DeepgramContinuousSession {
@@ -187,11 +196,16 @@ fn build_continuous_url(config: &ContinuousSessionConfig) -> String {
         query.append_pair("mip_opt_out", "true");
         query.append_pair("no_delay", "true");
         if config.diarize {
-            // `diarize_model` alone never switched diarization on: every
-            // interview transcript arrived with no speaker id, so the
-            // crosstalk short-circuit and the same-speaker merge were dead.
+            // Exactly one diarization parameter, never both. Deepgram rejects
+            // the pair outright ("diarize_model cannot be used together with
+            // diarize or diarize_version") with a 400 on the handshake, which
+            // took down the remote leg on every connect for a whole interview.
+            // `diarize_model` alone is the newer spelling but never switched
+            // diarization on here: every transcript arrived with no speaker id,
+            // so the crosstalk short-circuit and the same-speaker merge were
+            // dead. `diarize=true` is the one that actually emits per-word
+            // speaker fields on the streaming socket.
             query.append_pair("diarize", "true");
-            query.append_pair("diarize_model", "latest");
         }
         for term in config.keyterms.iter().take(MAX_KEYTERMS) {
             let trimmed = term.trim();
@@ -563,69 +577,96 @@ async fn run_socket(
 
 async fn run_continuous_socket(
     url: String,
+    plain_url: Option<String>,
     credential: String,
     mut commands: UnboundedReceiver<Command>,
     events: Sender<ContinuousAsrEvent>,
 ) {
-    let mut request = match url.into_client_request() {
-        Ok(request) => request,
-        Err(_) => {
-            let _ = events.send(ContinuousAsrEvent::Failed(AsrError::Provider));
-            return;
-        }
+    // Dial the configured URL, then - only if diarization was requested - the
+    // same URL without it. A provider that refuses the diarization parameters
+    // must not be able to take down the leg that hears the interviewer:
+    // speaker labels are a nice-to-have, hearing the questions IS the feature.
+    // `plain_url` is None when there is nothing to drop, so a plain leg still
+    // gets exactly one dial.
+    let attempts: Vec<String> = match plain_url {
+        Some(plain) => vec![url, plain],
+        None => vec![url],
     };
-    match HeaderValue::from_str(&format!("Bearer {credential}")) {
-        Ok(mut value) => {
-            value.set_sensitive(true);
-            request.headers_mut().insert("Authorization", value);
+    let last_attempt = attempts.len() - 1;
+    let mut connected = None;
+    for (index, attempt) in attempts.into_iter().enumerate() {
+        let mut request = match attempt.into_client_request() {
+            Ok(request) => request,
+            Err(_) => {
+                let _ = events.send(ContinuousAsrEvent::Failed(AsrError::Provider));
+                return;
+            }
+        };
+        match HeaderValue::from_str(&format!("Bearer {credential}")) {
+            Ok(mut value) => {
+                value.set_sensitive(true);
+                request.headers_mut().insert("Authorization", value);
+            }
+            Err(_) => {
+                let _ = events.send(ContinuousAsrEvent::Failed(AsrError::NotAuthenticated));
+                return;
+            }
         }
-        Err(_) => {
-            let _ = events.send(ContinuousAsrEvent::Failed(AsrError::NotAuthenticated));
-            return;
+        match tokio::time::timeout(
+            CONNECT_TIMEOUT,
+            tokio_tungstenite::connect_async_tls_with_config(
+                request,
+                None,
+                false,
+                Some(tls_connector()),
+            ),
+        )
+        .await
+        {
+            Ok(Ok((socket, response))) => {
+                info!(
+                    "dictation.asr: provider=deepgram mode=continuous phase=connect state=ready status={} diarize_dropped={}",
+                    response.status().as_u16(),
+                    index > 0
+                );
+                let _ = events.send(ContinuousAsrEvent::Connected);
+                connected = Some(socket);
+                break;
+            }
+            Ok(Err(error)) => {
+                let failure = map_handshake_error(&error);
+                let status = match &error {
+                    tokio_tungstenite::tungstenite::Error::Http(response) => {
+                        response.status().as_u16()
+                    }
+                    _ => 0,
+                };
+                warn!(
+                    "dictation.asr: provider=deepgram mode=continuous phase=connect state=failed code={} status={status}",
+                    failure.category()
+                );
+                // Only a parameter-shaped rejection is worth re-dialling. A
+                // credential the provider refused fails identically without
+                // diarization, and retrying it would just burn the budget.
+                if index < last_attempt && matches!(failure, AsrError::Provider) {
+                    continue;
+                }
+                let _ = events.send(ContinuousAsrEvent::Failed(failure));
+                return;
+            }
+            Err(_) => {
+                warn!(
+                    "dictation.asr: provider=deepgram mode=continuous phase=connect state=failed code=network status=0"
+                );
+                let _ = events.send(ContinuousAsrEvent::Failed(AsrError::Network));
+                return;
+            }
         }
     }
     drop(credential);
-
-    let socket = match tokio::time::timeout(
-        CONNECT_TIMEOUT,
-        tokio_tungstenite::connect_async_tls_with_config(
-            request,
-            None,
-            false,
-            Some(tls_connector()),
-        ),
-    )
-    .await
-    {
-        Ok(Ok((socket, response))) => {
-            info!(
-                "dictation.asr: provider=deepgram mode=continuous phase=connect state=ready status={}",
-                response.status().as_u16()
-            );
-            socket
-        }
-        Ok(Err(error)) => {
-            let failure = map_handshake_error(&error);
-            let status = match &error {
-                tokio_tungstenite::tungstenite::Error::Http(response) => {
-                    response.status().as_u16()
-                }
-                _ => 0,
-            };
-            warn!(
-                "dictation.asr: provider=deepgram mode=continuous phase=connect state=failed code={} status={status}",
-                failure.category()
-            );
-            let _ = events.send(ContinuousAsrEvent::Failed(failure));
-            return;
-        }
-        Err(_) => {
-            warn!(
-                "dictation.asr: provider=deepgram mode=continuous phase=connect state=failed code=network status=0"
-            );
-            let _ = events.send(ContinuousAsrEvent::Failed(AsrError::Network));
-            return;
-        }
+    let Some(socket) = connected else {
+        let _ = events.send(ContinuousAsrEvent::Failed(AsrError::Provider));
+        return;
     };
 
     let (mut sink, mut stream) = socket.split();

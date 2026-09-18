@@ -835,6 +835,22 @@ fn open_streams(
     })
 }
 
+/// Why the worker parked on a credential. The two cases look identical at the
+/// call site and are not: an expired credential is fixed by the next rotation,
+/// while a missing FALLBACK credential is not fixed by anything the client can
+/// do, and reporting it as expired is what made the card ask for a rotation
+/// that reset the retry counter and restarted the same failing dial forever.
+fn blocked_code(
+    provider: TranscriptionProvider,
+    credentials: &TranscriptionCredentials,
+) -> &'static str {
+    if provider == TranscriptionProvider::OpenAi && credentials.openai.trim().is_empty() {
+        "no_fallback_provider"
+    } else {
+        "credential_expired"
+    }
+}
+
 fn reconnect_delay(next_attempt: u8) -> Duration {
     let exponent = next_attempt.saturating_sub(1).min(5);
     Duration::from_secs((1u64 << exponent).min(MAX_RECONNECT_BACKOFF_SECS))
@@ -941,6 +957,7 @@ fn run_worker_loop(
         ),
     };
     let mut paused = false;
+    let mut blocked_reason: Option<&'static str> = None;
     let mut reconnects = provider.retry_floor();
     let mut rebinding = false;
     let mut retry_at = Instant::now()
@@ -950,6 +967,15 @@ fn run_worker_loop(
             reconnect_delay(1)
         };
     let mut stable_since = streams.as_ref().map(|_| Instant::now());
+    // `start_continuous` returns as soon as the socket task is SPAWNED, so a
+    // live `Streams` proves nothing about either handshake. "listening" is
+    // held back until BOTH legs report `Connected`; announcing it at spawn
+    // time is what turned a 400 on every remote connect into 134 reported
+    // reconnects with nothing on screen to say otherwise.
+    let mut candidate_connected = false;
+    let mut remote_connected = false;
+    let mut listening_pending = streams.is_some();
+    let mut listening_reason: Option<&'static str> = None;
     let mut candidate_start = None;
     let mut remote_start = None;
     let mut candidate_turn = 0u64;
@@ -957,14 +983,9 @@ fn run_worker_loop(
     let mut stop_reason = None;
 
     if streams.is_some() {
-        emit_status(
-            &app,
-            "listening",
-            Some(&session_id),
-            Some(epoch),
-            Some(&app_name),
-            None,
-        );
+        // Deliberately silent here: the card is already on "Starting
+        // transcription..." and the first honest status is the one emitted
+        // once both handshakes land (or the failure that replaces it).
     } else {
         emit_status(
             &app,
@@ -973,7 +994,9 @@ fn run_worker_loop(
             Some(epoch),
             Some(&app_name),
             Some(if credential_blocked {
-                "credential_expired"
+                let code = blocked_code(provider, &credentials);
+                blocked_reason = Some(code);
+                code
             } else {
                 initial_failure.unwrap_or("transcription_unavailable")
             }),
@@ -1015,6 +1038,9 @@ fn run_worker_loop(
                     close_streams(&mut streams);
                     candidate_start = None;
                     remote_start = None;
+                    candidate_connected = false;
+                    remote_connected = false;
+                    listening_pending = false;
                 }
                 RuntimeCommand::Resume => {
                     paused = false;
@@ -1027,6 +1053,7 @@ fn run_worker_loop(
                     // really is dead, the next open_streams sets it again and
                     // re-emits the error - one honest attempt either way.
                     credential_blocked = false;
+                    blocked_reason = None;
                 }
                 RuntimeCommand::UpdateCredentials(next_credentials) => {
                     credentials = next_credentials;
@@ -1037,9 +1064,29 @@ fn run_worker_loop(
                             TranscriptionProvider::Deepgram
                         };
                     }
-                    credential_blocked = false;
-                    reconnects = provider.retry_floor();
-                    retry_at = Instant::now();
+                    // A rotation is automatic and lands every ~30s. It may
+                    // unblock a genuinely expired credential, and it must NOT
+                    // forgive a provider failing for its own reasons.
+                    // Unconditionally resetting `reconnects` here is what let a
+                    // rejected dial restart from zero on every rotation and
+                    // loop for a whole interview without once reaching
+                    // MAX_RECONNECTS. Only the credential that was actually
+                    // missing can clear the block; "Retry transcription"
+                    // (RuntimeCommand::Resume) remains the explicit reset.
+                    let unblocks = match blocked_reason {
+                        Some("credential_expired") => {
+                            !provider.credential(&credentials).trim().is_empty()
+                        }
+                        // A fresh PRIMARY token cannot conjure a fallback one.
+                        Some("no_fallback_provider") => !credentials.openai.trim().is_empty(),
+                        _ => false,
+                    };
+                    if unblocks {
+                        blocked_reason = None;
+                        credential_blocked = false;
+                        reconnects = provider.retry_floor();
+                        retry_at = Instant::now();
+                    }
                 }
                 RuntimeCommand::Stop => break 'runtime,
             }
@@ -1067,18 +1114,14 @@ fn run_worker_loop(
                 Ok(next_streams) => {
                     streams = Some(next_streams);
                     stable_since = Some(Instant::now());
-                    emit_status(
-                        &app,
-                        "listening",
-                        Some(&session_id),
-                        Some(epoch),
-                        Some(&app_name),
-                        Some(if switched_provider {
-                            "fallback_openai"
-                        } else {
-                            "reconnected"
-                        }),
-                    );
+                    candidate_connected = false;
+                    remote_connected = false;
+                    listening_pending = true;
+                    listening_reason = Some(if switched_provider {
+                        "fallback_openai"
+                    } else {
+                        "reconnected"
+                    });
                 }
                 Err(AsrError::NotAuthenticated | AsrError::Rejected) => {
                     if provider == TranscriptionProvider::Deepgram
@@ -1096,13 +1139,14 @@ fn run_worker_loop(
                         );
                     } else {
                         credential_blocked = true;
+                        blocked_reason = Some(blocked_code(provider, &credentials));
                         emit_status(
                             &app,
                             "error",
                             Some(&session_id),
                             Some(epoch),
                             Some(&app_name),
-                            Some("credential_expired"),
+                            blocked_reason,
                         );
                     }
                 }
@@ -1112,7 +1156,10 @@ fn run_worker_loop(
                         + reconnect_delay((reconnects % DEEPGRAM_RECONNECTS).saturating_add(1));
                     emit_status(
                         &app,
-                        if reconnects == MAX_RECONNECTS { "error" } else { "degraded" },
+                        // `==` left the card on "degraded" forever if the
+                        // counter ever stepped past the ceiling instead of
+                        // landing on it.
+                        if reconnects >= MAX_RECONNECTS { "error" } else { "degraded" },
                         Some(&session_id),
                         Some(epoch),
                         Some(&app_name),
@@ -1206,6 +1253,7 @@ fn run_worker_loop(
                     TranscriptSource::Candidate,
                     &mut candidate_turn,
                     &mut candidate_start,
+                    &mut candidate_connected,
                     live.candidate.as_mut(),
                 ) {
                     failure_reason = Some(source_failure_code(TranscriptSource::Candidate, error));
@@ -1219,6 +1267,7 @@ fn run_worker_loop(
                         TranscriptSource::Remote,
                         &mut remote_turn,
                         &mut remote_start,
+                        &mut remote_connected,
                         live.remote.as_mut(),
                     ) {
                         failure_reason = Some(source_failure_code(TranscriptSource::Remote, error));
@@ -1227,12 +1276,26 @@ fn run_worker_loop(
                 }
             }
         }
+        if listening_pending && failure.is_none() && candidate_connected && remote_connected {
+            listening_pending = false;
+            emit_status(
+                &app,
+                "listening",
+                Some(&session_id),
+                Some(epoch),
+                Some(&app_name),
+                listening_reason,
+            );
+        }
         if let Some(error) = failure {
             let failure_code = failure_reason.unwrap_or_else(|| error.category());
             close_streams(&mut streams);
             stable_since = None;
             candidate_start = None;
             remote_start = None;
+            candidate_connected = false;
+            remote_connected = false;
+            listening_pending = false;
             if matches!(error, AsrError::NotAuthenticated | AsrError::Rejected) {
                 if provider == TranscriptionProvider::Deepgram
                     && !credentials.openai.trim().is_empty()
@@ -1249,13 +1312,14 @@ fn run_worker_loop(
                     );
                 } else {
                     credential_blocked = true;
+                    blocked_reason = Some(blocked_code(provider, &credentials));
                     emit_status(
                         &app,
                         "error",
                         Some(&session_id),
                         Some(epoch),
                         Some(&app_name),
-                        Some("credential_expired"),
+                        blocked_reason,
                     );
                 }
             } else {
@@ -1292,6 +1356,7 @@ fn run_worker_loop(
     stop_reason
 }
 
+#[allow(clippy::too_many_arguments)]
 fn drain_asr(
     app: &AppHandle,
     session_id: &str,
@@ -1299,11 +1364,13 @@ fn drain_asr(
     source: TranscriptSource,
     turn: &mut u64,
     started_at: &mut Option<u64>,
+    connected: &mut bool,
     session: &mut dyn ContinuousAsrSession,
 ) -> Option<AsrError> {
     while let Some(event) = session.poll() {
         let now = crate::meeting::now_ms().max(0) as u64;
         match event {
+            ContinuousAsrEvent::Connected => *connected = true,
             ContinuousAsrEvent::Partial(transcript) => {
                 if transcript.text.trim().is_empty() {
                     continue;

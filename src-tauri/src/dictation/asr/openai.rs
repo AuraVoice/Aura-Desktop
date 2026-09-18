@@ -209,6 +209,7 @@ async fn run_socket(
                 "dictation.asr: provider=openai mode=continuous phase=connect state=ready status={}",
                 response.status().as_u16()
             );
+            let _ = events.send(ContinuousAsrEvent::Connected);
             socket
         }
         Ok(Err(error)) => {

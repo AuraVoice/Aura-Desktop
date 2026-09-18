@@ -45,6 +45,14 @@ const LEFT_AFTER_MISSES: u32 = 2;
 /// end for that, but an ad-hoc call has no calendar. Five minutes is the
 /// trade-off until a mic-in-use signal can say the call really ended.
 const BROWSER_GONE_AFTER_MISSES: u32 = 60;
+/// Consecutive polls the SAME call must be seen for before it is announced,
+/// when no call is currently tracked. There was no first-sight debounce at
+/// all: the very first matching poll armed the prompt, so a Meet lobby page
+/// the user never joined, a tab merely mentioning the product, and a title
+/// that flickered past for one tick each summoned the notch. Confirming costs
+/// nothing real - the prompt only ASKS, and capture starts on the click - so
+/// the meeting is not shortened, only the question is delayed.
+const SEEN_AFTER_HITS: u32 = 3;
 
 use super::JoinDetectedPayload;
 
@@ -106,6 +114,9 @@ fn ambient_thread(app: AppHandle, cancel: Arc<AtomicBool>) {
     // The lock watcher is otherwise only started by the capture engine.
     super::session::ensure_watcher();
     let mut misses: u32 = 0;
+    // The call the watch is counting toward `SEEN_AFTER_HITS`, and how many
+    // consecutive polls it has survived. Never announced until it settles.
+    let mut pending: Option<(String, u32)> = None;
     #[cfg(target_os = "macos")]
     let mut trust_logged = false;
 
@@ -139,9 +150,26 @@ fn ambient_thread(app: AppHandle, cancel: Arc<AtomicBool>) {
         match (seen, current) {
             (Some((next, _)), Some(previous)) if previous.call_key == next.call_key => {
                 misses = 0;
+                pending = None;
             }
             (Some((mut next, icon_source)), previous) => {
                 misses = 0;
+                // Arming a call the watch is not already tracking needs
+                // confirmation. A re-key mid-call (`previous` is Some) is NOT
+                // held back: the capture is pointed at the old key and must
+                // follow the title immediately.
+                if previous.is_none() {
+                    let hits = match pending.take() {
+                        Some((key, hits)) if key == next.call_key => hits + 1,
+                        _ => 1,
+                    };
+                    if hits < SEEN_AFTER_HITS {
+                        pending = Some((next.call_key.clone(), hits));
+                        std::thread::sleep(POLL_INTERVAL);
+                        continue;
+                    }
+                }
+                pending = None;
                 if cancel.load(Ordering::Relaxed) {
                     break;
                 }
@@ -176,6 +204,10 @@ fn ambient_thread(app: AppHandle, cancel: Arc<AtomicBool>) {
             }
             (None, None) => {
                 misses = 0;
+                // A candidate that stops matching before it is confirmed was
+                // the lobby page, the stray tab, or the title flicker. It
+                // starts its count over if it comes back.
+                pending = None;
             }
         }
         std::thread::sleep(POLL_INTERVAL);
@@ -432,15 +464,42 @@ fn find_meeting_window_with_source() -> Option<(String, String, IconSource)> {
     None
 }
 
+/// Teams window titles that contain "meeting" or "call" and are definitively
+/// NOT a live call. `contains("meeting") || contains("call")` on any Teams
+/// window was the loosest matcher in this file: opening Teams on the Calls
+/// tab, a channel named "Weekly Meeting", or a missed-call row in the activity
+/// feed each raised the record prompt with nobody on a call.
+const TEAMS_NOT_A_CALL: &[&str] = &[
+    "chat | microsoft teams",
+    "calls | microsoft teams",
+    "calendar | microsoft teams",
+    "activity | microsoft teams",
+    "teams | microsoft teams",
+    "files | microsoft teams",
+    "apps | microsoft teams",
+    "missed call",
+];
+
+/// Exclusion only, never a new requirement: a real meeting whose title happens
+/// to carry neither word was already invisible to this matcher, and tightening
+/// the positive side here would drop calls rather than noise.
+fn teams_title_is_a_call(title_lower: &str) -> bool {
+    if title_lower.trim() == "microsoft teams" {
+        return false;
+    }
+    if TEAMS_NOT_A_CALL.iter().any(|chrome| title_lower.contains(chrome)) {
+        return false;
+    }
+    title_lower.contains("meeting") || title_lower.contains("call")
+}
+
 fn meeting_app_for_window<'a>(exe_stem: &str, title_lower: &'a str) -> Option<&'a str> {
     if exe_stem == "zoom"
         && (title_lower.contains("zoom meeting") || title_lower.contains("zoom webinar"))
     {
         return Some("zoom");
     }
-    if (exe_stem == "ms-teams" || exe_stem == "teams")
-        && (title_lower.contains("meeting") || title_lower.contains("call"))
-    {
+    if (exe_stem == "ms-teams" || exe_stem == "teams") && teams_title_is_a_call(title_lower) {
         return Some("teams");
     }
     let browser = matches!(exe_stem, "chrome" | "msedge" | "brave" | "firefox");
@@ -450,9 +509,7 @@ fn meeting_app_for_window<'a>(exe_stem: &str, title_lower: &'a str) -> Option<&'
     if title_lower.contains("google meet") || title_lower.starts_with("meet -") {
         return Some("google-meet");
     }
-    if title_lower.contains("microsoft teams")
-        && (title_lower.contains("meeting") || title_lower.contains("call"))
-    {
+    if title_lower.contains("microsoft teams") && teams_title_is_a_call(title_lower) {
         return Some("teams-web");
     }
     if title_lower.contains("zoom meeting") || title_lower.contains("zoom webinar") {

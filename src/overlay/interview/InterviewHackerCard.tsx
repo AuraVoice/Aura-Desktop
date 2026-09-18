@@ -485,7 +485,11 @@ export function InterviewHackerCard({
   // Steady-state "listening" has no caption on purpose: the card being on
   // screen already says it is listening, and a line that never changes is chrome
   // in the one place the answer needs the room. Only actionable states speak.
-  const status = hacker.candidateSpeaking
+  // "You are speaking" outranks the message only while nothing is wrong. It
+  // used to outrank it unconditionally, so an error arriving while the mic was
+  // hot was replaced by a reassuring line for up to FROZEN_HOLD_MAX_MS.
+  const failing = hacker.phase === "degraded" || hacker.phase === "error";
+  const status = hacker.candidateSpeaking && !failing
     ? "You are speaking. Answer held."
     : hacker.message
       ?? (hacker.phase === "paused"

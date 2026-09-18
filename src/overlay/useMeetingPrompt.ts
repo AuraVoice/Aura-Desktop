@@ -24,6 +24,13 @@ const REPROMPT_AFTER_MS = 2 * 60_000;
 const SNOOZE_MS = 2 * 60_000;
 /** After an expiry, no prompt for the same app for this long. */
 const APP_COOLDOWN_MS = 60_000;
+/** After a call that was actually RECORDED ends, no prompt for the same app
+ * for this long. Longer than the expiry cooldown because the failure it
+ * guards is worse: being asked to record a meeting that is already recorded,
+ * by a detector whose call identity is a window-title hash and therefore
+ * changes under it. Covers the leave-then-rejoin blip and the post-call page
+ * that still carries the meeting's title. */
+const RECORDED_COOLDOWN_MS = 10 * 60_000;
 /** How long the cap / failure line stays up after a Record press. */
 const STATUS_LINGER_MS = 6_000;
 /** A calendar meeting counts as "this call" from this long before its start. */
@@ -183,6 +190,16 @@ export function useMeetingPrompt(inputs: MeetingPromptInputs): MeetingPromptStat
   const decide = useCallback(
     (callKey: string, decision: Decision) => {
       decisionsRef.current.set(callKey, decision);
+      // Every route to "recorded" arms the per-app cooldown, including the
+      // tray's Capture now. The call-key decision alone cannot hold, because
+      // the key is a window-title hash and a re-key mints a fresh identity
+      // for the same meeting.
+      if (decision === "recorded" && currentRef.current?.callKey === callKey) {
+        appCooldownRef.current.set(
+          currentRef.current.app,
+          Date.now() + RECORDED_COOLDOWN_MS,
+        );
+      }
       hide();
     },
     [hide],
@@ -196,8 +213,19 @@ export function useMeetingPrompt(inputs: MeetingPromptInputs): MeetingPromptStat
   const handleGone = useCallback(
     (callKey: string) => {
       if (currentRef.current?.callKey !== callKey) return;
-      currentRef.current = null;
-      decisionsRef.current.delete(callKey);
+      const app = currentRef.current.app;
+      // "I already recorded this" must outlive the call. Gone is the event
+      // that ENDS the meeting, and it was also the event that erased the
+      // record of having captured it, so anything that re-matched the title
+      // afterwards (a tab switched back, a minimize blip past the miss
+      // threshold, a title flicker) asked again for a meeting just recorded.
+      // The decision map is keyed by a hash of the window title, so a re-key
+      // defeats it too; the per-app cooldown is the backstop for both.
+      if (decisionsRef.current.get(callKey) === "recorded") {
+        appCooldownRef.current.set(app, Date.now() + RECORDED_COOLDOWN_MS);
+      } else {
+        decisionsRef.current.delete(callKey);
+      }
       repromptedRef.current.delete(callKey);
       shownRef.current.delete(callKey);
       summonedKeyRef.current = null;
@@ -422,6 +450,10 @@ export function useMeetingPrompt(inputs: MeetingPromptInputs): MeetingPromptStat
       reprompt: repromptedRef.current.has(call.callKey),
     });
     decisionsRef.current.set(call.callKey, "recorded");
+    // Armed here, not only on gone: a capture that ends by manual stop or by
+    // the engine's own cap never produces a gone, and the call key can still
+    // change underneath us while it runs.
+    appCooldownRef.current.set(call.app, Date.now() + RECORDED_COOLDOWN_MS);
     setStatus("starting");
     void recordCallRef.current(call, matched).then((outcome) => {
       if (currentRef.current?.callKey !== call.callKey) return;

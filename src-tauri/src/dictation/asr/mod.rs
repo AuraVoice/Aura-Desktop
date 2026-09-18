@@ -50,6 +50,12 @@ pub enum AsrEvent {
 /// may produce any number of completed turns before it is cancelled.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ContinuousAsrEvent {
+    /// The socket completed its handshake. `start_continuous` returns as soon
+    /// as the socket task is SPAWNED, not when it is up, so without this a
+    /// caller has no way to tell a live stream from one that is about to be
+    /// rejected. Reporting "listening" off the spawn alone is what let a 400
+    /// on every connect read as 134 successful reconnects.
+    Connected,
     Partial(ContinuousTranscript),
     Final(ContinuousTranscript),
     Failed(AsrError),
@@ -121,6 +127,9 @@ pub struct SessionConfig {
 }
 
 /// Configuration for a provider-endpointed, multi-turn stream.
+/// `Clone` so a provider can derive a variant of the same session (the
+/// diarization-free retry) without the caller having to build it twice.
+#[derive(Clone)]
 pub struct ContinuousSessionConfig {
     pub sample_rate: i32,
     pub keyterms: Vec<String>,

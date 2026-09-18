@@ -1813,7 +1813,10 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       .catch((error) => {
         if (sequence !== savingReflectionSequenceRef.current) return;
         logError("Interview Companion: save reflection", error);
-        setMessage("Aura could not write the file. The reflection is still saved with this session.");
+        // One line for every cause hid a bad path, a full disk and a name
+        // collision behind the same sentence. The Rust side returns a real
+        // reason; show it.
+        setMessage(`Aura could not write the file: ${errorText(error)}. The reflection is still saved with this session.`);
       })
       .finally(() => {
         if (sequence !== savingReflectionSequenceRef.current) return;
@@ -1978,9 +1981,23 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       setPhase(status.phase);
       if (status.reason === "credential_expired") {
         credentialBlockedRef.current = true;
-        setMessage("Refreshing transcription credentials...");
+        // The Rust phase for this is terminal `error`. Rendering it as plain
+        // progress hid a 15-minute failure behind a reassuring line.
+        setMessage(status.phase === "error"
+          ? "The transcription credential expired. Aura is refreshing it now."
+          : "Refreshing transcription credentials...");
         setErrorDetail("Error code: credential_expired. Aura is refreshing the transcription credential automatically.");
         rotateCredentialRef.current?.();
+      } else if (status.reason === "no_fallback_provider") {
+        // Distinct from credential_expired on purpose: nothing the client can
+        // refresh will fix this, so it must not read as "refreshing...".
+        if (metricsRef.current) metricsRef.current.errors += 1;
+        trackEvent("interview_companion_error", {
+          code: "no_fallback_provider",
+          stage: "transcription",
+        });
+        setMessage("Transcription keeps failing and there is no backup provider available. Try Retry transcription, or restart Interview Companion.");
+        setErrorDetail("Error code: no_fallback_provider. The primary provider was rejected repeatedly and this account has no fallback transcription credential to switch to.");
       } else if (status.reason === "session_limit_warning") {
         setMessage("Interview Companion stops automatically in 5 minutes (two-hour session limit).");
         setErrorDetail(null);
@@ -2014,11 +2031,16 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
             stage: "transcription",
           });
         }
+        // The code goes in the VISIBLE line, not only in the collapsed
+        // details. Roughly twenty distinct reasons land here, and collapsing
+        // them into two strings is what left a whole interview with nothing
+        // on screen to say what had actually broken. "after 10 automatic
+        // retries" is also not true of every error that reaches this branch.
         setMessage(
           status.phase === "degraded"
-            ? "Transcription was interrupted. Aura is retrying automatically."
+            ? `Transcription was interrupted (${status.reason ?? "unknown"}). Aura is retrying automatically.`
             : status.phase === "error"
-              ? "Transcription stopped after 10 automatic retries."
+              ? `Transcription stopped (${status.reason ?? "unknown"}). Try Retry transcription, or restart Interview Companion.`
               : null,
         );
         setErrorDetail(

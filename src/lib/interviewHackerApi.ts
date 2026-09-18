@@ -135,6 +135,11 @@ export async function mintInterviewCredential(): Promise<InterviewCredential> {
   if (response.status === 503) {
     throw new InterviewUnavailableError("Interview transcription is unavailable");
   }
+  if (response.status === 429) {
+    // A rate limit is the one non-2xx a retry actually fixes, so it must not
+    // read the same as a 500.
+    throw new Error("Interview transcription is rate limited. Wait a moment and retry.");
+  }
   if (!response.ok) {
     throw new Error(`Interview transcription is unavailable (${response.status}).`);
   }

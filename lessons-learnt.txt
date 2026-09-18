@@ -1114,3 +1114,155 @@ was rejected deliberately: it skips off-screen rendering and would reintroduce t
 was meant to remove. The test for any future surface, now written into CLAUDE.md's glass recipe:
 blur only if something varied is actually behind it. A 94%-opaque notification panel and an opaque
 #fff onboarding confirmation failed that test too, and kept their removal.
+
+
+2026-09-17  A failed tool row stayed red in the chat rail for the rest of the conversation
+
+Problem: in the desktop text chat, when Buddy's backend agent called a tool and that call failed,
+the activity rail row kept its red "failed" badge forever, including after the agent retried the
+same tool in the same turn and succeeded. The rail ended up claiming something was broken while
+the answer sitting right below it was fine.
+
+Issue: two causes, only one of them obvious. ActivityRow derived `failed` straight from
+`message.ok === false`, and nothing ever reset `ok`; finishAssistantText settles `running` on every
+terminal path but deliberately keeps activity rows, because "it searched the web to answer this"
+stays true after the answer lands. That rule is right for the row and wrong for the badge: one
+describes what Aura did, the other describes what Aura is doing, and only the first survives the
+turn. The second cause was upstream. juno-backend's claude_client runs a six-turn model loop, and
+a retried tool is a new provider tool_use id, so the rail opened a SECOND row for one user-visible
+action: "Searching the web - failed" directly above "Searching the web".
+
+Solution: ActivityRow now takes a `live` boolean and renders the badge (and .is-failed) only while
+its turn is the one in flight. useChatSession gained `activeTurnId` beside `sending`, set and
+cleared at the same two lines, because at most one turn can ever be in flight (runTurn refuses to
+start while activeRequestRef is set). A new module-private supersededActivityIds() walks messages
+and drops any failed row that a later success for the same tool made irrelevant. Filtering happens
+before displayOrder at the one render site; no CSS changed.
+
+Justification: `sending` alone was not enough - it is true for the whole card, so gating on it
+would have re-lit old turns' badges while a new one streamed. Deriving the in-flight turn from
+message state instead was rejected: the abort path at useChatSession.ts:862 early-returns without
+calling finishAssistantText, so an aborted turn leaves its assistant bubble stranded at
+state:"streaming" forever, and only a setMessages([]) in a different effect covers for it. An
+explicit activeTurnId is authoritative on every path for five lines. Supersession keys on the tool
+NAME because there is nothing else: the backend fills `detail` only for web_surf and start_research
+(the _ECHOABLE_TOOL_ARGUMENT allowlist), so every other tool arrives with an empty one and two
+calls are indistinguishable; an unnamed tool is skipped rather than bucketed under "", or one
+shared bucket would let an unrelated success erase an unrelated failure.
+
+Still open, in the sibling repo: `ok` is computed as `not (exc is not None or "error" in result)`,
+so tool_executor's policy refusals (tool_not_allowed), deliberate no-ops (not_authorized_this_turn),
+free-tier gating (upgrade_required), duplicate suppression (action_in_progress) and empty lookups
+all report as failures, and the inverse - _normalize_tool_result treats configured:false and
+approval_required:true as not-ok WITHOUT an error key, so an unconfigured connector closes its row
+as a success. Hiding the settled badge masks all of that rather than fixing it. Narrowing the test
+is a juno-backend deploy and was deliberately left out of this pass.
+
+
+2026-09-18 - Interview Companion transcribed nothing for 15 minutes of a real interview, and the
+card said "retrying" the whole time
+
+Problem: Interview Companion ran 18:00 to 18:15 during an actual interview and never produced a
+remote transcript. Nothing on screen named a cause. The desktop log carried 134 reason=reconnected,
+99 remote_provider_error, 36 remote_network and 26 credential_expired, and a plain dictation connect
+five minutes later succeeded on the same credential (connect_ms=283, status=101), so neither the
+network nor the account was at fault.
+
+Issue: four defects stacked. (1) build_continuous_url sent diarize=true AND diarize_model=latest
+together; Deepgram rejects the pair ("diarize_model cannot be used together with diarize or
+diarize_version") with a 400 on the handshake. Only the `remote` leg sets diarize, so the leg that
+hears the INTERVIEWER was the one being refused, which is why the failure looked like half the log
+succeeding. Introduced 2026-09-16 in 2a6a665, whose comment correctly observed that diarize_model
+alone produced no speaker ids and then added the second parameter instead of swapping it.
+(2) start_continuous returns as soon as the socket task is SPAWNED, so open_streams always reported
+success and the worker announced listening/reconnected for a connection that was about to be
+rejected. (3) The retry ladder climbed to DEEPGRAM_RECONNECTS, flipped to OpenAI, found
+credentials.openai empty, and - because provider was no longer Deepgram - fell into the else branch
+and emitted credential_expired. React answered that by rotating the credential, the rotation
+SUCCEEDED, and RuntimeCommand::UpdateCredentials reset reconnects to the floor and cleared
+credential_blocked. MAX_RECONNECTS = 10 was therefore never reached in 15 minutes; the counter was
+zeroed every ~32 seconds. (4) credentials.openai was empty because juno-backend's
+_mint_openai_stt_token sent "model": "gpt-live-transcribe" with "delay": "low". Neither is valid -
+the openai SDK's AudioTranscription enumerates whisper-1, gpt-4o-mini-transcribe,
+gpt-4o-mini-transcribe-2025-12-15, gpt-4o-transcribe, gpt-4o-transcribe-diarize and
+gpt-realtime-whisper, and documents delay as supported only with gpt-realtime-whisper. Cloud Run
+logged "openai token mint failed BadRequestError" at 18:12:10, 18:12:43, 18:13:15, 18:13:48 and
+18:14:20, matching the desktop's credential_expired events to the second. That leg had never once
+minted a token, so the entire fallback ladder was decorative.
+
+Solution: send diarize=true alone. Added ContinuousAsrEvent::Connected, emitted by both providers
+after the handshake, and held the worker's "listening" until BOTH legs report it. Split the blocked
+state into credential_expired vs a new no_fallback_provider via blocked_code(), and made
+UpdateCredentials clear the block only when the credential that was actually missing has arrived -
+an automatic rotation can no longer forgive a provider failing for its own reasons. Changed
+reconnects == MAX_RECONNECTS to >=. On the card, the reason code now appears in the visible line
+instead of only inside the collapsed details element, credential_expired no longer renders as plain
+progress when the phase is terminal, and candidateSpeaking stops outranking the message while the
+phase is degraded or error. In juno-backend, the model is now settings.OPENAI_REALTIME_TRANSCRIBE_MODEL
+(the value the voice path already mints with) and openai.BadRequestError bodies are logged.
+
+Justification: diarize=true rather than diarize_model=latest because diarize_model is the newer
+spelling but is precisely the half already observed here to yield no speaker ids on streaming;
+the deprecated parameter is the one that works. Connected as an event rather than making
+start_continuous await the handshake keeps the non-blocking shape and avoids blocking the worker
+thread twice per reconnect. The BadRequestError body is logged as a deliberate exception to
+realtime.py's type-only rule, which exists because a LocalProtocolError message echoes the
+Authorization header: a 400 body describes OUR request and names the offending parameter, and
+logging only "BadRequestError" is exactly what let an invalid model name sit unnoticed through
+every interview since the feature shipped.
+
+2026-09-18 - "Record this meeting?" fired with no meeting on screen, and again for a meeting
+already recorded
+
+Problem: the prompt appeared when nothing was on screen and after a meeting had ended and been
+captured.
+
+Issue: two unrelated causes. Detection is (exe stem) AND (window title substring) on a 5 second
+poll with NO first-sight debounce, so the very first matching tick armed the prompt - a Meet lobby
+page never joined, a post-call page still titled "Meet - abc-defg-hij", and any tab merely
+mentioning the product all qualified. The Teams matcher was the loosest in the file,
+contains("meeting") or contains("call") against any ms-teams window, which matches the Calls tab, a
+channel named "Weekly Meeting", the Calendar view and a missed-call row. Separately, useMeetingPrompt
+keyed decisions by call_key, a sha256 of the normalized window TITLE, and handleGone deleted the
+whole decision entry - so meeting-call-gone, the event that means the meeting ended, was also the
+event that erased the record of having recorded it. Any later re-match (tab switched back, minimize
+blip past the miss threshold, title flicker) then asked again, and a mid-call title change minted a
+fresh key that no decision covered.
+
+Solution: SEEN_AFTER_HITS = 3 consecutive polls of the same call_key before meeting-call-seen is
+emitted, applied only when no call is currently tracked; a mid-call re-key still emits immediately
+because the capture is pointed at the stale key. Added TEAMS_NOT_A_CALL and teams_title_is_a_call()
+as an exclusion list for the app's own navigation chrome. On the React side, handleGone keeps a
+"recorded" decision instead of deleting it, and every route to "recorded" arms a per-app
+RECORDED_COOLDOWN_MS of 10 minutes.
+
+Justification: confirmation costs nothing real because the prompt only ASKS - capture begins on the
+click - so a 15 second delay shortens no recording, only the question. The end-side thresholds
+(LEFT_AFTER_MISSES 2, BROWSER_GONE_AFTER_MISSES 60) were deliberately left alone: they guard an
+in-flight capture, and tightening them would end recordings early. The Teams change is exclusion
+only, never a new positive requirement, because a real meeting whose title carries neither word was
+already invisible to this matcher and narrowing the positive side would drop calls rather than
+noise. The per-app cooldown is the backstop rather than the fix: call identity is a title hash and
+will keep changing underneath us, so no per-key decision can hold on its own. IsIconic was
+considered and rejected - a minimized Zoom meeting window means the user IS in a meeting, so
+suppressing on it would miss real calls.
+
+2026-09-18 - Meta Muse STT has never once succeeded in production
+
+Problem: every meeting since at least 2026-09-11 logs "Muse unavailable or unusable, using
+Deepgram". Zero successful Muse runs in 30 days of Cloud Run logs.
+
+Issue: the error type is MuseOutputError, not MuseError, which means the request got an HTTP 200
+carrying a JSON object that then failed validation - a 4xx/5xx raises the other type at muse.py:96,
+and an unset META_MUSE_API_KEY raises MuseError at muse.py:155 (the key is in fact configured on the
+live service). So Meta answers and the response shape does not match the muse-meeting-v1 parser.
+Which of the roughly ten validators fires is unknowable from the logs, because synthesis.py recorded
+only type(exc).__name__.
+
+Solution: log str(muse_exc) alongside the type. Nothing else changed yet.
+
+Justification: every MuseError and MuseOutputError string is a literal in muse.py and carries no
+audio-derived text, so the message is safe to log where a provider body would not be. This is
+diagnostics-first on purpose: guessing at which field drifted would be the same mistake that left
+the interview 400 undiagnosed for two days. Worth noting the contrast with Interview Companion -
+this fallback actually works, which is why nothing was lost and nobody noticed.
