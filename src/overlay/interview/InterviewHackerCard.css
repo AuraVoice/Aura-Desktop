@@ -1061,6 +1061,15 @@
   cursor: pointer;
 }
 
+/* Holds Start next to Wait while the preflight is armed. Layout only, no
+   colours, so it needs no dark twin. */
+.interview-hacker-start-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
 .interview-hacker-primary {
   align-self: center;
   margin-bottom: 6px;
@@ -1093,4 +1102,25 @@
   color: rgba(63, 86, 78, 0.72);
   background: rgba(255, 255, 255, 0.42);
   border: 1px solid rgba(255, 255, 255, 0.6);
+}
+
+/* Recording indicator. The interview window is .theme-pinned-dark, so this has
+   one look in both themes and needs no twin. */
+.interview-hacker-recording {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 4px;
+  color: rgba(255, 138, 128, 0.95);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.interview-hacker-recording::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
 }

@@ -28,6 +28,7 @@ import {
   storeInterviewBrief,
 } from "../../lib/interviewBriefMemory";
 import { osName } from "../../lib/platformKeys";
+import { useGeneralSettings } from "../../state/useGeneralSettings";
 import { callLabel } from "../../lib/meetingCopy";
 import {
   listenForInterviewResume,
@@ -165,6 +166,14 @@ const MAX_CREDENTIAL_RETRIES = 3;
 // Tauri's invoke has no deadline of its own. Past this, Start is treated as
 // failed and cancelled rather than left on "Starting..." indefinitely.
 const START_TIMEOUT_MS = 20_000;
+// How long an armed preflight waits before starting itself. Long enough to
+// read the card and change the round, short enough that the candidate is not
+// watching a clock while the interviewer is already talking. Touching any
+// preflight control restarts it, so the countdown never runs out from under
+// someone who is still choosing.
+const ARM_COUNTDOWN_MS = 10_000;
+// Coarse on purpose: this only drives a whole-second label.
+const ARM_TICK_MS = 250;
 // An automatic answer waits behind the candidate's own voice until their
 // final arrives. If it never does (a mic stall, a dropped socket mid-sentence)
 // the held text was invisible forever; past this the hold releases on its own.
@@ -351,6 +360,14 @@ export interface InterviewHackerState {
   roundKind: RoundKind;
   roomAudio: boolean;
   setRoomAudio: (value: boolean) => void;
+  /** Whole seconds left before an armed preflight starts itself, or null when
+   *  it is not armed. Display only; Start never waits on it. */
+  autoStartInSeconds: number | null;
+  /** Stop the countdown and leave Start as a plain button. */
+  cancelAutoStart: () => void;
+  /** True while a live session is keeping its audio, so the card can say so.
+   *  Recording is visible state, never silent. */
+  recordingAudio: boolean;
   plannedMinutes: PlannedMinutes;
   setRoundKind: (value: RoundKind) => void;
   setPlannedMinutes: (value: PlannedMinutes) => void;
@@ -377,6 +394,7 @@ export interface InterviewHackerState {
 
 export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   const { user } = useAuth();
+  const { interviewAutoStart, interviewKeepAudio } = useGeneralSettings();
   const [phase, setPhase] = useState<InterviewHackerPhase>("idle");
   const [callName, setCallName] = useState<string | null>(null);
   const [callApp, setCallApp] = useState<string | null>(null);
@@ -428,6 +446,15 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
    *  Frozen at Start, because it decides which ASR socket each device feeds. */
   const [roomAudio, setRoomAudio] = useState(false);
   const [plannedMinutes, setPlannedMinutes] = useState<PlannedMinutes>(DEFAULT_PLANNED_MINUTES);
+  /** When the armed preflight will start itself, or null once it has been
+   *  cancelled, has fired, or auto-start is switched off. Never a gate on
+   *  Start: the button below stays live the whole time. */
+  const [autoStartAtMs, setAutoStartAtMs] = useState<number | null>(null);
+  /** Whether THIS session is keeping audio. Frozen at Start with the round and
+   *  the room-audio choice, because the recorder subscribes once: flipping the
+   *  setting mid interview must not change what the indicator claims. */
+  const [sessionKeepsAudio, setSessionKeepsAudio] = useState(false);
+  const [armNowMs, setArmNowMs] = useState(0);
   const [pitch, setPitch] = useState<SelfPitch | null>(null);
   const [pitchExpanded, setPitchExpanded] = useState(true);
   const [caption, setCaption] = useState<string | null>(null);
@@ -859,9 +886,39 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     // precondition. A candidate practicing solo, or on a call Aura's detector
     // does not recognise, loses nothing by starting without it.
     setPhase("preflight");
+    // Armed, not gated. Whichever comes first wins: this countdown, or the
+    // call detection below noticing a call. Start stays clickable throughout,
+    // so a candidate on a platform the detector has never heard of loses
+    // nothing and a candidate already in the call does nothing at all.
+    setAutoStartAtMs(interviewAutoStart ? Date.now() + ARM_COUNTDOWN_MS : null);
     setMessage(null);
     setErrorDetail(null);
-  }, [signedIn]);
+  }, [interviewAutoStart, signedIn]);
+
+  const cancelAutoStart = useCallback(() => {
+    setAutoStartAtMs(null);
+  }, []);
+
+  // Re-arm whenever one of the three values Start freezes is changed. Someone
+  // still picking a round is not someone waiting to begin, and a countdown
+  // that expired mid-choice would freeze the wrong round for the session.
+  useEffect(() => {
+    if (phase !== "preflight" || !interviewAutoStart) return;
+    setAutoStartAtMs(Date.now() + ARM_COUNTDOWN_MS);
+  }, [interviewAutoStart, phase, plannedMinutes, roomAudio, roundKind]);
+
+  // Drop the arm the moment preflight is left, by any route (Start, cancel, a
+  // session that ended). Without this a stale timestamp survives into the next
+  // preflight and fires it early.
+  useEffect(() => {
+    if (phase !== "preflight") setAutoStartAtMs(null);
+  }, [phase]);
+
+  useEffect(() => {
+    if (phase !== "preflight" || autoStartAtMs === null) return;
+    const tick = setInterval(() => setArmNowMs(Date.now()), ARM_TICK_MS);
+    return () => clearInterval(tick);
+  }, [autoStartAtMs, phase]);
 
   // Runs in the background purely to label the "Call" widget and to surface
   // the macOS Accessibility grant if that is what is keeping the label blank -
@@ -958,6 +1015,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     // The round picked here is the session's, frozen now so nothing can move it
     // mid-interview.
     assemblyMsRef.current = assemblyMsFor(roundKind);
+    setSessionKeepsAudio(interviewKeepAudio);
     answerShapeRef.current = answerShapeFor(roundKind);
     plannedMinutesRef.current = plannedMinutes;
     // Assembled locally from claims the user already confirmed, so it is on
@@ -991,6 +1049,9 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
               jobDescription: prepInputRef.current?.jobDescription,
             }),
             roomAudio,
+            // Frozen here with the rest: the recorder subscribes once, when the
+            // worker opens its streams.
+            keepAudio: interviewKeepAudio,
           }).then(
             (status) => {
               clearTimeout(deadline);
@@ -1068,7 +1129,19 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
         setMessage(message);
         setErrorDetail(`Start error: ${raw}`);
       });
-  }, [armCredentialRefresh, phase, plannedMinutes, roomAudio, roundKind]);
+  }, [armCredentialRefresh, interviewKeepAudio, phase, plannedMinutes, roomAudio, roundKind]);
+
+  // The one place auto-start actually fires. Two racing triggers, neither a
+  // precondition on the other: the countdown expiring, or the detector finding
+  // a call it recognises (callApp, set by the labelling poll above). Detection
+  // only ever makes Start happen SOONER - it can never hold it back, which is
+  // the invariant the 2026-09-11 lost interview was about.
+  useEffect(() => {
+    if (phase !== "preflight" || autoStartAtMs === null) return;
+    if (callApp === null && armNowMs < autoStartAtMs) return;
+    setAutoStartAtMs(null);
+    start();
+  }, [armNowMs, autoStartAtMs, callApp, phase, start]);
 
   const pause = useCallback(() => {
     invoke("pause_interview_hacker").catch((error) => {
@@ -2448,6 +2521,13 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     roundKind,
     roomAudio,
     setRoomAudio,
+    // armNowMs is what re-renders this; Date.now() is what makes it accurate.
+    autoStartInSeconds:
+      phase === "preflight" && autoStartAtMs !== null && armNowMs >= 0
+        ? Math.max(0, Math.ceil((autoStartAtMs - Date.now()) / 1000))
+        : null,
+    cancelAutoStart,
+    recordingAudio: sessionKeepsAudio && isInterviewCaptureActive(phase),
     plannedMinutes,
     setRoundKind,
     setPlannedMinutes,

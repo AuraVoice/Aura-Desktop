@@ -32,6 +32,8 @@ export interface GeneralSettings {
   textOutputMuted: boolean;
   chatScreenshots: boolean;
   voiceScreenContext: boolean;
+  interviewAutoStart: boolean;
+  interviewKeepAudio: boolean;
   notifySuggestions: boolean;
   notifyAnnouncements: boolean;
   notifyMilestones: boolean;
@@ -69,6 +71,15 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   // is the kind of thing a user has to opt into knowingly, and mergeSettings
   // folds the new key into an existing store without a migration.
   voiceScreenContext: false,
+  // On by default, and it is not a capture consent: the companion still only
+  // arms once the user has opened it and settled the preflight. All this
+  // decides is whether the last gesture is a click or a countdown, and
+  // reaching for the overlay mid-interview can blur the interview window.
+  interviewAutoStart: true,
+  // Retains the interview's own audio, sealed, under a retention cap, so the
+  // candidate can hear what was actually asked. Separate from the transcript:
+  // turning this off stops future capture and keeps existing clips.
+  interviewKeepAudio: true,
   notifySuggestions: true,
   notifyAnnouncements: true,
   notifyMilestones: true,

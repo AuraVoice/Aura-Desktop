@@ -226,6 +226,10 @@ pub async fn start_interview_hacker(
     // the interviewer is transcribed as the candidate, no remote turn is ever
     // produced, and nothing is ever answered.
     room_audio: Option<bool>,
+    // Frozen at Start like the round and the room-audio choice: the recorder
+    // subscribes once, when the worker opens, so flipping the setting mid
+    // interview must not half-record a session.
+    keep_audio: Option<bool>,
 ) -> Result<InterviewStatusPayload, String> {
     let credentials = TranscriptionCredentials {
         deepgram: access_token,
@@ -309,6 +313,7 @@ pub async fn start_interview_hacker(
                     app_name,
                     epoch,
                     room_audio.unwrap_or(false),
+                    keep_audio.unwrap_or(false),
                     command_rx,
                 );
             })
@@ -895,8 +900,19 @@ fn run_worker(
     app_name: String,
     epoch: u64,
     room_audio: bool,
+    keep_audio: bool,
     commands: mpsc::Receiver<RuntimeCommand>,
 ) {
+    // Outside catch_unwind on purpose. The Recorder finalises its last chunk on
+    // Drop, so a panicking loop still leaves the interview playable up to the
+    // moment it died, exactly like the streams below.
+    let recorder = if keep_audio {
+        crate::security::current_uid(&app)
+            .filter(|uid| !uid.is_empty())
+            .and_then(|uid| crate::interview_audio::start(&app, &uid, &session_id))
+    } else {
+        None
+    };
     // A panic anywhere in the loop must still release the handle and tell the
     // card, or the session stays "active" forever with nothing listening. The
     // streams clean themselves up on unwind (every member cancels in Drop).
@@ -912,6 +928,11 @@ fn run_worker(
             commands,
         )
     }));
+    // Before the handle is released, so the clip is closed by the time the card
+    // is told the session stopped and can offer to play it.
+    if let Some(recorder) = recorder {
+        recorder.stop();
+    }
     let stop_reason = match outcome {
         Ok(reason) => reason,
         Err(_) => {

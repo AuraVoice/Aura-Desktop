@@ -588,6 +588,11 @@ export function InterviewHackerCard({
           <div className="interview-hacker-header">
             <div>
               {active && <LiveIndicator phase={hacker.phase} />}
+              {/* Recording is never silent: if audio is being kept, the card
+                  says so for as long as it is being kept. */}
+              {hacker.recordingAudio && (
+                <div className="interview-hacker-recording">Recording</div>
+              )}
               {status && <div className="interview-hacker-status">{status}</div>}
             </div>
             {active && hacker.pacingCaption && (
@@ -670,13 +675,26 @@ export function InterviewHackerCard({
         )}
 
         {hacker.phase === "preflight" && (
-          <button
-            type="button"
-            className="interview-hacker-primary"
-            onClick={hacker.start}
-          >
-            Start Interview Companion
-          </button>
+          <div className="interview-hacker-start-row">
+            <button
+              type="button"
+              className="interview-hacker-primary"
+              onClick={hacker.start}
+            >
+              {hacker.autoStartInSeconds === null
+                ? "Start Interview Companion"
+                : `Starting in ${hacker.autoStartInSeconds}s`}
+            </button>
+            {hacker.autoStartInSeconds !== null && (
+              <button
+                type="button"
+                className="interview-hacker-secondary"
+                onClick={hacker.cancelAutoStart}
+              >
+                Wait
+              </button>
+            )}
+          </div>
         )}
 
         {/* Optional, not a gate: Start above already works without it. This

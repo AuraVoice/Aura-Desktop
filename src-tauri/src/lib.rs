@@ -40,6 +40,7 @@ mod fsx;
 mod guide;
 mod hotkeys;
 mod interview;
+mod interview_audio;
 mod interview_prep_store;
 mod interview_store;
 mod logging;
@@ -561,6 +562,7 @@ pub fn run() {
             interview_store::interview_sessions_list,
             interview_store::interview_session_load,
             interview_store::interview_session_delete,
+            interview_audio::interview_session_audio,
             interview_store::interview_reflection_save,
             interview_store::interview_sessions_clear,
             interview_prep_store::interview_prep_load,

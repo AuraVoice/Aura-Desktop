@@ -327,3 +327,9 @@
   background: var(--dk-glass-fill);
   box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
 }
+
+/* ── Interview recording player ── */
+:root[data-theme="dark"] .db-interview-audio-load button {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+}

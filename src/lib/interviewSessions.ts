@@ -50,6 +50,10 @@ export interface InterviewSessionSummary {
   turnCount: number;
   /** Read from the column being non-NULL, so the list never decrypts a body. */
   hasReflection: boolean;
+  /** Whether the recording is still on disk. Retention evicts clips without
+   *  touching the row, so false is a normal state (transcript kept, audio aged
+   *  out) and never an error to report. */
+  hasAudio: boolean;
 }
 
 /** Full detail for one session. */
@@ -106,6 +110,7 @@ interface RawSummary {
   exchange_count: number;
   turn_count: number;
   has_reflection: boolean;
+  has_audio: boolean;
 }
 
 interface RawDetail {
@@ -166,6 +171,7 @@ export async function listInterviewSessions(
     exchangeCount: raw.exchange_count,
     turnCount: raw.turn_count,
     hasReflection: raw.has_reflection,
+    hasAudio: raw.has_audio,
   }));
 }
 
@@ -234,4 +240,20 @@ export async function deleteInterviewSession(
 
 export async function clearInterviewSessions(uid: string): Promise<void> {
   await invoke("interview_sessions_clear", { uid });
+}
+
+/** The whole interview as one WAV, as an object URL the caller must revoke.
+ *
+ *  WAV rather than the stored FLAC because WKWebView cannot decode FLAC; the
+ *  Rust side does the join and the conversion so the webview never sees a
+ *  sealed byte. */
+export async function interviewSessionAudioUrl(
+  uid: string,
+  sessionId: string,
+): Promise<string> {
+  const bytes = await invoke<ArrayBuffer>("interview_session_audio", {
+    uid,
+    sessionId,
+  });
+  return URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
 }

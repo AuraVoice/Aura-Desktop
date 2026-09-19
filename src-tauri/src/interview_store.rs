@@ -102,6 +102,10 @@ pub struct InterviewSessionSummary {
     /// Whether a reflection exists. Read from the column being non-NULL, so the
     /// list stays metadata-only and never decrypts a body.
     pub has_reflection: bool,
+    /// Whether the recording is still on disk. Retention evicts clips without
+    /// touching the row, so false here is a designed state - transcript kept,
+    /// audio aged out - and never an error.
+    pub has_audio: bool,
 }
 
 /// Full detail for one session, for the dashboard modal.
@@ -483,6 +487,7 @@ pub async fn interview_sessions_list(
                 turns,
                 has_reflection,
             ) = row.map_err(|e| e.to_string())?;
+            let has_audio = crate::interview_audio::has_audio(&app, &session_id);
             out.push(InterviewSessionSummary {
                 company: unseal_optional(&key, &company, &row_aad(&uid, &session_id, "company")),
                 role: unseal_optional(&key, &role, &row_aad(&uid, &session_id, "role")),
@@ -493,8 +498,22 @@ pub async fn interview_sessions_list(
                 exchange_count: exchanges,
                 turn_count: turns,
                 has_reflection,
+                has_audio,
             });
         }
+        // The rows that survived are the index; the clips follow them. Done here
+        // rather than on a timer because this is the one call that already knows
+        // the full surviving set for this account.
+        //
+        // The running session is added back explicitly: this query filters it
+        // out (ended_at_ms = 0 belongs to the card, not the history list), so
+        // without it the sweep would delete the recording currently being
+        // written underneath the worker.
+        let mut keep: Vec<String> = out.iter().map(|row| row.session_id.clone()).collect();
+        if let Some(active) = live {
+            keep.push(active);
+        }
+        crate::interview_audio::sweep(&app, &keep, now_ms());
         Ok(out)
     })
     .await
@@ -692,6 +711,10 @@ pub async fn interview_session_delete(
             params![uid, session_id],
         )
         .map_err(|e| e.to_string())?;
+        // Deleting an interview deletes its recording too. Leaving the clips
+        // behind would keep audio for a session the user just removed and that
+        // nothing in the UI can reach any more.
+        crate::interview_audio::delete_session(&app, &session_id);
         Ok(())
     })
     .await
@@ -712,10 +735,29 @@ pub async fn interview_sessions_clear(app: AppHandle, uid: Option<String>) -> Re
                 .execute("DELETE FROM sessions", [])
                 .map_err(|e| e.to_string())?,
         };
+        // Whatever rows are left are the only sessions allowed to keep audio.
+        // Collected AFTER the delete so a clear leaves nothing orphaned.
+        crate::interview_audio::sweep(&app, &surviving_session_ids(&conn)?, now_ms());
         Ok(())
     })
     .await
     .map_err(|e| e.to_string())?
+}
+
+/// Every session id still stored, for any account. The clip directories carry no
+/// uid (the row and the AAD do), so this is what the audio sweep is filtered by.
+fn surviving_session_ids(conn: &Connection) -> Result<Vec<String>, String> {
+    let mut statement = conn
+        .prepare("SELECT session_id FROM sessions")
+        .map_err(|e| e.to_string())?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.push(row.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
 }
 
 /// Native session-boundary hook, mirroring `chat_cache::retain_only_for_session`.
@@ -737,6 +779,11 @@ pub fn retain_only_for_session(app: &AppHandle, uid: Option<String>) {
                     .execute("DELETE FROM sessions", [])
                     .map_err(|e| e.to_string())?,
             };
+            // The audio half of the same isolation. Clip paths carry no uid, so
+            // without this one account's recordings would outlive its rows and
+            // sit on disk while the next account is signed in. Unconditional on
+            // every transition, exactly like the row delete above.
+            crate::interview_audio::sweep(&app, &surviving_session_ids(&conn)?, now_ms());
             Ok::<(), String>(())
         })
         .await;

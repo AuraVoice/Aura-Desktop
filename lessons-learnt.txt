@@ -1410,3 +1410,84 @@ request. The read-back is what converts it, and it fails closed at every layer:
 no-op, and the JS helper returns false when the status cannot be read, because
 claiming "hidden" on an invoke error would make the warning unreachable. The
 `?` was downgraded deliberately: launching with a warning beats not launching.
+
+================================================================================
+2026-09-18  One boolean meant two things, and it disabled a model ban
+
+Problem: Interview Companion kept answering conceptual, technical and
+"why do you want to work here" questions by reaching into the candidate's
+resume and steering back to their projects, which is exactly what the prompt
+tells it not to do.
+
+Issue: `grounded` in `interview_companion.py` was
+`bool(candidate_evidence or payload.resume.strip())`, one flag serving two
+unrelated decisions. It picked the system prompt AND it gated which models
+could run. The 2026-09-16 fix that banned `openai/gpt-oss-120b` from ungrounded
+turns (it had presented a JD's LightGBM fraud pipeline as its own experience)
+keyed on that same flag, so attaching a resume silently re-admitted the model
+to precisely the weakly-grounded turns it had been banned from. At the same
+time a resume-only session picked up INTERVIEW_GROUNDED_SYSTEM, whose
+"supplied evidence" means the verified brief and which never names
+`candidate_resume` at all. The one rule scoping the resume lived in
+`resume_note`, a clause concatenated mid-sentence into the volatile user
+message, restated every turn, while the resume itself sat upstream in the
+cached system prefix. `INTERVIEW_INTENT_STYLE["company"]` then told the model
+to connect a company fact to candidate evidence, and `INTERVIEW_INTENT_RULE`
+says the intent row wins where the two disagree, so on "why us" the
+contradiction resolved in favour of the resume.
+
+Verified from the session itself rather than from source: all 14 exchanges of
+`interview-1789778116412-2` carry `unverified=1` (no reviewed brief), and every
+one of its 16 answers ran on gpt-oss via Groq. Only a non-empty resume can
+produce both at once.
+
+Solution: split the prompt's notion of evidence from the model filter's.
+`_evidence_kind` returns verified / resume_only / none; `_answer_system` takes
+it; `resume_only` gets a new INTERVIEW_RESUME_ONLY_SYSTEM that names
+`candidate_resume`, makes it the ceiling on personal claims, and says plainly
+that it is not the subject of a conceptual, technical, hypothetical or
+company question. `resume_note` now fires only for `verified`, where "which of
+the resume and the brief wins" is a real question. The company intent row no
+longer requires a candidate connection. `grounded` and the model filter are
+untouched.
+
+Justification: prompt-cache economics had quietly moved a safety rule away from
+the data it governs (the resume rides the 1h cached prefix, so its rule was
+pushed into the cheap volatile half to avoid churn). Putting the rule back next
+to the resume costs one prefix change per session and nothing per turn. The
+model filter was initially left alone as a knowing TTFT trade. An A/B eval then
+showed that was wrong, which is the second half of this lesson.
+
+Second issue, found by evaluating rather than reasoning: the prompt fix changed
+nothing measurable. Probing the real model with a resume and no brief, the
+intents everyone worried about (concept, compare, hypothetical, logistics) were
+ALREADY clean before the change, because their intent rows carried the guard.
+The only failing intent was `company`, and it failed for a bigger reason than
+resume bleed: with no target context supplied, gpt-oss invented the interviewer.
+It produced "Stripe's focus on developer-first payments" out of nothing, and in
+another run promoted the candidate's OWN employer to the company interviewing
+them ("I'm excited about Zephyrion because you're pushing..."). Adding an
+explicit no-company clause to the system prompt narrowed this without closing
+it: the model kept asserting soft facts ("your emphasis on responsible data
+practices", "the recent push into edge computing").
+
+Run head to head on the IDENTICAL prompt, Haiku refused all three: "I don't have
+specific details about your company in front of me right now, so I want to be
+straight with you - I'd rather ask what you're working on than guess." So the
+binding constraint was the model, not the prompt.
+
+Solution, second half: `_has_target_context` (company, role, target facts or JD
+requirements - verification state irrelevant) now joins `not grounded` in the
+Groq exclusion. A prepared interview keeps gpt-oss and its TTFT; only a session
+with nothing at all about the company pays the fallback.
+
+Justification, second half: the shape of this is the 2026-09-16 LightGBM
+incident repeating, and the general rule it teaches is that a prompt rule cannot
+reliably suppress a model's fabrication habit in a vacuum - if there is nothing
+to say, only a model that will admit that is safe. The narrow gate was chosen
+over "treat resume_only as ungrounded" because the latter would slow down
+concept and walkthrough answers gpt-oss was already getting right. Worth keeping:
+the eval was a throwaway harness that ran both arms by flipping one argument
+(`kind="verified"` reproduces the old behaviour exactly), which is why measuring
+cost minutes instead of a deploy and a real interview.
+================================================================================

@@ -289,6 +289,18 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
                 onChange={(value) => void update("voiceScreenContext", value)}
               />
               <ToggleRow
+                label="Start Interview Companion on its own"
+                description="Once you open the companion and settle the round, it starts itself after a short countdown, or sooner if it spots the call. Off means you press Start."
+                checked={settings.interviewAutoStart}
+                onChange={(value) => void update("interviewAutoStart", value)}
+              />
+              <ToggleRow
+                label="Keep interview audio"
+                description="Save the audio of each interview on this device, encrypted, so you can hear what was actually asked. Off stops new recordings and keeps the ones you have."
+                checked={settings.interviewKeepAudio}
+                onChange={(value) => void update("interviewKeepAudio", value)}
+              />
+              <ToggleRow
                 label="Reduce motion"
                 description="Use fades instead of pulsing keycaps and larger transitions."
                 checked={settings.reduceMotion}

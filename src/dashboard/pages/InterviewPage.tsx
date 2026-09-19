@@ -72,6 +72,7 @@ import {
   type InterviewWorkspaceRecord,
 } from "../../lib/interviewWorkspace";
 import {
+  interviewSessionAudioUrl,
   listInterviewSessions,
   loadInterviewSession,
   deleteInterviewSession,
@@ -1436,6 +1437,50 @@ function downloadReflection(reflection: StoredReflection): void {
   }).catch((error) => logError("InterviewPage: download reflection", error));
 }
 
+/** Lazy on purpose. Loading a session's audio decrypts and decodes every chunk
+ *  of it, so doing that for each row as the list renders would cost a whole
+ *  history's worth of work to show players nobody pressed. The fetch happens on
+ *  the click, and the object URL is revoked when the row unmounts. */
+function InterviewAudioPlayer({ uid, sessionId }: { uid: string; sessionId: string }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [url]);
+
+  if (url) {
+    return <audio className="db-interview-audio" controls src={url} preload="none" />;
+  }
+  return (
+    <div className="db-interview-audio-load">
+      <button
+        type="button"
+        disabled={loading}
+        onClick={() => {
+          setLoading(true);
+          setError(null);
+          interviewSessionAudioUrl(uid, sessionId)
+            .then(setUrl)
+            .catch((cause: unknown) => {
+              // The recording can be gone while the row is still here: retention
+              // evicts clips and keeps transcripts. Say which it is rather than
+              // offering a retry that cannot help.
+              setError(typeof cause === "string" ? cause : "Recording unavailable.");
+            })
+            .finally(() => setLoading(false));
+        }}
+      >
+        {loading ? "Loading recording..." : "Play recording"}
+      </button>
+      {error && <p role="alert">{error}</p>}
+    </div>
+  );
+}
+
 function InterviewSessionsPanel({ uid }: { uid: string | null }) {
   const [sessions, setSessions] = useState<InterviewSessionSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1564,7 +1609,12 @@ function InterviewSessionsPanel({ uid }: { uid: string | null }) {
                   <span>{session.exchangeCount} answers</span>
                   <span>{sessionDurationMinutes(session)} min</span>
                   {session.hasReflection && <span>Reflection</span>}
+                  {session.hasAudio && <span>Recording</span>}
                 </div>
+
+                {session.hasAudio && uid && (
+                  <InterviewAudioPlayer uid={uid} sessionId={session.sessionId} />
+                )}
 
                 {isConfirmingDelete ? (
                   <div className="db-interview-delete-confirm" role="alert">
