@@ -1,0 +1,26 @@
+/* The TypeSafe key form on the Dictation page's Voice commands section.
+   Page-scoped like InterviewPage.css; the dark twins live with the rest of
+   the dictation rail's in src/theme/surfaces/dashboard-pages.dark.css. */
+
+.db-command-key-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.db-command-key-form input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid rgba(63, 86, 78, 0.18);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--db-text);
+  font-size: 12.5px;
+}
+
+.db-command-key-form input:focus-visible {
+  outline: none;
+  border-color: rgba(63, 86, 78, 0.38);
+}

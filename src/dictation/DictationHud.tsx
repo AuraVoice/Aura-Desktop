@@ -22,6 +22,7 @@ export type DictationPhase =
   | "listening"
   | "transcribing"
   | "inserted"
+  | "action"
   | "error"
   | "recovery"
   | "pending"
@@ -271,6 +272,17 @@ export function DictationHud() {
 
   if (update.phase === "recovery") {
     return <DictationRecovery text={update.text} message={update.message} />;
+  }
+
+  // A voice command was carried out instead of typing: one line naming what
+  // happened, in the same caption card as an error but never styled as one.
+  if (update.phase === "action") {
+    return (
+      <GlassSurface className="dictation-message is-action" draggable={false}>
+        <span className="dictation-message__dot" aria-hidden="true" />
+        <p className="dictation-message__text">{update.message ?? "Done."}</p>
+      </GlassSurface>
+    );
   }
 
   // A failure is the only other thing worth words here.
