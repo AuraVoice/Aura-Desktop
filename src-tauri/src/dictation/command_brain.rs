@@ -336,9 +336,7 @@ pub(super) fn try_command(
         );
         return None;
     }
-    let Some(action) = action else {
-        return None;
-    };
+    let action = action?;
     let mut conf = intent_c.min(action_c);
 
     // Resolve the action's argument first, folding its confidence in: a
