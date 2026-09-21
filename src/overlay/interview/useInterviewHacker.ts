@@ -382,7 +382,9 @@ export interface InterviewHackerState {
   resume: () => void;
   stop: () => void;
   shorter: () => void;
-  screenSight: () => void;
+  /** Send the screen, with the composer's question when there is one. Never
+   *  pass this straight to onClick: the first argument is the question. */
+  screenSight: (text?: string) => void;
   questionSource: QuestionSource;
   /** Ask: the candidate types the question themselves. Works with no audio
    *  and no screenshot, which is the only input a silent interview has. */
@@ -1960,14 +1962,33 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   }, [adoptSyntheticTurn, evaluate, mintSyntheticRemoteTurn]);
 
   const screenSightRef = useRef<(() => void) | null>(null);
-  const screenSight = useCallback(() => {
+  /**
+   * Send the screen, optionally with a question about it.
+   *
+   * `text` is what the composer had in it. With text the question is that text
+   * and a fresh turn is always minted: reusing the last remote turn would send
+   * the screen under the interviewer's previous question instead of the one the
+   * candidate just typed. Without text the old behaviour is exact - the last
+   * spoken question if there is one, else the minted fallback, because the
+   * backend's text field is min_length=1.
+   *
+   * Every send captures a FRESH frame rather than reusing the last one. That is
+   * what makes a follow-up work: "now give me the code" goes out as a screen
+   * send, so it reaches a vision model looking at the real screen instead of a
+   * 15-word caption. It also means there is no stored frame to go stale and no
+   * retention question to answer.
+   */
+  const screenSight = useCallback((text?: string) => {
     const identity = identityRef.current;
+    const typed = text?.trim() ?? "";
     // No spoken question is the NORMAL case in a text-based AI interview, not an
     // error: the screenshot is the question. This used to require a prior remote
     // turn and return silently without one, which made the control dead for a
     // whole class of interview and said nothing about why.
-    const turn = lastRemoteTurnRef.current
-      ?? mintSyntheticRemoteTurn("screen", "What's on my screen?");
+    const turn = typed
+      ? mintSyntheticRemoteTurn("typed", typed)
+      : lastRemoteTurnRef.current
+        ?? mintSyntheticRemoteTurn("screen", "What's on my screen?");
     if (!identity || !turn) return;
     if (phase !== "listening") {
       setMessage("Screen Sight needs the session to be listening.");

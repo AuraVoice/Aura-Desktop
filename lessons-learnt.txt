@@ -1491,3 +1491,163 @@ the eval was a throwaway harness that ran both arms by flipping one argument
 (`kind="verified"` reproduces the old behaviour exactly), which is why measuring
 cost minutes instead of a deploy and a real interview.
 ================================================================================
+
+================================================================================
+2026-09-18  A failed production deploy reported exit code 0
+
+Problem: deploying the interview fix to Cloud Run appeared to succeed. The
+command finished with exit code 0 and the last lines of output looked like a
+normal tail. It had not deployed anything.
+
+Issue: two faults stacked. The deploy was run as `bash deploy.sh ... | tail -80`
+and the shell had no `pipefail`, so the pipeline's status was `tail`'s, not the
+script's - a dead script reads as success. Underneath that, the run aborted in
+the dictation storage preflight because it was executed from a clean worktree
+carrying a copied `.env` whose GOOGLE_APPLICATION_CREDENTIALS points at
+`service-account.json`, a file that was never copied alongside it. The image had
+already been built and pushed to gcr.io by then, so the registry showed a fresh
+digest even though `gcloud run deploy` had never run.
+
+Solution: `set -o pipefail` before any piped deploy, copy the credential beside
+the `.env` when deploying from a worktree, and verify against the live resource
+rather than the script's own report: `gcloud run services describe` for the
+serving revision and traffic split, then `docker run` the exact digest that
+revision names and import the changed symbols inside it.
+
+Justification: the registry digest and the exit code both said "shipped" while
+production was still on the previous revision. The only claim that could not be
+faked was running the deployed image and asking it what code it contains. The
+same check is cheap enough to be the default: one `docker run --entrypoint
+python` against the digest from `gcloud run revisions describe`. An image built
+from a worktree is also a reminder that the build context is the directory, not
+the git tree, so anything the runtime reads by path has to be present there too.
+================================================================================
+
+2026-09-18  Deepgram's request_id sits inside every Results frame, not on the
+            closing Metadata frame the dictation socket never reads
+================================================================================
+Problem: schema v4's `recognition.providerRequestId` was wired end to end and
+would have been `null` on every single desktop trace, forever, with nothing
+logging a failure.
+
+Issue: `asr/deepgram.rs` declared `request_id` at the TOP LEVEL of `ServerFrame`,
+which is where the standalone `{"type":"Metadata","request_id":...}` frame carries
+it. That frame arrives after Deepgram closes the stream, and `run_socket` breaks
+out of its loop the moment the `from_finalize` Results frame lands, so the
+dictation path never reads it. The interview path does, which is why the shape
+looked already proven. Nothing would have surfaced this: serde drops undeclared
+fields silently, an absent optional field is a valid payload to the backend, and
+the column would simply have stayed empty.
+
+Solution: declare the nested `metadata` object that rides inside every `Results`
+frame and read `metadata.request_id` from there, first non-empty wins, with the
+`dg-request-id` upgrade-response header and the closing frame as fallbacks.
+
+Justification: this was found by reading two consumers that already ship rather
+than by reasoning about the wire format. `Aura/backend/src/services/meetings/
+deepgram.py:219` confirmed the word field names (`punctuated_word or word`,
+`start`, `end`, `confidence`) and showed it derives the utterance confidence by
+averaging per-WORD confidences rather than trusting an alternative-level field,
+which became the fallback here. The vendored official plugin at
+`livekit/plugins/deepgram/stt.py:818` was decisive: it reads
+`data["metadata"]["request_id"]` inside its `Results` branch. Two independent
+shipping readers beat any amount of careful thinking about a JSON shape. The
+general rule: when adding a provider field, find an existing consumer of that
+provider in the tree and match it, because a field that silently never arrives
+looks exactly like a field that is working.
+================================================================================
+
+2026-09-20  Two tokens minted together must not be pushed in a chain: the second
+            push was what made sharing work, and the first could veto it
+================================================================================
+Problem: `usePolishCredential`'s cycle mints one Firebase ID token and pushes it
+to two Rust holders, `pushPolishCredential` then `setUploadToken`, both awaited
+in sequence. Any throw from the first (an unregistered command, an IPC failure)
+skips the second entirely.
+
+Issue: with no upload token, `upload.rs` returns 401 for every attempt by design,
+`classifyUploadFailure` maps that to `signedOut`, and the drain sets `stop = true`
+on every tick. Dictation sharing is then completely dead with
+`lastErrorReason: "signed_out"`, no attempt burned on any row, and nothing in any
+log saying the upload token was the missing piece rather than the session. The
+polish command has been gated behind `#[cfg(windows)]` once before, which is
+exactly the failure that produced this shape: see the `usePolishCredential.ts`
+retry loop in the platform-gating lesson above.
+
+Solution: push the upload token FIRST, then polish. One line swapped.
+
+Justification: `Promise.allSettled` was the obvious fix and is wrong here. The
+cycle's return value drives the retry schedule, so settling both would either
+swallow a polish failure forever or need a partial-failure policy the pump has no
+vocabulary for. Ordering gets the same independence for free: a polish throw still
+retries the whole cycle, and by then the upload token is already in place. The
+teardown path in the same file already used `allSettled` for both clears, which is
+correct there because a clear has nothing to retry. The general rule: when one
+mint fans out to N consumers, a sequential await chain silently ranks them, and
+the last one in the chain is the one that dies quietly.
+================================================================================
+
+2026-09-21  A spoken-answer prompt cannot be asked for code, and "half the
+            meeting" was a missed start rather than an early stop
+================================================================================
+Problem: three complaints from one Interview Companion session. A LeetCode
+screenshot came back as a paragraph explaining the problem instead of a
+solution. The follow-up "now give me the code" answered "I cannot see your
+screen, I don't have any information". And a meeting recorded about half its
+length.
+
+Issue, one per complaint, none of them where it looked:
+
+The code case was not a model failure and no amount of re-prompting the
+question would have fixed it. Three layers each independently forbid a code
+block: INTERVIEW_VOICE_RULE ("write ONLY the words they say out loud"),
+INTERVIEW_SPOKEN_RULE ("never any formatting a person cannot say aloud",
+"never write more than one paragraph"), and a 480-token ceiling, with the
+volatile task line restating "in one paragraph" every turn so the cached rule
+could not be argued with. A fenced block is by definition formatting nobody
+can say aloud. The feature was structurally incapable of the thing it was
+being asked for.
+
+The refusal string does not exist in the interview handler or in any of its
+prompts. It belongs to the Buddy voice agent's screen_context_control.py, so
+the first instinct was that the follow-up had left the card. It had not: the
+Ask button calls evaluate(..., "suggest"), and interview_companion.py filters
+the vision-less Groq primary out for action == "screen_sight" ONLY. The
+follow-up therefore ran on gpt-oss-120b, which has no vision at all, holding a
+15-word caption. It improvised a refusal that happened to match another
+subsystem's guardrail word for word, which is the part that would have sent a
+second investigation down the wrong path.
+
+The meeting was not truncated. capture_runs said stopped_by_user, 1320 s, five
+of five segments uploaded, and the log put the stop four seconds after the
+call's own end. The missing half was at the FRONT: "ambient call seen
+(google-meet)" fired for the first time twenty-two minutes into the call,
+because detect.rs matches window titles and, as its own comment says,
+"EnumWindows exposes only a browser's active tab title". A Meet in a
+background tab is invisible, so the prompt only appeared when the tab came
+forward.
+
+Solution: a fourth register (INTERVIEW_SCREEN_CODE_RULE) on the volatile
+system for screen_sight only, where it is the later word on rules that live in
+the cached prefix, plus a screen-only 1400-token ceiling and the sentence
+budget dropped for that one action. INTERVIEW_SCREEN_RECALL_RULE for the
+caption-only turn. One composer in the card with a sticky screen toggle, so
+every send captures fresh and a follow-up reaches a vision model. And a
+microphone probe in detect.rs: a browser holding an active WASAPI capture
+session is a call, whichever tab it is in.
+
+Justification: the spoken rules are right for every other answer, so they were
+overridden for one action rather than loosened. The token ceiling's comment
+says the cap "cannot vary by intent" because intent is chosen mid-stream; that
+argument does not reach action, which arrives in the request, and the
+distinction is what let the ceiling move safely. The sticky toggle beats
+retaining the last frame: re-capturing has no staleness window and adds no
+retention question. The mic probe reports "browser-call", never a guessed
+platform, because it knows the process and not the site, and it carries a
+fixed title because call_key hashes the title and the browser's own would
+change on every tab switch. Two forensic notes worth keeping: capture_runs
+stores complete_reason, started_at_ms and total_duration_ms in PLAINTEXT, so
+"why did this recording stop" is one SQL query with no decryption; and the
+desktop log is UTC while that table is localtime, which is a seven hour trap
+when lining the two up.
+================================================================================

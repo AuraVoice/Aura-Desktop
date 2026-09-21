@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { logError } from "../../lib/log";
 import { openDashboardWindow } from "../../lib/dashboardWindow";
 import { GlassSurface } from "../GlassSurface";
@@ -115,6 +116,69 @@ const QUESTION_SOURCE_LABEL: Record<QuestionSource, string> = {
   typed: "You asked",
 };
 
+/** Splits an answer into prose and fenced code.
+ *
+ * A coding screen answers with a solution the candidate TYPES, so that half of
+ * the answer must not render as a wrapped paragraph. An unterminated fence
+ * still counts as code: the answer streams, so the closing fence arrives last
+ * and without this the block would render as prose and then snap into a code
+ * block, which reads as a glitch mid-interview.
+ */
+function answerSegments(answer: string): { code: boolean; text: string }[] {
+  if (!answer.includes("```")) return [{ code: false, text: answer }];
+  return answer
+    .split("```")
+    .map((part, index) => (index % 2 === 0
+      ? { code: false, text: part }
+      // The fence may carry a language tag on its first line; drop that line
+      // rather than printing "python" as the first line of the block.
+      : { code: true, text: part.replace(/^[^\n]*\n/, "").replace(/\s+$/, "") }))
+    .filter((segment) => segment.text.trim().length > 0);
+}
+
+function CodeBlock({ code }: { code: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="interview-hacker-code">
+      <button
+        type="button"
+        className="interview-hacker-code-copy"
+        onClick={() => {
+          // Tauri's clipboard plugin, not navigator.clipboard: the WebView API
+          // is unreliable here (see InterviewPage's read path for the same note).
+          void writeText(code)
+            .then(() => {
+              setCopied(true);
+              window.setTimeout(() => setCopied(false), 1600);
+            })
+            .catch((error: unknown) => logError("InterviewHackerCard: copy code", error));
+        }}
+      >
+        {copied ? "Copied" : "Copy"}
+      </button>
+      <pre><code>{code}</code></pre>
+    </div>
+  );
+}
+
+function AnswerBody({ answer }: { answer: string }) {
+  const segments = answerSegments(answer);
+  if (segments.length === 1 && !segments[0].code) {
+    return <div className="interview-hacker-answer-text">{answer}</div>;
+  }
+  return (
+    <>
+      {segments.map((segment, index) => (segment.code
+        ? <CodeBlock key={index} code={segment.text} />
+        : (
+          <div key={index} className="interview-hacker-answer-text">
+            {segment.text.trim()}
+          </div>
+        )))}
+    </>
+  );
+}
+
 function Exchange({
   question,
   answer,
@@ -150,7 +214,7 @@ function Exchange({
           {unverified && (
             <span className="interview-hacker-unverified">Not from your brief</span>
           )}
-          <div className="interview-hacker-answer-text">{answer}</div>
+          <AnswerBody answer={answer} />
         </div>
       ) : (
         // An archived question with no answer: the gate declined it, or its
@@ -541,9 +605,13 @@ export function InterviewHackerCard({
   // heard back yet shows nothing rather than flashing a warning it may have to
   // take back a frame later.
   const [captureHidden, setCaptureHidden] = useState<boolean | null>(null);
-  // Ask: type the question instead of waiting for one to be spoken. Open state
-  // is local because it is pure card chrome - the hook only needs the text.
-  const [askOpen, setAskOpen] = useState(false);
+  // The composer: type the question instead of waiting for one to be spoken,
+  // and say whether the screen rides along. Both are local because they are
+  // pure card chrome - the hook only needs the text and the flag at send time.
+  // `withScreen` is sticky on purpose: a follow-up about the same screen is the
+  // common case, and flipping it back on every send is what made "now give me
+  // the code" go out with no screen at all.
+  const [withScreen, setWithScreen] = useState(false);
   const [askText, setAskText] = useState("");
   useEffect(() => {
     if (!active) return;
@@ -857,57 +925,76 @@ export function InterviewHackerCard({
               Answer now
             </button>
             <button type="button" disabled={!hacker.answer} onClick={hacker.shorter}>Shorter</button>
-            <button
-              type="button"
-              className={askOpen ? "is-primary" : undefined}
-              disabled={hacker.phase !== "listening"}
-              onClick={() => setAskOpen((open) => !open)}
-              title="Type or paste the question yourself"
-            >
-              Ask
-            </button>
-            {/* Deliberately NOT gated on canSuggest. That means "somebody asked
-                something out loud", which is the wrong precondition for the one
-                control that has to work when nothing was said: in a text-based
-                AI interview it never becomes true, and this button stayed grey
-                for the whole session. */}
-            <button
-              type="button"
-              disabled={hacker.capturingScreen || hacker.phase !== "listening"}
-              onClick={hacker.screenSight}
-            >
-              {hacker.capturingScreen ? "Looking..." : "Screen Sight"}
-            </button>
           </div>
         )}
 
-        {active && askOpen && (
+        {/* One composer, not an Ask button beside a Screen Sight button. Those
+            two never combined, so the screen could only ever be sent under the
+            hardcoded "What's on my screen?" and there was no way to ask about
+            what was on it.
+
+            The screen toggle is sticky and every send captures fresh, which is
+            what makes a follow-up work: "now give me the code" goes out as a
+            screen send rather than as text carrying a 15-word caption.
+
+            Deliberately NOT gated on canSuggest. That means "somebody asked
+            something out loud", which is the wrong precondition for the one
+            control that has to work when nothing was said: in a text-based AI
+            interview it never becomes true, and the old button stayed grey for
+            the whole session.
+
+            No autoFocus: it is mounted for the length of the interview, and
+            reaching for the overlay must never blur the interview window. */}
+        {active && hacker.phase !== "starting" && (
           <form
             className="interview-hacker-ask"
             onSubmit={(event) => {
               event.preventDefault();
               const text = askText.trim();
-              if (!text) return;
-              hacker.askTyped(text);
+              if (withScreen) {
+                hacker.screenSight(text);
+              } else {
+                if (!text) return;
+                hacker.askTyped(text);
+              }
               setAskText("");
-              setAskOpen(false);
             }}
           >
             <input
               type="text"
               value={askText}
-              autoFocus
-              placeholder="Type or paste the question"
+              placeholder={withScreen
+                ? "Ask about this screen, or just send it"
+                : "Type or paste the question"}
               onChange={(event) => setAskText(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Escape") {
                   event.preventDefault();
                   setAskText("");
-                  setAskOpen(false);
                 }
               }}
             />
-            <button type="submit" disabled={!askText.trim()}>Send</button>
+            <button
+              type="button"
+              className={withScreen ? "is-primary" : undefined}
+              aria-pressed={withScreen}
+              onClick={() => setWithScreen((on) => !on)}
+              title={withScreen
+                ? "The screen goes with every send. Click to stop sending it."
+                : "Send the screen with the question"}
+            >
+              Screen
+            </button>
+            <button
+              type="submit"
+              disabled={
+                hacker.capturingScreen
+                || hacker.phase !== "listening"
+                || (!withScreen && !askText.trim())
+              }
+            >
+              {hacker.capturingScreen ? "Looking..." : "Send"}
+            </button>
           </form>
         )}
 
