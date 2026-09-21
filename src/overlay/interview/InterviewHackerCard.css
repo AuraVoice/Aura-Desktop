@@ -837,6 +837,68 @@
   cursor: default;
 }
 
+/* The screen toggle. Ghost while off so the solid pill next to it still reads
+   as the one control that sends; solid only once the screen is riding along,
+   which is a state the candidate has to be able to see at a glance mid-call. */
+.interview-hacker-ask button[aria-pressed] {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-primary, rgba(255, 255, 255, 0.92));
+  font-weight: 600;
+}
+
+.interview-hacker-ask button[aria-pressed="true"] {
+  background: rgba(126, 216, 255, 0.92);
+  color: rgba(18, 20, 27, 0.95);
+}
+
+/* A typed answer, not a spoken one. Monospace, no wrapping, and its own
+   horizontal scroller because a real solution line runs past the card width.
+   Scrollbar hidden per the app-wide rule; the block still scrolls. */
+.interview-hacker-code {
+  position: relative;
+  margin: 8px 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  background: rgba(10, 12, 18, 0.55);
+}
+
+.interview-hacker-code pre {
+  margin: 0;
+  padding: 10px 12px;
+  overflow-x: auto;
+}
+
+.interview-hacker-code pre::-webkit-scrollbar {
+  display: none;
+}
+
+.interview-hacker-code code {
+  font-family: ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.interview-hacker-code-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  padding: 2px 9px;
+  background: rgba(255, 255, 255, 0.1);
+  color: rgba(255, 255, 255, 0.86);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.interview-hacker-code-copy:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
 /* Next moves offered by a Screen Sight answer. Same pill shape as the action
    row below so they read as one control family, and wrapping rather than
    scrolling because the card is narrow and these are short by contract. */
