@@ -12,6 +12,10 @@ export function callLabel(app: string | null): string {
     case "zoom-web": return "Zoom";
     case "teams": return "Microsoft Teams";
     case "zoom": return "Zoom";
+    // Detected from a browser holding the microphone, not from a tab title, so
+    // the site is genuinely unknown. "Record this browser call?" is honest;
+    // naming a platform here would be a guess the user would catch.
+    case "browser-call": return "browser";
     default: return "Supported call";
   }
 }

@@ -268,7 +268,7 @@ fn call_signal() -> Option<(AmbientCallPayload, IconSource)> {
 }
 
 fn gone_threshold(app: &str) -> u32 {
-    if app.ends_with("web") || app == "google-meet" {
+    if is_browser_hosted(app) {
         BROWSER_GONE_AFTER_MISSES
     } else {
         LEFT_AFTER_MISSES
@@ -389,7 +389,7 @@ fn watch_thread(
                     misses = 0;
                     if !joined {
                         joined = true;
-                        joined_in_browser = app_name.ends_with("web") || app_name == "google-meet";
+                        joined_in_browser = is_browser_hosted(&app_name);
                         info!("meeting.detect: join detected for {event_id} ({app_name})");
                         if let Err(e) = app.emit(crate::events::MEETING_JOIN_DETECTED, JoinDetectedPayload {
                             event_id: event_id.clone(),
@@ -454,14 +454,53 @@ pub(crate) fn find_meeting_window() -> Option<(String, String)> {
 }
 
 /// `find_meeting_window` plus where the matched app's icon can be read from.
+///
+/// Two passes, and the order matters. A title match names the platform, so it
+/// wins outright and everything downstream (the product label, the bundled
+/// logo, `joined_in_browser`) behaves exactly as it always has. Only when no
+/// title matches does the microphone signal get a say, and all it can say is
+/// "a browser is on a call": it knows the process, never the site. That is why
+/// it reports `browser-call` rather than guessing `google-meet`, and why the
+/// title pass is not allowed to be skipped for it.
 fn find_meeting_window_with_source() -> Option<(String, String, IconSource)> {
-    for (app_stem, title, icon_source) in scan::visible_windows() {
+    let windows = scan::visible_windows();
+    for (app_stem, title, icon_source) in &windows {
         let title_lower = title.to_lowercase();
-        if let Some(app_name) = meeting_app_for_window(&app_stem, &title_lower) {
-            return Some((app_name.to_string(), title, icon_source));
+        if let Some(app_name) = meeting_app_for_window(app_stem, &title_lower) {
+            return Some((app_name.to_string(), title.clone(), icon_source.clone()));
         }
     }
-    None
+    // Probed only after the cheap pass misses, so a normal tick costs no COM
+    // work at all.
+    let microphones = scan::microphone_users();
+    if microphones.is_empty() {
+        return None;
+    }
+    windows
+        .into_iter()
+        .find(|(app_stem, _, _)| is_browser(app_stem) && microphones.contains(app_stem))
+        // A FIXED title, not the browser's. The one we have is whatever tab is
+        // frontmost, and `call_key` hashes it, so carrying it through would
+        // change the call's identity every time the user switched tabs and the
+        // same call would churn through gone/seen all meeting. Nothing renders
+        // window_title (see ipcEvents.ts: "for the card only", and the card
+        // shows the product label instead), so a stable string costs nothing.
+        .map(|(stem, _, icon_source)| ("browser-call".to_string(), stem, icon_source))
+}
+
+fn is_browser(exe_stem: &str) -> bool {
+    matches!(exe_stem, "chrome" | "msedge" | "brave" | "firefox")
+}
+
+/// A call hosted in a browser tab rather than a native app window. Both things
+/// that follow from it are about tabs: a tab switch hides the title without
+/// ending the call, so leaving needs the long threshold, and the per-event
+/// watch has to lean on the calendar end instead of the title disappearing.
+/// `browser-call` belongs here for a further reason: its evidence is a
+/// microphone session, and a call whose mic is muted may release that session
+/// without ending, so it needs the forgiving threshold most of all.
+fn is_browser_hosted(app: &str) -> bool {
+    app.ends_with("web") || app == "google-meet" || app == "browser-call"
 }
 
 /// Teams window titles that contain "meeting" or "call" and are definitively
@@ -502,8 +541,7 @@ fn meeting_app_for_window<'a>(exe_stem: &str, title_lower: &'a str) -> Option<&'
     if (exe_stem == "ms-teams" || exe_stem == "teams") && teams_title_is_a_call(title_lower) {
         return Some("teams");
     }
-    let browser = matches!(exe_stem, "chrome" | "msedge" | "brave" | "firefox");
-    if !browser {
+    if !is_browser(exe_stem) {
         return None;
     }
     if title_lower.contains("google meet") || title_lower.starts_with("meet -") {
@@ -548,7 +586,15 @@ mod tests {
 #[cfg(windows)]
 mod scan {
     use super::IconSource;
+    use windows::core::Interface;
     use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
+    use windows::Win32::Media::Audio::{
+        eCapture, AudioSessionStateActive, IAudioSessionControl2, IAudioSessionManager2,
+        IMMDeviceEnumerator, MMDeviceEnumerator, DEVICE_STATE_ACTIVE,
+    };
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED,
+    };
     use windows::Win32::System::Threading::{
         OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
         PROCESS_QUERY_LIMITED_INFORMATION,
@@ -598,6 +644,71 @@ mod scan {
         }
     }
 
+    /// Exe stems of the processes holding an ACTIVE microphone session right
+    /// now, our own excluded.
+    ///
+    /// The one signal in this file that does not read a window title, and the
+    /// only reason it exists: `EnumWindows` exposes a browser's ACTIVE TAB
+    /// title and nothing else, so a Google Meet running in a background tab is
+    /// invisible to every matcher above. A call was missed for its first
+    /// twenty-two minutes that way and the prompt only appeared when the tab
+    /// came forward. A browser holding the microphone is a call, whichever tab
+    /// it is in.
+    ///
+    /// Every active capture endpoint, not just the default one: a headset is
+    /// routinely not the default device, and the call would be invisible again.
+    /// Our own PID is skipped, which is not tidiness - Aura holds the mic
+    /// during dictation and during a meeting capture, so counting ourselves
+    /// would make the signal true forever and turn a dictation hold into a
+    /// detected call.
+    pub(super) fn microphone_users() -> Vec<String> {
+        // Idempotent on this long-lived polling thread: every later call
+        // returns S_FALSE or RPC_E_CHANGED_MODE, both fine to ignore.
+        unsafe {
+            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        }
+        match collect_microphone_users() {
+            Ok(stems) => stems,
+            // Never louder than a debug line. A failed probe means the title
+            // matcher is the only signal, which is exactly where this started.
+            Err(error) => {
+                log::debug!("meeting.detect: microphone probe failed: {error}");
+                Vec::new()
+            }
+        }
+    }
+
+    fn collect_microphone_users() -> windows::core::Result<Vec<String>> {
+        let own_pid = std::process::id();
+        let mut stems: Vec<String> = Vec::new();
+        unsafe {
+            let enumerator: IMMDeviceEnumerator =
+                CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
+            let devices = enumerator.EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE)?;
+            for device_index in 0..devices.GetCount()? {
+                let device = devices.Item(device_index)?;
+                let manager: IAudioSessionManager2 = device.Activate(CLSCTX_ALL, None)?;
+                let sessions = manager.GetSessionEnumerator()?;
+                for index in 0..sessions.GetCount()? {
+                    let control: IAudioSessionControl2 = sessions.GetSession(index)?.cast()?;
+                    if control.GetState()? != AudioSessionStateActive {
+                        continue;
+                    }
+                    let pid = control.GetProcessId()?;
+                    if pid == 0 || pid == own_pid {
+                        continue;
+                    }
+                    if let Some((stem, _)) = process_stem(pid) {
+                        if !stems.contains(&stem) {
+                            stems.push(stem);
+                        }
+                    }
+                }
+            }
+        }
+        Ok(stems)
+    }
+
     /// PID -> (lowercase exe file stem like "zoom" or "ms-teams", full exe
     /// path) for one window.
     fn process_stem_for_window(hwnd_raw: isize) -> Option<(String, String)> {
@@ -608,6 +719,14 @@ mod scan {
             if pid == 0 {
                 return None;
             }
+            process_stem(pid)
+        }
+    }
+
+    /// The half of the lookup above that only needs a PID, split out for the
+    /// microphone probe, which has a PID and no window.
+    fn process_stem(pid: u32) -> Option<(String, String)> {
+        unsafe {
             let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
             let mut buffer = vec![0u16; 1024];
             let mut size = buffer.len() as u32;
@@ -662,6 +781,15 @@ mod scan {
             }
         }
         found
+    }
+
+    /// No macOS half yet, and an empty answer is the correct placeholder: the
+    /// matcher treats it as "no extra evidence" and falls back to titles
+    /// exactly as before. CoreAudio has no permission-free equivalent of
+    /// enumerating another process's capture sessions, so the macOS version is
+    /// its own piece of work rather than a port of the Windows one.
+    pub(super) fn microphone_users() -> Vec<String> {
+        Vec::new()
     }
 
     /// Bundle id -> the same stem the Windows exe name yields, so
