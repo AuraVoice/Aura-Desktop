@@ -281,6 +281,18 @@ export function DownArrowIcon() {
   );
 }
 
+/** Filled paper plane, Telegram style: a solid wing over a dimmer folded
+ * underside, so it reads as "send" at 15px where an outline plane goes thin.
+ * The Interview Companion composer's submit button. */
+export function SendPlaneIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor">
+      <path d="M21.2 3.2 2.8 10.6c-.9.4-.9 1.6 0 1.9L7.4 14l11.2-7.6-7.3 8.8 5.9 4.4c.6.4 1.4.1 1.6-.6l3.8-14.4c.2-1-.6-1.7-1.4-1.4Z" />
+      <path d="m7.4 14 1.8 5.6c.2.7 1.1.9 1.6.4l2.6-2.5-2.1-2.3 7.3-8.8L7.4 14Z" fillOpacity="0.6" />
+    </svg>
+  );
+}
+
 /** Small down chevron, not the chunky DownArrowIcon above: this one marks a
  * control as expandable (the Interview Companion Brief widget's switcher)
  * rather than an action like jump-to-latest, so it has to read as "more

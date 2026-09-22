@@ -129,6 +129,24 @@ const MINT_TIMEOUT_MS = 15_000;
 // plus a 20s stream deadline) and it goes idle for at most 4s between frames.
 const ANSWER_FIRST_FRAME_TIMEOUT_MS = 25_000;
 const ANSWER_IDLE_TIMEOUT_MS = 8_000;
+// The chat leg (typed/Screen composer) reasons and writes whole functions: the
+// backend allows it 8s idle and 60s total, so the client must outlast both or
+// it aborts a stream the backend still considers healthy.
+const ANSWER_CHAT_FIRST_FRAME_TIMEOUT_MS = 70_000;
+const ANSWER_CHAT_IDLE_TIMEOUT_MS = 12_000;
+
+/** "chat" is the typed/Screen composer, answered by the backend's chat chain
+ *  as a conversation with the candidate; "voice" is everything heard aloud. */
+export type InterviewAnswerChannel = "voice" | "chat";
+
+/** One earlier composer exchange, sent back so the chat leg remembers what it
+ *  was asked and what it said. `screen` is set only for the few most recent
+ *  exchanges whose screenshot the hook still holds in memory. */
+export type InterviewThreadExchange = {
+  question: string;
+  answer: string;
+  screen: InterviewScreenSightFrame | null;
+};
 
 export async function mintInterviewCredential(): Promise<InterviewCredential> {
   const response = await authFetchWithTimeout(
@@ -281,6 +299,8 @@ export async function streamInterviewAnswer({
   screenSight = null,
   screenNotes = [],
   steer = "",
+  channel = "voice",
+  thread = [],
   signal,
   onFrame,
 }: {
@@ -304,6 +324,9 @@ export async function streamInterviewAnswer({
   /** Captions of screens shown earlier this round, so a later question about
    *  "that" still resolves. Bounded by the backend at three. */
   screenNotes?: string[];
+  channel?: InterviewAnswerChannel;
+  /** Earlier chat exchanges, oldest first. Sent only on the chat channel. */
+  thread?: InterviewThreadExchange[];
   signal: AbortSignal;
   onFrame: (frame: InterviewAnswerFrame) => void;
 }): Promise<void> {
@@ -333,7 +356,16 @@ export async function streamInterviewAnswer({
     watchdogFired && !signal.aborted && err instanceof DOMException && err.name === "AbortError"
       ? new TimeoutError("interview answer stream timed out")
       : err;
-  arm(ANSWER_FIRST_FRAME_TIMEOUT_MS);
+  const chat = channel === "chat";
+  const idleTimeoutMs = chat ? ANSWER_CHAT_IDLE_TIMEOUT_MS : ANSWER_IDLE_TIMEOUT_MS;
+  const wireFrame = (frame: InterviewScreenSightFrame) => ({
+    mime_type: frame.mimeType,
+    data: frame.data,
+    width_px: frame.widthPx,
+    height_px: frame.heightPx,
+    captured_at_ms: frame.capturedAtMs,
+  });
+  arm(chat ? ANSWER_CHAT_FIRST_FRAME_TIMEOUT_MS : ANSWER_FIRST_FRAME_TIMEOUT_MS);
   let response: Response;
   try {
     response = await authFetch("/interview-companion/answer", {
@@ -358,13 +390,15 @@ export async function streamInterviewAnswer({
       steer,
       current_answer: currentAnswer,
       screen_notes: screenNotes.slice(-3),
-      screen_sight: screenSight ? {
-        mime_type: screenSight.mimeType,
-        data: screenSight.data,
-        width_px: screenSight.widthPx,
-        height_px: screenSight.heightPx,
-        captured_at_ms: screenSight.capturedAtMs,
-      } : null,
+      screen_sight: screenSight ? wireFrame(screenSight) : null,
+      channel,
+      thread: chat
+        ? thread.slice(-8).map((item) => ({
+          question: item.question.slice(0, 2_000),
+          answer: item.answer.slice(0, 6_000),
+          screen: item.screen ? wireFrame(item.screen) : null,
+        }))
+        : [],
     }),
     signal: watchdog.signal,
   });
@@ -395,7 +429,7 @@ export async function streamInterviewAnswer({
         const frame = parseFrame(buffer.slice(0, separator), turn);
         buffer = buffer.slice(separator + 2);
         if (frame) {
-          arm(ANSWER_IDLE_TIMEOUT_MS);
+          arm(idleTimeoutMs);
           onFrame(frame);
           if (frame.type === "terminator") terminated = true;
         }

@@ -1711,3 +1711,82 @@ absent from VOICE_TOOL_REGISTRY, and product_knowledge's capabilities.desktop
 does not list it, so Buddy denies the feature in conversation. research_ui is
 the same shape already shipped end to end and is the pattern to copy.
 ================================================================================
+
+2026-09-22  The typed composer was the spoken pipeline wearing a text box, so it
+            had no memory and could not follow an instruction
+================================================================================
+Problem: three live coding sessions on Interview Companion. "Wait for my
+instructions" came back three times as full paragraphs. A four-option pick
+("compiles and runs / compilation issue / runtime failure / cannot determine")
+came back as a time-complexity paragraph. Pushback made it flip-flop from O(m)
+to O(m log m), and two later answers were near-identical. "Ask me if unsure"
+was ignored three times. "Code for this in python" in a system-design round
+came back as prose. Both code answers had a sliding-window bug (rejected
+shipments counted as accepted, then decremented when they never were counted).
+
+Issue: a typed question was minted as a fake remote turn with action=suggest,
+identical on the wire to "Answer now" on a spoken question. So it inherited the
+spoken voice rule, the one-paragraph rule, the round's answer_shape, a 480 token
+cap, and the candidate-voice register ("So I need to..."), which by design never
+talks TO the user and never asks. Memory was recent_turns (questions only; the
+model never saw one of its own previous answers, current_answer is "" on a new
+question) plus three screen captions capped at 120 characters, so a problem
+statement that scrolled away was gone. Every Screen turn ran on Haiku with no
+reasoning because Groq has no vision.
+
+Solution: an additive channel on /interview-companion/answer. Composer sends
+(-typed-/-screen- turn ids, and refinements of them) go as channel="chat" with a
+thread of the last 8 exchanges (question AND answer) and the last 2 screenshots,
+held in memory only and cleared in clearSession. The backend answers chat on
+gpt-5.6-luna at reasoning_effort=low, hedged at 4s to claude-sonnet-5, with its
+own INTERVIEW_CHAT_SYSTEM and the thread as real user/assistant turns
+(stream_text grew history and reasoning_effort). No ANSWER|/NEXT| marker lines,
+a 4000 token cap, and 12s first-token / 60s total windows on both sides.
+Spoken turns are untouched.
+
+Justification: the model was only part of it. Every failure above maps to a
+missing input (its own answers, the old screen) or a rule written for speech,
+and a stronger model behind the same prompt would still have scripted "wait"
+into a paragraph. The thread is append-only and sits before the current turn,
+so OpenAI's automatic prefix cache and the Anthropic 1h breakpoint keep hitting
+as it grows. Keying the channel on the turn id means nothing new has to be
+threaded through the hook, and an older desktop sends no channel and gets the
+voice path exactly as before.
+================================================================================
+
+2026-09-22  Interview Companion ran on a nano model and a stalling voice host,
+and nobody could re-measure either because the bench script was gone
+================================================================================
+Problem: the chat leg's sliding-window bug came back, gpt-oss on Groq answered
+"Okay, that makes sense." with a full re-explanation, and the first request on
+every fresh backend process took 21-25s. The numbers behind the model picks
+lived in scratchpad jsonl files whose generating script no longer existed.
+
+Issue: gpt-5.6-luna is OpenAI's nano tier. On 17 screenshot coding problems
+(301 random cases each) it failed rate_limit on 127/301 by treating the window
+as [t-w, t] instead of (t-w, t]. Groq gpt-oss had a 0.88s median but a 4.86s
+p90: it stalled past the 4s window 4 times in 36 turns, the circuit opened, and
+Haiku answered 15 turns at up to 6.5s. The median hid all of it. Haiku, the
+"good judge", skipped "Right, and what about analytics on clicks?" 3 of 3 times
+as not_a_question. Cold start: Langfuse and the SDK clients were built lazily
+inside the first stream_text, and warm() was a fire-and-forget task, so uvicorn
+took traffic before any of it existed.
+
+Solution: backend/scripts/bench_interview_companion.py drives the real
+_answer_stream per model with the hedge disabled, executes every code answer in
+a subprocess against a reference, and labels every voice turn answer or skip.
+Chat primary is gpt-6-sol at low (17/17, same 1.4s warm screen median), voice
+primary is gpt-6-sol with no reasoning (0.97s median, 1.18s p90, 36/36) with
+Haiku as the other-vendor fallback. Pure acknowledgements skip in 0ms before
+any model runs (word-set match, no "?", voice + automatic only, reusing
+not_a_question so the desktop contract is unchanged), and the decision prompt
+says an acknowledgement followed by a question is a question. Startup awaits
+the Langfuse init (in a thread) and warm() under a 12s cap; --cpu-boost added.
+Chat first-token window 12s -> 6s.
+
+Justification: judge a live-answer model by its p90 with the fallback turned
+off, never by a median with the hedge on, because the hedge hides the stalls
+the candidate sits through. A model's tier matters more than its reasoning
+effort for exact code. Still open: the first image turn on a process is 4-8s
+even after warm(), since warm() never sends a real streamed or image request.
+================================================================================

@@ -204,19 +204,33 @@
   color: rgba(20, 28, 26, 0.6);
 }
 
-/* Live indicator. The dots keep their dark-mode amber/red, which carry on a
-   light ground too, but the labels were tuned for a dark card and go muddy on
-   one, so each is darkened to hold contrast. Paused reads as text, not as a
-   state colour, so it follows the muted body colour above. */
-:root[data-theme="light"] .interview-hacker-live[data-phase="starting"] .interview-hacker-live-label,
-:root[data-theme="light"] .interview-hacker-live[data-phase="degraded"] .interview-hacker-live-label {
+/* Live indicator. The waveform and label both take the indicator's colour,
+   which was tuned for a dark card, so each state is darkened to hold contrast.
+   The speaking rule is restated because the listening rule's prefix would
+   otherwise beat it. Paused follows the muted body colour above. */
+:root[data-theme="light"] .interview-hacker-live[data-phase="starting"],
+:root[data-theme="light"] .interview-hacker-live[data-phase="degraded"] {
   color: rgba(146, 90, 4, 0.95);
 }
-:root[data-theme="light"] .interview-hacker-live[data-phase="listening"] .interview-hacker-live-label {
-  color: rgba(176, 30, 30, 0.95);
+:root[data-theme="light"] .interview-hacker-live[data-phase="listening"] {
+  color: #0d7a6b;
 }
-:root[data-theme="light"] .interview-hacker-live[data-phase="paused"] .interview-hacker-live-label {
+:root[data-theme="light"] .interview-hacker-live[data-phase="listening"] .interview-hacker-live-wave span {
+  background: #149e8b;
+}
+:root[data-theme="light"] .interview-hacker-live[data-phase="listening"][data-speaking="true"] {
+  color: rgba(146, 90, 4, 0.95);
+}
+:root[data-theme="light"] .interview-hacker-live[data-phase="listening"][data-speaking="true"] .interview-hacker-live-wave span {
+  background: currentColor;
+}
+:root[data-theme="light"] .interview-hacker-live[data-phase="paused"] {
   color: rgba(20, 28, 26, 0.6);
+}
+:root[data-theme="light"] .interview-hacker-recording {
+  border-color: rgba(185, 28, 28, 0.35);
+  background: rgba(239, 68, 68, 0.1);
+  color: rgba(176, 30, 30, 0.95);
 }
 :root[data-theme="light"] .interview-hacker-capture-warning {
   color: rgba(146, 90, 4, 0.95);
@@ -325,13 +339,6 @@
 }
 :root[data-theme="light"] .interview-hacker-bubble.is-answer.is-drafting {
   color: rgba(20, 28, 26, 0.58);
-}
-:root[data-theme="light"] .interview-hacker-unverified {
-  color: #9a6700;
-}
-:root[data-theme="light"] .interview-hacker-intent {
-  background: rgba(20, 28, 26, 0.08);
-  color: rgba(20, 28, 26, 0.62);
 }
 :root[data-theme="light"] .interview-hacker-thread-empty {
   color: rgba(20, 28, 26, 0.55);

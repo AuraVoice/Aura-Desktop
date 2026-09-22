@@ -4,7 +4,7 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { logError } from "../../lib/log";
 import { openDashboardWindow } from "../../lib/dashboardWindow";
 import { GlassSurface } from "../GlassSurface";
-import { ChevronDownIcon, DocumentIcon, DownArrowIcon, MicIcon, MicOffIcon, StopSquareIcon, UploadArrowIcon } from "../icons";
+import { ChevronDownIcon, DocumentIcon, DownArrowIcon, MicIcon, MicOffIcon, SendPlaneIcon, StopSquareIcon, UploadArrowIcon } from "../icons";
 import { callVisual } from "./callIcons";
 import { useMicPreflightLevel } from "./useMicPreflightLevel";
 import { RESUME_ACCEPT } from "../../lib/resumeText";
@@ -43,19 +43,6 @@ export const INTERVIEW_HACKER_BRIEF_MENU_SLOT_HEIGHT = 620;
  * script is about twice a normal answer, and reading it mid-call should not
  * need a scroll. The thread still scrolls, so this is headroom. */
 export const INTERVIEW_HACKER_LONG_ANSWER_SLOT_HEIGHT = 560;
-
-/** The chip next to an answer naming the register it was drafted in, so the
- * candidate knows before reading whether this is a script, a definition or a
- * comparison. Intents with no chip read as ordinary answers. */
-const INTENT_CHIP: Partial<Record<string, string>> = {
-  project_walkthrough: "Walkthrough",
-  project_detail: "Your project",
-  concept: "Concept",
-  compare: "Compare",
-  behavioral: "Story",
-  company: "Company",
-  logistics: "Logistics",
-};
 
 /**
  * Segmented picker local to the overlay.
@@ -179,11 +166,11 @@ function AnswerBody({ answer }: { answer: string }) {
   );
 }
 
+// `unverified` and `intent` ride along as metadata only. Rendering them as chips
+// above the answer ("Concept", "Not from your brief") was noise mid-interview.
 function Exchange({
   question,
   answer,
-  unverified,
-  intent,
   source = "interviewer",
   live = false,
 }: {
@@ -208,12 +195,6 @@ function Exchange({
           aria-live={live ? "polite" : undefined}
         >
           <span className="interview-hacker-who">You</span>
-          {intent && INTENT_CHIP[intent] && (
-            <span className="interview-hacker-intent">{INTENT_CHIP[intent]}</span>
-          )}
-          {unverified && (
-            <span className="interview-hacker-unverified">Not from your brief</span>
-          )}
           <AnswerBody answer={answer} />
         </div>
       ) : (
@@ -460,17 +441,38 @@ const LIVE_LABEL: Partial<Record<InterviewHackerPhase, string>> = {
 };
 
 /** The one thing on the card that says a session is running, in a spot that
- * does not move as the answer area fills. The colour vocabulary is the app's
- * existing capture one (amber starting/recovering, red live) rather than the
- * teal `--glass-accent`, which already means "armed toggle" elsewhere. */
-function LiveIndicator({ phase }: { phase: InterviewHackerPhase }) {
+ * does not move as the answer area fills. Listening is a teal waveform, not a
+ * red dot: red belongs to the REC capsule alone, so "hearing" and "keeping
+ * audio" can never be mistaken for each other. The bars react through data
+ * attributes only (pure CSS), bouncing while the interviewer's words stream in
+ * and flattening amber while the candidate talks and the answer is held. */
+function LiveIndicator({
+  phase,
+  hearing,
+  speaking,
+}: {
+  phase: InterviewHackerPhase;
+  hearing: boolean;
+  speaking: boolean;
+}) {
   const label = LIVE_LABEL[phase];
   if (!label) return null;
   return (
-    <div className="interview-hacker-live" data-phase={phase}>
-      {/* The dot is decoration; the label is the accessible text, so a screen
-          reader gets "Listening" once rather than a dot it cannot describe. */}
-      <span className="interview-hacker-live-dot" aria-hidden="true" />
+    <div
+      className="interview-hacker-live"
+      data-phase={phase}
+      data-hearing={hearing}
+      data-speaking={speaking}
+    >
+      {/* The bars are decoration; the label is the accessible text, so a
+          screen reader gets "Listening" once rather than five spans. */}
+      <span className="interview-hacker-live-wave" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+        <span />
+        <span />
+      </span>
       <span className="interview-hacker-live-label" aria-live="polite">{label}</span>
     </div>
   );
@@ -655,12 +657,25 @@ export function InterviewHackerCard({
         {(active || status) && (
           <div className="interview-hacker-header">
             <div>
-              {active && <LiveIndicator phase={hacker.phase} />}
-              {/* Recording is never silent: if audio is being kept, the card
-                  says so for as long as it is being kept. */}
-              {hacker.recordingAudio && (
-                <div className="interview-hacker-recording">Recording</div>
-              )}
+              <div className="interview-hacker-live-row">
+                {active && (
+                  <LiveIndicator
+                    phase={hacker.phase}
+                    hearing={Boolean(hacker.interimQuestion)}
+                    speaking={hacker.candidateSpeaking}
+                  />
+                )}
+                {/* Recording is never silent: if audio is being kept, the card
+                    says so for as long as it is being kept. */}
+                {hacker.recordingAudio && (
+                  <span
+                    className="interview-hacker-recording"
+                    title="Audio from this session is being saved to this device"
+                  >
+                    REC
+                  </span>
+                )}
+              </div>
               {status && <div className="interview-hacker-status">{status}</div>}
             </div>
             {active && hacker.pacingCaption && (
@@ -887,12 +902,6 @@ export function InterviewHackerCard({
           </div>
         )}
 
-        {active && hacker.screenNote && (
-          <div className="interview-hacker-screen-note">
-            Looked at: {hacker.screenNote}
-          </div>
-        )}
-
         {/* What to do next with the screen Aura just looked at. Only Screen
             Sight produces these, and tapping one re-answers the same question
             steered at that move. */}
@@ -987,13 +996,16 @@ export function InterviewHackerCard({
             </button>
             <button
               type="submit"
+              className={`interview-hacker-send${hacker.capturingScreen ? " is-busy" : ""}`}
+              aria-label={hacker.capturingScreen ? "Looking at your screen" : "Send"}
+              title={hacker.capturingScreen ? "Looking at your screen" : "Send"}
               disabled={
                 hacker.capturingScreen
                 || hacker.phase !== "listening"
                 || (!withScreen && !askText.trim())
               }
             >
-              {hacker.capturingScreen ? "Looking..." : "Send"}
+              <SendPlaneIcon />
             </button>
           </form>
         )}

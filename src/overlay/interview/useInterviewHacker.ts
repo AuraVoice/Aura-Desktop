@@ -12,8 +12,10 @@ import {
   streamInterviewAnswer,
   type AnswerIntent,
   type InterviewAnswerAction,
+  type InterviewAnswerChannel,
   type InterviewReflection,
   type InterviewScreenSightFrame,
+  type InterviewThreadExchange,
   type InterviewTranscriptTurn,
 } from "../../lib/interviewHackerApi";
 import {
@@ -208,6 +210,10 @@ const CALL_DETECTION_RETRY_MS = 4_000;
 // A 30 minute round runs 15-25 questions, so this is headroom rather than a
 // limit anyone should hit. Strings only, no images, so the cost is negligible.
 const MAX_HISTORY_EXCHANGES = 40;
+/** How many earlier exchanges ride a chat send, and how many of them may carry
+ *  their screenshot. The backend caps the thread at 10 and the images at 2. */
+const CHAT_THREAD_EXCHANGES = 8;
+const CHAT_THREAD_SCREENS = 2;
 
 function reflectionMarkdown(reflection: InterviewReflection): string {
   const section = (title: string, items: string[]) =>
@@ -548,6 +554,11 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   // only: the images themselves are never stored, so these short strings are all
   // that survives a Screen Sight, and they die with the session.
   const screenNotesRef = useRef<string[]>([]);
+  // The last few Screen Sight frames, keyed by the turn they were asked on, so
+  // the chat leg can see a problem statement that has since scrolled away.
+  // Memory only and bounded to CHAT_THREAD_SCREENS: never written to disk,
+  // cleared with the session like the captions above.
+  const chatScreensRef = useRef(new Map<string, InterviewScreenSightFrame>());
   const savingReflectionRef = useRef(false);
   const savingReflectionSequenceRef = useRef(0);
   const activeAnswerTurnRef = useRef<InterviewTranscriptTurn | null>(null);
@@ -630,6 +641,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     recentRef.current = [];
     reflectionTurnsRef.current = [];
     screenNotesRef.current = [];
+    chatScreensRef.current.clear();
     setScreenNote(null);
     setFollowups([]);
     lastRemoteTurnRef.current = null;
@@ -1517,6 +1529,45 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       && action !== "screen_sight"
       && !previousAnswer.trim()
     ) return;
+    // The composer (typed text, Screen, and refinements of either) is a
+    // conversation with the candidate and runs on the backend's chat chain.
+    // Everything heard aloud stays on the fast spoken chain.
+    const channel: InterviewAnswerChannel =
+      questionSourceOf(turn.turnId) === "interviewer" ? "voice" : "chat";
+    // Built BEFORE activate() archives the exchange on screen: that archive is
+    // a state update, so historyRef has not caught up with it yet and the
+    // exchange the candidate is following up on would be missing.
+    let thread: InterviewThreadExchange[] = [];
+    if (channel === "chat") {
+      const onScreen = activeAnswerTurnRef.current;
+      const exchanges = historyRef.current
+        .filter((exchange) => exchange.id !== turn.turnId)
+        .map((exchange) => ({ id: exchange.id, question: exchange.question, answer: exchange.answer }));
+      if (
+        onScreen
+        && !sameTurn
+        && !exchanges.some((exchange) => exchange.id === onScreen.turnId)
+      ) {
+        exchanges.push({ id: onScreen.turnId, question: onScreen.text, answer: previousAnswer });
+      }
+      thread = exchanges.slice(-CHAT_THREAD_EXCHANGES).map((exchange) => ({
+        question: exchange.question,
+        answer: exchange.answer,
+        screen: chatScreensRef.current.get(exchange.id) ?? null,
+      }));
+      // Recorded after the thread is built, so this turn's frame rides as
+      // screen_sight now and joins the thread from the next send on.
+      if (screenSight) {
+        const screens = chatScreensRef.current;
+        screens.delete(turn.turnId);
+        screens.set(turn.turnId, screenSight);
+        while (screens.size > CHAT_THREAD_SCREENS) {
+          const oldest = screens.keys().next().value;
+          if (oldest === undefined) break;
+          screens.delete(oldest);
+        }
+      }
+    }
     // Retrieval focus: the project the question most likely concerns, ranked
     // lexically against the question plus the interviewer's previous turn (a
     // reference Deepgram split across two finals still counts). Evidence
@@ -1625,6 +1676,8 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       screenSight,
       screenNotes: screenNotesRef.current,
       steer,
+      channel,
+      thread,
       signal: controller.signal,
       onFrame: (frame) => {
         if (controller.signal.aborted) return;

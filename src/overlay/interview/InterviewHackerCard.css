@@ -171,12 +171,19 @@
   font-size: 13.5px;
 }
 
-/* The live indicator. Sits above the status line inside the header's centered
-   column, so it holds one spot regardless of what the status line is doing.
-   Colours follow the app's capture vocabulary (see .notch-guide-indicator in
-   NotchBar.css): amber while starting or recovering, red while actually
-   listening. Deliberately NOT --glass-accent, which reads as "armed toggle"
-   everywhere else in the overlay. */
+/* The live row: the listening waveform, and beside it the REC capsule when
+   audio is kept. One row so the two read as two different things side by side
+   rather than two shades of one thing stacked. */
+.interview-hacker-live-row {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+
+/* The live indicator. Holds one spot regardless of what the status line below
+   is doing. Teal while listening, amber while starting or recovering, flat grey
+   while paused. Red is kept for the REC capsule alone. */
 .interview-hacker-live {
   display: inline-flex;
   align-items: center;
@@ -184,12 +191,29 @@
   gap: 7px;
 }
 
-.interview-hacker-live-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
+/* Five bars, animated on transform only so the compositor does the work. */
+.interview-hacker-live-wave {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 14px;
   flex: none;
 }
+
+.interview-hacker-live-wave span {
+  width: 2.5px;
+  height: 100%;
+  border-radius: 999px;
+  background: currentColor;
+  transform: scaleY(0.25);
+  transform-origin: center;
+  transition: transform 180ms ease, background-color 180ms ease;
+}
+
+.interview-hacker-live-wave span:nth-child(2) { animation-delay: -0.18s; }
+.interview-hacker-live-wave span:nth-child(3) { animation-delay: -0.36s; }
+.interview-hacker-live-wave span:nth-child(4) { animation-delay: -0.54s; }
+.interview-hacker-live-wave span:nth-child(5) { animation-delay: -0.72s; }
 
 .interview-hacker-live-label {
   font-size: 12.5px;
@@ -197,48 +221,73 @@
   letter-spacing: 0.02em;
 }
 
-.interview-hacker-live[data-phase="starting"] .interview-hacker-live-dot,
-.interview-hacker-live[data-phase="degraded"] .interview-hacker-live-dot {
-  background: #f59e0b;
-  box-shadow: 0 0 8px rgba(245, 158, 11, 0.8);
-}
-
-.interview-hacker-live[data-phase="starting"] .interview-hacker-live-label,
-.interview-hacker-live[data-phase="degraded"] .interview-hacker-live-label {
+.interview-hacker-live[data-phase="starting"],
+.interview-hacker-live[data-phase="degraded"] {
   color: rgba(245, 158, 11, 0.95);
 }
 
-.interview-hacker-live[data-phase="listening"] .interview-hacker-live-dot {
-  background: #ef4444;
-  box-shadow: 0 0 10px rgba(239, 68, 68, 0.95);
+.interview-hacker-live[data-phase="starting"] .interview-hacker-live-wave span,
+.interview-hacker-live[data-phase="degraded"] .interview-hacker-live-wave span {
+  animation: interview-hacker-wave-idle 1.8s ease-in-out infinite;
 }
 
-.interview-hacker-live[data-phase="listening"] .interview-hacker-live-label {
-  color: rgba(239, 68, 68, 0.95);
+/* Listening at rest: a slow, low breathing, so it reads as alive without
+   pulling the eye off the answer. */
+.interview-hacker-live[data-phase="listening"] {
+  color: rgba(94, 234, 212, 0.95);
 }
 
-/* Paused is the one state that must not pulse OR glow: a mic that is not
-   capturing should not look like one that is. */
-.interview-hacker-live[data-phase="paused"] .interview-hacker-live-dot {
-  background: rgba(239, 68, 68, 0.45);
+.interview-hacker-live[data-phase="listening"] .interview-hacker-live-wave span {
+  animation: interview-hacker-wave-idle 2.4s ease-in-out infinite;
 }
 
-.interview-hacker-live[data-phase="paused"] .interview-hacker-live-label {
+/* The interviewer's words are streaming in: the bars jump. */
+.interview-hacker-live[data-phase="listening"][data-hearing="true"] .interview-hacker-live-wave span {
+  animation: interview-hacker-wave-hear 0.7s ease-in-out infinite;
+}
+
+/* The candidate is talking and the answer is held: the bars lie flat in
+   amber, whatever the room is doing. */
+.interview-hacker-live[data-phase="listening"][data-speaking="true"] {
+  color: rgba(245, 158, 11, 0.95);
+}
+
+.interview-hacker-live[data-phase="listening"][data-speaking="true"] .interview-hacker-live-wave span {
+  animation: none;
+  transform: scaleY(0.18);
+}
+
+/* Paused is the one state that must not move: a mic that is not capturing
+   should not look like one that is. */
+.interview-hacker-live[data-phase="paused"] {
   color: var(--text-muted, rgba(255, 255, 255, 0.52));
 }
 
-.interview-hacker-live[data-phase="listening"] .interview-hacker-live-dot,
-.interview-hacker-live[data-phase="degraded"] .interview-hacker-live-dot {
-  animation: interview-hacker-live-pulse 1.6s ease-in-out infinite;
+.interview-hacker-live[data-phase="paused"] .interview-hacker-live-wave span {
+  animation: none;
+  transform: scaleY(0.18);
 }
 
-@keyframes interview-hacker-live-pulse {
+@keyframes interview-hacker-wave-idle {
   0%,
   100% {
-    opacity: 1;
+    transform: scaleY(0.22);
   }
   50% {
-    opacity: 0.35;
+    transform: scaleY(0.5);
+  }
+}
+
+@keyframes interview-hacker-wave-hear {
+  0%,
+  100% {
+    transform: scaleY(0.3);
+  }
+  25% {
+    transform: scaleY(1);
+  }
+  60% {
+    transform: scaleY(0.55);
   }
 }
 
@@ -252,7 +301,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .interview-hacker-live-dot {
+  .interview-hacker-live-wave span,
+  .interview-hacker-recording::before,
+  .interview-hacker-send.is-busy svg {
     animation: none !important;
   }
 }
@@ -557,20 +608,6 @@
   color: var(--accent, rgba(150, 190, 255, 0.92));
 }
 
-/* The register chip on an answer bubble ("Walkthrough", "Compare"). Sits
-   beside the "Not from your brief" badge and shares its size. */
-.interview-hacker-intent {
-  display: inline-block;
-  margin: 0 6px 4px 0;
-  padding: 1px 7px;
-  border-radius: 999px;
-  background: var(--surface-raised, rgba(255, 255, 255, 0.1));
-  color: var(--text-muted, rgba(255, 255, 255, 0.62));
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-}
-
 @media (prefers-reduced-motion: reduce) {
   .interview-hacker-meter span {
     transition: none;
@@ -736,16 +773,6 @@
   font-weight: 600;
 }
 
-.interview-hacker-unverified {
-  display: block;
-  margin-bottom: 6px;
-  color: rgba(255, 189, 116, 0.92);
-  font-size: 11px;
-  font-weight: 650;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
 .interview-hacker-thread-empty {
   margin: auto;
   color: var(--text-muted, rgba(255, 255, 255, 0.42));
@@ -849,6 +876,51 @@
 .interview-hacker-ask button[aria-pressed="true"] {
   background: rgba(126, 216, 255, 0.92);
   color: rgba(18, 20, 27, 0.95);
+}
+
+/* Send: a round paper-plane button. Keeps the solid white fill so it still
+   reads as the one control that sends. */
+.interview-hacker-ask .interview-hacker-send {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 50%;
+}
+
+.interview-hacker-send svg {
+  width: 15px;
+  height: 15px;
+  /* The plane's mass sits up and right; nudge it back to the optical centre. */
+  transform: translate(-1px, 0.5px);
+  transition: transform 160ms ease;
+}
+
+.interview-hacker-send:not(:disabled):hover svg {
+  transform: translate(0.5px, -1px) rotate(-6deg);
+}
+
+/* Capturing the screen: the plane flies a small loop instead of a
+   "Looking..." caption. The button is disabled then, so opacity is overridden
+   to keep the motion visible. */
+.interview-hacker-ask .interview-hacker-send.is-busy {
+  opacity: 0.85;
+}
+
+.interview-hacker-send.is-busy svg {
+  animation: interview-hacker-send-fly 0.9s ease-in-out infinite;
+}
+
+@keyframes interview-hacker-send-fly {
+  0%,
+  100% {
+    transform: translate(-1px, 0.5px);
+  }
+  50% {
+    transform: translate(1.5px, -2px) rotate(-8deg);
+  }
 }
 
 /* A typed answer, not a spoken one. Monospace, no wrapping, and its own
@@ -1150,33 +1222,22 @@
   padding: 5px 11px;
 }
 
-/* What Aura saw on the last screen it was shown. Alpha-based like everything
-   else on the glass: an opaque fill here would punch a hole in the surface. */
-.interview-hacker-screen-note {
-  margin: 2px 0 6px;
-  padding: 4px 9px;
-  border-radius: 8px;
-  align-self: flex-end;
-  max-width: 82%;
-  font-size: 11px;
-  line-height: 1.35;
-  letter-spacing: 0.01em;
-  color: rgba(63, 86, 78, 0.72);
-  background: rgba(255, 255, 255, 0.42);
-  border: 1px solid rgba(255, 255, 255, 0.6);
-}
-
-/* Recording indicator. The interview window is .theme-pinned-dark, so this has
-   one look in both themes and needs no twin. */
+/* Recording indicator: a camcorder-style "REC" capsule beside the waveform.
+   Red lives here and nowhere else on the card. Alpha-based fill so it stays
+   glass. Light twin in overlay-chat.light.css. */
 .interview-hacker-recording {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  margin-top: 4px;
-  color: rgba(255, 138, 128, 0.95);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
+  padding: 2px 8px 2px 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(248, 113, 113, 0.5);
+  background: rgba(239, 68, 68, 0.14);
+  color: rgba(255, 138, 128, 0.98);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  cursor: default;
 }
 
 .interview-hacker-recording::before {
@@ -1184,5 +1245,18 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: currentColor;
+  background: #ef4444;
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.9);
+  animation: interview-hacker-rec-blink 2.4s steps(1, end) infinite;
+}
+
+@keyframes interview-hacker-rec-blink {
+  0%,
+  70% {
+    opacity: 1;
+  }
+  71%,
+  100% {
+    opacity: 0.25;
+  }
 }
