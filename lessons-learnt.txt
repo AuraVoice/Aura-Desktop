@@ -1651,3 +1651,63 @@ stores complete_reason, started_at_ms and total_duration_ms in PLAINTEXT, so
 desktop log is UTC while that table is localtime, which is a seven hour trap
 when lining the two up.
 ================================================================================
+
+2026-09-21  "Open spotify" did nothing because the feature was never merged,
+            and two gaps under it would have kept it broken anyway
+================================================================================
+Problem: a dictation hold of "open spotify" typed the words instead of opening
+anything, on a fresh 0.15.26 build and right after a backend deploy. The first
+guess was a missing API key.
+
+Issue: three stacked causes, and the deploy was not among them. The voice
+command feature (Jev, TypeSafe's jev-latest, in dictation/command_brain.rs)
+existed only on PR #26, opened 2026-09-20 with green CI on all three legs and
+MERGEABLE/CLEAN, and simply never merged or reviewed while main shipped two
+releases past it. git ls-tree origin/main had no command_brain.rs at all, so
+the installed binary contained none of this, and no backend deploy could have
+mattered because this path never calls juno-backend.
+
+Under that, two real gaps. enumerate_apps walked only the two Start Menu
+Programs trees for .lnk files, and an MSIX/AppX app has no .lnk anywhere, so
+the entire Store catalogue was invisible: Jev was handed a choice list with no
+Spotify in it, found no match at the apps.iter().find, and fell through to
+typing. And launch_uri checked nothing while cmd /C start exits 0 whether or
+not a scheme has a handler, so an unregistered spotify: captioned "Looking for
+X on Spotify" with nothing on screen. Every failure on this path is a silent
+fall-through to typing by design, which is why all three looked identical.
+
+Latent alongside them: enumerate_apps ends in take(MAX_APPS) over a BTreeMap
+keyed by lowercase name, so the cut is ALPHABETICAL. At 111 shortcuts it never
+fired; adding AppsFolder would have pushed a normal machine past the old 200
+and silently dropped the end of the alphabet, which is where "Spotify" lives.
+The fix would have reintroduced the same bug through a different door.
+
+Solution: merged PR #26, then added shell:AppsFolder to enumerate_apps through
+SHCreateItemFromParsingName plus IEnumShellItems, reading SIGDN_NORMALDISPLAY
+for the name and SIGDN_PARENTRELATIVEPARSING for the AppUserModelID, and
+launching those through explorer.exe because start cannot resolve an AUMID.
+launch_uri now looks the scheme up in HKEY_CLASSES_ROOT\<scheme>\shell\open\
+command before launching, and play_music falls back to the Spotify web player
+when no handler exists. Noise filter grew readme/release notes/documentation/
+website, MAX_APPS went to 250, and its comment now names the alphabetical cut.
+
+Justification: SIGDN_PARENTRELATIVEPARSING rather than the absolute parsing
+name because a probe of shell:AppsFolder showed what its children actually are:
+189 entries of which 57 are not apps at all (a .chm, a .msi, a .url, an example
+folder), and the AUMID is the parent relative form. Building the shell: prefix
+in code beats trusting a full parsing name to carry it. The path separator is
+what separates the two, so the non-app members drop out with no name matching.
+The registry lookup is the same key the shell itself consults, and it was
+verified to discriminate on this machine (spotify false, https/mailto/
+ms-settings true) while explorer.exe shell:AppsFolder\<AUMID> was verified to
+launch a real app. Measured union after filtering is 180, comfortably under the
+cap, so the cap is documented as a last resort rather than relied on.
+
+Worth knowing for the other half: the voice-call route is separately hollow.
+desktopCapabilities.ts has advertised a manifest on GET /voice/token since
+02c66eb and voice.ts says the backend can read it "whenever it ships", but
+voice_token in juno-backend never reads ?manifest=, run_desktop_capability is
+absent from VOICE_TOOL_REGISTRY, and product_knowledge's capabilities.desktop
+does not list it, so Buddy denies the feature in conversation. research_ui is
+the same shape already shipped end to end and is the pattern to copy.
+================================================================================
