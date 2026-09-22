@@ -65,6 +65,7 @@ mod keystore;
 pub mod polish;
 pub mod edits;
 pub mod observer;
+pub mod command_brain;
 
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
@@ -652,6 +653,25 @@ mod platform {
                 word_bucket: "0",
                 polished: false,
                 error_category: Some(category),
+            }
+        }
+
+        /// A hold that was executed as a desktop command (command_brain.rs)
+        /// rather than typed. Same bucket boundaries as `from_outcome`.
+        fn command(hold_ms: u64, words: u64, polished: bool) -> Self {
+            let word_bucket = match words {
+                0 => "0",
+                1..=5 => "1-5",
+                6..=20 => "6-20",
+                21..=60 => "21-60",
+                _ => "60+",
+            };
+            Self {
+                outcome: "command",
+                hold_ms,
+                word_bucket,
+                polished,
+                error_category: None,
             }
         }
     }
@@ -1338,6 +1358,44 @@ mod platform {
         // SendInput still reports success). Hand the text to React, which
         // drops it into the composer at the caret and refocuses it. To
         // dictate into another app, close the chat first.
+        // Voice command routing (command_brain.rs): inert without a stored
+        // key, and never for a hold aimed at Aura's own chat, which is a
+        // conversation with Buddy rather than a desktop instruction. `None`
+        // means "this is dictation" and the insert path below runs unchanged.
+        if !(composer_focused() || chat_slot_open()) {
+            if let Some(done) =
+                super::command_brain::try_command(app, &final_text, app_key.as_deref())
+            {
+                emit_hold_completed(
+                    app,
+                    HoldCompleted::command(
+                        hold_ms as u64,
+                        usage::word_count(&final_text),
+                        raw_for_history.is_some(),
+                    ),
+                );
+                // Archived like any dictation so nothing said is ever lost,
+                // but never shareable: there is no field to read back.
+                let _ = history::record_later(
+                    app,
+                    final_text.clone(),
+                    raw_for_history,
+                    std::mem::take(&mut utterance),
+                    hold_ms as i64,
+                    usage::word_count(&final_text),
+                    false,
+                    polish_context.to_json(),
+                );
+                finish_with(
+                    app,
+                    generation,
+                    HudUpdate::new(HudPhase::Action).with_message(done.caption),
+                    CAPTION_LINGER,
+                );
+                return shutting_down;
+            }
+        }
+
         // Monotonic start of the correction window, taken the moment the
         // keystrokes land rather than after history encodes the clip.
         let mut typed_at = Instant::now();

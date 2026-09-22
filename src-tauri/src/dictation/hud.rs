@@ -109,6 +109,9 @@ pub enum HudPhase {
     Listening,
     Transcribing,
     Inserted,
+    /// A voice command was executed instead of typing (command_brain.rs).
+    /// The caption names the action taken; it never quotes the transcript.
+    Action,
     Error,
     /// A final transcript exists, but Windows could not safely type it. This
     /// interactive card lets the user copy the words instead of losing them.
@@ -165,7 +168,11 @@ fn edge_wanted(phase: HudPhase) -> bool {
 fn resizes_into_card(phase: HudPhase) -> bool {
     matches!(
         phase,
-        HudPhase::Error | HudPhase::Pending | HudPhase::Recovery | HudPhase::Consent
+        HudPhase::Action
+            | HudPhase::Error
+            | HudPhase::Pending
+            | HudPhase::Recovery
+            | HudPhase::Consent
     )
 }
 
@@ -450,6 +457,7 @@ fn surface_size(edge: NotchEdge, phase: HudPhase, _has_caption: bool) -> Logical
             }
         },
         HudPhase::Idle => resting_size(edge),
+        HudPhase::Action => LogicalSize::new(MESSAGE_WIDTH, MESSAGE_HEIGHT),
         HudPhase::Error => LogicalSize::new(MESSAGE_WIDTH, MESSAGE_HEIGHT),
         HudPhase::Recovery => LogicalSize::new(MESSAGE_WIDTH, RECOVERY_HEIGHT),
         HudPhase::Pending => LogicalSize::new(MESSAGE_WIDTH, PENDING_HEIGHT),

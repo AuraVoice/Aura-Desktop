@@ -573,6 +573,9 @@ pub fn run() {
             dictation::polish_commands::dictation_set_polish_settings,
             dictation::polish_commands::dictation_set_polish_credential,
             dictation::polish_commands::dictation_clear_polish_credential,
+            dictation::command_brain::dictation_command_settings,
+            dictation::command_brain::dictation_set_command_settings,
+            dictation::command_brain::dictation_set_command_api_key,
             uia::capture_structured_context,
             toast::show_actionable_toast,
             toast::take_pending_toast_activation,
@@ -630,6 +633,13 @@ pub fn run() {
             // it left usePolishCredential.ts retrying an unregistered command
             // forever on macOS.
             app.manage(dictation::polish::start(app.handle().clone()));
+
+            // Voice command routing (command_brain.rs). Same shape and same
+            // rationale as polish above: no Win32 in the module top, both
+            // platform halves real behind its own seam, and cheap when
+            // unused: one JSON read and, only if a key was ever saved, one
+            // decrypt.
+            app.manage(dictation::command_brain::start(app.handle().clone()));
 
             // Owns the COM apartment for UI Automation. Started once here so
             // the first turn does not pay for CoCreateInstance. A placeholder

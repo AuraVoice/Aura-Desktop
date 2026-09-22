@@ -233,6 +233,12 @@ body,
   animation: dictation-hold-pulse 1.6s ease-in-out infinite;
 }
 
+/* A command that was carried out: green, because the red default reads as a
+   failure and this is the one caption that reports success. */
+.dictation-message.is-action .dictation-message__dot {
+  background: #4ec489;
+}
+
 @keyframes dictation-hold-pulse {
   0%,
   100% {
