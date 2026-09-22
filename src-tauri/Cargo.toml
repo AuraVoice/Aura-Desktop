@@ -305,6 +305,13 @@ windows = { version = "0.61", features = [
     # API - IAudioSessionManager2, IAudioSessionControl2, ISimpleAudioVolume -
     # is the same mechanism the Windows volume mixer uses for per-app mute.
     "Win32_Media_Audio",
+    # Voice commands (dictation/command_brain.rs): shell:AppsFolder is the only
+    # place Store (MSIX/AppX) apps are listed, and reaching it needs
+    # SHCreateItemFromParsingName plus IEnumShellItems. The registry half is
+    # RegOpenKeyExW, which is how a URI scheme is checked for a handler before
+    # the module claims it launched something.
+    "Win32_UI_Shell",
+    "Win32_System_Registry",
 ] }
 # The Windows half of audio_capture.rs's device layer: loopback + mic. No
 # resampler crate is needed alongside it, because both streams are opened in
