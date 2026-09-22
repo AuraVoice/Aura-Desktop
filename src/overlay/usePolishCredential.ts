@@ -1,4 +1,5 @@
 import { auth } from "../lib/firebase";
+import { clearCommandCredential, pushCommandCredential } from "../lib/dictationCommands";
 import { clearPolishCredential, pushPolishCredential } from "../lib/dictationPolish";
 import { logError } from "../lib/log";
 import {
@@ -29,7 +30,14 @@ async function cycle(): Promise<PumpOutcome> {
     if (!user) return { nextDelayMs: null };
     // Force a fresh mint so the pushed token carries its full hour.
     const idToken = await user.getIdToken(true);
-    await pushPolishCredential(idToken, ID_TOKEN_TTL_SECONDS);
+    // Both backend dictation calls check the same Firebase ID token, so one
+    // mint serves both rather than running a second pump that would double the
+    // refreshes for no gain. Pushed independently: a failure to reach one
+    // holder must not leave the other stale.
+    await Promise.all([
+      pushPolishCredential(idToken, ID_TOKEN_TTL_SECONDS),
+      pushCommandCredential(idToken, ID_TOKEN_TTL_SECONDS),
+    ]);
     return { nextDelayMs: refreshDelayMs(ID_TOKEN_TTL_SECONDS) };
   } catch (err) {
     logError("usePolishCredential", err);
@@ -37,6 +45,10 @@ async function cycle(): Promise<PumpOutcome> {
   }
 }
 
+async function clearBoth(): Promise<void> {
+  await Promise.all([clearPolishCredential(), clearCommandCredential()]);
+}
+
 export function usePolishCredential(ownerUid: string | null) {
-  useCredentialPump(ownerUid, cycle, clearPolishCredential);
+  useCredentialPump(ownerUid, cycle, clearBoth);
 }

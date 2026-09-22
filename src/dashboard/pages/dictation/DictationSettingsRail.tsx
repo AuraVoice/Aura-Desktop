@@ -18,11 +18,9 @@ import {
 } from "../../../lib/dictationHistory";
 import {
   loadCommandSettings,
-  saveCommandApiKey,
   saveCommandSettings,
   type CommandSettings,
 } from "../../../lib/dictationCommands";
-import "./DictationCommandKey.css";
 import { dictationConsent as consentCopy, dictationChord as chordCopy } from "../../../lib/copy";
 import { chordKeysOf, useDictationStatus } from "../../../lib/dictationStatus";
 import { bytes as formatBytes } from "../../format";
@@ -103,7 +101,6 @@ export function DictationSettingsRail({
   const [onlineAccepted, setOnlineAccepted] = useState<boolean | null>(null);
   const [polish, setPolish] = useState<PolishSettings | null>(null);
   const [commands, setCommands] = useState<CommandSettings | null>(null);
-  const [keyDraft, setKeyDraft] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [permissionAsked, setPermissionAsked] = useState(false);
@@ -169,20 +166,6 @@ export function DictationSettingsRail({
     } catch (err) {
       logError("DictationSettingsRail: commands toggle", err);
       setError("The change could not be saved.");
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function updateCommandKey(apiKey: string) {
-    setBusy("commandKey");
-    setError(null);
-    try {
-      setCommands(await saveCommandApiKey(apiKey));
-      setKeyDraft("");
-    } catch (err) {
-      logError("DictationSettingsRail: command key", err);
-      setError("The key could not be saved on this device.");
     } finally {
       setBusy(null);
     }
@@ -296,50 +279,11 @@ export function DictationSettingsRail({
               disabled={busy === "commands"}
               onChange={(value) => void updateCommands(value)}
             />
-            {commands.hasApiKey ? (
-              <div className="db-trace-actions">
-                <p className="db-trace-note">A TypeSafe API key is stored on this {deviceNoun()}.</p>
-                <button
-                  type="button"
-                  className="db-trace-action"
-                  disabled={busy === "commandKey"}
-                  onClick={() => void updateCommandKey("")}
-                >
-                  Remove key
-                </button>
-              </div>
-            ) : (
-              <>
-                <p className="db-trace-note">
-                  Commands run through Jev, TypeSafe's decision model, with your own API
-                  key from console.typesafe.ai. Without a key nothing changes and every
-                  hold types as usual.
-                </p>
-                <div className="db-command-key-form">
-                  <input
-                    type="password"
-                    value={keyDraft}
-                    placeholder="TypeSafe API key"
-                    aria-label="TypeSafe API key"
-                    disabled={busy === "commandKey"}
-                    onChange={(event) => setKeyDraft(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" && busy !== "commandKey" && keyDraft.trim()) {
-                        void updateCommandKey(keyDraft.trim());
-                      }
-                    }}
-                  />
-                  <button
-                    type="button"
-                    className="db-trace-action"
-                    disabled={busy === "commandKey" || keyDraft.trim() === ""}
-                    onClick={() => void updateCommandKey(keyDraft.trim())}
-                  >
-                    Save
-                  </button>
-                </div>
-              </>
-            )}
+            <p className="db-trace-note">
+              {commands.ready
+                ? "Commands run through Jev, TypeSafe's decision model. Aura handles the connection; there is nothing to set up."
+                : `Connecting to the command service. Until it is ready every hold types as usual. If this persists, check that this ${deviceNoun()} is signed in.`}
+            </p>
           </>
         )}
       </RailSection>

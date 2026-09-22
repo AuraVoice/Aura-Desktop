@@ -1,14 +1,23 @@
 //! Voice commands: route a finished dictation to a desktop action.
 //!
-//! Off unless the user has both switched it on and stored a TypeSafe API key
-//! (console.typesafe.ai). With it on, every short finished hold is put to Jev,
-//! TypeSafe's System One model, as ONE typed decision over options this code
-//! enumerates: which action, which installed app, which candidate span. Jev
-//! never generates text, it only selects, so nothing it answers can name an
-//! app, verb or URL that this module did not offer it first. Anything below
-//! the confidence gates, any error, and any timeout falls through to the
-//! ordinary insert path, so with no key stored this module costs one atomic
-//! read per hold and changes nothing.
+//! Every short finished hold is put to Jev, TypeSafe's System One model, as
+//! ONE typed decision over options this code enumerates: which action, which
+//! installed app, which candidate span. Jev never generates text, it only
+//! selects, so nothing it answers can name an app, verb or URL that this
+//! module did not offer it first. Anything below the confidence gates, any
+//! error, and any timeout falls through to the ordinary insert path.
+//!
+//! The call goes to `POST /dictation/command` on juno-backend, which holds the
+//! TypeSafe key and adds the model name. No provider key exists in this
+//! process, the bundle, or the installer - the same posture as transcription
+//! (credential.rs) and polish (polish.rs). Unlike transcription there is no
+//! provider-side ephemeral token to mint, so the whole call is proxied.
+//!
+//! Auth follows the credential.rs pattern exactly: React mints (a Firebase ID
+//! token, the same one `authFetch` attaches), Rust holds it in RAM only, and
+//! the pump refreshes ahead of expiry so a keyup never pays a minting round
+//! trip. Same storage rules: no Serialize, no Debug, never disk. With no
+//! credential yet pushed the module is inert and costs one lock per hold.
 //!
 //! The routing is deliberately asymmetric, because the two mistakes are not
 //! the same size. A command typed as text costs one delete; text executed as
@@ -24,10 +33,8 @@
 //! (mod.rs header): verbs, confidences, durations and outcomes only. Never
 //! the transcript, a candidate span, or a raw reply.
 //!
-//! The API key is the one secret this module owns. It is sealed with the
-//! dictation key (keystore.rs) in the dictation directory and decrypted once
-//! at startup into RAM; it is never logged, never serialized, and never sent
-//! anywhere but api.typesafe.ai.
+//! This module owns no secret at all. The only thing it holds is the user's
+//! own short-lived Firebase ID token, in RAM, dropped on sign-out.
 
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -38,19 +45,26 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
 use super::keystore;
+use super::scoped_token::ScopedToken;
 use crate::util::lock;
 
 const SETTINGS_FILE: &str = "command_brain.json";
-const KEY_FILE: &str = "command_key.sealed";
 
-/// TypeSafe's System One endpoint and the launch model route.
-const TYPESAFE_URL: &str = "https://api.typesafe.ai/v1/systemone";
-const JEV_MODEL: &str = "jev-latest";
+/// Mirrors `API_BASE_URL` in `src/lib/api.ts`, for the same reason polish.rs
+/// carries its own copy: this call runs on the dictation worker in front of
+/// the keystrokes and must not IPC to the webview to learn where the backend
+/// lives. The model name is the backend's business, not this module's.
+const API_BASE_URL: &str = "https://juno-backend-620715294422.us-central1.run.app";
 
 /// Total wall-clock the worker waits before treating the hold as dictation.
-const WAIT_BUDGET: Duration = Duration::from_millis(1500);
-const CONNECT_TIMEOUT: Duration = Duration::from_millis(700);
-const REQUEST_TIMEOUT: Duration = Duration::from_millis(1400);
+/// Wider than the 1500ms of the direct-to-provider version because the call
+/// now goes through juno-backend. Measured warm on 2026-09-22: ~70ms to Cloud
+/// Run plus ~150ms provider time, so this is about 9x the real round trip.
+/// The service runs with min-instances=1 precisely so a cold start cannot eat
+/// this budget and silently turn a command back into typed words.
+const WAIT_BUDGET: Duration = Duration::from_millis(2000);
+const CONNECT_TIMEOUT: Duration = Duration::from_millis(800);
+const REQUEST_TIMEOUT: Duration = Duration::from_millis(1800);
 
 /// No text field focused: dictation has nowhere to land, act on a clear read.
 const GATE_FREE: f64 = 0.60;
@@ -101,7 +115,8 @@ struct AppEntry {
 
 struct State {
     settings: Settings,
-    api_key: Option<String>,
+    /// A Firebase ID token for `/dictation/command`, never a provider key.
+    credential: ScopedToken,
     apps: Vec<AppEntry>,
     apps_read_at: Option<Instant>,
 }
@@ -115,15 +130,14 @@ fn handle(app: &AppHandle) -> Option<tauri::State<'_, CommandBrainHandle>> {
     app.try_state::<CommandBrainHandle>()
 }
 
-/// Reads the settings and unseals the stored key once. Cheap when the feature
-/// has never been touched: both reads miss and the module stays inert.
+/// Reads the settings once. Cheap when the feature has never been touched:
+/// the read misses and the module stays inert until a credential arrives.
 pub fn start(app: AppHandle) -> CommandBrainHandle {
     let settings = load_settings(&app);
-    let api_key = load_api_key(&app);
     CommandBrainHandle {
         state: Arc::new(Mutex::new(State {
             settings,
-            api_key,
+            credential: ScopedToken::new("dictation.command.credential"),
             apps: Vec::new(),
             apps_read_at: None,
         })),
@@ -132,11 +146,23 @@ pub fn start(app: AppHandle) -> CommandBrainHandle {
 
 impl CommandBrainHandle {
     fn usable(&self) -> Option<String> {
-        let state = lock(&self.state);
+        let mut state = lock(&self.state);
         if !state.settings.enabled {
             return None;
         }
-        state.api_key.clone()
+        state.credential.usable()
+    }
+
+    /// Stores a fresh Firebase ID token from the webview's refresh pump.
+    /// Duration only in the log - never the token, its length, or a prefix.
+    pub fn set_token(&self, token: String, ttl: Duration) {
+        lock(&self.state).credential.set(token, ttl);
+    }
+
+    /// Drops the token on sign-out, so it cannot outlive the session that was
+    /// allowed to have it.
+    pub fn clear_token(&self) {
+        lock(&self.state).credential.clear();
     }
 
     /// The installed-app registry, re-enumerated when stale. The scan is a
@@ -179,34 +205,6 @@ fn save_settings(app: &AppHandle, settings: Settings) -> Result<Settings, String
     Ok(settings)
 }
 
-fn load_api_key(app: &AppHandle) -> Option<String> {
-    let dir = keystore::dictation_dir(app).ok()?;
-    let sealed = std::fs::read(dir.join(KEY_FILE)).ok()?;
-    let key = keystore::load_or_create_key(app).ok()?;
-    let plain = crate::crypto::decrypt(&key, &sealed).ok()?;
-    let value = String::from_utf8(plain).ok()?;
-    let value = value.trim().to_string();
-    (!value.is_empty()).then_some(value)
-}
-
-/// Seals and stores the key, or removes it when `value` is empty. Returns
-/// what is now effectively stored.
-fn store_api_key(app: &AppHandle, value: &str) -> Result<Option<String>, String> {
-    let dir = keystore::dictation_dir(app)?;
-    let path = dir.join(KEY_FILE);
-    let value = value.trim();
-    if value.is_empty() {
-        if path.exists() {
-            std::fs::remove_file(&path).map_err(|e| e.to_string())?;
-        }
-        return Ok(None);
-    }
-    let key = keystore::load_or_create_key(app)?;
-    let sealed = crate::crypto::encrypt(&key, value.as_bytes())?;
-    crate::fsx::write_atomic(&path, &sealed, crate::fsx::Durability::Fsync)?;
-    Ok(Some(value.to_string()))
-}
-
 // ---------------------------------------------------------------------------
 // Tauri commands (registered in lib.rs by full path)
 
@@ -214,21 +212,23 @@ fn store_api_key(app: &AppHandle, value: &str) -> Result<Option<String>, String>
 #[serde(rename_all = "camelCase")]
 pub struct CommandSettingsView {
     pub enabled: bool,
-    pub has_api_key: bool,
+    /// Whether the webview's credential pump has supplied a usable token yet.
+    /// The page shows readiness with it; there is nothing for a user to enter.
+    pub ready: bool,
 }
 
 fn view(app: &AppHandle) -> CommandSettingsView {
     match handle(app) {
         Some(handle) => {
-            let state = lock(&handle.state);
+            let mut state = lock(&handle.state);
             CommandSettingsView {
                 enabled: state.settings.enabled,
-                has_api_key: state.api_key.is_some(),
+                ready: state.credential.usable().is_some(),
             }
         }
         None => CommandSettingsView {
             enabled: false,
-            has_api_key: false,
+            ready: false,
         },
     }
 }
@@ -255,23 +255,27 @@ pub async fn dictation_set_command_settings(
     Ok(view(&app))
 }
 
-/// Stores the user's TypeSafe API key, sealed under the dictation key. An
-/// empty string removes it. The value is never logged and never echoed back.
+/// Receives a fresh Firebase ID token from the webview's credential pump. The
+/// token is never logged, never serialized, and never written to disk.
 #[tauri::command]
-pub async fn dictation_set_command_api_key(
+pub async fn dictation_set_command_credential(
     app: AppHandle,
-    api_key: String,
-) -> Result<CommandSettingsView, String> {
-    let blocking_app = app.clone();
-    let stored =
-        tauri::async_runtime::spawn_blocking(move || store_api_key(&blocking_app, &api_key))
-            .await
-            .map_err(|e| e.to_string())??;
-    info!("dictation: phase=command key_stored={}", stored.is_some());
+    id_token: String,
+    ttl_seconds: u32,
+) -> Result<(), String> {
     if let Some(handle) = handle(&app) {
-        lock(&handle.state).api_key = stored;
+        handle.set_token(id_token, Duration::from_secs(ttl_seconds.into()));
     }
-    Ok(view(&app))
+    Ok(())
+}
+
+/// Drops the token on sign-out or account switch.
+#[tauri::command]
+pub async fn dictation_clear_command_credential(app: AppHandle) -> Result<(), String> {
+    if let Some(handle) = handle(&app) {
+        handle.clear_token();
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -292,7 +296,7 @@ pub(super) fn try_command(
     frontmost_app: Option<&str>,
 ) -> Option<Executed> {
     let brain = handle(app)?;
-    let api_key = brain.usable()?;
+    let token = brain.usable()?;
     let words = transcript.split_whitespace().count();
     if words == 0 || words > MAX_COMMAND_WORDS {
         return None;
@@ -313,11 +317,16 @@ pub(super) fn try_command(
 
     let (tx, rx) = std::sync::mpsc::channel();
     tauri::async_runtime::spawn(async move {
-        let _ = tx.send(request_decision(api_key, payload).await);
+        let _ = tx.send(request_decision(token, payload).await);
     });
     let answers = match rx.recv_timeout(WAIT_BUDGET) {
         Ok(Ok(answers)) => answers,
         Ok(Err(reason)) => {
+            // The backend refused this token; drop it so the webview's pump
+            // mints a fresh one rather than every hold retrying a dead one.
+            if reason == "auth" {
+                brain.clear_token();
+            }
             info!(
                 "dictation: phase=command outcome={reason} decision_ms={}",
                 started.elapsed().as_millis()
@@ -704,7 +713,6 @@ fn build_payload(
     }
 
     json!({
-        "model": JEV_MODEL,
         "state": {
             "utterance": utterance,
             "frontmost_app": frontmost_app,
@@ -714,12 +722,13 @@ fn build_payload(
     })
 }
 
-/// One decision round trip. The error is a category for the log, never a body
+/// One decision round trip, through juno-backend, which holds the provider key
+/// and adds the model name. The error is a category for the log, never a body
 /// that could quote the transcript back.
-async fn request_decision(api_key: String, payload: Value) -> Result<Value, &'static str> {
+async fn request_decision(token: String, payload: Value) -> Result<Value, &'static str> {
     let response = client()
-        .post(TYPESAFE_URL)
-        .bearer_auth(api_key)
+        .post(format!("{API_BASE_URL}/dictation/command"))
+        .bearer_auth(token)
         .json(&payload)
         .send()
         .await
@@ -728,6 +737,7 @@ async fn request_decision(api_key: String, payload: Value) -> Result<Value, &'st
         200 => {}
         401 | 403 => return Err("auth"),
         429 => return Err("rate_limited"),
+        503 => return Err("unavailable"),
         _ => return Err("http_other"),
     }
     let parsed: Value = response.json().await.map_err(|_| "invalid")?;

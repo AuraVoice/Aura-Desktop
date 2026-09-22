@@ -245,15 +245,6 @@
 :root[data-theme="dark"] .db-dictation-rail .db-trace-privacy {
   border-top-color: var(--dk-divider);
 }
-:root[data-theme="dark"] .db-command-key-form input {
-  border-color: var(--dk-field-border);
-  background: var(--dk-field-bg);
-  color: var(--dk-text);
-}
-:root[data-theme="dark"] .db-command-key-form input:focus-visible {
-  outline: none;
-  border-color: var(--dk-field-border-focus, var(--dk-field-border));
-}
 
 /* ── Dictation feedback dialog ── */
 :root[data-theme="dark"] .db-dictation-feedback textarea {
