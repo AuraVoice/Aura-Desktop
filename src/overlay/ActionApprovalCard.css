@@ -78,13 +78,6 @@
   color: var(--glass-text-dim);
 }
 
-.action-card-issue-title {
-  flex-basis: 100%;
-  font-size: 13.5px;
-  font-weight: 600;
-  color: var(--glass-text-bright);
-}
-
 .action-card-warning {
   padding: 1px 8px;
   border: 1px solid var(--glass-border-flat);

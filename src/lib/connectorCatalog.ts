@@ -42,10 +42,10 @@ export const ACCOUNT_CONNECTORS: readonly AccountConnectorDescriptor[] = [
     label: "GitHub",
     providerName: "GitHub",
     Icon: GitHubBrandIcon,
-    pitch: "Ask why a build is red, see PRs waiting on you, and file issues you approve.",
+    pitch: "Let Buddy read the repositories you choose. Aura never writes to GitHub.",
     connectedDetail: (status) => status.accountLabel ?? "Connected account",
     connectedMessage:
-      "GitHub is connected. If Buddy can't see a repository yet, choose it with Choose repositories.",
+      "GitHub is connected. Aura can read only the repositories you choose with Choose repositories.",
     openingMessage: "Opening GitHub so you can connect securely.",
     waitingMessage: "Finish connecting GitHub in your browser. Aura reopens here when it is done.",
   },

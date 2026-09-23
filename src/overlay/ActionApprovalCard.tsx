@@ -12,17 +12,12 @@ import "./ActionApprovalCard.css";
 const CONNECTOR_NAMES: Record<PendingAction["connector"], string> = {
   x: "X",
   linkedin: "LinkedIn",
-  github: "GitHub",
 };
-
-function approveLabel(action: PendingAction): string {
-  return action.tool === "create_github_issue" ? "Create issue" : "Post";
-}
 
 function outcomeCopy(action: PendingAction): string {
   const name = CONNECTOR_NAMES[action.connector];
   if (action.status === "done") {
-    return action.tool === "create_github_issue" ? "Issue created on GitHub." : `Posted to ${name}.`;
+    return `Posted to ${name}.`;
   }
   if (action.status === "expired") return "This expired. Ask again to prepare it.";
   if (action.status === "rejected") return "Discarded. Nothing was posted.";
@@ -38,14 +33,6 @@ function outcomeCopy(action: PendingAction): string {
       return "Posting to X is paused for now. Try again later.";
     case "rate_limited":
       return `${name} is limiting requests right now. Try again in a few minutes.`;
-    case "no_issue_access":
-    case "repo_no_access":
-      return "Aura can't open issues in that repository. Add it to the Aura app on GitHub.";
-    case "repo_ambiguous":
-    case "repo_not_found":
-      return "Aura couldn't tell which repository you meant. Ask again with its full name.";
-    case "issues_disabled":
-      return "Issues are turned off for that repository.";
     default:
       return `${name} didn't accept it. Nothing was posted.`;
   }
@@ -122,12 +109,6 @@ export function ActionApprovalCard({
           </p>
         ) : (
           <>
-            {action.tool === "create_github_issue" && (
-              <p className="action-card-meta">
-                {action.preview.repo}
-                <span className="action-card-issue-title">{action.preview.title}</span>
-              </p>
-            )}
             {action.preview.text && <p className="action-card-text">{action.preview.text}</p>}
             <p className="action-card-meta">
               {action.preview.charLimit !== null
@@ -165,7 +146,7 @@ export function ActionApprovalCard({
                 disabled={actions.busy || overLimit || action.status !== "pending"}
                 onClick={() => actions.approve(action.approvalId)}
               >
-                {actions.busy ? "Working" : approveLabel(action)}
+                {actions.busy ? "Working" : "Post"}
               </button>
               <button
                 type="button"

@@ -3,20 +3,19 @@ import { AuthRequiredError, authFetchWithTimeout } from "./api";
 /**
  * Approval cards for connector writes (juno-backend services/pending_actions.py).
  *
- * A post to LinkedIn or X, or a new GitHub issue, is only ever PROPOSED by a
- * tool or a draft's Post button. The backend stores the exact arguments and a
+ * A post to LinkedIn or X is only ever PROPOSED by a tool or a draft's Post
+ * button. The backend stores the exact arguments and a
  * preview; nothing reaches the provider until the user clicks on the card,
  * which calls approve. The preview shown here always comes from the backend
  * over the user's own token, never from the voice agent's data message, so the
  * card and the executed action cannot disagree.
  */
 
-export type PendingActionTool = "post_to_x" | "post_to_linkedin" | "create_github_issue";
+export type PendingActionTool = "post_to_x" | "post_to_linkedin";
 
 export const PENDING_ACTION_TOOLS: ReadonlySet<string> = new Set<PendingActionTool>([
   "post_to_x",
   "post_to_linkedin",
-  "create_github_issue",
 ]);
 
 export type PendingActionStatus =
@@ -34,14 +33,12 @@ export interface PendingActionPreview {
   charLimit: number | null;
   hasLink: boolean;
   account: string;
-  repo: string;
-  title: string;
 }
 
 export interface PendingAction {
   approvalId: string;
   tool: PendingActionTool;
-  connector: "x" | "linkedin" | "github";
+  connector: "x" | "linkedin";
   title: string;
   status: PendingActionStatus;
   preview: PendingActionPreview;
@@ -73,7 +70,7 @@ export function parsePendingAction(raw: unknown): PendingAction | null {
   if (
     !APPROVAL_ID_RE.test(approvalId)
     || !PENDING_ACTION_TOOLS.has(tool)
-    || (connector !== "x" && connector !== "linkedin" && connector !== "github")
+    || (connector !== "x" && connector !== "linkedin")
     || !STATUSES.has(status)
   ) {
     return null;
@@ -97,8 +94,6 @@ export function parsePendingAction(raw: unknown): PendingAction | null {
       charLimit: typeof preview.char_limit === "number" ? preview.char_limit : null,
       hasLink: preview.has_link === true,
       account: str(preview.account),
-      repo: str(preview.repo),
-      title: str(preview.title),
     },
     createdAt: str(data.created_at),
     expiresAt: str(data.expires_at),

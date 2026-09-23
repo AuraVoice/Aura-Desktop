@@ -7,15 +7,18 @@ import {
   ACCOUNT_CONNECTOR_NAMES,
   ConnectorBlockedError,
   ConnectorReauthorizationRequiredError,
+  GitHubRateLimitedError,
   disableAccountConnector,
   disableGmail,
   disableGoogleCalendar,
   disableNotion,
+  disconnectGitHub,
   enableAccountConnector,
   enableGmail,
   enableGoogleCalendar,
   enableNotion,
   fetchConnectors,
+  fetchGitHubRepos,
   startConnectorOAuth,
   syncGoogleCalendar,
   syncXBookmarks,
@@ -23,6 +26,7 @@ import {
   type AccountConnectorStatus,
   type ConnectorName,
   type ConnectorsCatalog,
+  type GitHubRepos,
   type GmailConnectorStatus,
   type GoogleCalendarConnectorStatus,
   type NotionConnectorStatus,
@@ -56,8 +60,15 @@ export interface ConnectorBanner {
   message: string;
 }
 
+/** Why the GitHub repository list could not load, each with its own copy. */
+export type GitHubReposError = "reauthorization" | "rate_limited" | "unavailable";
+
 export interface ConnectorsState {
   catalog: ConnectorsCatalog | null;
+  /** What Aura can actually read on GitHub. Null until loaded, and whenever
+   * GitHub is off. */
+  githubRepos: GitHubRepos | null;
+  githubReposError: GitHubReposError | null;
   loading: boolean;
   loadError: boolean;
   action: ConnectorAction | null;
@@ -146,6 +157,35 @@ export function useConnectors(): ConnectorsState {
   const pendingOAuthRef = useRef<{ attemptId: string; connector: ConnectorName } | null>(null);
   const handledAttemptsRef = useRef(new Set<string>());
   const mountedRef = useRef(true);
+  const [githubRepos, setGitHubRepos] = useState<GitHubRepos | null>(null);
+  const [githubReposError, setGitHubReposError] = useState<GitHubReposError | null>(null);
+  const githubReposRequestRef = useRef(0);
+  /** Set by a fresh GitHub authorization: if it can read no repository yet,
+   * the install page opens once so the user is not left on a green row that
+   * reads nothing. */
+  const offerGitHubInstallRef = useRef(false);
+
+  const loadGitHubRepos = useCallback(async (): Promise<GitHubRepos | null> => {
+    const request = ++githubReposRequestRef.current;
+    try {
+      const next = await fetchGitHubRepos();
+      if (!mountedRef.current || request !== githubReposRequestRef.current) return null;
+      setGitHubRepos(next);
+      setGitHubReposError(null);
+      return next;
+    } catch (err) {
+      if (!mountedRef.current || request !== githubReposRequestRef.current) return null;
+      if (err instanceof ConnectorReauthorizationRequiredError) {
+        setGitHubReposError("reauthorization");
+      } else if (err instanceof GitHubRateLimitedError) {
+        setGitHubReposError("rate_limited");
+      } else {
+        logError("useConnectors: GitHub repos", err);
+        setGitHubReposError("unavailable");
+      }
+      return null;
+    }
+  }, []);
 
   const clearBannerTimer = useCallback(() => {
     if (bannerTimerRef.current) {
@@ -186,6 +226,7 @@ export function useConnectors(): ConnectorsState {
         // Claim the attempt so the deep link, if it ever turns up, does not
         // replay a second "connected" banner over this one.
         handledAttemptsRef.current.add(attemptId);
+        if (connector === "github") offerGitHubInstallRef.current = true;
         clearOAuthWait();
         clearBannerTimer();
         setAction(null);
@@ -467,6 +508,17 @@ export function useConnectors(): ConnectorsState {
 
   const disableAccount = useCallback((name: AccountConnectorName) => {
     const descriptor = ACCOUNT_CONNECTOR_BY_NAME[name];
+    if (name === "github") {
+      return runAction({
+        actionName: "disabling_github",
+        run: disconnectGitHub,
+        apply: (status: AccountConnectorStatus) => applyAccount("github", status),
+        logLabel: "disconnect GitHub",
+        startMessage: "Removing Aura's access to GitHub.",
+        doneMessage: "GitHub is disconnected and Aura's access on GitHub is removed. You can reconnect anytime.",
+        failedMessage: "GitHub stayed connected because the disconnect did not finish. Try again.",
+      });
+    }
     return runAction({
       actionName: `disabling_${name}`,
       run: () => disableAccountConnector(name),
@@ -498,7 +550,34 @@ export function useConnectors(): ConnectorsState {
 
   const handleOAuthCompletion = useCallback(async (rawUrl: string) => {
     const completion = parseConnectorOAuthCompletion(rawUrl);
-    if (!completion || handledAttemptsRef.current.has(completion.attemptId)) return;
+    if (!completion) return;
+    if (completion.attemptId === null) {
+      // GitHub's Setup URL: the user just picked or changed repositories. It
+      // belongs to no attempt, so it leaves any browser wait alone and only
+      // refreshes what Aura can read.
+      try {
+        const next = await fetchConnectors();
+        if (!mountedRef.current) return;
+        setCatalog(next);
+        if (!next.accounts.github.enabled) return;
+        const repos = await loadGitHubRepos();
+        if (!mountedRef.current || !repos) return;
+        clearBannerTimer();
+        setBanner(repos.total > 0
+          ? {
+              tone: "success",
+              message: `Aura can read ${repos.total} ${repos.total === 1 ? "repository" : "repositories"} on GitHub.`,
+            }
+          : {
+              tone: "info",
+              message: "GitHub isn't sharing any repositories with Aura yet. Use Choose repositories to pick some.",
+            });
+      } catch (err) {
+        logError("useConnectors: GitHub repositories refresh", err);
+      }
+      return;
+    }
+    if (handledAttemptsRef.current.has(completion.attemptId)) return;
     const pending = pendingOAuthRef.current;
     if (
       pending
@@ -528,6 +607,7 @@ export function useConnectors(): ConnectorsState {
     try {
       const next = await fetchConnectors();
       if (!mountedRef.current) return;
+      if (completion.connector === "github") offerGitHubInstallRef.current = true;
       setCatalog(next);
       setAction(null);
       setBanner(connectedByName(next)[completion.connector]
@@ -548,7 +628,34 @@ export function useConnectors(): ConnectorsState {
         message: "Aura could not verify the connection. Refresh and try again.",
       });
     }
-  }, [clearOAuthWait]);
+  }, [clearBannerTimer, clearOAuthWait, loadGitHubRepos]);
+
+  // The repository list follows GitHub's on/off state: loaded whenever it turns
+  // on (page open, reconnect, OAuth completion or its poll), dropped when off.
+  const githubEnabled = catalog?.accounts.github.enabled === true;
+  const githubInstallUrl = catalog?.accounts.github.installUrl ?? null;
+  useEffect(() => {
+    if (!githubEnabled) {
+      githubReposRequestRef.current += 1;
+      setGitHubRepos(null);
+      setGitHubReposError(null);
+      return;
+    }
+    const offerInstall = offerGitHubInstallRef.current;
+    offerGitHubInstallRef.current = false;
+    void loadGitHubRepos().then((repos) => {
+      if (!offerInstall || !repos || repos.total > 0 || !githubInstallUrl || !mountedRef.current) return;
+      clearBannerTimer();
+      setBanner({
+        tone: "info",
+        message: "One more step: pick the repositories Aura can read on GitHub. Aura reopens here when you're done.",
+      });
+      void openUrl(githubInstallUrl).catch((err) => logError("useConnectors: open GitHub install", err));
+    });
+    // githubInstallUrl is read once per turn-on, not tracked: it only changes
+    // with the backend's app slug.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [githubEnabled, loadGitHubRepos, clearBannerTimer]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -578,6 +685,8 @@ export function useConnectors(): ConnectorsState {
 
   return {
     catalog,
+    githubRepos,
+    githubReposError,
     loading,
     loadError,
     action,

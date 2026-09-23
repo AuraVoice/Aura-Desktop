@@ -236,9 +236,6 @@
 :root[data-theme="dark"] .db-connector-row.is-connected {
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
 }
-:root[data-theme="dark"] .db-connector-connected-dot {
-  color: var(--dk-accent-text);
-}
 :root[data-theme="dark"] .db-connector-attention {
   color: var(--dk-warning);
 }

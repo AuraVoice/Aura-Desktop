@@ -12,7 +12,7 @@ Status: code-complete for all five phases on 2026-09-14, not yet deployed or ver
 - **The approval card outranks chat** in the notch slot and yields only to a live Interview Companion and its paste box.
 - **Not built:** a scheduled bookmark sweep for every user, a Post button on the dashboard Drafts page, and Vercel/Supabase.
 
-**Before any of it works in production:** create the GitHub App (user-to-server tokens with expiry, callback `/connectors/oauth/github/callback`, permissions Actions read, Issues write, Pull requests read, Metadata read), the LinkedIn app (Sign In with LinkedIn using OpenID Connect + Share on LinkedIn), the X app (OAuth 2.0, confidential client, pay-per-use billing), add the two Classroom scopes to the Google consent screen, then add these Secret Manager secrets and wire them in `deploy.sh`: GitHub, LinkedIn and X client ids and secrets, plus env vars `GITHUB_APP_SLUG` and the three `*_REDIRECT_URI`s.
+**Before any of it works in production:** create the GitHub App (user-to-server tokens with expiry, callback `/connectors/oauth/github/callback`, Setup URL `/connectors/github/installed` with Redirect on update, webhook off, permissions Contents read, Actions read, Pull requests read, Metadata read; read-only since 2026-09-22, so no Issues write and no `create_github_issue`), the LinkedIn app (Sign In with LinkedIn using OpenID Connect + Share on LinkedIn), the X app (OAuth 2.0, confidential client, pay-per-use billing), add the two Classroom scopes to the Google consent screen, then add these Secret Manager secrets and wire them in `deploy.sh`: GitHub, LinkedIn and X client ids and secrets, plus env vars `GITHUB_APP_SLUG` and the three `*_REDIRECT_URI`s.
 
 ## Context
 

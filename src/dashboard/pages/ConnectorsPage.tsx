@@ -5,6 +5,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import type {
   AccountConnectorName,
   AccountConnectorStatus,
+  GitHubRepos,
   GmailConnectorStatus,
   GoogleCalendarConnectorStatus,
   NotionConnectorStatus,
@@ -25,6 +26,7 @@ import { DetailModal } from "../components/DetailModal";
 import {
   useConnectors,
   type ConnectorBanner,
+  type GitHubReposError,
 } from "../useConnectors";
 
 const COMING_SOON_CONNECTORS: Array<{
@@ -145,6 +147,8 @@ export function ConnectorsPage() {
               key={descriptor.name}
               descriptor={descriptor}
               status={connectors.catalog?.accounts[descriptor.name] ?? null}
+              githubRepos={connectors.githubRepos}
+              githubReposError={connectors.githubReposError}
               busy={busy}
               syncing={connectors.action === "syncing_x"}
               onToggle={(checked) => {
@@ -184,6 +188,8 @@ export function ConnectorsPage() {
                   ? "Gmail"
                   : ACCOUNT_CONNECTOR_BY_NAME[confirmDisconnect].label}?
             Buddy will stop using it, but you can reconnect anytime.
+            {confirmDisconnect === "github"
+              && " Aura's access is removed on GitHub too. The Aura app stays installed on your repositories until you remove it there."}
           </p>
           <div className="db-update-dialog-actions">
             <button
@@ -279,7 +285,6 @@ function CalendarConnectorRow({
       <div className="db-connector-row-copy">
         <div className="db-connector-title-line">
           <h2>Google Calendar</h2>
-          {connected && <span className="db-connector-connected-dot">Connected</span>}
         </div>
         <p>
           {connected
@@ -360,7 +365,6 @@ function GmailConnectorRow({
       <div className="db-connector-row-copy">
         <div className="db-connector-title-line">
           <h2>Gmail</h2>
-          {connected && <span className="db-connector-connected-dot">Connected</span>}
         </div>
         <p>
           {connected
@@ -399,7 +403,6 @@ function NotionConnectorRow({
       <div className="db-connector-row-copy">
         <div className="db-connector-title-line">
           <h2>Notion</h2>
-          {connected && <span className="db-connector-connected-dot">Connected</span>}
         </div>
         <p>
           {connected
@@ -439,9 +442,39 @@ function NotionConnectorRow({
   );
 }
 
+/** What the GitHub row says Aura can read. A connected account with no
+ * repository is its own state, not a plain "Connected". */
+function gitHubRepoLine(
+  repos: GitHubRepos | null,
+  error: GitHubReposError | null,
+): { text: string; attention: boolean } | null {
+  if (error === "reauthorization") {
+    return { text: "GitHub needs to be reconnected. Turn it off and on again.", attention: true };
+  }
+  if (error === "rate_limited") {
+    return { text: "GitHub is busy right now. Your repositories will show again in a minute.", attention: false };
+  }
+  if (error === "unavailable") {
+    return { text: "Aura couldn't reach GitHub to list your repositories. Reopen this page to retry.", attention: true };
+  }
+  if (!repos) return null;
+  if (repos.total === 0) {
+    return { text: "No repositories shared yet. Use Choose repositories to pick what Aura can read.", attention: true };
+  }
+  const shown = repos.repos.slice(0, 3).map((repo) => repo.fullName.split("/")[1] ?? repo.fullName);
+  const more = repos.total - shown.length;
+  const noun = repos.total === 1 ? "repository" : "repositories";
+  return {
+    text: `Aura can read ${repos.total}${repos.truncated ? "+" : ""} ${noun}: ${shown.join(", ")}${more > 0 ? ` and ${more} more` : ""}`,
+    attention: false,
+  };
+}
+
 function AccountConnectorRow({
   descriptor,
   status,
+  githubRepos,
+  githubReposError,
   busy,
   syncing,
   onToggle,
@@ -449,6 +482,8 @@ function AccountConnectorRow({
 }: {
   descriptor: AccountConnectorDescriptor;
   status: AccountConnectorStatus | null;
+  githubRepos: GitHubRepos | null;
+  githubReposError: GitHubReposError | null;
   busy: boolean;
   syncing: boolean;
   onToggle: (checked: boolean) => void;
@@ -458,6 +493,9 @@ function AccountConnectorRow({
   const { Icon } = descriptor;
   const schoolBlocked = status?.lastError === "school_blocked";
   const installUrl = status?.installUrl ?? null;
+  const repoLine = connected && descriptor.name === "github"
+    ? gitHubRepoLine(githubRepos, githubReposError)
+    : null;
   return (
     <article className={`db-panel db-connector-row${connected ? " is-connected" : ""}`}>
       <span className="db-connector-icon">
@@ -466,9 +504,13 @@ function AccountConnectorRow({
       <div className="db-connector-row-copy">
         <div className="db-connector-title-line">
           <h2>{descriptor.label}</h2>
-          {connected && <span className="db-connector-connected-dot">Connected</span>}
         </div>
         <p>{connected && status ? descriptor.connectedDetail(status) : descriptor.pitch}</p>
+        {repoLine && (
+          <p className={repoLine.attention ? "db-connector-attention" : "db-connector-hint"}>
+            {repoLine.text}
+          </p>
+        )}
         {schoolBlocked && (
           <p className="db-connector-attention">
             Your school hasn't allowed Aura to use Classroom. Your school's IT admin can turn it on.

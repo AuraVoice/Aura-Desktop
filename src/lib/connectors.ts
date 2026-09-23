@@ -69,6 +69,20 @@ export interface ConnectorsCatalog {
 export class ConnectorReauthorizationRequiredError extends Error {}
 /** A school admin has not allowed Aura to read Google Classroom. */
 export class ConnectorBlockedError extends Error {}
+/** GitHub's per-user API budget ran out; a retry in a minute helps. */
+export class GitHubRateLimitedError extends Error {}
+
+/** The repositories Aura can read. Empty with a live token means the user
+ * authorized but never installed the app on a repository. */
+export interface GitHubRepos {
+  repos: { fullName: string; private: boolean }[];
+  total: number;
+  truncated: boolean;
+}
+
+/** The repos read fans out to one GitHub call per installation, so it gets
+ * more room than a plain connector mutation. */
+const GITHUB_REPOS_TIMEOUT_MS = 20_000;
 export type ConnectorName = "google_calendar" | "gmail" | "notion" | AccountConnectorName;
 
 // Per-connector OAuth host allowlist. Never widen to "any https": that turns
@@ -346,4 +360,37 @@ export function disableAccountConnector(name: AccountConnectorName): Promise<Acc
 
 export function syncXBookmarks(): Promise<AccountConnectorStatus> {
   return postConnectorAction("/connectors/x/sync", "X bookmark sync", parseAccountStatus);
+}
+
+/** Revokes Aura's grant on GitHub and deletes the stored credential. GitHub's
+ * off switch uses this instead of disable, so no token for private code
+ * outlives the user turning it off. */
+export function disconnectGitHub(): Promise<AccountConnectorStatus> {
+  return postConnectorAction("/connectors/github/disconnect", "github disconnect", parseAccountStatus);
+}
+
+export async function fetchGitHubRepos(): Promise<GitHubRepos> {
+  const response = await authFetchWithTimeout(
+    "/connectors/github/repos",
+    { method: "GET" },
+    GITHUB_REPOS_TIMEOUT_MS,
+  );
+  if (response.status === 429) {
+    throw new GitHubRateLimitedError("rate_limited");
+  }
+  const data = await readConnectorStatus(
+    response,
+    "GitHub repos",
+    (raw: unknown) => (typeof raw === "object" && raw !== null ? raw as Record<string, unknown> : {}),
+  );
+  const repos = Array.isArray(data.repos) ? data.repos : [];
+  return {
+    repos: repos.flatMap((repo) => {
+      const entry = typeof repo === "object" && repo !== null ? repo as Record<string, unknown> : {};
+      const fullName = optionalString(entry.full_name);
+      return fullName ? [{ fullName, private: entry.private === true }] : [];
+    }),
+    total: typeof data.total === "number" ? data.total : repos.length,
+    truncated: data.truncated === true,
+  };
 }

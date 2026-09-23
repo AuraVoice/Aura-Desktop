@@ -5413,22 +5413,6 @@
   align-items: center;
   gap: 9px;
 }
-.db-connector-connected-dot {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: #167766;
-  font-size: 9.5px;
-  font-weight: 750;
-}
-.db-connector-connected-dot::before {
-  width: 6px;
-  height: 6px;
-  border-radius: 999px;
-  background: #1ec8b0;
-  content: "";
-  box-shadow: 0 0 0 3px rgba(30, 200, 176, 0.12);
-}
 .db-connector-attention {
   margin: 3px 0 0;
   font-size: 11px;

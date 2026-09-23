@@ -11,9 +11,11 @@ const KNOWN_CONNECTORS: ReadonlySet<string> = new Set<ConnectorName>([
 ]);
 
 export interface ConnectorOAuthCompletion {
-  attemptId: string;
+  /** Null only for GitHub's `repos_updated`, which comes from the GitHub App's
+   * Setup URL after the user picks repositories and belongs to no attempt. */
+  attemptId: string | null;
   connector: ConnectorName;
-  outcome: "success" | "cancelled" | "failed";
+  outcome: "success" | "cancelled" | "failed" | "repos_updated";
 }
 
 export function parseConnectorOAuthCompletion(
@@ -36,6 +38,9 @@ export function parseConnectorOAuthCompletion(
   const attemptId = url.searchParams.get("attempt_id");
   const connector = url.searchParams.get("connector");
   const outcome = url.searchParams.get("outcome");
+  if (connector === "github" && outcome === "repos_updated") {
+    return { attemptId: null, connector, outcome };
+  }
   if (
     !attemptId
     || !connector
