@@ -5,17 +5,28 @@
 
 /** Product name for a detected call app (detect.rs app strings). Product
  * names, not platform strings, so they live here rather than platformKeys. */
-export function callLabel(app: string | null): string {
+export function callLabel(app: string | null, appName?: string): string {
   switch (app) {
     case "google-meet": return "Google Meet";
     case "teams-web": return "Microsoft Teams";
     case "zoom-web": return "Zoom";
     case "teams": return "Microsoft Teams";
     case "zoom": return "Zoom";
+    case "discord": return "Discord";
+    case "slack": return "Slack";
+    case "whatsapp": return "WhatsApp";
+    case "webex": return "Webex";
+    case "skype": return "Skype";
+    case "signal": return "Signal";
+    case "telegram": return "Telegram";
+    case "facetime": return "FaceTime";
     // Detected from a browser holding the microphone, not from a tab title, so
     // the site is genuinely unknown. "Record this browser call?" is honest;
     // naming a platform here would be a guess the user would catch.
     case "browser-call": return "browser";
+    // Some other app holding the microphone. The detector sends its name in
+    // windowTitle, so the card can say which one.
+    case "mic-call": return appName || "app";
     default: return "Supported call";
   }
 }

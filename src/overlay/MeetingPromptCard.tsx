@@ -85,7 +85,7 @@ export function MeetingPromptCard({
   if (!shown) return null;
 
   const { call, event, status } = shown;
-  const title = event ? copy.titleForEvent(event.title) : copy.title(callLabel(call.app));
+  const title = event ? copy.titleForEvent(event.title) : copy.title(callLabel(call.app, call.windowTitle));
   const answering = status === "prompt" || status === "starting";
   const starting = status === "starting";
   return (

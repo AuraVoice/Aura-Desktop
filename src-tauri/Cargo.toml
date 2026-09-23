@@ -284,6 +284,9 @@ windows = { version = "0.61", features = [
     # dictation share pump can tell an idle machine from a busy one.
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
+    # Meeting detection (meeting/detect.rs): a WebView2 process holding the mic
+    # is walked up to its host app via a Toolhelp parent-PID snapshot.
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_LibraryLoader",
     "Win32_Security_Cryptography",
     "Win32_System_RemoteDesktop",

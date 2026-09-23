@@ -430,7 +430,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
         const now = new Date();
         outcome = await startCaptureFor(
           `manual:${crypto.randomUUID()}`,
-          callLabel(call.app),
+          callLabel(call.app, call.windowTitle),
           now.toISOString(),
           new Date(now.getTime() + MANUAL_WINDOW_MS).toISOString(),
         );

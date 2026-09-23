@@ -20,8 +20,9 @@
 //!
 //! The watch loop, the polling cadence and the app-matching table are shared;
 //! only `scan` at the bottom is per-platform, and it exists solely to answer
-//! "which apps have visible windows, and what are they called". Nothing here
-//! ever touches the OverlayState mutex.
+//! "which apps have visible windows, and what are they called", plus "which
+//! apps hold the microphone". Nothing here holds the OverlayState mutex; the
+//! macOS ambient tick only reads `voice_active` through it for a moment.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -43,8 +44,14 @@ const LEFT_AFTER_MISSES: u32 = 2;
 /// active tab's title is visible, so switching tabs mid-call hides the match
 /// without ending the call; the per-event watch below leans on the calendar
 /// end for that, but an ad-hoc call has no calendar. Five minutes is the
-/// trade-off until a mic-in-use signal can say the call really ended.
+/// trade-off for a call whose only evidence is its title.
 const BROWSER_GONE_AFTER_MISSES: u32 = 60;
+/// The "gone" threshold for a call seen through the microphone. The mic session
+/// does not care which tab is in front, so this can say the call really ended:
+/// thirty seconds after the last app lets go of the mic. Zoom, Meet and Teams
+/// keep the device open while muted (it is how they say "you are muted"), so a
+/// mute is not a release.
+const MIC_GONE_AFTER_MISSES: u32 = 6;
 /// Consecutive polls the SAME call must be seen for before it is announced,
 /// when no call is currently tracked. There was no first-sight debounce at
 /// all: the very first matching poll armed the prompt, so a Meet lobby page
@@ -132,20 +139,28 @@ fn ambient_thread(app: AppHandle, cancel: Arc<AtomicBool>) {
         // Window titles come from the accessibility tree, which is empty
         // without the grant. Re-checked every tick because the grant applies
         // live; silent check only, this must never raise the system dialog.
+        // The microphone pass needs no grant, so the tick still runs.
         #[cfg(target_os = "macos")]
         {
             if !crate::macos_ax::is_trusted(false) {
                 if !trust_logged {
-                    info!("meeting.detect: ambient watch idle, Accessibility not granted");
+                    info!("meeting.detect: titles unavailable, Accessibility not granted");
                     trust_logged = true;
                 }
-                std::thread::sleep(POLL_INTERVAL);
-                continue;
+            } else {
+                trust_logged = false;
             }
-            trust_logged = false;
         }
 
-        let seen = call_signal();
+        // Only macOS needs this: Aura's own call runs in a WebKit helper there,
+        // indistinguishable from Safari's. On Windows the WebView2 host walk in
+        // `scan` already tells Aura's webview apart. A momentary read, never
+        // held across the scan.
+        #[cfg(target_os = "macos")]
+        let own_voice_live = crate::overlay::is_voice_active(&app);
+        #[cfg(not(target_os = "macos"))]
+        let own_voice_live = false;
+        let seen = call_signal(own_voice_live);
         let current = ambient_current(&app);
         match (seen, current) {
             (Some((next, _)), Some(previous)) if previous.call_key == next.call_key => {
@@ -193,7 +208,7 @@ fn ambient_thread(app: AppHandle, cancel: Arc<AtomicBool>) {
             }
             (None, Some(previous)) => {
                 misses += 1;
-                if misses >= gone_threshold(&previous.app) {
+                if misses >= gone_threshold(&previous) {
                     misses = 0;
                     if cancel.load(Ordering::Relaxed) {
                         break;
@@ -251,24 +266,28 @@ fn emit_gone(app: &AppHandle, previous: AmbientCallPayload) {
     }
 }
 
-/// The signal seam. Today the only source is a matching window; a mic-in-use
-/// check joins here later with `source: "mic"` and the loop above is unchanged.
-fn call_signal() -> Option<(AmbientCallPayload, IconSource)> {
-    let (app, title, icon_source) = find_meeting_window_with_source()?;
+/// The signal seam: a matching window (`source: "window"`), else an app holding
+/// the microphone (`source: "mic"`). The loop above treats both alike except
+/// for how long a call may go unseen before it counts as gone.
+fn call_signal(own_voice_live: bool) -> Option<(AmbientCallPayload, IconSource)> {
+    let (app, title, icon_source, source) = find_meeting_window_with_source(own_voice_live)?;
     Some((
         AmbientCallPayload {
             call_key: call_key(&app, &title),
             app,
             window_title: title,
-            source: "window".to_string(),
+            source: source.to_string(),
             app_icon: None,
         },
         icon_source,
     ))
 }
 
-fn gone_threshold(app: &str) -> u32 {
-    if is_browser_hosted(app) {
+fn gone_threshold(call: &AmbientCallPayload) -> u32 {
+    if call.source == "mic" {
+        return MIC_GONE_AFTER_MISSES;
+    }
+    if is_browser_hosted(&call.app) {
         BROWSER_GONE_AFTER_MISSES
     } else {
         LEFT_AFTER_MISSES
@@ -450,55 +469,158 @@ fn watch_thread(
 /// platforms, which matters because `joined_in_browser` and the backend claim
 /// both key off them.
 pub(crate) fn find_meeting_window() -> Option<(String, String)> {
-    find_meeting_window_with_source().map(|(app, title, _)| (app, title))
+    find_meeting_window_with_source(false).map(|(app, title, _, _)| (app, title))
 }
 
-/// `find_meeting_window` plus where the matched app's icon can be read from.
+/// `find_meeting_window` plus where the matched app's icon can be read from
+/// and which signal found it (`"window"` or `"mic"`).
 ///
 /// Two passes, and the order matters. A title match names the platform, so it
 /// wins outright and everything downstream (the product label, the bundled
-/// logo, `joined_in_browser`) behaves exactly as it always has. Only when no
-/// title matches does the microphone signal get a say, and all it can say is
-/// "a browser is on a call": it knows the process, never the site. That is why
-/// it reports `browser-call` rather than guessing `google-meet`, and why the
-/// title pass is not allowed to be skipped for it.
-fn find_meeting_window_with_source() -> Option<(String, String, IconSource)> {
+/// logo, `joined_in_browser`) behaves exactly as it always has. It is also the
+/// only pass that sees a listen-only webinar, where no mic is ever opened.
+/// Only when no title matches does the microphone get a say, and it knows the
+/// process, never the site or the meeting: a known call app is named, a
+/// browser is `browser-call`, a recorder or voice filter is ignored, and any
+/// other app is `mic-call` under its own name.
+fn find_meeting_window_with_source(
+    own_voice_live: bool,
+) -> Option<(String, String, IconSource, &'static str)> {
     let windows = scan::visible_windows();
     for (app_stem, title, icon_source) in &windows {
         let title_lower = title.to_lowercase();
         if let Some(app_name) = meeting_app_for_window(app_stem, &title_lower) {
-            return Some((app_name.to_string(), title.clone(), icon_source.clone()));
+            return Some((app_name.to_string(), title.clone(), icon_source.clone(), "window"));
         }
     }
     // Probed only after the cheap pass misses, so a normal tick costs no COM
     // work at all.
-    let microphones = scan::microphone_users();
-    if microphones.is_empty() {
+    scan::microphone_users(own_voice_live)
+        .into_iter()
+        .filter_map(|user| mic_call_app(&user.stem).map(|app| (app, user)))
+        .min_by_key(|(app, _)| mic_call_rank(app))
+        // The app's NAME, never a window title. The only title we could have
+        // is whatever tab or window is frontmost, and `call_key` hashes it, so
+        // carrying it through would change the call's identity every time the
+        // user switched tabs and the same call would churn through gone/seen
+        // all meeting. The name is stable and is what a `mic-call` card shows.
+        .map(|(app, user)| (app.to_string(), user.display_name, user.icon_source, "mic"))
+}
+
+/// One process holding an active microphone session, already resolved to the
+/// app the user would name (a WebView2 or helper process is reported as its
+/// host app).
+struct MicUser {
+    /// The same stem the title table uses ("zoom", "chrome", "discord"), or
+    /// for an app neither table knows, its exe stem or bundle id.
+    stem: String,
+    display_name: String,
+    icon_source: IconSource,
+}
+
+/// Call apps named when they hold the mic, by the stem either platform scan
+/// produces. The app id is what React labels and draws.
+const MIC_CALL_APPS: &[(&str, &str)] = &[
+    ("zoom", "zoom"),
+    ("ms-teams", "teams"),
+    ("teams", "teams"),
+    ("discord", "discord"),
+    ("discordptb", "discord"),
+    ("discordcanary", "discord"),
+    ("slack", "slack"),
+    ("whatsapp", "whatsapp"),
+    ("whatsapp.root", "whatsapp"),
+    ("webex", "webex"),
+    ("ciscocollabhost", "webex"),
+    ("atmgr", "webex"),
+    ("skype", "skype"),
+    ("signal", "signal"),
+    ("telegram", "telegram"),
+    ("facetime", "facetime"),
+];
+
+/// Apps that hold the mic for something other than a conversation: recorders,
+/// voice filters that sit on the device all day, and other dictation tools.
+/// Windows exe stems and macOS bundle ids share one list because the two never
+/// collide. Without this, "prompt for any app on the mic" would ask to record
+/// every OBS session and, for a Krisp or Broadcast user, forever.
+const MIC_NOISE: &[&str] = &[
+    "obs64",
+    "obs32",
+    "obs",
+    "audacity",
+    "soundrec",
+    "soundrecorder",
+    "voicerecorder",
+    "nvidia broadcast",
+    "nvidia rtx voice",
+    "krisp",
+    "voiceaccess",
+    "textinputhost",
+    "speechruntime",
+    "wispr flow",
+    "loom",
+    "com.obsproject.obs-studio",
+    "com.apple.voicememos",
+    "ai.krisp.krispmac",
+    "org.audacityteam.audacity",
+    "com.loom.desktop",
+];
+
+/// Families matched by prefix: Voicemeeter ships one exe per edition and
+/// bitness, and Siri and system dictation run under several daemons.
+const MIC_NOISE_PREFIXES: &[&str] = &[
+    "voicemeeter",
+    "com.apple.siri",
+    "com.apple.speech",
+    "com.apple.assistant",
+    "com.apple.dictation",
+    "com.apple.corespeech",
+];
+
+/// The app id a mic holder is reported as, or None when it is noise.
+fn mic_call_app(stem: &str) -> Option<&'static str> {
+    if let Some((_, app)) = MIC_CALL_APPS.iter().find(|(known, _)| *known == stem) {
+        return Some(app);
+    }
+    if is_browser(stem) {
+        return Some("browser-call");
+    }
+    if MIC_NOISE.contains(&stem) || MIC_NOISE_PREFIXES.iter().any(|prefix| stem.starts_with(prefix)) {
         return None;
     }
-    windows
-        .into_iter()
-        .find(|(app_stem, _, _)| is_browser(app_stem) && microphones.contains(app_stem))
-        // A FIXED title, not the browser's. The one we have is whatever tab is
-        // frontmost, and `call_key` hashes it, so carrying it through would
-        // change the call's identity every time the user switched tabs and the
-        // same call would churn through gone/seen all meeting. Nothing renders
-        // window_title (see ipcEvents.ts: "for the card only", and the card
-        // shows the product label instead), so a stable string costs nothing.
-        .map(|(stem, _, icon_source)| ("browser-call".to_string(), stem, icon_source))
+    Some("mic-call")
+}
+
+/// When several apps hold the mic at once, the most specific answer wins: a
+/// named call app, then a browser, then anything else.
+fn mic_call_rank(app: &str) -> u8 {
+    match app {
+        "browser-call" => 1,
+        "mic-call" => 2,
+        _ => 0,
+    }
+}
+
+/// "discord" -> "Discord". Only reached for a stem nothing better names.
+fn display_name_for_stem(stem: &str) -> String {
+    let mut chars = stem.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
 }
 
 fn is_browser(exe_stem: &str) -> bool {
-    matches!(exe_stem, "chrome" | "msedge" | "brave" | "firefox")
+    matches!(exe_stem, "chrome" | "msedge" | "brave" | "firefox" | "safari")
 }
 
 /// A call hosted in a browser tab rather than a native app window. Both things
 /// that follow from it are about tabs: a tab switch hides the title without
 /// ending the call, so leaving needs the long threshold, and the per-event
 /// watch has to lean on the calendar end instead of the title disappearing.
-/// `browser-call` belongs here for a further reason: its evidence is a
-/// microphone session, and a call whose mic is muted may release that session
-/// without ending, so it needs the forgiving threshold most of all.
+/// `browser-call` is here for the per-event watch's sake; the ambient scanner
+/// times it out by its mic evidence instead (`gone_threshold`).
 fn is_browser_hosted(app: &str) -> bool {
     app.ends_with("web") || app == "google-meet" || app == "browser-call"
 }
@@ -586,6 +708,7 @@ mod tests {
 #[cfg(windows)]
 mod scan {
     use super::IconSource;
+    use std::collections::HashMap;
     use windows::core::Interface;
     use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
     use windows::Win32::Media::Audio::{
@@ -594,6 +717,10 @@ mod scan {
     };
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CLSCTX_ALL, COINIT_MULTITHREADED,
+    };
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
     };
     use windows::Win32::System::Threading::{
         OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
@@ -644,24 +771,25 @@ mod scan {
         }
     }
 
-    /// Exe stems of the processes holding an ACTIVE microphone session right
-    /// now, our own excluded.
+    /// The processes holding an ACTIVE microphone session right now, our own
+    /// excluded, each resolved to the app the user would name.
     ///
-    /// The one signal in this file that does not read a window title, and the
-    /// only reason it exists: `EnumWindows` exposes a browser's ACTIVE TAB
-    /// title and nothing else, so a Google Meet running in a background tab is
-    /// invisible to every matcher above. A call was missed for its first
-    /// twenty-two minutes that way and the prompt only appeared when the tab
-    /// came forward. A browser holding the microphone is a call, whichever tab
-    /// it is in.
+    /// The one signal in this file that does not read a window title. It first
+    /// existed because `EnumWindows` exposes a browser's ACTIVE TAB title and
+    /// nothing else, so a Google Meet running in a background tab was invisible
+    /// to every matcher above for its first twenty-two minutes. It now also
+    /// covers every call app the title table has never heard of.
     ///
     /// Every active capture endpoint, not just the default one: a headset is
     /// routinely not the default device, and the call would be invisible again.
     /// Our own PID is skipped, which is not tidiness - Aura holds the mic
     /// during dictation and during a meeting capture, so counting ourselves
     /// would make the signal true forever and turn a dictation hold into a
-    /// detected call.
-    pub(super) fn microphone_users() -> Vec<String> {
+    /// detected call. So is our own WebView2: Buddy's voice call captures from
+    /// a msedgewebview2.exe child, not from our PID, which is why WebView2
+    /// holders are walked up to their host before anything else is decided.
+    /// That walk is also what names new Teams, which renders in WebView2.
+    pub(super) fn microphone_users(_own_voice_live: bool) -> Vec<super::MicUser> {
         // Idempotent on this long-lived polling thread: every later call
         // returns S_FALSE or RPC_E_CHANGED_MODE, both fine to ignore.
         unsafe {
@@ -678,9 +806,11 @@ mod scan {
         }
     }
 
-    fn collect_microphone_users() -> windows::core::Result<Vec<String>> {
+    fn collect_microphone_users() -> windows::core::Result<Vec<super::MicUser>> {
         let own_pid = std::process::id();
-        let mut stems: Vec<String> = Vec::new();
+        let mut users: Vec<super::MicUser> = Vec::new();
+        // Built only when a WebView2 process holds the mic, which is rare.
+        let mut parents: Option<HashMap<u32, u32>> = None;
         unsafe {
             let enumerator: IMMDeviceEnumerator =
                 CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)?;
@@ -698,15 +828,84 @@ mod scan {
                     if pid == 0 || pid == own_pid {
                         continue;
                     }
-                    if let Some((stem, _)) = process_stem(pid) {
-                        if !stems.contains(&stem) {
-                            stems.push(stem);
+                    let Some((mut stem, mut path)) = process_stem(pid) else {
+                        continue;
+                    };
+                    if stem == WEBVIEW2_STEM {
+                        let parents = parents.get_or_insert_with(parent_pids);
+                        let Some(host) = webview2_host(pid, parents) else {
+                            continue;
+                        };
+                        if host == own_pid {
+                            continue;
                         }
+                        let Some(resolved) = process_stem(host) else {
+                            continue;
+                        };
+                        (stem, path) = resolved;
                     }
+                    if users.iter().any(|user| user.stem == stem) {
+                        continue;
+                    }
+                    users.push(super::MicUser {
+                        display_name: super::display_name_for_stem(&stem),
+                        stem,
+                        icon_source: IconSource::Exe(path),
+                    });
                 }
             }
         }
-        Ok(stems)
+        Ok(users)
+    }
+
+    const WEBVIEW2_STEM: &str = "msedgewebview2";
+
+    /// The first ancestor of a WebView2 process that is not itself WebView2:
+    /// the app hosting it. A WebView2 tree is host -> browser process ->
+    /// utility processes, so a few hops always suffice; the cap only guards a
+    /// recycled parent PID that happens to point back into the chain.
+    fn webview2_host(pid: u32, parents: &HashMap<u32, u32>) -> Option<u32> {
+        let own_pid = std::process::id();
+        let mut current = pid;
+        for _ in 0..8 {
+            let parent = *parents.get(&current)?;
+            if parent == 0 {
+                return None;
+            }
+            if parent == own_pid {
+                return Some(parent);
+            }
+            match process_stem(parent) {
+                Some((stem, _)) if stem == WEBVIEW2_STEM => current = parent,
+                Some(_) => return Some(parent),
+                None => return None,
+            }
+        }
+        None
+    }
+
+    /// PID -> parent PID for every running process, from one Toolhelp snapshot.
+    fn parent_pids() -> HashMap<u32, u32> {
+        let mut parents = HashMap::new();
+        unsafe {
+            let Ok(snapshot) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+                return parents;
+            };
+            let mut entry = PROCESSENTRY32W {
+                dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+                ..Default::default()
+            };
+            if Process32FirstW(snapshot, &mut entry).is_ok() {
+                loop {
+                    parents.insert(entry.th32ProcessID, entry.th32ParentProcessID);
+                    if Process32NextW(snapshot, &mut entry).is_err() {
+                        break;
+                    }
+                }
+            }
+            let _ = CloseHandle(snapshot);
+        }
+        parents
     }
 
     /// PID -> (lowercase exe file stem like "zoom" or "ms-teams", full exe
@@ -767,6 +966,10 @@ mod scan {
 
     pub(super) fn visible_windows() -> Vec<(String, String, IconSource)> {
         let mut found = Vec::new();
+        // Titles would all come back empty anyway; skip the AX walk entirely.
+        if !crate::macos_ax::is_trusted(false) {
+            return found;
+        }
         let apps = NSWorkspace::sharedWorkspace().runningApplications();
         for app in apps.iter() {
             let Some(bundle_id) = app.bundleIdentifier() else {
@@ -783,13 +986,189 @@ mod scan {
         found
     }
 
-    /// No macOS half yet, and an empty answer is the correct placeholder: the
-    /// matcher treats it as "no extra evidence" and falls back to titles
-    /// exactly as before. CoreAudio has no permission-free equivalent of
-    /// enumerating another process's capture sessions, so the macOS version is
-    /// its own piece of work rather than a port of the Windows one.
-    pub(super) fn microphone_users() -> Vec<String> {
-        Vec::new()
+    /// The processes running audio INPUT right now, from Core Audio's process
+    /// objects (macOS 14.2+, and the bundle's minimum is 14.4). This reads
+    /// process metadata only, never audio, and needs neither the Microphone
+    /// nor the Accessibility grant, which is why the ambient tick keeps running
+    /// without the latter.
+    ///
+    /// Helper processes are reported as their host app: Chrome, Discord,
+    /// Slack and Teams all capture from a `<bundle id>.helper` process. WebKit
+    /// helpers are the one ambiguous case, because Safari's calls and Aura's
+    /// own Buddy call both run in them. They count as Safari only while Safari
+    /// is running and no Buddy call is live.
+    pub(super) fn microphone_users(own_voice_live: bool) -> Vec<super::MicUser> {
+        use objc2_core_audio::{
+            kAudioHardwarePropertyProcessObjectList, kAudioProcessPropertyBundleID,
+            kAudioProcessPropertyIsRunningInput, kAudioProcessPropertyPID,
+        };
+
+        let own_pid = std::process::id() as i32;
+        let apps = NSWorkspace::sharedWorkspace().runningApplications();
+        let app_for_bundle = |bundle_id: &str| {
+            apps.iter().find(|app| {
+                app.bundleIdentifier()
+                    .is_some_and(|id| id.to_string().to_lowercase() == bundle_id)
+            })
+        };
+        let safari_running = app_for_bundle("com.apple.safari").is_some();
+
+        let mut users: Vec<super::MicUser> = Vec::new();
+        for object in read_object_list(kAudioObjectSystemObject as AudioObjectID, kAudioHardwarePropertyProcessObjectList) {
+            if read_u32(object, kAudioProcessPropertyIsRunningInput) != Some(1) {
+                continue;
+            }
+            let Some(pid) = read_u32(object, kAudioProcessPropertyPID).map(|pid| pid as i32) else {
+                continue;
+            };
+            if pid <= 0 || pid == own_pid {
+                continue;
+            }
+            // Daemons carry no bundle id, and none of them is a call.
+            let Some(bundle_id) = read_string(object, kAudioProcessPropertyBundleID) else {
+                continue;
+            };
+            let bundle_id = bundle_id.to_lowercase();
+            let host_id = if bundle_id.starts_with("com.apple.webkit.") {
+                if own_voice_live || !safari_running {
+                    continue;
+                }
+                "com.apple.safari"
+            } else {
+                bundle_id.find(".helper").map_or(bundle_id.as_str(), |at| &bundle_id[..at])
+            };
+            let stem = bundle_stem(host_id)
+                .or_else(|| mic_only_stem(host_id))
+                .map_or_else(|| host_id.to_string(), str::to_string);
+            if users.iter().any(|user| user.stem == stem) {
+                continue;
+            }
+            // The host app's own pid, so the card gets its real icon and name
+            // rather than a helper's.
+            let host = app_for_bundle(host_id);
+            let icon_pid = host.as_ref().map_or(pid, |app| app.processIdentifier());
+            let display_name = host
+                .and_then(|app| app.localizedName())
+                .map_or_else(|| super::display_name_for_stem(&stem), |name| name.to_string());
+            users.push(super::MicUser {
+                stem,
+                display_name,
+                icon_source: IconSource::Pid(icon_pid),
+            });
+        }
+        users
+    }
+
+    /// Call apps the mic pass names but the title scan does not walk: listing
+    /// them in `bundle_stem` would put every Slack and Discord window through
+    /// the accessibility tree on every tick for titles no matcher reads.
+    fn mic_only_stem(bundle_id: &str) -> Option<&'static str> {
+        Some(match bundle_id {
+            "com.hnc.discord" => "discord",
+            "com.tinyspeck.slackmacgap" => "slack",
+            "net.whatsapp.whatsapp" | "desktop.whatsapp" => "whatsapp",
+            "cisco-systems.spark" => "webex",
+            "com.skype.skype" => "skype",
+            "org.whispersystems.signal-desktop" => "signal",
+            "ru.keepcoder.telegram" | "org.telegram.desktop" => "telegram",
+            "com.apple.facetime" => "facetime",
+            "com.apple.safari" => "safari",
+            _ => return None,
+        })
+    }
+
+    use objc2_core_audio::{
+        kAudioObjectPropertyElementMain, kAudioObjectPropertyScopeGlobal, kAudioObjectSystemObject,
+        AudioObjectGetPropertyData, AudioObjectGetPropertyDataSize, AudioObjectID,
+        AudioObjectPropertyAddress, AudioObjectPropertySelector,
+    };
+
+    fn address(selector: AudioObjectPropertySelector) -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress {
+            mSelector: selector,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain,
+        }
+    }
+
+    fn read_object_list(object: AudioObjectID, selector: AudioObjectPropertySelector) -> Vec<AudioObjectID> {
+        let mut address = address(selector);
+        let mut size: u32 = 0;
+        let status = unsafe {
+            AudioObjectGetPropertyDataSize(
+                object,
+                std::ptr::NonNull::from(&mut address),
+                0,
+                std::ptr::null(),
+                std::ptr::NonNull::from(&mut size),
+            )
+        };
+        if status != 0 || size == 0 {
+            return Vec::new();
+        }
+        let mut ids: Vec<AudioObjectID> = vec![0; size as usize / std::mem::size_of::<AudioObjectID>()];
+        if ids.is_empty() {
+            return ids;
+        }
+        let status = unsafe {
+            AudioObjectGetPropertyData(
+                object,
+                std::ptr::NonNull::from(&mut address),
+                0,
+                std::ptr::null(),
+                std::ptr::NonNull::from(&mut size),
+                std::ptr::NonNull::from(&mut ids[0]).cast(),
+            )
+        };
+        if status != 0 {
+            return Vec::new();
+        }
+        // A process can exit between the two calls, which shrinks the answer.
+        ids.truncate(size as usize / std::mem::size_of::<AudioObjectID>());
+        ids
+    }
+
+    /// A UInt32 property, which is also how Core Audio returns a pid_t.
+    fn read_u32(object: AudioObjectID, selector: AudioObjectPropertySelector) -> Option<u32> {
+        let mut address = address(selector);
+        let mut value: u32 = 0;
+        let mut size = std::mem::size_of::<u32>() as u32;
+        let status = unsafe {
+            AudioObjectGetPropertyData(
+                object,
+                std::ptr::NonNull::from(&mut address),
+                0,
+                std::ptr::null(),
+                std::ptr::NonNull::from(&mut size),
+                std::ptr::NonNull::from(&mut value).cast(),
+            )
+        };
+        (status == 0).then_some(value)
+    }
+
+    /// A CFString property, returned +1 like `macos_audio::default_input_uid`'s
+    /// device UID, so it is taken and released on drop.
+    fn read_string(object: AudioObjectID, selector: AudioObjectPropertySelector) -> Option<String> {
+        use objc2_core_foundation::{CFRetained, CFString};
+        let mut address = address(selector);
+        let mut value: *const CFString = std::ptr::null();
+        let mut size = std::mem::size_of::<*const CFString>() as u32;
+        let status = unsafe {
+            AudioObjectGetPropertyData(
+                object,
+                std::ptr::NonNull::from(&mut address),
+                0,
+                std::ptr::null(),
+                std::ptr::NonNull::from(&mut size),
+                std::ptr::NonNull::from(&mut value).cast(),
+            )
+        };
+        if status != 0 || value.is_null() {
+            return None;
+        }
+        let value = unsafe { CFRetained::from_raw(std::ptr::NonNull::new(value as *mut CFString)?) };
+        let text = value.to_string();
+        (!text.is_empty()).then_some(text)
     }
 
     /// Bundle id -> the same stem the Windows exe name yields, so
