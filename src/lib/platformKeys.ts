@@ -71,3 +71,9 @@ export function primaryModifierLabel(): string {
 export function defaultVoiceKeyLabel(): string {
   return isMac() ? "Left Control" : "Left Ctrl";
 }
+
+/** The Screen Sight shortcut spelled the way it is SPOKEN, for a voice agent
+ * to say aloud. One Control+Alt+KeyS accelerator in hotkeys.rs on both. */
+export function screenSightSpokenKey(): string {
+  return isMac() ? "Control Option S" : "Control Alt S";
+}

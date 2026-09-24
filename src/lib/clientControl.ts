@@ -44,6 +44,29 @@ export async function publishGuideMode(room: Room, control: GuideModeControl): P
   });
 }
 
+/** Tells the worker whether an armed watch session can see the screen right
+ * now. Sent once per transition, when the native CaptureGuide authorization
+ * flips because the user switched Screen Sight off or back on. keyLabel is the
+ * spoken shortcut that turns it on, so the coach can name it. */
+export async function publishGuideSight(
+  room: Room,
+  guideSessionId: string,
+  on: boolean,
+  keyLabel: string,
+): Promise<void> {
+  await room.localParticipant.publishData(
+    new TextEncoder().encode(
+      JSON.stringify({
+        type: "guide.sight",
+        guide_session_id: guideSessionId,
+        on,
+        key_label: keyLabel,
+      }),
+    ),
+    { reliable: true, topic: "client_events" },
+  );
+}
+
 export interface OutputModeControl {
   mode: "voice" | "text";
   generation: number;

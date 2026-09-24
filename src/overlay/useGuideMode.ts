@@ -10,7 +10,8 @@ import {
   type TranscriptionSegment,
 } from "livekit-client";
 import { validateAgentDataMessage } from "../lib/agentData";
-import { publishGuideMode } from "../lib/clientControl";
+import { publishGuideMode, publishGuideSight } from "../lib/clientControl";
+import { screenSightSpokenKey } from "../lib/platformKeys";
 import { trackEvent } from "../lib/analytics";
 import { reportGuideUsage, type GuideUsageOutcome } from "../lib/guideUsage";
 import { logError, logInfo } from "../lib/log";
@@ -29,6 +30,9 @@ const MODE_ACK_TIMEOUT_MS = 3_000;
 const VERIFICATION_TIMEOUT_MS = 30_000;
 const RETAINED_FRAME_GEOMETRY_COUNT = 6;
 const GUIDE_TASK_STORAGE_KEY = "aura.guide.currentTask.v2";
+// security.rs Denied::ScreenSightOff's Display text, the same stable string
+// useTurnScreenCapture's reasonForCaptureError matches.
+const SCREEN_SIGHT_OFF_DENIAL = "denied: screen sight is switched off";
 
 type CaptureReason =
   | "user_turn"
@@ -257,6 +261,10 @@ export function useGuideMode({ room, status, signedIn, onPoint }: UseGuideModeOp
     parentEventId: string | null;
   } | null>(null);
   const lastEventIdRef = useRef<string | null>(null);
+  // Whether the armed session could last see the screen. null until the first
+  // capture tick of each arm. The worker assumes "on" at every arm, so only a
+  // departure from that (off, then on again) is ever published.
+  const sightRef = useRef<boolean | null>(null);
   const agentPrimeGenerationRef = useRef(0);
   // Per-armed-window usage metrics, reported once on disarm to PostHog + the
   // backend rollup (see lib/guideUsage.ts). Duration uses a monotonic clock so a
@@ -333,9 +341,28 @@ export function useGuideMode({ room, status, signedIn, onPoint }: UseGuideModeOp
     pendingModeAckRef.current = null;
     activeModeGenerationRef.current = null;
     firstFrameReadyGenerationRef.current = null;
+    sightRef.current = null;
     setActive(false);
     agentPrimeGenerationRef.current += 1;
   }, [clearModeAckTimer, clearResponseTimer, clearVerificationTimer]);
+
+  /** Report a Screen Sight transition for the armed session, once. Returns true
+   * when vision just came back, so the caller forces a fresh frame at once. */
+  const noteSight = useCallback(
+    (on: boolean, targetRoom: Room): boolean => {
+      const sessionId = armedRef.current.sessionId;
+      const previous = sightRef.current ?? true;
+      sightRef.current = on;
+      if (!sessionId || previous === on) return false;
+      const cameBack = previous === false && on;
+      logGuideEvent("capture", on ? "succeeded" : "rejected", on ? "sight_on" : "sight_off");
+      void publishGuideSight(targetRoom, sessionId, on, screenSightSpokenKey()).catch(
+        (error) => logGuideFailure("capture", "sight_publish_failed", error),
+      );
+      return cameBack;
+    },
+    [logGuideFailure],
+  );
 
   const publishCurrentMode = useCallback(
     async (targetRoom: Room, generation: number) => {
@@ -517,6 +544,12 @@ export function useGuideMode({ room, status, signedIn, onPoint }: UseGuideModeOp
         const previousObservation = observationStateRef.current;
         let effectiveReason = reason;
         let effectiveForce = force;
+        // Authorized again, so Screen Sight is on. Coming back from off, send
+        // a fresh frame now rather than waiting for the board to change.
+        if (noteSight(true, targetRoom)) {
+          effectiveReason = "resume";
+          effectiveForce = true;
+        }
         if (
           previousObservation &&
           (previousObservation.activeProcess !== beforeObservation.activeProcess ||
@@ -632,7 +665,13 @@ export function useGuideMode({ room, status, signedIn, onPoint }: UseGuideModeOp
         }
         armResponseTimeout(envelope.frameId);
       } catch (error) {
-        logGuideFailure("capture", "capture_tick_failed", error);
+        // Screen Sight off is the user's choice, not a failure: the session stays
+        // armed, the worker is told once, and every later tick retries silently.
+        if (typeof error === "string" && error.startsWith(SCREEN_SIGHT_OFF_DENIAL)) {
+          noteSight(false, targetRoom);
+        } else {
+          logGuideFailure("capture", "capture_tick_failed", error);
+        }
       } finally {
         invokeInFlightRef.current = false;
         const pending = pendingCaptureRef.current;
@@ -644,7 +683,7 @@ export function useGuideMode({ room, status, signedIn, onPoint }: UseGuideModeOp
         }
       }
     },
-    [armResponseTimeout, logGuideFailure, streamFrame],
+    [armResponseTimeout, logGuideFailure, noteSight, streamFrame],
   );
   processCaptureRef.current = processCapture;
 

@@ -282,6 +282,13 @@ impl SecurityState {
                 if !self.guide_armed {
                     return Err(Denied::NotArmed);
                 }
+                // An explicit Screen Sight off stops a watch session's frames too,
+                // without disarming it: Coach keeps listening, and the next tick
+                // after the user turns it back on captures again. Only Some(false)
+                // denies, so a user who never pressed the shortcut still sees.
+                if self.screen_sight_switched_off() {
+                    return Err(Denied::ScreenSightOff);
+                }
             }
             // Still-armed is deliberately NOT required: the user may disarm
             // right after asking and the agent's point reply is still theirs.
