@@ -43,6 +43,12 @@ export const NOTIFICATION_TYPES = [
   "research_partial",
   "research_failed",
   "research_needs_input",
+  // Local-only, produced by useBrowserTask when a browser task ends. The
+  // backend never emits these; they ride the broker for the inbox, dedup and
+  // toast-once guarantees like every other producer.
+  "browser_task_ready",
+  "browser_task_partial",
+  "browser_task_failed",
 ] as const;
 export type DesktopNotificationType = (typeof NOTIFICATION_TYPES)[number];
 
@@ -62,6 +68,7 @@ export const ACTIONS = [
   "retry_meeting_upload",
   "view_research",
   "answer_research_question",
+  "view_browser_task",
 ] as const;
 export type NotificationAction = (typeof ACTIONS)[number];
 

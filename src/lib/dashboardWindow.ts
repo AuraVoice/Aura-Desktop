@@ -7,6 +7,7 @@ export type DashboardRoute =
   | "/meetings"
   | "/interview"
   | "/research"
+  | "/browser-agent"
   | "/insights"
   | "/general"
   | "/connectors"

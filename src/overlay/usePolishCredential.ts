@@ -1,6 +1,7 @@
 import { auth } from "../lib/firebase";
 import { clearCommandCredential, pushCommandCredential } from "../lib/dictationCommands";
 import { clearPolishCredential, pushPolishCredential } from "../lib/dictationPolish";
+import { clearBrowserTaskCredential, pushBrowserTaskCredential } from "../lib/browserTask";
 import { logError } from "../lib/log";
 import {
   refreshDelayMs,
@@ -37,6 +38,8 @@ async function cycle(): Promise<PumpOutcome> {
     await Promise.all([
       pushPolishCredential(idToken, ID_TOKEN_TTL_SECONDS),
       pushCommandCredential(idToken, ID_TOKEN_TTL_SECONDS),
+      // The browser agent's /agent/step call checks the same token.
+      pushBrowserTaskCredential(idToken, ID_TOKEN_TTL_SECONDS),
     ]);
     return { nextDelayMs: refreshDelayMs(ID_TOKEN_TTL_SECONDS) };
   } catch (err) {
@@ -46,7 +49,7 @@ async function cycle(): Promise<PumpOutcome> {
 }
 
 async function clearBoth(): Promise<void> {
-  await Promise.all([clearPolishCredential(), clearCommandCredential()]);
+  await Promise.all([clearPolishCredential(), clearCommandCredential(), clearBrowserTaskCredential()]);
 }
 
 export function usePolishCredential(ownerUid: string | null) {

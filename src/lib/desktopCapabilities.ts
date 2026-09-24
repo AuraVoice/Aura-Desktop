@@ -115,7 +115,22 @@ const CAPABILITIES: readonly DesktopCapability[] = [
     argKeys: ["app"],
     validate: validateAppKey,
   },
+  {
+    id: "browser_task",
+    description:
+      "Start a multi-step web task in Aura's own separate browser, in the background, and report back later: find, compare, collect or check something across public websites. brief: what to do, one or two sentences in the user's words. Not for a single fact you can answer or a plain web search.",
+    argKeys: ["brief"],
+    validate: validateBrief,
+  },
 ];
+
+const BRIEF_MAX_LENGTH = 500;
+
+function validateBrief(args: Record<string, unknown>): Record<string, unknown> | null {
+  const brief = typeof args.brief === "string" ? args.brief.trim() : "";
+  if (brief.length === 0 || brief.length > BRIEF_MAX_LENGTH) return null;
+  return { brief };
+}
 
 export const DESKTOP_CAPABILITIES: ReadonlyMap<string, DesktopCapability> = new Map(
   CAPABILITIES.map((capability) => [capability.id, capability]),

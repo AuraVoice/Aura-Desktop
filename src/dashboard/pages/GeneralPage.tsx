@@ -330,6 +330,20 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
           </SettingsSection>
 
           <SettingsSection
+            title="Experimental"
+            description="Early features that are still being measured."
+          >
+            <div className="db-panel db-settings-panel">
+              <ToggleRow
+                label="Browser Agent page"
+                description="Show the page where Buddy runs multi-step web tasks in its own separate browser."
+                checked={settings.browserAgentHarness}
+                onChange={(value) => void update("browserAgentHarness", value)}
+              />
+            </div>
+          </SettingsSection>
+
+          <SettingsSection
             title="Notifications"
             description="Choose which kinds of updates Aura may send you."
           >

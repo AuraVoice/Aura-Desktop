@@ -55,7 +55,8 @@ pub(crate) mod asr;
 mod audio;
 mod consent;
 mod credential;
-mod scoped_token;
+// Crate-visible: agent_browser holds its backend ID token in one of these too.
+pub(crate) mod scoped_token;
 pub mod history;
 pub mod share;
 mod hud;

@@ -313,6 +313,31 @@ and `src-tauri/src/interview_store.rs` that a reasonable-looking edit could undo
   session upsert only matches an open row. No column was made nullable, so no
   migration and no change to the frozen AAD grammar.
 
+## Background Browser Agent: code owns the loop, the wallet is the off switch
+
+`src-tauri/src/agent_browser/` launches Aura's OWN Chromium (never the user's browser) and drives
+it over CDP one model-chosen action at a time through `POST /agent/step` on juno-backend. Design
+record and the end-to-end test checklist: [`BACKGROUND_BROWSER_AGENT_ARCHITECTURE.md`](./BACKGROUND_BROWSER_AGENT_ARCHITECTURE.md).
+Rules an edit could break:
+
+- **`PROJECT_BROWSER_AGENT_DAILY_COST_CAP_MICROUSD` is the full-stop control.** `deploy.sh` sets it
+  to $10 per UTC day; a value of 0 (the `settings.py` default) refuses EVERY step with 429
+  `browser_agent_project_cap` before any model call. "Every task fails on step 1" means check the
+  deployed env var first. It is a budget value on purpose, never a feature flag.
+- **Every safety gate is code on the desktop** (`guard.rs`): a click or a type only on a ref from the
+  LAST snapshot, a pause with default-no on anything that reads submit/buy/pay/apply/send/sign up,
+  http(s) only, 40 steps, 5 minutes. The prompt asks the model to avoid these; the guard is what
+  stops them. Do not move a gate into the prompt.
+- **Authorization is `Operation::StartBrowserTask`, never `DesktopControl`**: the latter requires a
+  live voice call and a task must outlive the call that started it. Sign-out stops it.
+- **The task store has its own key file** (`agent-browser/key.bin`); it never borrows the meeting or
+  dictation key. Snapshots and page text are never persisted or logged; the trace holds action,
+  ref, URL, milliseconds and token counts.
+- **Jev is a shortcut, not the entry** (`command_brain.rs`): the 12-word cap rises to 30 only for a
+  hold that opens with an address word, and `browser_task` acts only on `addressed = yes`. Raising
+  the cap for every hold, or dropping the addressed gate, reintroduces "typed a to-do item started
+  a browser".
+
 ## Desktop notifications
 
 `src/lib/desktopNotifications.ts` is the ONE broker every producer calls (local Rust/JS events and backend events polled from the outbox). It owns the durable inbox, dedup, permission, and the toast-once guarantee (delivered ids persist across restart, so a relaunch never replays a toast). Two non-obvious rules:

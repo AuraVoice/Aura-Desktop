@@ -40,6 +40,18 @@ use windows::Win32::UI::WindowsAndMessaging::{
 /// re-validated per verb below.
 #[tauri::command]
 pub async fn run_desktop_capability(app: AppHandle, id: String, args: Value) -> Result<(), String> {
+    // browser_task has its OWN gate (Operation::StartBrowserTask: signed in
+    // plus the browser agent opt-in) and deliberately not DesktopControl's
+    // live-voice requirement: the task must outlive the call that started
+    // it, and its worker thread checks the account again after launch.
+    if id == "browser_task" {
+        let brief = args
+            .get("brief")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .unwrap_or_default();
+        return crate::agent_browser::start(&app, brief, "voice").map(|_| ());
+    }
     // Whole-surface gate: signed in + live voice. Verb-level allowlisting is
     // separate and happens inside each handler. The ticket carries the auth
     // epoch so launch_app can re-check it right before it spawns a process.

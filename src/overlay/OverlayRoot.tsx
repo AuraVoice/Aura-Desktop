@@ -88,6 +88,8 @@ import {
   resetMicrophonePermission,
 } from "../lib/microphoneAccess";
 import { VoiceRecoveryCard, VOICE_RECOVERY_CARD_HEIGHT } from "./VoiceRecoveryCard";
+import { BrowserTaskCard, browserTaskSlotHeight } from "./BrowserTaskCard";
+import { useBrowserTask } from "./useBrowserTask";
 import { useRegionCapture } from "./region/useRegionCapture";
 import { RegionPreviewCard, REGION_PREVIEW_CARD_HEIGHT } from "./region/RegionPreviewCard";
 
@@ -360,6 +362,19 @@ export function OverlayRoot() {
   // Keeps the AI-formatting backend credential warm for the same reason. Rust
   // no-ops with it when the polish toggle is off.
   usePolishCredential(user?.uid ?? null);
+  // The one live browser task (agent_browser): chip, approval question, result.
+  const browserTask = useBrowserTask({
+    uid: user?.uid ?? null,
+    appHidden: presentation !== "bar",
+    room: voice.room,
+  });
+  // The result card reports its measured height; null until it has, and
+  // again whenever a different result arrives, so the constant guess never
+  // outlives the content it guessed for.
+  const [browserTaskMeasured, setBrowserTaskMeasured] = useState<number | null>(null);
+  useEffect(() => {
+    setBrowserTaskMeasured(null);
+  }, [browserTask.result]);
   const meetingCapture = useMeetingCapture({
     uid: user?.uid ?? null,
     appHidden: presentation !== "bar",
@@ -448,6 +463,16 @@ export function OverlayRoot() {
     && !showInterviewPaste;
   const [approvalCardHeight, setApprovalCardHeight] = useState(INITIAL_DRAFT_SLOT_HEIGHT);
   const lowerCardsHidden = visibleChatOpen || showApprovalCard;
+  // The browser task sits under the draft and above the meeting prompt: its
+  // approval question expires in 60 s and its running chip is the only Stop
+  // control, so neither may queue behind the inbox or a banner.
+  const showBrowserTask =
+    user !== null
+    && (browserTask.live || browserTask.approval !== null || browserTask.result !== null)
+    && !showInterviewHacker
+    && !showInterviewPaste
+    && !showVoiceNotice
+    && !showDraftCard;
 
   // Slot priority (CLAUDE.md): active Interview Companion > chat > voice recovery
   // > draft > inbox > update > daily catch-up. The live companion must keep its capture
@@ -482,7 +507,8 @@ export function OverlayRoot() {
     && !showInterviewHacker
     && !showInterviewPaste
     && !showVoiceNotice
-    && !showDraftCard;
+    && !showDraftCard
+    && !showBrowserTask;
   // Held on screen (and in the slot) through its exit animation, unless a
   // higher-priority card took the slot, which must not share it.
   const meetingPromptPresence = usePresence(showMeetingPrompt, MEETING_PROMPT_EXIT_MS);
@@ -492,7 +518,8 @@ export function OverlayRoot() {
       && !showInterviewHacker
       && !showInterviewPaste
       && !showVoiceNotice
-      && !showDraftCard);
+      && !showDraftCard
+      && !showBrowserTask);
   // The consent card sits directly under the meeting prompt: the user just
   // told Buddy "yes, turn it on" out loud, so it must not queue behind the
   // inbox or a banner while that sentence is still hanging.
@@ -503,6 +530,7 @@ export function OverlayRoot() {
     && !showInterviewPaste
     && !showVoiceNotice
     && !showDraftCard
+    && !showBrowserTask
     && !meetingPromptOnScreen;
   // What the user just circled with the region gesture. Under the live-session
   // surfaces above, which only exist mid-call where the gesture is a no-op, and
@@ -515,6 +543,7 @@ export function OverlayRoot() {
     && !showInterviewPaste
     && !showVoiceNotice
     && !showDraftCard
+    && !showBrowserTask
     && !meetingPromptOnScreen
     && !showScreenContextConsent;
   const showInbox =
@@ -524,6 +553,7 @@ export function OverlayRoot() {
     && !showVoiceNotice
     && !showDraftCard
     && !showInterviewPaste
+    && !showBrowserTask
     && !meetingPromptOnScreen
     && !showScreenContextConsent
     && !showRegionPreview;
@@ -534,6 +564,7 @@ export function OverlayRoot() {
     && !showInterviewPaste
     && !showVoiceNotice
     && !showDraftCard
+    && !showBrowserTask
     && !meetingPromptOnScreen
     && !showScreenContextConsent
     && !showRegionPreview
@@ -545,6 +576,7 @@ export function OverlayRoot() {
     && !showInterviewPaste
     && !showVoiceNotice
     && !showDraftCard
+    && !showBrowserTask
     && !meetingPromptOnScreen
     && !showScreenContextConsent
     && !showRegionPreview
@@ -576,6 +608,8 @@ export function OverlayRoot() {
         ? VOICE_RECOVERY_CARD_HEIGHT
         : showDraftCard
           ? draftCardHeight
+          : showBrowserTask
+            ? (browserTaskMeasured ?? browserTaskSlotHeight(browserTask))
           : meetingPromptOnScreen
             ? MEETING_PROMPT_HEIGHT
             : showScreenContextConsent
@@ -788,6 +822,8 @@ export function OverlayRoot() {
       || notification.action === "answer_research_question"
     ) {
       void openDashboardWindow("/research", notification.resourceId);
+    } else if (notification.action === "view_browser_task") {
+      void openDashboardWindow("/browser-agent", notification.resourceId);
     }
   }
 
@@ -1015,6 +1051,7 @@ export function OverlayRoot() {
             onPost={postDraft}
           />
         )}
+      {!lowerCardsHidden && showBrowserTask && <BrowserTaskCard task={browserTask} onHeightChange={setBrowserTaskMeasured} />}
       {!lowerCardsHidden &&meetingPromptOnScreen && (
         <MeetingPromptCard prompt={meetingPrompt} leaving={meetingPromptPresence.leaving} />
       )}

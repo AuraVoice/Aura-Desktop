@@ -59,7 +59,7 @@ describe("advertiseManifest", () => {
     const manifest = advertiseManifest();
     expect(manifest.manifest_version).toBe(1);
     const ids = manifest.capabilities.map((c) => c.id);
-    expect(ids).toEqual(["open_url", "media_control", "focus_window", "launch_app"]);
+    expect(ids).toEqual(["open_url", "media_control", "focus_window", "launch_app", "browser_task"]);
     for (const capability of manifest.capabilities) {
       expect(capability.description.length).toBeGreaterThan(0);
       expect(capability.arg_keys.length).toBeGreaterThan(0);

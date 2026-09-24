@@ -30,6 +30,10 @@ function researchDestination(resourceId: string | null | undefined): string {
   return resourceId ? `/research?run=${encodeURIComponent(resourceId)}` : "/research";
 }
 
+function browserTaskDestination(resourceId: string | null | undefined): string {
+  return resourceId ? `/browser-agent?run=${encodeURIComponent(resourceId)}` : "/browser-agent";
+}
+
 function initialsFor(user: FirebaseUser | null): string {
   const source = user?.displayName || user?.email || "";
   const parts = source.trim().split(/\s+/).filter(Boolean);
@@ -119,6 +123,10 @@ export function TopBar({ title, user, notifications }: TopBarProps) {
         const row = notifications?.inbox.find((item) => item.notificationId === activation.notificationId);
         setNotifOpen(false);
         navigate(researchDestination(row?.resourceId));
+      } else if (activation.action === "view_browser_task") {
+        const row = notifications?.inbox.find((item) => item.notificationId === activation.notificationId);
+        setNotifOpen(false);
+        navigate(browserTaskDestination(row?.resourceId));
       } else {
         setOpen(false);
         setNotifOpen(true);
@@ -183,6 +191,9 @@ export function TopBar({ title, user, notifications }: TopBarProps) {
     } else if (row.action === "view_research" || row.action === "answer_research_question") {
       setNotifOpen(false);
       navigate(researchDestination(row.resourceId));
+    } else if (row.action === "view_browser_task") {
+      setNotifOpen(false);
+      navigate(browserTaskDestination(row.resourceId));
     }
   }
 

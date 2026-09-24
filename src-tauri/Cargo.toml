@@ -315,6 +315,10 @@ windows = { version = "0.61", features = [
     # the module claims it launched something.
     "Win32_UI_Shell",
     "Win32_System_Registry",
+    # Background Browser Agent (agent_browser/launch.rs): the Chromium it
+    # launches is assigned to a Job Object with KILL_ON_JOB_CLOSE, so a crash
+    # of this process takes the whole browser tree down with it.
+    "Win32_System_JobObjects",
 ] }
 # The Windows half of audio_capture.rs's device layer: loopback + mic. No
 # resampler crate is needed alongside it, because both streams are opened in

@@ -29,6 +29,7 @@ import { InsightsPage } from "./pages/InsightsPage";
 import { GeneralPage } from "./pages/GeneralPage";
 import { DictationPage } from "./pages/DictationPage";
 import { ResearchPage } from "./pages/ResearchPage";
+import { BrowserAgentPage } from "./pages/BrowserAgentPage";
 import { InterviewPage } from "./pages/InterviewPage";
 import { DashboardOnboarding } from "./DashboardOnboarding";
 import { TrialBanner } from "./TrialBanner";
@@ -42,7 +43,7 @@ import {
 import { useDashboardUser } from "./useDashboardUser";
 import { DashboardResourceScope } from "./useDashboardResource";
 import { useDashboardNotifications } from "./useDashboardNotifications";
-import { navSections, navTitles } from "./navConfig";
+import { browserAgentNavItem, navSections, navTitles } from "./navConfig";
 import { desktopOnboardingSeenForUidKey, overlayStorePath } from "../lib/copy";
 import { logError } from "../lib/log";
 import { trackPageView } from "../lib/analytics";
@@ -59,6 +60,7 @@ export const dashboardPages: Record<string, ReactElement> = {
   "/meetings": <MeetingsPage />,
   "/interview": <InterviewPage />,
   "/research": <ResearchPage />,
+  "/browser-agent": <BrowserAgentPage />,
   "/insights": <InsightsPage />,
   "/general": <GeneralPage />,
   "/dictation": <DictationPage />,
@@ -84,7 +86,9 @@ export function DashboardShell({ user, collapsed }: { user: User | null; collaps
   const title = navTitles[mainPath] ?? "Home";
   const notifications = useDashboardNotifications(user?.uid ?? null);
 
-  const routes = navSections.flatMap((section) => section.items);
+  // The browser agent route is routable whether or not the sidebar shows it:
+  // a notification or the overlay's result card can open it directly.
+  const routes = [...navSections.flatMap((section) => section.items), browserAgentNavItem];
   const closeSettings = useCallback(() => {
     navigate(lastMainPathRef.current);
   }, [navigate]);

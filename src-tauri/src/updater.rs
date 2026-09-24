@@ -152,6 +152,7 @@ fn handle_downloaded(app: &AppHandle, update: Update, bytes: Vec<u8>, auto_insta
         && !overlay::is_voice_active(app)
         && !meeting::is_capture_active(app)
         && !crate::interview::is_active(app)
+        && !crate::agent_browser::is_active(app)
     {
         info!("update check: installing v{} at startup", update.version);
         // On Windows install() exits the process without RunEvent::Exit, so
@@ -212,6 +213,10 @@ pub fn install_pending_update(app: &AppHandle) -> Result<bool, String> {
     }
     if crate::interview::is_active(app) {
         info!("install_pending_update: Interview Companion active, deferring install");
+        return Ok(false);
+    }
+    if crate::agent_browser::is_active(app) {
+        info!("install_pending_update: browser task active, deferring install");
         return Ok(false);
     }
     let Some(handle) = app.try_state::<PendingUpdate>() else {

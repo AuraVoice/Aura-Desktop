@@ -79,6 +79,14 @@ pub const INTERVIEW_SCREEN_SIGHT_REQUESTED: &str = "interview-screen-sight-reque
 pub const INTERVIEW_BRIEF_UPDATED: &str = "interview-brief-updated";
 pub const INTERVIEW_RESUME_UPDATED: &str = "interview-resume-updated";
 
+// agent_browser/mod.rs
+/// Phase, step count and current URL of the live browser task; the terminal
+/// emit also carries the answer and its sources.
+pub const BROWSER_TASK_STATUS: &str = "browser-task-status";
+/// The guard paused on a risky click; the card asks and answers with
+/// `browser_task_approve`. Sixty seconds, default no.
+pub const BROWSER_TASK_APPROVAL: &str = "browser-task-approval";
+
 // tray.rs
 pub const OPEN_NOTIFICATIONS_REQUESTED: &str = "open-notifications-requested";
 pub const CAPTURE_NOW_REQUESTED: &str = "capture-now-requested";

@@ -8317,3 +8317,160 @@
   opacity: 0.6;
   cursor: default;
 }
+
+/* ── Browser Agent page ──────────────────────────────────────────────────
+   Reuses the research page's shell (command section, composer, history list,
+   terminal and confirm blocks). Only the pieces research has no twin for live
+   here, on --db-* tokens so they flip with the theme without a dark twin. */
+.db-browser-agent-state {
+  display: inline-block;
+  margin-bottom: 6px;
+  font-size: 11.5px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--db-text-dim);
+}
+.db-browser-agent-consent-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+.db-browser-agent-live {
+  cursor: default;
+}
+.db-browser-agent-live-actions {
+  display: flex;
+  gap: 8px;
+}
+.db-browser-agent-live-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.db-browser-agent-answer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 20px 22px;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
+  contain: layout paint;
+}
+.db-browser-agent-answer p {
+  margin: 0;
+  font-size: 14.5px;
+  line-height: 1.55;
+  color: var(--db-text);
+  white-space: pre-wrap;
+}
+.db-browser-agent-reason {
+  color: var(--db-text-dim);
+  font-size: 13px;
+}
+/* A failed or stopped task: one line, not the research page's terminal card.
+   Glass recipe with a coral tint; the header's state chip already says FAILED. */
+.db-browser-agent-fail {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  max-width: 720px;
+  padding: 11px 14px;
+  border: 1px solid rgba(225, 183, 177, 0.9);
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(255, 240, 236, 0.6));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
+  contain: layout paint;
+}
+.db-browser-agent-fail > svg {
+  flex-shrink: 0;
+  color: var(--research-coral);
+}
+.db-browser-agent-fail p {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--db-text);
+}
+.db-browser-agent-fail .db-browser-agent-fail-answer {
+  flex-basis: 100%;
+  font-size: 13px;
+  font-weight: 400;
+  color: var(--db-text-dim);
+  white-space: pre-wrap;
+}
+.db-browser-agent-sources {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.db-browser-agent-sources button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 11px;
+  border: 1px solid rgba(63, 86, 78, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.5);
+  color: var(--db-text);
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.db-browser-agent-sources button:hover {
+  background: rgba(255, 255, 255, 0.8);
+}
+.db-browser-agent-trace {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+.db-browser-agent-trace table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  color: var(--db-text);
+}
+.db-browser-agent-trace th,
+.db-browser-agent-trace td {
+  padding: 7px 10px;
+  text-align: left;
+  border-bottom: 1px solid rgba(63, 86, 78, 0.1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 220px;
+}
+.db-browser-agent-trace th {
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--db-text-dim);
+}
+.db-browser-agent-trace td:nth-child(6),
+.db-browser-agent-trace td:nth-child(7),
+.db-browser-agent-trace td:nth-child(8) {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.db-browser-agent-withdraw {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--db-text-dim);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.db-browser-agent-withdraw:hover {
+  color: var(--db-text);
+}

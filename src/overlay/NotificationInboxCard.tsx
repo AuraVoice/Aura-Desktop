@@ -110,6 +110,8 @@ function actionLabel(action: StoredNotification["action"]): string | null {
       return copy.viewResearch;
     case "answer_research_question":
       return copy.answerResearchQuestion;
+    case "view_browser_task":
+      return copy.viewBrowserTask;
     default:
       return null; // open_notifications / null: the inbox itself, no inline action
   }

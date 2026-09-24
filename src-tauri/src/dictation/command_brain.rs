@@ -76,6 +76,10 @@ const GATE_TYPING: f64 = 0.90;
 /// Commands are short. Longer utterances skip the round trip entirely, so a
 /// paragraph of prose never pays the decision latency.
 const MAX_COMMAND_WORDS: usize = 12;
+/// The cap for a hold that opens with an address word ("hey aura, ..."): a
+/// browser task is a sentence, and the address is the user's own signal that
+/// this hold is for Buddy rather than the page. See `try_command`.
+const ADDRESSED_MAX_COMMAND_WORDS: usize = 30;
 
 /// Jev choices cap at 255 options, so this is the ceiling the list is cut to.
 /// Beware what the cut MEANS: `enumerate_apps` collects into a `BTreeMap` keyed
@@ -298,7 +302,13 @@ pub(super) fn try_command(
     let brain = handle(app)?;
     let token = brain.usable()?;
     let words = transcript.split_whitespace().count();
-    if words == 0 || words > MAX_COMMAND_WORDS {
+    // A hold that opens by addressing Buddy is allowed to be a whole sentence:
+    // a browser task ("hey aura, find three internships in Seattle posted
+    // this week and list the deadlines") is rarely twelve words. Every other
+    // hold keeps the short cap, so ordinary dictation pays nothing for this.
+    let addressed_prefix = starts_with_address(transcript);
+    let word_cap = if addressed_prefix { ADDRESSED_MAX_COMMAND_WORDS } else { MAX_COMMAND_WORDS };
+    if words == 0 || words > word_cap {
         return None;
     }
 
@@ -396,6 +406,9 @@ pub(super) fn try_command(
         "volume_up" => Verb::Media(MediaKey::VolumeUp),
         "volume_down" => Verb::Media(MediaKey::VolumeDown),
         "volume_mute" => Verb::Media(MediaKey::VolumeMute),
+        // Jev only selects; it cannot write a brief. The utterance itself,
+        // minus the address word, IS the brief (feature entry, section 9.1).
+        "browser_task" => Verb::BrowserTask(strip_address(transcript)),
         _ => {
             info!(
                 "dictation: phase=command outcome=dictation action=none decision_ms={decision_ms}"
@@ -404,7 +417,13 @@ pub(super) fn try_command(
         }
     };
 
-    let acts = if !field_focused {
+    // A browser task acts only when the user addressed Buddy, whether or not
+    // a field is focused. It is the one verb that can be mistaken for a
+    // to-do item someone wanted TYPED ("find three internships and list the
+    // deadlines"), and starting a browser on that is the costlier mistake.
+    let acts = if matches!(verb, Verb::BrowserTask(_)) {
+        addressed.as_deref() == Some("yes") && conf.min(addressed_c) >= GATE_ADDRESSED
+    } else if !field_focused {
         conf >= GATE_FREE
     } else if addressed.as_deref() == Some("yes") {
         conf.min(addressed_c) >= GATE_ADDRESSED
@@ -443,6 +462,10 @@ enum Verb {
     OpenSite(String),
     PlayMusic(String),
     Media(MediaKey),
+    /// A multi-step web job handed to the Background Browser Agent
+    /// (agent_browser). The String is the brief: the utterance verbatim,
+    /// minus the address word.
+    BrowserTask(String),
 }
 
 impl Verb {
@@ -455,8 +478,43 @@ impl Verb {
             Verb::OpenSite(_) => "open_site",
             Verb::PlayMusic(_) => "play_music",
             Verb::Media(key) => key.id(),
+            Verb::BrowserTask(_) => "browser_task",
         }
     }
+}
+
+/// Address words a hold may open with. Lowercased, punctuation-insensitive:
+/// "Hey Aura, find ..." and "buddy find ..." both count.
+const ADDRESS_WORDS: &[&str] = &["buddy", "aura", "hey buddy", "hey aura", "ok buddy", "ok aura"];
+
+fn address_prefix_len(transcript: &str) -> usize {
+    let lowered = transcript.trim_start().to_lowercase();
+    let mut best = 0;
+    for word in ADDRESS_WORDS {
+        if let Some(rest) = lowered.strip_prefix(word) {
+            // The address must end the token: "aurora" is not "aura".
+            let ends_token = rest.is_empty()
+                || rest.starts_with(|c: char| c.is_whitespace() || c == ',' || c == ':' || c == '.');
+            if ends_token && word.len() > best {
+                best = word.len();
+            }
+        }
+    }
+    best
+}
+
+fn starts_with_address(transcript: &str) -> bool {
+    address_prefix_len(transcript) > 0
+}
+
+/// The brief: everything after the address word and its punctuation.
+fn strip_address(transcript: &str) -> String {
+    let trimmed = transcript.trim_start();
+    let cut = address_prefix_len(trimmed);
+    trimmed[cut..]
+        .trim_start_matches(|c: char| c.is_whitespace() || c == ',' || c == ':' || c == '.')
+        .trim()
+        .to_string()
 }
 
 #[derive(Clone, Copy)]
@@ -529,6 +587,12 @@ fn execute(app: &AppHandle, verb: Verb) -> Result<String, String> {
         Verb::Media(key) => {
             platform::media_key(key)?;
             Ok(key.caption().to_string())
+        }
+        Verb::BrowserTask(brief) => {
+            // Its own authorization (signed in + the browser agent opt-in),
+            // its own worker thread; the hold returns at once with a caption.
+            crate::agent_browser::start(app, &brief, "dictation")?;
+            Ok("Working on it in the background".to_string())
         }
     }
 }
@@ -647,6 +711,10 @@ fn build_payload(
         ("volume_up", "Turn the system volume up."),
         ("volume_down", "Turn the system volume down."),
         ("volume_mute", "Mute or unmute the system volume."),
+        (
+            "browser_task",
+            "A multi-step job on the web to do in the background and report back: find, compare, collect or check something across websites. Not a single search or opening one site.",
+        ),
         ("none", "No desktop action fits this utterance."),
     ];
 

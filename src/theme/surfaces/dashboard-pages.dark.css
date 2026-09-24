@@ -273,3 +273,29 @@
 :root[data-theme="dark"] .db-update-dialog-dismiss:hover:not(:disabled) {
   background: var(--dk-hover);
 }
+
+/* ── Browser Agent page ── */
+:root[data-theme="dark"] .db-browser-agent-answer {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
+}
+:root[data-theme="dark"] .db-browser-agent-fail {
+  border-color: rgba(255, 138, 128, 0.3);
+  background: linear-gradient(rgba(255, 107, 95, 0.08), rgba(255, 107, 95, 0.08)), var(--dk-glass-fill);
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
+}
+:root[data-theme="dark"] .db-browser-agent-fail > svg {
+  color: var(--research-coral);
+}
+:root[data-theme="dark"] .db-browser-agent-sources button {
+  border-color: var(--dk-border);
+  background: rgba(255, 255, 255, 0.06);
+}
+:root[data-theme="dark"] .db-browser-agent-sources button:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+:root[data-theme="dark"] .db-browser-agent-trace th,
+:root[data-theme="dark"] .db-browser-agent-trace td {
+  border-bottom-color: var(--dk-border);
+}

@@ -10,6 +10,7 @@ import {
   Mic,
   Search,
   Briefcase,
+  Globe,
   type LucideIcon,
 } from "lucide-react";
 
@@ -33,6 +34,15 @@ export const primaryNavItems: NavItem[] = [
   { to: "/connectors", label: "Connectors", Icon: Link2 },
 ];
 
+/** Behind Settings > System > Experimental. The route always exists; the
+ * sidebar shows the entry only while the harness flag is on. */
+export const browserAgentNavItem: NavItem = {
+  to: "/browser-agent",
+  label: "Browser Agent",
+  Icon: Globe,
+  beta: true,
+};
+
 export const settingsNavItem: NavItem = {
   to: "/system",
   label: "Settings",
@@ -51,6 +61,6 @@ export const navSections = [
 
 /** Flat lookup of route -> label, for the top-bar title. */
 export const navTitles: Record<string, string> = Object.fromEntries(
-  [...primaryNavItems, ...footerNavItems].map((item) => [item.to, item.label]),
+  [...primaryNavItems, browserAgentNavItem, ...footerNavItems].map((item) => [item.to, item.label]),
 );
 navTitles["/interview"] = "Interview Companion";

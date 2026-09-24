@@ -22,6 +22,7 @@
 // must keep failing `clippy -- -D warnings` on the macos CI leg.
 #![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
+mod agent_browser;
 mod audio_ducking;
 mod audio_capture;
 mod auth_cache;
@@ -382,6 +383,7 @@ pub fn run() {
         .manage(OverlayStateHandle::default())
         .manage(hotkeys::HotkeyState::default())
         .manage(interview::InterviewHandle::default())
+        .manage(agent_browser::BrowserAgentHandle::default())
         .manage(security::SecurityHandle::default())
         .manage(guide::GuideRuntimeHandle::default())
         .manage(guide::GuideCaptureHandle::default())
@@ -569,6 +571,18 @@ pub fn run() {
             interview_prep_store::interview_prep_upsert,
             interview_prep_store::interview_prep_delete,
             interview_prep_store::interview_prep_set_meta,
+            agent_browser::browser_task_start,
+            agent_browser::browser_task_stop,
+            agent_browser::browser_task_approve,
+            agent_browser::browser_task_watch,
+            agent_browser::browser_task_status,
+            agent_browser::browser_task_set_credential,
+            agent_browser::browser_task_clear_credential,
+            agent_browser::browser_task_consent,
+            agent_browser::set_browser_task_consent,
+            agent_browser::browser_tasks_list,
+            agent_browser::browser_task_load,
+            agent_browser::browser_task_delete,
             dictation::polish_commands::dictation_polish_settings,
             dictation::polish_commands::dictation_set_polish_settings,
             dictation::polish_commands::dictation_set_polish_credential,
@@ -658,6 +672,11 @@ pub fn run() {
             // After the listener, so the first status the UI sees already
             // reflects whether the key hook / event tap actually came up.
             dictation::emit_status_changed(app.handle());
+
+            // Background Browser Agent: mirror its persisted opt-in into the
+            // security state and sweep a browser a crash may have left
+            // holding the agent profile.
+            agent_browser::on_startup(app.handle());
 
             // Regular so the app has a Dock icon and a Cmd+Tab entry to
             // navigate back to, which the menu bar item alone did not give
@@ -807,6 +826,10 @@ pub fn run() {
                 if let Some(queue) = app.try_state::<screenshot_store::PersistenceQueue>() {
                     queue.drain_for_shutdown();
                 }
+                // A browser task's Chromium must not outlive Aura. On Windows
+                // the Job Object guarantees it; this is the polite close and
+                // the macOS path.
+                agent_browser::kill_for_shutdown(app);
                 // A deliberate exit; the next launch must not count it as a
                 // crash (telemetry::startup_marker).
                 telemetry::startup_marker::clean_exit(app);

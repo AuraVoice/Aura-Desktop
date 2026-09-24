@@ -74,6 +74,10 @@ export const REGION_SELECTION_LOCKED = "region-selection-locked";
 export const REGION_CAPTURE_READY = "region-capture-ready";
 export const REGION_CANCELLED = "region-cancelled";
 
+// agent_browser/mod.rs
+export const BROWSER_TASK_STATUS = "browser-task-status";
+export const BROWSER_TASK_APPROVAL = "browser-task-approval";
+
 // JS-originated (no Rust twin)
 export const START_VOICE_REQUESTED = "start-voice-requested";
 export const DESKTOP_ONBOARDING_COMPLETED = "desktop-onboarding-completed";
@@ -187,4 +191,40 @@ export interface RegionCaptureReadyPayload {
 export interface RegionCancelledPayload {
   generation: number;
   reason: string;
+}
+
+// Mirrors agent_browser/mod.rs BrowserTaskStatusPayload (rename_all =
+// "camelCase"). Emitted on every phase change and step; the terminal emit
+// (done / partial / failed / stopped) also carries the answer and sources.
+export type BrowserTaskPhase =
+  | "idle"
+  | "starting"
+  | "launching"
+  | "running"
+  | "awaiting_approval"
+  | "done"
+  | "partial"
+  | "failed"
+  | "stopped";
+
+export interface BrowserTaskStatusPayload {
+  phase: BrowserTaskPhase;
+  taskId: string | null;
+  epoch: number | null;
+  origin: string | null;
+  brief: string | null;
+  steps: number;
+  url: string | null;
+  reason: string | null;
+  answer: string | null;
+  sources: string[];
+  partial: boolean;
+}
+
+// Mirrors agent_browser/mod.rs ApprovalPayload.
+export interface BrowserTaskApprovalPayload {
+  taskId: string;
+  epoch: number;
+  description: string;
+  url: string;
 }

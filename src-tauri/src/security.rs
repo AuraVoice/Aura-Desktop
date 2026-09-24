@@ -80,6 +80,11 @@ pub struct SecurityState {
     /// cannot capture a turn screen the user has switched off. Default false
     /// mirrors the setting's own default.
     voice_screen_context_enabled: bool,
+    /// Mirror of the Background Browser Agent's persisted opt-in
+    /// (`agent_browser/consent.rs`), pushed at startup and on every change.
+    /// Same reasoning as the flag above: the authorization decision lives
+    /// here, AppHandle-free, so it cannot read the store per call.
+    browser_task_consented: bool,
     guide_epoch: u64,
     /// A screen frame was actually captured (and authorized) during the
     /// current voice session - the precondition for `point_at`, since a
@@ -125,6 +130,10 @@ pub enum Operation {
     MarkMeetingAcked,
     StartJoinWatch,
     ReadLogs,
+    /// Launch Aura's own browser and act on the web for the user. Signed in
+    /// plus the one-time opt-in; deliberately NOT tied to a live voice call,
+    /// because the task must outlive the call that started it.
+    StartBrowserTask,
 }
 
 /// Proof of a successful `authorize` call, carrying the auth epoch it was
@@ -179,6 +188,7 @@ pub enum Denied {
     StaleGuide,
     ScreenContextDisabled,
     ScreenSightOff,
+    BrowserTaskNotEnabled,
 }
 
 impl fmt::Display for Denied {
@@ -193,6 +203,7 @@ impl fmt::Display for Denied {
             Denied::StaleGuide => "denied: Guide session changed while the operation was in flight",
             Denied::ScreenContextDisabled => "denied: screen context sharing is off in settings",
             Denied::ScreenSightOff => "denied: screen sight is switched off",
+            Denied::BrowserTaskNotEnabled => "denied: browser tasks are not enabled in settings",
         };
         f.write_str(reason)
     }
@@ -316,6 +327,11 @@ impl SecurityState {
             | Operation::MarkMeetingAcked
             | Operation::StartJoinWatch
             | Operation::ReadLogs => {}
+            Operation::StartBrowserTask => {
+                if !self.browser_task_consented {
+                    return Err(Denied::BrowserTaskNotEnabled);
+                }
+            }
         }
         Ok(Ticket {
             auth_epoch: self.auth_epoch,
@@ -474,6 +490,10 @@ impl SecurityState {
         self.guide_epoch
     }
 
+    pub fn set_browser_task_consent(&mut self, accepted: bool) {
+        self.browser_task_consented = accepted;
+    }
+
     pub fn set_voice_screen_context(&mut self, enabled: bool) {
         self.voice_screen_context_enabled = enabled;
         // Switching the setting back on in Settings is a fresh, newer opt-in.
@@ -556,6 +576,14 @@ pub fn current_uid(app: &AppHandle) -> Option<String> {
     }
 }
 
+/// Mirrors the browser agent's persisted opt-in (`agent_browser/consent.rs`).
+pub fn set_browser_task_consent(app: &AppHandle, accepted: bool) {
+    if let Some(handle) = handle(app) {
+        let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        state.set_browser_task_consent(accepted);
+    }
+}
+
 /// Records a successful, authorized screen capture (enables PointAt).
 pub fn note_capture(app: &AppHandle) {
     if let Some(handle) = handle(app) {
@@ -588,6 +616,9 @@ pub fn session_changed(app: &AppHandle, signed_in: bool, uid: Option<String>) {
     if transition.revoked {
         crate::meeting::request_stop(app, "signed_out");
         crate::interview::request_stop(app, "signed_out");
+        // A browser task acting for account A must not keep acting once B is
+        // (or nobody is) signed in.
+        crate::agent_browser::request_stop(app, "signed_out");
         crate::interview::clear_preparation(app);
         crate::meeting::stop_all_join_watches(app);
         crate::meeting::stop_ambient_watch_native(app);
@@ -624,6 +655,9 @@ pub fn session_changed(app: &AppHandle, signed_in: bool, uid: Option<String>) {
     // the Rust slot before either window asks for it, so the same boundary
     // that prunes the other account's rows also hydrates this one's.
     crate::interview_prep_store::retain_only_for_session(app, session_uid.clone());
+    // Browser task rows (brief, answer, trace) are per-account and exist
+    // nowhere else; same boundary, same reason.
+    crate::agent_browser::store::retain_only_for_session(app, session_uid.as_deref());
     if let Some(uid) = session_uid.clone() {
         crate::interview::hydrate_preparation(app, uid);
     }
@@ -760,7 +794,7 @@ mod tests {
         s
     }
 
-    const GATED_OPS: [Operation; 17] = [
+    const GATED_OPS: [Operation; 18] = [
         Operation::CaptureScreen,
         Operation::CaptureTurnScreen,
         Operation::CaptureChatScreen,
@@ -778,6 +812,7 @@ mod tests {
         Operation::MarkMeetingAcked,
         Operation::StartJoinWatch,
         Operation::ReadLogs,
+        Operation::StartBrowserTask,
     ];
 
     #[test]

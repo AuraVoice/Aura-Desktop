@@ -20,6 +20,7 @@ const DASHBOARD_ROUTES: &[&str] = &[
     "/history",
     "/meetings",
     "/research",
+    "/browser-agent",
     "/insights",
     "/general",
     "/connectors",
@@ -72,7 +73,9 @@ pub fn open_dashboard_route(
     resource_id: Option<&str>,
 ) -> Result<(), String> {
     let route = normalize_route(route);
-    let destination = if route == "/research" {
+    // Both pages read `?run=` for the row to open (ResearchPage and
+    // BrowserAgentPage), so one encoding serves both.
+    let destination = if route == "/research" || route == "/browser-agent" {
         resource_id
             .filter(|value| !value.is_empty() && value.len() <= 160)
             .map(|value| {
