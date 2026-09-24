@@ -1447,6 +1447,8 @@ mod platform {
                 usage::word_count(&final_text),
                 false,
                 polish_context.to_json(),
+                app_key.clone(),
+                history::OUTCOME_COMMAND,
             );
             finish_with(
                 app,
@@ -1476,12 +1478,25 @@ mod platform {
             let probe = crate::uia::probe_focus(app);
             let outcome = insert::insert_text(&final_text, target, probe.verdict);
             typed_at = Instant::now();
+            // The app is the one field that says WHERE a lost hold was aimed.
+            // Process stems only (never a title, never text): the module's
+            // "counts, sizes, durations and outcomes" rule widened by this one
+            // name so a FocusChanged can be diagnosed from the log at all.
+            let foreground_note = if matches!(outcome, InsertOutcome::FocusChanged) {
+                let stem = crate::system_control::process_stem_for_window(
+                    insert::foreground_window(),
+                );
+                format!(" fg={}", stem.as_deref().unwrap_or("unknown"))
+            } else {
+                String::new()
+            };
             info!(
                 "dictation: phase=insert hold_ms={hold_ms} frames={captured_frames} chars={} \
-                 role={} verdict={:?} outcome={outcome:?}",
+                 role={} verdict={:?} outcome={outcome:?} app={}{foreground_note}",
                 final_text.chars().count(),
                 probe.role,
-                probe.verdict
+                probe.verdict,
+                app_key.as_deref().unwrap_or("unknown"),
             );
             outcome
         };
@@ -1534,6 +1549,8 @@ mod platform {
                 usage::word_count(&final_text),
                 shareable,
                 polish_context.to_json(),
+                app_key.clone(),
+                history::outcome_label(&outcome),
             );
             // The read-back. Only for text that actually reached a field, only
             // while sharing consent is on (the baseline was parked under the

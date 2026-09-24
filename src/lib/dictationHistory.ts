@@ -26,6 +26,71 @@ export interface DictationHistoryEntry {
   /** The transcript as it left speech recognition, present only when AI polish
    * changed the text. Null means `text` IS the raw transcript. */
   rawText: string | null;
+  /** Process stem of the app the hold was aimed at ("code", "chrome"). Null
+   * for rows written before the column existed. */
+  appStem: string | null;
+  /** "inserted", "focus_changed", "keys_held", "blocked", "no_text_field" or
+   * "command". Null for rows written before the column existed. */
+  insertOutcome: string | null;
+}
+
+/** Process stems whose obvious capitalisation is not their product name. */
+const APP_STEM_LABELS: Record<string, string> = {
+  code: "VS Code",
+  "code - insiders": "VS Code Insiders",
+  cursor: "Cursor",
+  windowsterminal: "Windows Terminal",
+  wt: "Windows Terminal",
+  chrome: "Chrome",
+  msedge: "Edge",
+  firefox: "Firefox",
+  brave: "Brave",
+  arc: "Arc",
+  notepad: "Notepad",
+  winword: "Word",
+  outlook: "Outlook",
+  olk: "Outlook",
+  excel: "Excel",
+  powerpnt: "PowerPoint",
+  onenote: "OneNote",
+  slack: "Slack",
+  discord: "Discord",
+  teams: "Teams",
+  "ms-teams": "Teams",
+  notion: "Notion",
+  obsidian: "Obsidian",
+  whatsapp: "WhatsApp",
+  telegram: "Telegram",
+  zoom: "Zoom",
+  explorer: "File Explorer",
+  applicationframehost: "Windows app",
+};
+
+/** "code" -> "VS Code", "someapp" -> "Someapp". */
+export function appStemLabel(stem: string): string {
+  const key = stem.toLowerCase();
+  const known = APP_STEM_LABELS[key];
+  if (known) return known;
+  return key.charAt(0).toUpperCase() + key.slice(1);
+}
+
+/** The short reason a dictation never reached its field, or null when it did
+ * (or when the row predates the outcome column). */
+export function insertOutcomeLabel(outcome: string | null): string | null {
+  switch (outcome) {
+    case "focus_changed":
+      return "Not typed: focus changed";
+    case "keys_held":
+      return "Not typed: keys still held";
+    case "blocked":
+      return "Not typed: app blocked input";
+    case "no_text_field":
+      return "Not typed: no text box";
+    case "command":
+      return "Ran as a command";
+    default:
+      return null;
+  }
 }
 
 /** Mirrors `HistorySettings` in src-tauri/src/dictation/history.rs. */

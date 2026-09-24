@@ -122,6 +122,17 @@ pub struct AmbientGonePayload {
     pub app: String,
 }
 
+/// `meeting-call-rekeyed`: the tracked call is the same conversation under a
+/// new identity (detect.rs `same_call`). `previous_key` is the key React holds
+/// for it; `call` is what it should hold from now on. A capture started for
+/// `previous_key` keeps running, and a decision made for it carries over.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AmbientRekeyPayload {
+    pub previous_key: String,
+    pub call: AmbientCallPayload,
+}
+
 /// The single always-on call scanner (detect.rs `ambient_thread`). `cancel`
 /// is Some while a thread is running; `current` is the call it last reported,
 /// handed back to a remounting webview so a call already in progress still

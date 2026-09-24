@@ -67,6 +67,10 @@ pub const MEETING_LEFT: &str = "meeting-left";
 /// The ambient scanner saw a call window appear / disappear (detect.rs).
 pub const MEETING_CALL_SEEN: &str = "meeting-call-seen";
 pub const MEETING_CALL_GONE: &str = "meeting-call-gone";
+/// The call the scanner is tracking changed identity without ending: a browser
+/// launcher page handing off to the desktop client, or the mic pass naming
+/// the browser while the meeting tab is hidden. Neither seen nor gone fires.
+pub const MEETING_CALL_REKEYED: &str = "meeting-call-rekeyed";
 
 // interview.rs
 pub const INTERVIEW_HACKER_STATUS: &str = "interview-hacker-status";

@@ -7876,6 +7876,19 @@
 .db-dictation-text-cell {
   min-width: 0;
 }
+/* Where the hold was aimed and, when the text never landed, why. Tokens
+   only, so the dark sheet needs no twin. */
+.db-dictation-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-top: 4px;
+  color: var(--db-text-mute);
+  font-size: 12px;
+}
+.db-dictation-outcome {
+  color: var(--db-text-dim);
+}
 .db-dictation-raw {
   margin-top: 10px;
   padding-top: 10px;

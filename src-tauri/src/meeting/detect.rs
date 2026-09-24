@@ -33,7 +33,10 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use super::app_icon::IconSource;
-use super::{AmbientCallPayload, AmbientGonePayload, AmbientWatchHandle, JoinWatchHandle};
+use super::{
+    AmbientCallPayload, AmbientGonePayload, AmbientRekeyPayload, AmbientWatchHandle,
+    JoinWatchHandle,
+};
 
 const POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// Consecutive match-free polls before the meeting counts as left - one blip
@@ -124,6 +127,12 @@ fn ambient_thread(app: AppHandle, cancel: Arc<AtomicBool>) {
     // The call the watch is counting toward `SEEN_AFTER_HITS`, and how many
     // consecutive polls it has survived. Never announced until it settles.
     let mut pending: Option<(String, u32)> = None;
+    // The last title-identified key (a Meet code, a Teams meeting name) in
+    // the call the watch is tracking. When the mic pass has taken over
+    // ("browser-call", no title) and the window pass comes back, this is how
+    // the SAME tab returning is told apart from a different meeting opened in
+    // its place: the first re-keys, the second is a new call.
+    let mut lineage: Option<String> = None;
     #[cfg(target_os = "macos")]
     let mut trust_logged = false;
 
@@ -167,12 +176,45 @@ fn ambient_thread(app: AppHandle, cancel: Arc<AtomicBool>) {
                 misses = 0;
                 pending = None;
             }
+            (Some((mut next, icon_source)), Some(previous))
+                if same_call(&previous, &next, lineage.as_deref()) =>
+            {
+                // The same conversation under a new name: a "join from your
+                // browser" page handing off to the desktop client, the mic
+                // pass naming the browser while the meeting tab is hidden, or
+                // the tab coming back. One Zoom join used to walk browser-call
+                // -> zoom-web -> zoom and each step fired gone AND seen in the
+                // same tick, so the capture stopped, the card asked again, and
+                // the backend got three meetings for one call. Nothing ends
+                // here: the capture follows the key and the card's decision
+                // carries over.
+                misses = 0;
+                pending = None;
+                if title_identifies_meeting(&next.app) {
+                    lineage = Some(next.call_key.clone());
+                }
+                if !(next.app.ends_with("web") || next.app == "google-meet") {
+                    next.app_icon = super::app_icon::png_data_url(&icon_source);
+                }
+                info!(
+                    "meeting.detect: ambient call rekeyed ({} -> {}, source={})",
+                    previous.app, next.app, next.source
+                );
+                set_ambient_current(&app, Some(next.clone()));
+                let payload = AmbientRekeyPayload {
+                    previous_key: previous.call_key,
+                    call: next,
+                };
+                if let Err(e) = app.emit(crate::events::MEETING_CALL_REKEYED, payload) {
+                    error!("meeting.detect: emit call rekeyed failed: {e}");
+                }
+            }
             (Some((mut next, icon_source)), previous) => {
                 misses = 0;
                 // Arming a call the watch is not already tracking needs
-                // confirmation. A re-key mid-call (`previous` is Some) is NOT
-                // held back: the capture is pointed at the old key and must
-                // follow the title immediately.
+                // confirmation. A re-key to an UNRELATED call mid-call
+                // (`previous` is Some, `same_call` said no) is NOT held back:
+                // the old call is over and the new one must be announced now.
                 if previous.is_none() {
                     let hits = match pending.take() {
                         Some((key, hits)) if key == next.call_key => hits + 1,
@@ -191,6 +233,7 @@ fn ambient_thread(app: AppHandle, cancel: Arc<AtomicBool>) {
                 if let Some(previous) = previous {
                     emit_gone(&app, previous);
                 }
+                lineage = title_identifies_meeting(&next.app).then(|| next.call_key.clone());
                 // Once per call, never per tick. A browser-hosted call keeps
                 // None: the card shows the meeting site's own icon instead.
                 if !(next.app.ends_with("web") || next.app == "google-meet") {
@@ -214,6 +257,7 @@ fn ambient_thread(app: AppHandle, cancel: Arc<AtomicBool>) {
                         break;
                     }
                     set_ambient_current(&app, None);
+                    lineage = None;
                     emit_gone(&app, previous);
                 }
             }
@@ -294,15 +338,70 @@ fn gone_threshold(call: &AmbientCallPayload) -> u32 {
     }
 }
 
-/// "app:<16 hex of sha256(normalized title)>". Native Zoom always titles its
-/// window "Zoom Meeting", so every Zoom call shares a key; that is fine because
-/// React clears its decision on `meeting-call-gone`, and two Zoom calls always
-/// pass through gone in between. Meet titles carry the meeting code, so a tab
-/// switch and return resolves to the same call.
+/// A native call app's key is the app name alone. Its window title says
+/// nothing about WHICH call ("Zoom Meeting" every time), and hashing it gave
+/// one Zoom call two keys, `zoom:H("Zoom Meeting")` from the window pass and
+/// `zoom:H("Zoom")` from the mic pass, so a minimize or a floating mini-window
+/// re-keyed the call every few seconds. One key per app is safe because React
+/// clears its decision on `meeting-call-gone` and two calls in the same app
+/// always pass through gone in between.
+///
+/// Browser-hosted calls and `mic-call` keep "app:<16 hex of sha256(normalized
+/// title)>": a Meet title carries the meeting code, so back-to-back meetings in
+/// one tab are two calls, and a `mic-call` title is the app's own name.
 fn call_key(app: &str, title: &str) -> String {
     use sha2::{Digest, Sha256};
+    if !(is_browser_hosted(app) || app == "mic-call") {
+        return app.to_string();
+    }
     let digest = format!("{:x}", Sha256::digest(normalized_title(title).as_bytes()));
     format!("{app}:{}", &digest[..16])
+}
+
+/// Apps whose window title names the meeting itself, so a different title is
+/// a different call rather than the same call under another name.
+fn title_identifies_meeting(app: &str) -> bool {
+    app == "google-meet" || app == "teams-web"
+}
+
+/// Whether `next`, matched under a different key while `previous` is the
+/// tracked call, is the same conversation. Three shapes are:
+///
+/// - the mic pass naming the browser (`browser-call`) while the meeting tab
+///   is hidden, and the window pass naming the site again when it returns.
+///   With a title-identified site, only the SAME title returning counts
+///   (`lineage`); another Meet code in that tab is the next meeting.
+/// - a "join from your browser" page handing the call to the desktop client:
+///   `zoom-web` or `browser-call` becoming `zoom`, `teams-web` or
+///   `browser-call` becoming `teams`, `browser-call` becoming `webex`.
+/// - the reverse of either, which the loop treats identically.
+///
+/// Two different keys under the SAME app are not: native apps have one key
+/// per app, and for a browser-hosted app the key IS the meeting.
+fn same_call(previous: &AmbientCallPayload, next: &AmbientCallPayload, lineage: Option<&str>) -> bool {
+    let (from, to) = (previous.app.as_str(), next.app.as_str());
+    if from == to {
+        return false;
+    }
+    let browser_pair = (from == "browser-call" && is_browser_hosted(to))
+        || (to == "browser-call" && is_browser_hosted(from));
+    if browser_pair {
+        // A title-identified site returning from behind the mic pass must be
+        // the meeting the chain started with.
+        if title_identifies_meeting(to) {
+            return lineage.is_none_or(|key| key == next.call_key);
+        }
+        return true;
+    }
+    matches!(
+        (from, to),
+        ("zoom-web" | "browser-call", "zoom")
+            | ("zoom", "zoom-web" | "browser-call")
+            | ("teams-web" | "browser-call", "teams")
+            | ("teams", "teams-web" | "browser-call")
+            | ("browser-call", "webex")
+            | ("webex", "browser-call")
+    )
 }
 
 fn normalized_title(title: &str) -> String {

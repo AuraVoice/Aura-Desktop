@@ -102,7 +102,7 @@ mod backend {
     /// sensitive to time: the user can click somewhere else during the keyup wait
     /// above, and a verdict read before that wait would describe the wrong control.
     pub fn insert_text(text: &str, target: isize, verdict: FocusVerdict) -> InsertOutcome {
-        if foreground_window() != target {
+        if !focus_kept(target, verdict) {
             return InsertOutcome::FocusChanged;
         }
         if !release_modifiers() {
@@ -111,7 +111,7 @@ mod backend {
         // Re-read after the guard: waiting for a keyup is a window in which the
         // user can alt-tab away, and typing into the wrong app is worse than
         // typing nothing.
-        if foreground_window() != target {
+        if !focus_kept(target, verdict) {
             return InsertOutcome::FocusChanged;
         }
         if is_protected_target(target) {
@@ -329,6 +329,37 @@ mod backend {
         *first = false;
         let sent = unsafe { SendInput(chunk, core::mem::size_of::<INPUT>() as i32) };
         sent != 0
+    }
+
+    /// Whether the keystrokes would still land where the user was when the
+    /// chord went down. The foreground window itself is the first answer. When
+    /// it is a DIFFERENT window of the SAME process and a text box has focus,
+    /// that is still "where the user was": a second VS Code window, a Terminal
+    /// pane popped out, a quick-pick that briefly took the foreground at chord
+    /// time. Comparing raw handles alone called every one of those a focus
+    /// change and refused one hold in seven (41 of 289 over a week, 39 with a
+    /// typable field in front). Another process in front is still a focus
+    /// change: typing into the wrong app is the hazard this guard exists for,
+    /// and so is a same-process window with no text box (a dialog, a menu).
+    fn focus_kept(target: isize, verdict: FocusVerdict) -> bool {
+        let foreground = foreground_window();
+        if foreground == target {
+            return true;
+        }
+        if verdict != FocusVerdict::Typable {
+            return false;
+        }
+        let pid = window_pid(foreground);
+        pid != 0 && pid == window_pid(target)
+    }
+
+    fn window_pid(hwnd_raw: isize) -> u32 {
+        unsafe {
+            let hwnd = HWND(hwnd_raw as *mut core::ffi::c_void);
+            let mut pid: u32 = 0;
+            GetWindowThreadProcessId(hwnd, Some(&mut pid));
+            pid
+        }
     }
 
     /// True when the target window's process cannot even be opened for a limited

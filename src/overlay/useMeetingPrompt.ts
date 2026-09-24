@@ -3,11 +3,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
   MEETING_CALL_GONE,
+  MEETING_CALL_REKEYED,
   MEETING_CALL_SEEN,
   type AmbientCallPayload,
   type AmbientGonePayload,
+  type AmbientRekeyPayload,
 } from "../lib/ipcEvents";
 import type { UpcomingMeeting } from "../lib/calendar";
+import { relatedCallApps } from "../lib/meetingCallFamily";
 import { isEligibleForNotes } from "./useMeetingArm";
 import type { OverlayPresentation } from "./overlayPresentation";
 import type { RecordCallOutcome } from "./useMeetingCapture";
@@ -210,6 +213,28 @@ export function useMeetingPrompt(inputs: MeetingPromptInputs): MeetingPromptStat
     setCurrent(call);
   }, []);
 
+  /** The tracked call changed identity without ending. Everything remembered
+   * under the old key (the decision, that the card was shown or summoned, a
+   * re-prompt) moves to the new key, so a hand-off from the browser launcher
+   * to the desktop client neither asks again nor forgets a Record. */
+  const handleRekeyed = useCallback(
+    (previousKey: string, call: AmbientCallPayload) => {
+      if (currentRef.current?.callKey !== previousKey) {
+        handleSeen(call);
+        return;
+      }
+      const decision = decisionsRef.current.get(previousKey);
+      decisionsRef.current.delete(previousKey);
+      if (decision) decisionsRef.current.set(call.callKey, decision);
+      if (repromptedRef.current.delete(previousKey)) repromptedRef.current.add(call.callKey);
+      if (shownRef.current.delete(previousKey)) shownRef.current.add(call.callKey);
+      if (summonedKeyRef.current === previousKey) summonedKeyRef.current = call.callKey;
+      currentRef.current = call;
+      setCurrent(call);
+    },
+    [handleSeen],
+  );
+
   const handleGone = useCallback(
     (callKey: string) => {
       if (currentRef.current?.callKey !== callKey) return;
@@ -250,6 +275,9 @@ export function useMeetingPrompt(inputs: MeetingPromptInputs): MeetingPromptStat
       listen<AmbientGonePayload>(MEETING_CALL_GONE, (event) => {
         if (!disposed) handleGone(event.payload.callKey);
       }),
+      listen<AmbientRekeyPayload>(MEETING_CALL_REKEYED, (event) => {
+        if (!disposed) handleRekeyed(event.payload.previousKey, event.payload.call);
+      }),
     ])
       .then((fns) => {
         if (disposed) {
@@ -268,7 +296,7 @@ export function useMeetingPrompt(inputs: MeetingPromptInputs): MeetingPromptStat
       resetAll();
       void invoke("stop_ambient_watch").catch(() => undefined);
     };
-  }, [uid, ownsRuntime, handleSeen, handleGone, resetAll]);
+  }, [uid, ownsRuntime, handleSeen, handleGone, handleRekeyed, resetAll]);
 
   // ── Eligibility ─────────────────────────────────────────────────────────
   // Hide-class suppressors. A hidden card gets a fresh clock when it returns.
@@ -308,7 +336,13 @@ export function useMeetingPrompt(inputs: MeetingPromptInputs): MeetingPromptStat
     }
     if (suppressed) return;
     if (decisionsRef.current.has(key)) return;
-    const cooldownUntil = appCooldownRef.current.get(current.app) ?? 0;
+    // The cooldown is checked across the call's whole family: a Zoom that
+    // was just recorded must not be asked about again because the browser
+    // launcher page, or the post-call page, is still holding the mic.
+    const cooldownUntil = Math.max(
+      0,
+      ...relatedCallApps(current.app).map((app) => appCooldownRef.current.get(app) ?? 0),
+    );
     if (Date.now() < cooldownUntil) return;
     resetPromptInstance(key);
     setStatus("prompt");

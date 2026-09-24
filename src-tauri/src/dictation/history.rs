@@ -23,14 +23,24 @@
 //!   typing it. See the outcome match in `mod.rs`.
 //! - **Failed holds.** No transcript means a row that says nothing. The
 //!   in-memory `FailedUtterance` recovery buffer is unchanged.
-//! - **The target application name, in the clear.** It is the one field that
-//!   turns a transcript log into a browsing-and-activity log, so it appears
-//!   nowhere in the UI and `usage.rs` documents application names as
-//!   deliberately excluded. Since Phase 0 of the dictation model plan a sealed
-//!   `context` column (app stem, window-title stem, control role, up to 200
-//!   characters before the caret, language) IS stored, upload-only, under
-//!   sharing consent v3 which names each of those fields; it is never listed,
-//!   searched or shown, and `share.rs` is its only reader.
+//! - **The window title, the control, the text around the caret, in the
+//!   clear.** Those live only in the sealed `context` column (app stem,
+//!   window-title stem, control role, up to 200 characters before the caret,
+//!   language), stored since Phase 0 of the dictation model plan, upload-only,
+//!   under sharing consent v3 which names each of those fields; it is never
+//!   listed, searched or shown, and `share.rs` is its only reader.
+//!
+//! ## What IS stored in the clear, and why
+//!
+//! `app_stem` (the target process name, "code", "chrome") and
+//! `insert_outcome` ("inserted", "focus_changed", ...) are plain columns and
+//! the Dictation page shows both. The old posture kept the app name out of
+//! the clear so the history could not read as an activity log; it also meant
+//! that when a dictation never reached its field, nothing on disk or on the
+//! page could say which app it was aimed at, and one hold in seven was ending
+//! that way with no way to see the pattern. The stem is the same datum
+//! consent v3 already names and sends with every polish request; the title
+//! and the text around the caret stay sealed.
 //!
 //! ## What the observer adds after insertion
 //!
@@ -131,6 +141,13 @@ pub struct DictationHistoryEntry {
     /// The transcript as it left ASR (before AI polish), present only
     /// when AI polish changed the text. None means the final text IS the raw.
     pub raw_text: Option<String>,
+    /// Process stem of the app the hold was aimed at ("code", "chrome").
+    /// None for rows written before the column existed.
+    pub app_stem: Option<String>,
+    /// `outcome_label` vocabulary: "inserted", "focus_changed", "keys_held",
+    /// "blocked", "no_text_field", "command". None for rows written before
+    /// the column existed.
+    pub insert_outcome: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -350,7 +367,29 @@ const ADDED_TRANSCRIPT_COLUMNS: &[(&str, &str)] = &[
     ("label_source", "label_source TEXT"),
     ("label_quality", "label_quality TEXT"),
     ("observed_at_ms", "observed_at_ms INTEGER"),
+    // Where the hold was aimed and what became of the text, in the clear
+    // (module doc, "What IS stored in the clear"). A database written by a
+    // build from the `dictation-upload` branch already carries
+    // `insert_outcome`; the pragma check above makes that a no-op.
+    ("app_stem", "app_stem TEXT"),
+    ("insert_outcome", "insert_outcome TEXT"),
 ];
+
+/// `insert_outcome` vocabulary. Snake case so the page can match on it
+/// without knowing the Rust enum's spelling.
+pub const OUTCOME_COMMAND: &str = "command";
+
+pub fn outcome_label(outcome: &super::insert::InsertOutcome) -> &'static str {
+    use super::insert::InsertOutcome;
+    match outcome {
+        InsertOutcome::Inserted => "inserted",
+        InsertOutcome::FocusChanged => "focus_changed",
+        InsertOutcome::KeysHeld => "keys_held",
+        InsertOutcome::Blocked => "blocked",
+        InsertOutcome::NoTextField => "no_text_field",
+        InsertOutcome::PasswordField => "password_field",
+    }
+}
 
 /// Label vocabulary shared with the upload payload (backend
 /// `services/dictation/fields.py`). Spelled once here; `observer.rs` picks,
@@ -547,6 +586,8 @@ pub fn record_later(
     words: u64,
     shareable: bool,
     context: Option<String>,
+    app_stem: Option<String>,
+    insert_outcome: &'static str,
 ) -> Option<String> {
     if !ENCRYPTION_AVAILABLE || text.trim().is_empty() || !is_enabled(app) {
         return None;
@@ -576,6 +617,8 @@ pub fn record_later(
             words,
             shareable,
             context.as_deref(),
+            app_stem.as_deref(),
+            insert_outcome,
         ) {
             warn!("dictation.history: record or retention failed ({error})");
         }
@@ -650,6 +693,8 @@ fn record(
     words: u64,
     shareable: bool,
     context: Option<&str>,
+    app_stem: Option<&str>,
+    insert_outcome: &str,
 ) -> Result<(), String> {
     let key = load_or_create_key(app)?;
     let sealed_text = seal(&key, text, &row_aad(uid, id, "text"))?;
@@ -683,8 +728,8 @@ fn record(
         "INSERT INTO transcripts (
             uid, id, recorded_at_ms, word_count, duration_ms, text,
             flagged, audio_path, audio_bytes, raw_text, shareable, audio_sha256,
-            context
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, ?9, ?10, ?11, ?12)",
+            context, app_stem, insert_outcome
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
         params![
             uid,
             id,
@@ -698,6 +743,8 @@ fn record(
             i64::from(shareable),
             audio_sha256,
             sealed_context,
+            app_stem,
+            insert_outcome,
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -772,7 +819,7 @@ pub async fn dictation_history_list(
         let mut statement = conn
             .prepare(
                 "SELECT id, recorded_at_ms, word_count, duration_ms, text, flagged, audio_path,
-                        raw_text
+                        raw_text, app_stem, insert_outcome
                  FROM transcripts WHERE uid = ?1 ORDER BY recorded_at_ms DESC",
             )
             .map_err(|e| e.to_string())?;
@@ -787,12 +834,24 @@ pub async fn dictation_history_list(
                     row.get::<_, i64>(5)?,
                     row.get::<_, Option<String>>(6)?,
                     row.get::<_, Option<Vec<u8>>>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, Option<String>>(9)?,
                 ))
             })
             .map_err(|e| e.to_string())?;
         let mut entries = Vec::new();
-        for (id, recorded_at_ms, word_count, duration_ms, sealed, flagged, audio_path, sealed_raw) in
-            rows.flatten()
+        for (
+            id,
+            recorded_at_ms,
+            word_count,
+            duration_ms,
+            sealed,
+            flagged,
+            audio_path,
+            sealed_raw,
+            app_stem,
+            insert_outcome,
+        ) in rows.flatten()
         {
             // A row that will not decrypt is skipped, never fatal: one bad blob
             // must not make the whole page unreadable.
@@ -825,6 +884,8 @@ pub async fn dictation_history_list(
                 has_audio,
                 flagged: flagged != 0,
                 raw_text,
+                app_stem,
+                insert_outcome,
             });
         }
         Ok(entries)

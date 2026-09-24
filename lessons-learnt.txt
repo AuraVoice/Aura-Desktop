@@ -1790,3 +1790,47 @@ the candidate sits through. A model's tier matters more than its reasoning
 effort for exact code. Still open: the first image turn on a process is 4-8s
 even after warm(), since warm() never sends a real streamed or image request.
 ================================================================================
+
+2026-09-24  One Zoom join became three meetings, and a dictation "lost" one hold
+in seven with nothing on disk saying which app it was aimed at
+================================================================================
+Problem: the "Record this meeting?" card asked three times in 67 seconds for one
+Zoom call joined from the browser; each Record produced a separate backend
+meeting (2.3 s, 49.9 s, 0.7 s), three "insights ready" toasts, and the real
+3-minute call was never recorded. Separately, two long dictations the same
+morning finished with nothing typed, and GCP logs could not say why: every
+/dictation/polish and /command returned 200 either way.
+
+Issue: detect.rs keyed a call as app:sha256(title). A browser join walks
+browser-call (the launcher page holding the mic) -> zoom-web -> zoom, and
+after 61c0cb3 native Zoom itself flipped between zoom:H("Zoom Meeting") from
+the window pass and zoom:H("Zoom") from the mic pass on every minimize. A key
+change while a call was current emitted gone AND seen in the same 5 s tick;
+useMeetingCapture stopped on any gone at once; each Record minted a fresh
+manual:<uuid> event_id, so the backend could not merge anything. Dictation:
+insert.rs compared raw foreground HWNDs before consulting the UIA verdict, so a
+second VS Code window or a popped-out Terminal pane was "focus changed" even
+with a typable Edit in front (41 of 289 holds in a week, 39 of them typable).
+The app stem was computed at hold start but never logged and stored only inside
+the sealed context blob; the insert_outcome columns on disk came from an
+unmerged branch build and were NULL on every row.
+
+Solution: native call apps key on the app alone; a re-key between hand-off
+partners (browser-call <-> browser-hosted, zoom-web/browser-call -> zoom,
+teams-web/browser-call -> teams, browser-call -> webex) emits a new
+meeting-call-rekeyed event instead of gone+seen, the capture and the card's
+decision follow the new key, a gone for the live capture waits 8 s in case a
+re-key follows, a Record for a related app inside the 10 min rejoin hold reuses
+the previous event_id so the backend rejoins, and the "already recorded"
+cooldown is checked across the family. Dictation: the focus guard accepts a
+different window of the SAME process when a typable field has focus; the
+phase=insert line carries app= (and fg= on FocusChanged); history stores
+app_stem and insert_outcome in the clear and the Dictation page shows both.
+
+Justification: the local log (%LOCALAPPDATA%\com.aura.desktop\logs) is the only
+place either failure is visible; the backend sees success. The forensic lines
+are "ambient call seen/gone/rekeyed", "capture finished reason=", and
+"phase=insert ... outcome=". A window-title hash is a fine identity for a Meet
+tab and a bad one for a native app, and an identity that can change mid-call
+needs a rename event, not an end-and-begin pair.
+================================================================================

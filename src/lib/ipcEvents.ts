@@ -43,6 +43,8 @@ export const MEETING_LEFT = "meeting-left";
 // The ambient scanner saw a call window appear / disappear (detect.rs).
 export const MEETING_CALL_SEEN = "meeting-call-seen";
 export const MEETING_CALL_GONE = "meeting-call-gone";
+/** The tracked call changed identity without ending (detect.rs `same_call`). */
+export const MEETING_CALL_REKEYED = "meeting-call-rekeyed";
 
 // interview.rs
 export const INTERVIEW_HACKER_STATUS = "interview-hacker-status";
@@ -117,6 +119,14 @@ export interface AmbientCallPayload {
 export interface AmbientGonePayload {
   callKey: string;
   app: string;
+}
+
+// Mirrors meeting/mod.rs AmbientRekeyPayload. The call React knows as
+// previousKey is the same conversation as `call`; a capture started for it
+// keeps running and a decision made for it carries over.
+export interface AmbientRekeyPayload {
+  previousKey: string;
+  call: AmbientCallPayload;
 }
 
 // Mirrors dictation/hud.rs HudUpdate (rename_all = "camelCase"). Consumed by

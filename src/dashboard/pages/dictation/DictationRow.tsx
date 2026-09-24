@@ -3,7 +3,11 @@ import { Play, Square, Loader2, Flag, Trash2, FileText, Download, ScrollText } f
 import { CopyButton } from "../../components/CopyButton";
 import { RowMenu } from "../../components/RowMenu";
 import { timeOfDay } from "../../format";
-import type { DictationHistoryEntry } from "../../../lib/dictationHistory";
+import {
+  appStemLabel,
+  insertOutcomeLabel,
+  type DictationHistoryEntry,
+} from "../../../lib/dictationHistory";
 
 export type PlaybackState = "idle" | "loading" | "playing";
 
@@ -54,6 +58,7 @@ export const DictationRow = memo(function DictationRow({
   onExportAudio: (entry: DictationHistoryEntry) => void;
 }) {
   const active = menuOpen || playback !== "idle";
+  const outcomeLabel = insertOutcomeLabel(entry.insertOutcome);
   const playLabel = entry.hasAudio
     ? playback === "playing"
       ? "Stop"
@@ -72,6 +77,14 @@ export const DictationRow = memo(function DictationRow({
         >
           {entry.text}
         </button>
+        {(entry.appStem || outcomeLabel) && (
+          <div className="db-dictation-meta">
+            {entry.appStem && (
+              <span className="db-dictation-app">{appStemLabel(entry.appStem)}</span>
+            )}
+            {outcomeLabel && <span className="db-dictation-outcome">{outcomeLabel}</span>}
+          </div>
+        )}
         {showRaw && entry.rawText && (
           <div className="db-dictation-raw">
             <span className="db-dictation-raw-label">Original speech</span>

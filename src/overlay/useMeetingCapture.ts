@@ -3,13 +3,16 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
   MEETING_CALL_GONE,
+  MEETING_CALL_REKEYED,
   MEETING_CAPTURE_STATE,
   MEETING_SEGMENT_READY,
   type AmbientCallPayload,
   type AmbientGonePayload,
+  type AmbientRekeyPayload,
 } from "../lib/ipcEvents";
 import type { UpcomingMeeting } from "../lib/calendar";
 import { callLabel } from "../lib/meetingCopy";
+import { sameCallFamily } from "../lib/meetingCallFamily";
 import {
   claimMeeting,
   completeMeeting,
@@ -42,6 +45,11 @@ const MANUAL_WINDOW_MS = 2 * 60 * 60_000;
 /** After the user leaves a call, completion holds this long for a rejoin
  * before the capture is finalized and sent to synthesis. */
 const REJOIN_HOLD_MS = 10 * 60_000;
+/** A `meeting-call-gone` for the live capture's call waits this long before
+ * stopping it, in case a `meeting-call-rekeyed` for the same call is on its
+ * way (one scanner poll plus margin). The detector no longer emits gone for a
+ * hand-off it recognises, so this only ever costs a few seconds of tail. */
+const REKEY_GRACE_MS = 8_000;
 /** Background upload pump cadence (also triggered by segment-ready events). */
 const PUMP_INTERVAL_MS = 60_000;
 const CLAIM_RETRIES = 2;
@@ -230,6 +238,13 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
   /** The ambient call the live capture was started for (null for a tray
    * capture). Its `meeting-call-gone` is what stops the capture. */
   const activeCallKeyRef = useRef<string | null>(null);
+  const activeCallAppRef = useRef<string | null>(null);
+  /** The pending stop for a gone that may yet turn out to be a re-key. */
+  const goneTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** The last ad-hoc capture that ended with `meeting_left`. A Record press
+   * for a related call inside the rejoin hold reuses its event id, so the
+   * backend rejoins the same meeting instead of opening a new one. */
+  const lastLeftRef = useRef<{ eventId: string; app: string; at: number } | null>(null);
   const pumpRunningRef = useRef<{ uid: string; epoch: number } | null>(null);
   const claimInFlightRef = useRef<{ uid: string; epoch: number } | null>(null);
   /** Live captures awaiting their end toast. The upload pump may upload audio
@@ -420,16 +435,28 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
     ): Promise<RecordCallOutcome> => {
       if (!ownsRuntime || recordingRef.current || !uidRef.current) return "skipped";
       activeCallKeyRef.current = call.callKey;
+      activeCallAppRef.current = call.app;
       let outcome: RecordCallOutcome;
       if (event) {
         outcome = await startCaptureFor(event.id, event.title, event.startTime, event.endTime);
       } else {
         // Same claim shape as the tray path: the backend validates the
         // `manual:` prefix, so an ad-hoc call is a manual capture that
-        // happens to carry the app's name.
+        // happens to carry the app's name. A related call inside the rejoin
+        // hold of one that just ended is that call again (a hand-off the
+        // detector could not vouch for, or a leave and rejoin), so it claims
+        // under the same id and the backend continues the meeting.
         const now = new Date();
+        const left = lastLeftRef.current;
+        const eventId =
+          left && now.getTime() - left.at < REJOIN_HOLD_MS && sameCallFamily(left.app, call.app)
+            ? left.eventId
+            : `manual:${crypto.randomUUID()}`;
+        if (eventId === left?.eventId) {
+          logInfo("useMeetingCapture", `rejoining ${left.app} capture as ${call.app}`);
+        }
         outcome = await startCaptureFor(
-          `manual:${crypto.randomUUID()}`,
+          eventId,
           callLabel(call.app, call.windowTitle),
           now.toISOString(),
           new Date(now.getTime() + MANUAL_WINDOW_MS).toISOString(),
@@ -437,6 +464,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
       }
       if (outcome !== "started" && activeCallKeyRef.current === call.callKey) {
         activeCallKeyRef.current = null;
+        activeCallAppRef.current = null;
       }
       return outcome;
     },
@@ -767,12 +795,33 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
           activeCallKeyRef.current !== null
           && activeCallKeyRef.current === event.payload.callKey
         ) {
-          void invoke("stop_meeting_capture", { reason: "meeting_left" }).catch((err) =>
-            logError("useMeetingCapture: stop on meeting-call-gone", err),
-          );
+          const goneKey = event.payload.callKey;
+          if (goneTimerRef.current !== null) clearTimeout(goneTimerRef.current);
+          goneTimerRef.current = setTimeout(() => {
+            goneTimerRef.current = null;
+            // A re-key in the meantime moved the capture to a new key.
+            if (activeCallKeyRef.current !== goneKey) return;
+            void invoke("stop_meeting_capture", { reason: "meeting_left" }).catch((err) =>
+              logError("useMeetingCapture: stop on meeting-call-gone", err),
+            );
+          }, REKEY_GRACE_MS);
         }
       }),
       "meeting-call-gone",
+    );
+    add(
+      listen<AmbientRekeyPayload>(MEETING_CALL_REKEYED, (event) => {
+        const { previousKey, call } = event.payload;
+        if (activeCallKeyRef.current === null || activeCallKeyRef.current !== previousKey) return;
+        activeCallKeyRef.current = call.callKey;
+        activeCallAppRef.current = call.app;
+        if (goneTimerRef.current !== null) {
+          clearTimeout(goneTimerRef.current);
+          goneTimerRef.current = null;
+        }
+        logInfo("useMeetingCapture", `capture follows call re-key to ${call.app}`);
+      }),
+      "meeting-call-rekeyed",
     );
     add(
       listen<CaptureStatePayload>(MEETING_CAPTURE_STATE, (event) => {
@@ -785,8 +834,19 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
         setRecording(payload.active);
         setPaused(payload.active && payload.paused);
         if (!payload.active) {
+          const leftEvent = activeEventRef.current;
+          const leftApp = activeCallAppRef.current;
+          lastLeftRef.current =
+            payload.reason === "meeting_left" && leftEvent?.startsWith("manual:") && leftApp
+              ? { eventId: leftEvent, app: leftApp, at: Date.now() }
+              : null;
           activeEventRef.current = null;
           activeCallKeyRef.current = null;
+          activeCallAppRef.current = null;
+          if (goneTimerRef.current !== null) {
+            clearTimeout(goneTimerRef.current);
+            goneTimerRef.current = null;
+          }
           if (payload.meetingId) {
             if (payload.reason === "meeting_left") {
               // Rust persisted the completion job's rejoin hold. This timer
