@@ -60,6 +60,8 @@ const API_BASE_URL: &str = "https://juno-backend-620715294422.us-central1.run.ap
 /// Wider than the 1500ms of the direct-to-provider version because the call
 /// now goes through juno-backend. Measured warm on 2026-09-22: ~70ms to Cloud
 /// Run plus ~150ms provider time, so this is about 9x the real round trip.
+/// Backend-side it measured 331ms p50 on 2026-09-23, because juno-backend
+/// opened a new TLS connection to TypeSafe per call (now pooled).
 /// The service runs with min-instances=1 precisely so a cold start cannot eat
 /// this budget and silently turn a command back into typed words.
 const WAIT_BUDGET: Duration = Duration::from_millis(2000);
@@ -123,6 +125,8 @@ struct State {
     credential: ScopedToken,
     apps: Vec<AppEntry>,
     apps_read_at: Option<Instant>,
+    /// A background re-scan is in flight; `prepare` never starts a second.
+    apps_refreshing: bool,
 }
 
 /// Managed in lib.rs at startup; the worker takes one mutex per utterance.
@@ -144,6 +148,7 @@ pub fn start(app: AppHandle) -> CommandBrainHandle {
             credential: ScopedToken::new("dictation.command.credential"),
             apps: Vec::new(),
             apps_read_at: None,
+            apps_refreshing: false,
         })),
     }
 }
@@ -169,24 +174,87 @@ impl CommandBrainHandle {
         lock(&self.state).credential.clear();
     }
 
-    /// The installed-app registry, re-enumerated when stale. The scan is a
-    /// bounded directory walk and runs on whichever thread asks, which is the
-    /// dictation worker, never the thread pumping window messages.
+    /// The installed-app registry as last scanned, stale or not. The scan
+    /// itself runs from `prepare`, at chord-down, while the user is still
+    /// talking. It used to run here, on the keyup path, with no bound: the
+    /// Start Menu walk plus a COM walk of AppsFolder, redone every 10 minutes,
+    /// so the first short hold after a quiet spell logged decision_ms of 1342
+    /// and 2357 against a 302-331ms backend round trip (2026-09-23). Only a
+    /// registry that has never been read at all scans inline.
     fn apps(&self) -> Vec<AppEntry> {
         {
             let state = lock(&self.state);
-            if let Some(read_at) = state.apps_read_at {
-                if read_at.elapsed() < APPS_TTL && !state.apps.is_empty() {
-                    return state.apps.clone();
-                }
+            if !state.apps.is_empty() {
+                return state.apps.clone();
             }
         }
-        let apps = platform::enumerate_apps();
+        let apps = scan_apps();
         let mut state = lock(&self.state);
         state.apps = apps.clone();
         state.apps_read_at = Some(Instant::now());
         apps
     }
+
+    /// Starts a background re-scan when the registry is missing or older than
+    /// `APPS_TTL`, unless one is already running.
+    fn refresh_apps_if_stale(&self) {
+        {
+            let mut state = lock(&self.state);
+            let fresh = state
+                .apps_read_at
+                .is_some_and(|read_at| read_at.elapsed() < APPS_TTL)
+                && !state.apps.is_empty();
+            if fresh || state.apps_refreshing {
+                return;
+            }
+            state.apps_refreshing = true;
+        }
+        let shared = Arc::clone(&self.state);
+        // A plain thread, not the async runtime: the Windows walk initializes
+        // COM apartment-threaded on the calling thread.
+        let spawned = std::thread::Builder::new()
+            .name("command-brain-apps".into())
+            .spawn(move || {
+                let apps = scan_apps();
+                let mut state = lock(&shared);
+                if !apps.is_empty() {
+                    state.apps = apps;
+                    state.apps_read_at = Some(Instant::now());
+                }
+                state.apps_refreshing = false;
+            });
+        if spawned.is_err() {
+            lock(&self.state).apps_refreshing = false;
+        }
+    }
+}
+
+fn scan_apps() -> Vec<AppEntry> {
+    let started = Instant::now();
+    let apps = platform::enumerate_apps();
+    info!(
+        "dictation: phase=apps_scan count={} ms={}",
+        apps.len(),
+        started.elapsed().as_millis()
+    );
+    apps
+}
+
+/// Called at chord-down, once the hold is real. What the keyup path of
+/// `try_command` would otherwise pay for starts here, hidden behind the
+/// user's own speech: the TLS connection to the backend and a stale app scan.
+/// Inert without a usable credential, exactly like `try_command`.
+pub(super) fn prepare(app: &AppHandle) {
+    let Some(brain) = handle(app) else {
+        return;
+    };
+    if brain.usable().is_none() {
+        return;
+    }
+    brain.refresh_apps_if_stale();
+    tauri::async_runtime::spawn(async {
+        let _ = client().head(API_BASE_URL).send().await;
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -293,7 +361,8 @@ pub(super) struct Executed {
 
 /// Routes one finished hold. `None` means "this is dictation": the caller
 /// falls through to the insert path unchanged. Blocking, bounded by
-/// `WAIT_BUDGET` plus one focus probe; call it from the dictation worker.
+/// `WAIT_BUDGET` plus one focus probe. mod.rs runs it on its own thread over
+/// the raw transcript, alongside polish, so it never adds to polish's time.
 pub(super) fn try_command(
     app: &AppHandle,
     transcript: &str,
@@ -669,6 +738,7 @@ fn client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
+            .default_headers(super::polish::backend_headers())
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(REQUEST_TIMEOUT)
             .build()

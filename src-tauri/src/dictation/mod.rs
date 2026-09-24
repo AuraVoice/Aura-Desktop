@@ -625,9 +625,30 @@ mod platform {
         polished: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
         error_category: Option<&'static str>,
+        /// Keyup-path timings, present on holds that reached insert or a
+        /// command. Durations only, so the event stays text-free.
+        #[serde(flatten)]
+        timings: Option<KeyupTimings>,
+    }
+
+    /// Where the time between key release and text on screen went. Each
+    /// field is milliseconds; `command_wait_ms` is only what the keyup path
+    /// still waited for after polish, since the decision runs alongside it.
+    #[derive(Clone, Copy, serde::Serialize)]
+    struct KeyupTimings {
+        finalization_ms: u64,
+        polish_ms: u64,
+        command_wait_ms: u64,
+        insert_ms: u64,
+        keyup_to_text_ms: u64,
     }
 
     impl HoldCompleted {
+        fn with_timings(mut self, timings: KeyupTimings) -> Self {
+            self.timings = Some(timings);
+            self
+        }
+
         fn from_outcome(outcome: &InsertOutcome, hold_ms: u64, words: u64, polished: bool) -> Self {
             let outcome = match outcome {
                 InsertOutcome::Inserted => "inserted",
@@ -644,7 +665,7 @@ mod platform {
                 21..=60 => "21-60",
                 _ => "60+",
             };
-            Self { outcome, hold_ms, word_bucket, polished, error_category: None }
+            Self { outcome, hold_ms, word_bucket, polished, error_category: None, timings: None }
         }
 
         fn failed(category: &'static str) -> Self {
@@ -654,6 +675,7 @@ mod platform {
                 word_bucket: "0",
                 polished: false,
                 error_category: Some(category),
+                timings: None,
             }
         }
 
@@ -673,6 +695,7 @@ mod platform {
                 word_bucket,
                 polished,
                 error_category: None,
+                timings: None,
             }
         }
     }
@@ -1090,6 +1113,11 @@ mod platform {
             }
         };
 
+        // Both keyup round trips to juno-backend (polish, command) get their
+        // TLS connection, and command its app registry, while the user talks.
+        polish::warm(app);
+        super::command_brain::prepare(app);
+
         let started_at = Instant::now();
         info!("dictation: phase=capture");
         let mut last_level = Instant::now();
@@ -1333,15 +1361,41 @@ mod platform {
 
         let corrected = decoded;
 
-        // Optional AI cleanup (polish.rs): opt-in, user's own Groq key,
-        // bounded wait. Every failure falls back to the corrected text, so
-        // this step can never hang the utterance or lose words. Runs before
-        // the focus probe so the pending path below inherits the result.
+        // Voice command routing (command_brain.rs) starts NOW, on the raw
+        // transcript, on its own thread, so its round trip overlaps polish
+        // instead of following it. Serially the two added up on every short
+        // hold. Inert without a stored credential, and never for a hold aimed
+        // at Aura's own chat, which is a conversation with Buddy rather than a
+        // desktop instruction. A `None` result means "this is dictation".
+        let command_thread = if !(composer_focused() || chat_slot_open()) {
+            let command_app = app.clone();
+            let command_text = corrected.clone();
+            let command_key = app_key.clone();
+            std::thread::Builder::new()
+                .name("dictation-command".into())
+                .spawn(move || {
+                    super::command_brain::try_command(
+                        &command_app,
+                        &command_text,
+                        command_key.as_deref(),
+                    )
+                })
+                .ok()
+        } else {
+            None
+        };
+
+        // Optional AI cleanup (polish.rs): opt-in, bounded wait. Every failure
+        // falls back to the corrected text, so this step can never hang the
+        // utterance or lose words. Runs before the focus probe so the pending
+        // path below inherits the result.
+        let polish_started = Instant::now();
         let polish_result = if polish::wants(app) {
             polish::format_transcript(app, &corrected, app_key.as_deref(), &polish_context)
         } else {
             None
         };
+        let polish_ms = polish_started.elapsed().as_millis() as u64;
         // Kept only when polish actually changed the text, so history can show
         // "original speech" next to what was typed; otherwise it would just
         // duplicate the row's text.
@@ -1359,46 +1413,53 @@ mod platform {
         // SendInput still reports success). Hand the text to React, which
         // drops it into the composer at the caret and refocuses it. To
         // dictate into another app, close the chat first.
-        // Voice command routing (command_brain.rs): inert without a stored
-        // key, and never for a hold aimed at Aura's own chat, which is a
-        // conversation with Buddy rather than a desktop instruction. `None`
-        // means "this is dictation" and the insert path below runs unchanged.
-        if !(composer_focused() || chat_slot_open()) {
-            if let Some(done) =
-                super::command_brain::try_command(app, &final_text, app_key.as_deref())
-            {
-                emit_hold_completed(
-                    app,
-                    HoldCompleted::command(
-                        hold_ms as u64,
-                        usage::word_count(&final_text),
-                        raw_for_history.is_some(),
-                    ),
-                );
-                // Archived like any dictation so nothing said is ever lost,
-                // but never shareable: there is no field to read back.
-                let _ = history::record_later(
-                    app,
-                    final_text.clone(),
-                    raw_for_history,
-                    std::mem::take(&mut utterance),
-                    hold_ms as i64,
+        //
+        // The command decision started before polish (above); whatever time
+        // it still needs is the only part of it the keyup path waits for.
+        let command_wait_started = Instant::now();
+        let command_result = command_thread.and_then(|thread| thread.join().ok().flatten());
+        let mut timings = KeyupTimings {
+            finalization_ms: finalization_ms as u64,
+            polish_ms,
+            command_wait_ms: command_wait_started.elapsed().as_millis() as u64,
+            insert_ms: 0,
+            keyup_to_text_ms: 0,
+        };
+        if let Some(done) = command_result {
+            timings.keyup_to_text_ms = finalization_started_at.elapsed().as_millis() as u64;
+            emit_hold_completed(
+                app,
+                HoldCompleted::command(
+                    hold_ms as u64,
                     usage::word_count(&final_text),
-                    false,
-                    polish_context.to_json(),
-                );
-                finish_with(
-                    app,
-                    generation,
-                    HudUpdate::new(HudPhase::Action).with_message(done.caption),
-                    CAPTION_LINGER,
-                );
-                return shutting_down;
-            }
+                    raw_for_history.is_some(),
+                )
+                .with_timings(timings),
+            );
+            // Archived like any dictation so nothing said is ever lost,
+            // but never shareable: there is no field to read back.
+            let _ = history::record_later(
+                app,
+                final_text.clone(),
+                raw_for_history,
+                std::mem::take(&mut utterance),
+                hold_ms as i64,
+                usage::word_count(&final_text),
+                false,
+                polish_context.to_json(),
+            );
+            finish_with(
+                app,
+                generation,
+                HudUpdate::new(HudPhase::Action).with_message(done.caption),
+                CAPTION_LINGER,
+            );
+            return shutting_down;
         }
 
         // Monotonic start of the correction window, taken the moment the
         // keystrokes land rather than after history encodes the clip.
+        let insert_started = Instant::now();
         let mut typed_at = Instant::now();
         let outcome = if composer_focused() || chat_slot_open() {
             let _ = app.emit(crate::events::DICTATION_COMPOSER_INSERT, final_text.clone());
@@ -1424,6 +1485,20 @@ mod platform {
             );
             outcome
         };
+        // Key release to the last keystroke sent (or the composer handoff).
+        // The one number the user actually feels; before this it had to be
+        // summed from three lines and the insert itself was never timed.
+        timings.insert_ms = insert_started.elapsed().as_millis() as u64;
+        timings.keyup_to_text_ms = finalization_started_at.elapsed().as_millis() as u64;
+        info!(
+            "dictation: phase=keyup_to_text ms={} finalization_ms={} polish_ms={} \
+             command_wait_ms={} insert_ms={}",
+            timings.keyup_to_text_ms,
+            timings.finalization_ms,
+            timings.polish_ms,
+            timings.command_wait_ms,
+            timings.insert_ms
+        );
         emit_hold_completed(
             app,
             HoldCompleted::from_outcome(
@@ -1431,7 +1506,8 @@ mod platform {
                 hold_ms as u64,
                 usage::word_count(&final_text),
                 raw_for_history.is_some(),
-            ),
+            )
+            .with_timings(timings),
         );
 
         // Local history (history.rs). The one call site, placed here because

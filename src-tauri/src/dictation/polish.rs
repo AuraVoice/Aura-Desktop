@@ -180,6 +180,17 @@ impl PolishHandle {
     }
 }
 
+/// Chord-down warmup. reqwest drops an idle pooled connection after 90s, and
+/// the token-change warmup above fires only about every 40 minutes, so a hold
+/// after a quiet minute paid a fresh TLS handshake to Cloud Run inside its
+/// keyup budget (client p50 603ms against 448ms server-side, 2026-09-23).
+/// Here the handshake overlaps the user's speech instead.
+pub fn warm(app: &AppHandle) {
+    if let Some(polish_handle) = handle(app) {
+        polish_handle.warm_if_wanted();
+    }
+}
+
 /// Whether the insert path should attempt a polish at all. One lock.
 pub fn wants(app: &AppHandle) -> bool {
     handle(app).is_some_and(|handle| handle.usable().is_some())
@@ -209,10 +220,27 @@ pub fn save_settings(app: &AppHandle, settings: PolishSettings) -> Result<Polish
 // ---------------------------------------------------------------------------
 // The request
 
+/// The same identity headers `src/lib/api.ts` sends, so these calls land in
+/// the backend's per-platform `request_metric` feed. Without them every
+/// desktop polish and command was invisible to it. Shared with
+/// command_brain.rs, the other dictation call into juno-backend.
+pub(super) fn backend_headers() -> reqwest::header::HeaderMap {
+    use reqwest::header::{HeaderMap, HeaderValue};
+    let mut headers = HeaderMap::new();
+    let platform = if cfg!(target_os = "macos") { "macos" } else { "windows" };
+    headers.insert("X-Aura-Platform", HeaderValue::from_static(platform));
+    headers.insert(
+        "X-Aura-App-Version",
+        HeaderValue::from_static(env!("CARGO_PKG_VERSION")),
+    );
+    headers
+}
+
 fn client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
         reqwest::Client::builder()
+            .default_headers(backend_headers())
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(REQUEST_TIMEOUT)
             .build()

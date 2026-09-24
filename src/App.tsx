@@ -32,6 +32,12 @@ interface DictationHoldCompleted {
   word_bucket: string;
   polished?: boolean;
   error_category?: string | null;
+  // Keyup-path timings in ms, on holds that reached insert or a command.
+  finalization_ms?: number;
+  polish_ms?: number;
+  command_wait_ms?: number;
+  insert_ms?: number;
+  keyup_to_text_ms?: number;
 }
 
 function App() {
