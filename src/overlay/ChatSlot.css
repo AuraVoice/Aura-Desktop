@@ -344,7 +344,42 @@
 
 .chat-message-assistant .chat-message-bubble {
   background: var(--db-surface, var(--glass-field-fill));
-  color: var(--db-text, var(--glass-text-bright));
+  /* Full ink rather than the 0.97 token: replies are the longest text on the
+     card and the weight stays regular, so the colour carries the legibility. */
+  color: #ffffff;
+}
+
+/* Files sent with a turn sit above its text, right-aligned like the bubble. */
+.chat-message-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.chat-message-attachments:last-child {
+  margin-bottom: 0;
+}
+
+.chat-message-attachment-image {
+  display: block;
+  width: 64px;
+  height: 64px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.chat-message-attachment-doc {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 7px;
+  background: rgba(7, 31, 28, 0.14);
+  font: 600 10px/1 var(--font-body);
+  letter-spacing: 0.04em;
 }
 
 .chat-message-kind-status {
@@ -886,50 +921,161 @@
 }
 
 .chat-slot-composer {
+  position: relative;
   display: flex;
-  align-items: flex-end;
-  gap: 8px;
+  flex-direction: column;
   padding: 6px 12px;
 }
 
-/* Sits inside the rounded field on the left, so the composer reads as one
-   control rather than a button parked next to it. */
-.chat-screen-toggle {
+/* One rounded card, the desktop twin of mobile's message_input.dart: the
+   attachment strip, the field and the control row share a single border so the
+   composer reads as one control. Focus is shown on the card, not the field. */
+/* Registered so the angle interpolates; an unregistered custom property
+   would snap between keyframes instead of turning. */
+@property --composer-ring-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+
+.chat-composer-card {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid transparent;
+  border-radius: 22px;
+  background: var(--db-surface, var(--glass-field-fill));
+  box-shadow:
+    0 4px 14px rgba(0, 0, 0, 0.28),
+    -6px -4px 16px rgba(0, 0, 0, 0.22),
+    6px -4px 16px rgba(0, 0, 0, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+/* The app icon's two tones, teal and gold-orange, as a conic gradient that
+   turns around the card. Masked down to the 1.5px border ring, so the field
+   itself stays plain glass. */
+.chat-composer-card::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  z-index: -1;
+  padding: 1.5px;
+  border-radius: 23px;
+  background: conic-gradient(
+    from var(--composer-ring-angle),
+    #1ec8b0 0deg,
+    #57d9c4 70deg,
+    #f0b323 150deg,
+    #f2743b 200deg,
+    #f0b323 250deg,
+    #1ec8b0 360deg
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
+  opacity: 0.85;
+  pointer-events: none;
+  animation: chat-composer-ring 8s linear infinite;
+  transition: opacity 0.15s var(--db-ease, ease);
+}
+
+.chat-composer-card:focus-within::before {
+  opacity: 1;
+}
+
+@keyframes chat-composer-ring {
+  to { --composer-ring-angle: 360deg; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-composer-card::before {
+    animation: none;
+  }
+}
+
+/* ── Pending attachments ── */
+.chat-attachment-strip {
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px 2px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.chat-attachment-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.chat-attachment-tile {
+  position: relative;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: 56px;
+  height: 56px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 0 0 1px var(--glass-border-flat);
+  color: var(--glass-text-dim);
+}
+
+.chat-attachment-tile img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 10px;
+  object-fit: cover;
+}
+
+.chat-attachment-ext {
+  font: 600 9px/1 var(--font-body);
+  letter-spacing: 0.04em;
+}
+
+.chat-attachment-name {
+  max-width: 46px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 8px/1 var(--font-body);
+}
+
+.chat-attachment-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  position: absolute;
-  left: 6px;
-  bottom: 6px;
-  width: 24px;
-  height: 24px;
+  width: 18px;
+  height: 18px;
   padding: 0;
-  border: none;
-  border-radius: 7px;
-  background: none;
-  color: var(--db-text-mute, var(--glass-text-dim));
+  border: 1px solid var(--glass-border-flat);
+  border-radius: 50%;
+  background: rgba(16, 16, 20, 0.96);
+  color: var(--glass-text-bright);
   cursor: pointer;
-  transition: color 0.15s var(--db-ease, ease);
 }
 
-.chat-screen-toggle.armed {
-  color: var(--db-teal, var(--glass-accent));
+.chat-attachment-remove svg {
+  width: 11px;
+  height: 11px;
 }
 
-.chat-screen-toggle:disabled {
+.chat-attachment-remove:disabled {
   opacity: 0.4;
   cursor: default;
 }
 
-.chat-screen-toggle svg {
-  width: 15px;
-  height: 15px;
-}
-
-.chat-slot-input {
+/* ── Field ── */
+.chat-composer-field {
   position: relative;
-  flex: 1;
-  min-width: 0;
 }
 
 .chat-slot-composer textarea {
@@ -939,13 +1085,13 @@
   min-width: 0;
   height: 36px;
   max-height: 72px;
-  padding: 7px 14px 7px 34px;
+  padding: 8px 14px 4px;
   resize: none;
   overflow-y: auto;
-  border: 1px solid var(--db-border, var(--glass-border-flat));
-  border-radius: 30px;
+  border: none;
+  border-radius: 22px 22px 0 0;
   outline: none;
-  background: var(--db-surface, var(--glass-field-fill));
+  background: none;
   color: var(--db-text, var(--glass-text-bright));
   font: 13px/20px var(--font-body);
   scrollbar-width: none;
@@ -962,12 +1108,12 @@
   font: 10px/1 var(--font-body);
 }
 
-.chat-slot-input.counting textarea {
+.chat-composer-card.counting textarea {
   padding-right: 58px;
 }
 
-/* Why arming the screen produced no picture. Sits under the composer rather
-   than replacing the chip, because the message can still be sent without it. */
+/* Why a file or the screen was refused. Sits under the card rather than
+   replacing anything, because the message can still be sent without it. */
 .chat-screen-error {
   margin: 6px 2px 0;
   color: #a54640;
@@ -982,20 +1128,105 @@
   color: var(--db-text-mute, var(--glass-text-dim));
 }
 
-.chat-slot-composer textarea:focus {
-  border-color: var(--db-teal, var(--glass-accent));
-}
-
 .chat-slot-composer textarea:disabled {
   opacity: 0.65;
+}
+
+/* ── Control row: [+] [eye] ... [gauge] [send] ── */
+.chat-composer-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px 6px;
+}
+
+.chat-composer-spacer {
+  flex: 1;
+}
+
+.chat-composer-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 9px;
+  background: none;
+  color: var(--db-text-mute, var(--glass-text-dim));
+  cursor: pointer;
+  transition: color 0.15s var(--db-ease, ease), background-color 0.15s var(--db-ease, ease);
+}
+
+.chat-composer-icon:hover:not(:disabled) {
+  color: var(--glass-text-bright);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.chat-composer-icon.open {
+  color: var(--glass-text-bright);
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.chat-composer-icon:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.chat-composer-icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.chat-composer-add svg {
+  width: 17px;
+  height: 17px;
+}
+
+.chat-composer-effort svg {
+  width: 19px;
+  height: 19px;
+}
+
+.chat-screen-toggle.armed {
+  color: var(--db-teal, var(--glass-accent));
+}
+
+/* The gauge tints toward the accent as the level rises, mobile's
+   Color.lerp(textSecondary, accent, position). */
+.chat-composer-effort[data-effort="medium"] {
+  color: color-mix(in srgb, var(--glass-text-dim), var(--glass-accent) 35%);
+}
+
+.chat-composer-effort[data-effort="high"] {
+  color: color-mix(in srgb, var(--glass-text-dim), var(--glass-accent) 70%);
+}
+
+.chat-composer-effort[data-effort="ultra"] {
+  color: var(--glass-accent);
+}
+
+.chat-composer-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: chat-composer-spin 0.8s linear infinite;
+}
+
+@keyframes chat-composer-spin {
+  to { transform: rotate(360deg); }
 }
 
 .chat-slot-send {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: 30px;
+  height: 30px;
+  margin-left: 2px;
   padding: 0;
   border: none;
   border-radius: 30px;
@@ -1015,8 +1246,215 @@
 }
 
 .chat-slot-send svg {
-  width: 16px;
-  height: 16px;
+  width: 15px;
+  height: 15px;
+}
+
+/* ── Popovers ── rise from the row and stay INSIDE the card, because
+   .glass-surface clips overflow for its radius. */
+.chat-composer-popover {
+  position: absolute;
+  bottom: calc(100% - 4px);
+  z-index: 5;
+  box-sizing: border-box;
+  border: 1px solid var(--glass-border-flat);
+  border-radius: 14px;
+  background: rgba(16, 16, 20, 0.97);
+  box-shadow: inset 0 1px 0 var(--glass-border-top), 0 12px 32px rgba(0, 0, 0, 0.45);
+  color: var(--glass-text-bright);
+  font-family: var(--font-body);
+  animation: chat-popover-in 0.16s var(--db-ease, ease);
+}
+
+@keyframes chat-popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.96);
+  }
+}
+
+.chat-composer-menu {
+  left: 12px;
+  width: 176px;
+  padding: 6px;
+}
+
+.chat-composer-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 9px;
+  background: none;
+  color: var(--glass-text-bright);
+  font: 13px/1 var(--font-body);
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-composer-menu-item svg:first-child {
+  flex: none;
+  color: var(--glass-text-dim);
+}
+
+.chat-composer-menu-item span {
+  flex: 1;
+}
+
+.chat-composer-menu-item:hover:not(:disabled),
+.chat-composer-menu-item:focus-visible {
+  outline: none;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.chat-composer-menu-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.chat-composer-menu-item.checked,
+.chat-composer-menu-item.checked svg:first-child {
+  color: var(--glass-accent-lerp-white);
+}
+
+.chat-effort-popover {
+  right: 12px;
+  width: 232px;
+  padding: 12px 13px 13px;
+}
+
+.chat-effort-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 4px;
+  margin: 0 0 12px;
+  color: var(--glass-text-dim);
+  font: 12.5px/1.4 var(--font-body);
+}
+
+.chat-effort-summary strong {
+  color: var(--glass-text-bright);
+  font-weight: 600;
+}
+
+/* Mobile's _EffortSlider (effort_selector.dart): a 35px pill, a dark-teal fill
+   that ends under the knob, a three-row dot grid whose dots turn white and
+   drift slowly to the right inside the filled part, four checkpoint rings and
+   a white knob of radius 13. A native range input under it does the pointer
+   and keyboard work, so tap and drag both snap to the nearest level. The 13px
+   insets match half the thumb, which is where the thumb centre travels. */
+.chat-effort-slider {
+  --effort-thumb: 20px;
+  --effort-height: 24px;
+  position: relative;
+  /* Inset 5% on every side of the popover's content box. */
+  height: var(--effort-height);
+  margin: 0 5%;
+}
+
+.chat-effort-track {
+  position: absolute;
+  inset: 0;
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.09);
+  overflow: hidden;
+}
+
+.chat-effort-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  /* Ends one knob-radius PAST the knob centre, so the knob sits inside the
+     fill and the fill's rounded end shows on its right. */
+  width: calc(var(--effort-thumb) + (100% - var(--effort-thumb)) * var(--effort-frac, 0.33));
+  border-radius: 13px;
+  /* Three rows of short white dashes, only inside the fill, drifting right. */
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.55) 0 4px, transparent 4px) 0 3.25px / 9px 1.5px repeat-x,
+    linear-gradient(90deg, rgba(255, 255, 255, 0.55) 0 4px, transparent 4px) 0 11.25px / 9px 1.5px repeat-x,
+    linear-gradient(90deg, rgba(255, 255, 255, 0.55) 0 4px, transparent 4px) 0 19.25px / 9px 1.5px repeat-x,
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--glass-accent) 12%, #000),
+      color-mix(in srgb, var(--glass-accent) 18%, #000)
+    );
+  transition: width 0.18s var(--db-ease, ease);
+  animation: chat-effort-drift 0.6s linear infinite;
+}
+
+@keyframes chat-effort-drift {
+  to { background-position: 9px 3.25px, 9px 11.25px, 9px 19.25px, 0 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-effort-fill {
+    animation: none;
+  }
+}
+
+.chat-effort-stops {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--effort-thumb) / 2);
+  right: calc(var(--effort-thumb) / 2);
+}
+
+.chat-effort-stop {
+  position: absolute;
+  top: 50%;
+  box-sizing: border-box;
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
+  border: 1.5px solid rgba(255, 255, 255, 0.28);
+  border-radius: 50%;
+}
+
+.chat-effort-stop.reached {
+  border-color: rgba(255, 255, 255, 0.6);
+}
+
+.chat-effort-slider input[type="range"] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: pointer;
+  outline: none;
+}
+
+.chat-effort-slider input[type="range"]::-webkit-slider-runnable-track {
+  height: var(--effort-height);
+  background: transparent;
+}
+
+.chat-effort-slider input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: var(--effort-thumb);
+  height: var(--effort-thumb);
+  margin-top: calc((var(--effort-height) - var(--effort-thumb)) / 2);
+  border: none;
+  border-radius: 50%;
+  background: #ffffff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(0, 0, 0, 0.08);
+  transition: transform 0.12s var(--db-ease, ease);
+}
+
+.chat-effort-slider input[type="range"]:active::-webkit-slider-thumb {
+  transform: scale(1.06);
+}
+
+.chat-effort-slider:focus-within .chat-effort-track {
+  box-shadow: 0 0 0 2px rgba(116, 221, 206, 0.4);
 }
 
 /* ── Activity rail ─────────────────────────────────────────────────────────

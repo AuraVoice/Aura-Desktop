@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { ClipboardEvent, CSSProperties } from "react";
+import type { ChangeEvent, ClipboardEvent, CSSProperties } from "react";
 import { currentMonitor } from "@tauri-apps/api/window";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import {
@@ -11,10 +11,13 @@ import {
   Copy,
   Eye,
   EyeOff,
+  FileText,
+  Gauge,
   Globe,
   History,
   Lightbulb,
   Mail,
+  Paperclip,
   Plus,
   Radar,
   Send,
@@ -36,6 +39,22 @@ import {
 } from "../lib/ipcEvents";
 import { useTauriEvent } from "../lib/useTauriEvent";
 import type { ChatScreenState } from "./useChatScreenCapture";
+import { useChatAttachments } from "./useChatAttachments";
+import { ChatComposerMenu, CHAT_COMPOSER_MENU_ICONS } from "./ChatComposerMenu";
+import {
+  ChatEffortPopover,
+  DEFAULT_CHAT_EFFORT,
+  effortLevel,
+  type ChatEffort,
+} from "./ChatEffortPopover";
+import {
+  ATTACHMENT_ACCEPT,
+  extensionLabel,
+  IMAGE_ACCEPT,
+  type ChatMessageAttachment,
+  type PendingAttachment,
+} from "../lib/chatAttachments";
+import { setOverlayDialogFriendly } from "./overlayDialog";
 import "./ChatSlot.css";
 
 /** The states the transcript has to render across user and assistant turns.
@@ -81,6 +100,9 @@ export interface ChatMessage {
   running?: boolean;
   ok?: boolean;
   reminder?: ChatReminder;
+  /** Files the user attached to this turn: what the bubble draws, never the
+   * bytes. Absent on rows restored from the cache or the server. */
+  attachments?: ChatMessageAttachment[];
 }
 
 /** Where each row sits WITHIN its own turn. Lower renders first.
@@ -314,7 +336,8 @@ interface ChatSlotProps {
   history: ChatHistoryView;
   hasOlderMessages: boolean;
   onLoadOlder: () => void;
-  onSend: (message: string) => boolean;
+  /** Text may be empty when files are attached. */
+  onSend: (message: string, attachments: PendingAttachment[]) => boolean;
   onRetry: (messageId: string) => void;
   onClarification: (messageId: string, selectedOptions: string[]) => void;
   sending: boolean;
@@ -359,13 +382,14 @@ const COUNTER_THRESHOLD: Record<ChatLane, number> = {
 };
 
 /** Header (44) + the transcript's 260px floor + the body's own 8px padding +
- * composer (48): what an empty chat
+ * composer (84: the card's 36px field, 34px control row and 2px border inside
+ * 12px of padding): what an empty chat
  * renders at, used for the frame before the first measurement lands. The card's
  * height is otherwise never computed here - CSS sizes it to its content and the
  * measured result is what gets reported. Predicting it from row constants and
  * then stretching the card to the window is what put empty glass under the
  * composer for three rounds: two owners, no way to tell which one was wrong. */
-export const INITIAL_CHAT_SLOT_HEIGHT = 360;
+export const INITIAL_CHAT_SLOT_HEIGHT = 396;
 
 /** During a call the worker attaches screen frames to spoken turns only, so a
  * chip here would promise something the live lane cannot deliver. */
@@ -623,6 +647,16 @@ export function ChatSlot({
     setDictation(update.ownTarget && update.phase !== "idle" ? update : null);
   });
   const trimmedMessage = message.trim();
+  const attachments = useChatAttachments();
+  // Presentation only, like mobile's BuddyEffort: lives for the card, is not
+  // persisted and is not sent (see ChatEffortPopover.tsx).
+  const [effort, setEffort] = useState<ChatEffort>(DEFAULT_CHAT_EFFORT);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [effortOpen, setEffortOpen] = useState(false);
+  const addButtonRef = useRef<HTMLButtonElement>(null);
+  const effortButtonRef = useRef<HTMLButtonElement>(null);
+  const photoInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const cardRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -786,11 +820,39 @@ export function ChatSlot({
           ? "Screen is attached to your next message"
           : "Attach your screen to the next message";
 
+  const hasAttachments = attachments.items.length > 0;
+  const canSend = (!!trimmedMessage || hasAttachments)
+    && trimmedMessage.length <= maxMessageLength
+    && !sending
+    && !limitReached
+    && !attachments.processing;
+
   function sendMessage() {
-    if (!trimmedMessage || trimmedMessage.length > maxMessageLength || sending || limitReached) return;
+    if (!canSend) return;
     // Sending always returns the user to the live end of the transcript.
     stickToBottomRef.current = true;
-    if (onSend(trimmedMessage)) setMessage("");
+    if (onSend(trimmedMessage, attachments.items)) {
+      setMessage("");
+      // The bubble now owns the preview URLs.
+      attachments.clear({ keepPreviews: true });
+    }
+  }
+
+  // The native picker is an ordinary window; the overlay has to stop being
+  // topmost for it to be reachable (see overlayDialog.ts).
+  function openPicker(input: HTMLInputElement | null) {
+    if (!input) return;
+    setOverlayDialogFriendly(true);
+    input.click();
+  }
+
+  function onPicked(event: ChangeEvent<HTMLInputElement>) {
+    const files = event.target.files;
+    // Cleared immediately so re-picking the same file fires onChange again.
+    event.target.value = "";
+    setOverlayDialogFriendly(false);
+    if (files && files.length > 0) attachments.addFiles(files);
+    composerRef.current?.focus();
   }
 
   const historySheetStyle = {
@@ -864,6 +926,23 @@ export function ChatSlot({
                   ? " chat-reminder-supplemental"
                   : ""
               }`}>
+                {item.attachments && item.attachments.length > 0 && (
+                  <div className="chat-message-attachments">
+                    {item.attachments.map((attachment, index) => attachment.kind === "image" && attachment.previewUrl ? (
+                      <img
+                        key={index}
+                        className="chat-message-attachment-image"
+                        src={attachment.previewUrl}
+                        alt={attachment.fileName}
+                      />
+                    ) : (
+                      <span key={index} className="chat-message-attachment-doc" title={attachment.fileName}>
+                        <FileText size={12} aria-hidden="true" />
+                        {extensionLabel(attachment.fileName)}
+                      </span>
+                    ))}
+                  </div>
+                )}
                 {item.kind === "reminder" && item.reminder ? (
                   item.reminder.displayMode === "supplemental" ? (
                     <>
@@ -977,67 +1056,185 @@ export function ChatSlot({
             sendMessage();
           }}
         >
-          <div className={`chat-slot-input${counterVisible ? " counting" : ""}`}>
-            <button
-              type="button"
-              className={`chat-screen-toggle${screen.armed && lane !== "live" ? " armed" : ""}`}
-              aria-pressed={screen.armed && lane !== "live"}
-              disabled={lane === "live" || !screen.enabled}
-              title={screenToggleTitle}
-              onClick={screen.toggle}
-            >
-              {screen.armed && lane !== "live"
-                ? <Eye aria-hidden="true" />
-                : <EyeOff aria-hidden="true" />}
-            </button>
-            <textarea
-              rows={1}
-              ref={composerRef}
-              value={message}
-              maxLength={maxMessageLength}
-              aria-label="Chat message"
-              placeholder={limitReached ? "Daily chat limit reached" : "Message Aura"}
-              disabled={composerDisabled}
-              onChange={(event) => setMessage(event.target.value)}
-              onFocus={() => {
-                void invoke("dictation_set_composer_focused", { focused: true });
-              }}
-              onBlur={() => {
-                void invoke("dictation_set_composer_focused", { focused: false });
-              }}
-              onKeyDown={(event) => {
-                // First Escape only drops focus and keeps the draft text. It must
-                // not reach the overlay's window-level Escape handler, which
-                // closes the slot and would take a half-typed message with it.
-                if (event.key === "Escape") {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  composerRef.current?.blur();
-                  return;
-                }
-                if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
-                event.preventDefault();
-                sendMessage();
-              }}
-            />
-            {counterVisible && (
-              <span className="chat-slot-counter">
-                {message.length.toLocaleString()} / {maxMessageLength.toLocaleString()}
-              </span>
+          <div className={`chat-composer-card${counterVisible ? " counting" : ""}`}>
+            {hasAttachments && (
+              <div className="chat-attachment-strip">
+                {attachments.items.map((item) => (
+                  <div key={item.id} className={`chat-attachment-tile chat-attachment-${item.kind}`}>
+                    {item.kind === "image" && item.previewUrl ? (
+                      <img src={item.previewUrl} alt="" />
+                    ) : (
+                      <>
+                        <FileText size={18} aria-hidden="true" />
+                        <span className="chat-attachment-ext">{extensionLabel(item.fileName)}</span>
+                        <span className="chat-attachment-name">{item.fileName}</span>
+                      </>
+                    )}
+                    <button
+                      type="button"
+                      className="chat-attachment-remove"
+                      aria-label={`Remove ${item.fileName}`}
+                      title="Remove"
+                      disabled={sending}
+                      onClick={() => attachments.remove(item.id)}
+                    >
+                      <X aria-hidden="true" />
+                    </button>
+                  </div>
+                ))}
+              </div>
             )}
+            <div className="chat-composer-field">
+              <textarea
+                rows={1}
+                ref={composerRef}
+                value={message}
+                maxLength={maxMessageLength}
+                aria-label="Chat message"
+                placeholder={limitReached ? "Daily chat limit reached" : "Message Aura"}
+                disabled={composerDisabled}
+                onChange={(event) => setMessage(event.target.value)}
+                onFocus={() => {
+                  void invoke("dictation_set_composer_focused", { focused: true });
+                }}
+                onBlur={() => {
+                  void invoke("dictation_set_composer_focused", { focused: false });
+                }}
+                onKeyDown={(event) => {
+                  // First Escape only drops focus and keeps the draft text. It must
+                  // not reach the overlay's window-level Escape handler, which
+                  // closes the slot and would take a half-typed message with it.
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    composerRef.current?.blur();
+                    return;
+                  }
+                  if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+                  event.preventDefault();
+                  sendMessage();
+                }}
+              />
+              {counterVisible && (
+                <span className="chat-slot-counter">
+                  {message.length.toLocaleString()} / {maxMessageLength.toLocaleString()}
+                </span>
+              )}
+            </div>
+            <div className="chat-composer-row">
+              <button
+                ref={addButtonRef}
+                type="button"
+                className={`chat-composer-icon chat-composer-add${menuOpen ? " open" : ""}`}
+                aria-label="Attach"
+                aria-haspopup="menu"
+                aria-expanded={menuOpen}
+                title="Attach"
+                disabled={composerDisabled}
+                onClick={() => {
+                  setEffortOpen(false);
+                  setMenuOpen((open) => !open);
+                }}
+              >
+                {attachments.processing
+                  ? <span className="chat-composer-spinner" aria-hidden="true" />
+                  : <Paperclip aria-hidden="true" />}
+              </button>
+              <button
+                type="button"
+                className={`chat-composer-icon chat-screen-toggle${screen.armed && lane !== "live" ? " armed" : ""}`}
+                aria-pressed={screen.armed && lane !== "live"}
+                disabled={lane === "live" || !screen.enabled}
+                title={screenToggleTitle}
+                onClick={screen.toggle}
+              >
+                {screen.armed && lane !== "live"
+                  ? <Eye aria-hidden="true" />
+                  : <EyeOff aria-hidden="true" />}
+              </button>
+              <span className="chat-composer-spacer" />
+              <button
+                ref={effortButtonRef}
+                type="button"
+                className={`chat-composer-icon chat-composer-effort${effortOpen ? " open" : ""}`}
+                data-effort={effort}
+                aria-label={`Effort: ${effortLevel(effort).label}`}
+                aria-haspopup="dialog"
+                aria-expanded={effortOpen}
+                title={`Effort: ${effortLevel(effort).label}`}
+                disabled={composerDisabled}
+                onClick={() => {
+                  setMenuOpen(false);
+                  setEffortOpen((open) => !open);
+                }}
+              >
+                <Gauge aria-hidden="true" />
+              </button>
+              <button
+                type="submit"
+                className="chat-slot-send"
+                aria-label="Send message"
+                title="Send message"
+                disabled={!canSend}
+              >
+                <Send aria-hidden="true" />
+              </button>
+            </div>
           </div>
-          {screen.error && (
-            <p className="chat-screen-error" role="status">{screen.error}</p>
+          {(attachments.error || screen.error) && (
+            <p className="chat-screen-error" role="status">{attachments.error ?? screen.error}</p>
           )}
-          <button
-            type="submit"
-            className="chat-slot-send"
-            aria-label="Send message"
-            title="Send message"
-            disabled={!trimmedMessage || trimmedMessage.length > maxMessageLength || sending || limitReached}
-          >
-            <Send aria-hidden="true" />
-          </button>
+          {menuOpen && (
+            <ChatComposerMenu
+              anchorRef={addButtonRef}
+              onClose={() => setMenuOpen(false)}
+              items={[
+                {
+                  id: "photos",
+                  icon: CHAT_COMPOSER_MENU_ICONS.photos,
+                  label: "Photos",
+                  onSelect: () => openPicker(photoInputRef.current),
+                },
+                {
+                  id: "files",
+                  icon: CHAT_COMPOSER_MENU_ICONS.files,
+                  label: "Files",
+                  onSelect: () => openPicker(fileInputRef.current),
+                },
+                {
+                  id: "think",
+                  icon: CHAT_COMPOSER_MENU_ICONS.think,
+                  label: "Think harder",
+                  checked: effort === "ultra",
+                  onSelect: () => setEffort(effort === "ultra" ? "medium" : "ultra"),
+                },
+              ]}
+            />
+          )}
+          {effortOpen && (
+            <ChatEffortPopover
+              anchorRef={effortButtonRef}
+              effort={effort}
+              onChange={setEffort}
+              onClose={() => setEffortOpen(false)}
+            />
+          )}
+          <input
+            ref={photoInputRef}
+            type="file"
+            accept={IMAGE_ACCEPT}
+            multiple
+            hidden
+            onChange={onPicked}
+          />
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept={ATTACHMENT_ACCEPT}
+            multiple
+            hidden
+            onChange={onPicked}
+          />
         </form>
         </div>
       </GlassSurface>

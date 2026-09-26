@@ -23,6 +23,11 @@ import {
   type ChatStreamFrame,
 } from "../lib/chatStream";
 import type { ChatAttachment } from "../lib/chatScreenCapture";
+import {
+  toMessageAttachment,
+  toRequestAttachment,
+  type PendingAttachment,
+} from "../lib/chatAttachments";
 import { trackEvent } from "../lib/analytics";
 import { logError } from "../lib/log";
 import { captureException } from "../lib/sentry";
@@ -189,7 +194,7 @@ function cacheRowsFor(
       status: message.state,
       seq: index,
       created_at_ms: now + index,
-      has_attachments: false,
+      has_attachments: (message.attachments?.length ?? 0) > 0,
     });
   });
   return rows;
@@ -283,6 +288,9 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
   const activeRequestRef = useRef<{ clientMessageId: string; controller: AbortController } | null>(null);
   const messagesRef = useRef(messages);
   const resolveAttachmentsRef = useRef(resolveAttachments);
+  // Request-shaped attachments per user turn, kept only so Retry can resend
+  // them. Never read into messages state or written to the cache.
+  const attachmentsByTurnRef = useRef(new Map<string, ChatAttachment[]>());
   const uidRef = useRef(uid);
   // The conversation refreshes must stay pinned to. A newly-created empty thread
   // is pinned before the server knows it so focus refresh cannot restore the old
@@ -594,6 +602,9 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
     // different moment would make Retry send a different message than the one
     // that failed.
     withScreenContext = false,
+    // Files the user picked for this message. They travel on a retry too: they
+    // are part of what was said, unlike the screen frame above.
+    userAttachments: ChatAttachment[] = [],
   ) => {
     if (!enabledRef.current || activeRequestRef.current) return;
     const controller = new AbortController();
@@ -849,9 +860,10 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
     };
 
     try {
-      const attachments = withScreenContext && resolveAttachmentsRef.current
+      const screenAttachments = withScreenContext && resolveAttachmentsRef.current
         ? await resolveAttachmentsRef.current(text)
         : [];
+      const attachments = [...userAttachments, ...screenAttachments];
       await streamChat({
         message: text,
         history,
@@ -903,14 +915,16 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
     }
   }, []);
 
-  const send = useCallback((text: string) => {
+  const send = useCallback((text: string, pending: PendingAttachment[] = []) => {
     const trimmed = text.trim();
+    // A message may be files alone: the backend refuses only when both the
+    // text and the attachments are empty.
     if (
       !enabledRef.current
       || activeRequestRef.current
       || sending
       || limitReached
-      || !trimmed
+      || (!trimmed && pending.length === 0)
       || trimmed.length > MAX_MESSAGE_LENGTH.cold
     ) return false;
     const clientMessageId = crypto.randomUUID();
@@ -923,7 +937,12 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
       state: "sending",
       kind: "text",
       lane: "cold",
+      ...(pending.length > 0 ? { attachments: pending.map(toMessageAttachment) } : {}),
     };
+    // The bytes stay out of React state and the disk cache: the bubble keeps
+    // only what it draws, and this map is what a retry resends.
+    const requestAttachments = pending.map(toRequestAttachment);
+    if (requestAttachments.length > 0) attachmentsByTurnRef.current.set(clientMessageId, requestAttachments);
     setMessages((current) => [...current, bubble]);
     // Cached without awaiting, so a slow or broken disk can never delay the
     // request. The settled-transcript effect above rewrites this row once the
@@ -945,8 +964,9 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
     trackEvent("chat_message_sent", {
       length_bucket: lengthBucket(trimmed.length),
       history_len: history.length,
+      attachment_count: requestAttachments.length,
     });
-    void runTurn(clientMessageId, trimmed, history, true);
+    void runTurn(clientMessageId, trimmed, history, true, requestAttachments);
     return true;
   }, [limitReached, messages, runTurn, sending]);
 
@@ -964,7 +984,12 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
       .map((item) => item.id === clientMessageId
         ? { ...item, id: retryMessageId, turnId: retryMessageId, state: "sending" }
         : item));
-    void runTurn(retryMessageId, message.text, history);
+    const retryAttachments = attachmentsByTurnRef.current.get(clientMessageId) ?? [];
+    if (retryAttachments.length > 0) {
+      attachmentsByTurnRef.current.delete(clientMessageId);
+      attachmentsByTurnRef.current.set(retryMessageId, retryAttachments);
+    }
+    void runTurn(retryMessageId, message.text, history, false, retryAttachments);
   }, [limitReached, messages, runTurn, sending]);
 
   const submitClarification = useCallback((messageId: string, selectedOptions: string[]) => {

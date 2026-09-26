@@ -12,19 +12,14 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { asArrayBuffer } from "./screenFrame";
+import { blobToBase64, type ChatAttachment } from "./chatAttachments";
 
 /** width u32 | height u32 | captured_at_ms i64, all little-endian. */
 export const CHAT_CAPTURE_HEADER_LEN = 4 + 4 + 8;
 
-/** What /chat accepts, matching `_validate_and_filter_attachments` on the
- * backend exactly. Any drift here is a 422 the user sees as a failed send. */
-export interface ChatAttachment {
-  type: "image";
-  mime_type: string;
-  file_name: string;
-  /** Base64, no data-URL prefix. */
-  data: string;
-}
+/** The wire type now lives with the user-picked attachments; re-exported so
+ * every existing importer keeps its path. */
+export type { ChatAttachment };
 
 export interface ChatScreenCapture {
   widthPx: number;
@@ -64,26 +59,10 @@ export async function discardChatCapture(): Promise<void> {
   await invoke("discard_chat_capture");
 }
 
-/**
- * Base64 without touching the call stack. `String.fromCharCode(...bytes)` on a
- * 200 KB frame spreads 200k arguments and throws; a chunked loop works but
- * blocks. FileReader does the encode natively and hands it back on a task.
- */
+/** Kept as the name the capture path already uses; the encoder itself is
+ * shared with picked files in chatAttachments.ts. */
 export function toBase64(bytes: Uint8Array): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = typeof reader.result === "string" ? reader.result : "";
-      const comma = result.indexOf(",");
-      if (comma < 0) {
-        reject(new Error("chat capture could not be encoded"));
-        return;
-      }
-      resolve(result.slice(comma + 1));
-    };
-    reader.onerror = () => reject(reader.error ?? new Error("chat capture read failed"));
-    reader.readAsDataURL(new Blob([bytes as BlobPart], { type: "image/jpeg" }));
-  });
+  return blobToBase64(new Blob([bytes as BlobPart], { type: "image/jpeg" }));
 }
 
 export function screenAttachment(data: string): ChatAttachment {
