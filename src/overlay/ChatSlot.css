@@ -80,7 +80,8 @@
   border-color: transparent;
   border-radius: 0;
   background: transparent;
-  color: var(--db-text-dim, var(--glass-icon-idle));
+  color: rgba(255, 255, 255, 0.92);
+  opacity: 1;
 }
 
 .bar-icon-button.chat-history-toggle:hover,
@@ -101,7 +102,17 @@
 }
 
 .bar-icon-button.chat-slot-new {
-  color: var(--db-text-mute, var(--glass-text-dim));
+  color: rgba(255, 255, 255, 0.92);
+  opacity: 1;
+}
+
+/* One glyph size for the three header buttons; BarIconButton's 20px let the
+   X read larger than the compose and history marks beside it. */
+.bar-icon-button.chat-history-toggle svg,
+.bar-icon-button.chat-slot-new svg,
+.bar-icon-button.chat-slot-close svg {
+  width: 18px;
+  height: 18px;
 }
 
 .chat-slot-body {
@@ -1154,13 +1165,14 @@
   border: none;
   border-radius: 9px;
   background: none;
-  color: var(--db-text-mute, var(--glass-text-dim));
+  /* White, not the dim token: on dark glass the 0.66 alpha read as ash. */
+  color: rgba(255, 255, 255, 0.92);
   cursor: pointer;
   transition: color 0.15s var(--db-ease, ease), background-color 0.15s var(--db-ease, ease);
 }
 
 .chat-composer-icon:hover:not(:disabled) {
-  color: var(--glass-text-bright);
+  color: #ffffff;
   background: rgba(255, 255, 255, 0.07);
 }
 
@@ -1196,11 +1208,11 @@
 /* The gauge tints toward the accent as the level rises, mobile's
    Color.lerp(textSecondary, accent, position). */
 .chat-composer-effort[data-effort="medium"] {
-  color: color-mix(in srgb, var(--glass-text-dim), var(--glass-accent) 35%);
+  color: color-mix(in srgb, rgba(255, 255, 255, 0.92), var(--glass-accent) 35%);
 }
 
 .chat-composer-effort[data-effort="high"] {
-  color: color-mix(in srgb, var(--glass-text-dim), var(--glass-accent) 70%);
+  color: color-mix(in srgb, rgba(255, 255, 255, 0.92), var(--glass-accent) 70%);
 }
 
 .chat-composer-effort[data-effort="ultra"] {
@@ -1378,8 +1390,8 @@
     linear-gradient(90deg, rgba(255, 255, 255, 0.55) 0 4px, transparent 4px) 0 19.25px / 9px 1.5px repeat-x,
     linear-gradient(
       90deg,
-      color-mix(in srgb, var(--glass-accent) 12%, #000),
-      color-mix(in srgb, var(--glass-accent) 18%, #000)
+      color-mix(in srgb, var(--glass-accent) 62%, #000),
+      color-mix(in srgb, var(--glass-accent) 78%, #000)
     );
   transition: width 0.18s var(--db-ease, ease);
   animation: chat-effort-drift 0.6s linear infinite;

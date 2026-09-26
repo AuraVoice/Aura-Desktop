@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ChangeEvent, ClipboardEvent, CSSProperties } from "react";
 import { currentMonitor } from "@tauri-apps/api/window";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -18,9 +18,9 @@ import {
   Lightbulb,
   Mail,
   Paperclip,
-  Plus,
   Radar,
   Send,
+  SquarePen,
   UserRound,
   Wrench,
   X,
@@ -43,8 +43,9 @@ import { useChatAttachments } from "./useChatAttachments";
 import { ChatComposerMenu, CHAT_COMPOSER_MENU_ICONS } from "./ChatComposerMenu";
 import {
   ChatEffortPopover,
-  DEFAULT_CHAT_EFFORT,
   effortLevel,
+  readStoredEffort,
+  storeEffort,
   type ChatEffort,
 } from "./ChatEffortPopover";
 import {
@@ -337,7 +338,7 @@ interface ChatSlotProps {
   hasOlderMessages: boolean;
   onLoadOlder: () => void;
   /** Text may be empty when files are attached. */
-  onSend: (message: string, attachments: PendingAttachment[]) => boolean;
+  onSend: (message: string, attachments: PendingAttachment[], effort: ChatEffort) => boolean;
   onRetry: (messageId: string) => void;
   onClarification: (messageId: string, selectedOptions: string[]) => void;
   sending: boolean;
@@ -648,9 +649,13 @@ export function ChatSlot({
   });
   const trimmedMessage = message.trim();
   const attachments = useChatAttachments();
-  // Presentation only, like mobile's BuddyEffort: lives for the card, is not
-  // persisted and is not sent (see ChatEffortPopover.tsx).
-  const [effort, setEffort] = useState<ChatEffort>(DEFAULT_CHAT_EFFORT);
+  // Sent with every message and remembered on this machine; mobile keeps the
+  // same level per account (see ChatEffortPopover.tsx).
+  const [effort, setEffortState] = useState<ChatEffort>(readStoredEffort);
+  const setEffort = useCallback((next: ChatEffort) => {
+    setEffortState(next);
+    storeEffort(next);
+  }, []);
   const [menuOpen, setMenuOpen] = useState(false);
   const [effortOpen, setEffortOpen] = useState(false);
   const addButtonRef = useRef<HTMLButtonElement>(null);
@@ -831,7 +836,7 @@ export function ChatSlot({
     if (!canSend) return;
     // Sending always returns the user to the live end of the transcript.
     stickToBottomRef.current = true;
-    if (onSend(trimmedMessage, attachments.items)) {
+    if (onSend(trimmedMessage, attachments.items, effort)) {
       setMessage("");
       // The bubble now owns the preview URLs.
       attachments.clear({ keepPreviews: true });
@@ -898,7 +903,7 @@ export function ChatSlot({
             }}
             className="chat-slot-new"
           >
-            <Plus aria-hidden="true" />
+            <SquarePen aria-hidden="true" />
           </BarIconButton>
           <BarIconButton title="Close chat" onClick={onClose} className="chat-slot-close">
             <X aria-hidden="true" />
