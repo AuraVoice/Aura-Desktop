@@ -571,6 +571,22 @@ async fn request_step(token: String, body: Value) -> Result<Value, StepError> {
     }
 }
 
+/// Byte ceiling on a read_page text before it becomes the next snapshot.
+const READ_PAGE_MAX_BYTES: usize = 100_000;
+
+/// The longest prefix of `text` that fits in `max_bytes`, on a char boundary.
+fn clip_bytes(mut text: String, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text;
+    }
+    let mut end = max_bytes;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    text.truncate(end);
+    text
+}
+
 fn parse_action(value: &Value) -> Option<Action> {
     let action = value.get("action")?;
     let string = |key: &str| action.get(key).and_then(Value::as_str).unwrap_or("").to_string();
@@ -715,6 +731,10 @@ fn drive(
     let mut refs = std::collections::HashMap::new();
     let mut page_offset = 0usize;
     let mut reuse_tree = false;
+    // True while `full_text` holds the page's readable text from a read_page
+    // action rather than the element tree. It has no refs, so the guard refuses
+    // any click on it, and the next non-paging action refreshes the tree.
+    let mut read_mode = false;
     let mut last_action_line = String::from("(none)");
     let mut consecutive_denials = 0u32;
     let mut step: u32 = 0;
@@ -747,6 +767,7 @@ fn drive(
                     full_text = rendered.text;
                     refs = rendered.refs;
                     page_offset = 0;
+                    read_mode = false;
                 }
                 Err(error) => {
                     warn!("agent_browser: snapshot failed: {error}");
@@ -763,8 +784,13 @@ fn drive(
                 return Outcome::failed("page_closed");
             }
         };
+        let mode_line = if read_mode {
+            "MODE: read_page (the page's readable text; no refs on this snapshot)\n"
+        } else {
+            ""
+        };
         let snapshot_text = format!(
-            "SCROLL: y={}/{} viewport={}\nLAST_ACTION: {}\n{}",
+            "{mode_line}SCROLL: y={}/{} viewport={}\nLAST_ACTION: {}\n{}",
             info.scroll_y, info.scroll_height, info.viewport_height, last_action_line, chunk
         );
 
@@ -924,6 +950,20 @@ fn drive(
                     reuse_tree = true;
                     Ok(())
                 }
+                "read_page" => match cdp::readable_text(cdp, page) {
+                    Ok(text) => {
+                        // Clipped by BYTES, not chars: the backend refuses a body over
+                        // 128 KB before it ever reaches its own character cap, and a
+                        // non-ASCII page runs to three bytes a character.
+                        full_text = clip_bytes(text, READ_PAGE_MAX_BYTES);
+                        refs = std::collections::HashMap::new();
+                        page_offset = 0;
+                        reuse_tree = true;
+                        read_mode = true;
+                        Ok(())
+                    }
+                    Err(error) => Err(error),
+                },
                 "wait" => {
                     std::thread::sleep(Duration::from_millis(action.ms.min(3000)));
                     Ok(())

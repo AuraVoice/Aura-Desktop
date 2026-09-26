@@ -40,9 +40,6 @@ export interface GeneralSettings {
   improveConversations: boolean;
   improveActions: boolean;
   improvementConsentVersion: number;
-  /** Shows the Browser Agent page: the Phase A harness that measures the
-   * background browser agent before any voice user reaches it. */
-  browserAgentHarness: boolean;
 }
 
 // Launch-at-login is deliberately absent: autostart.rs owns it in a different
@@ -89,7 +86,6 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   improveConversations: false,
   improveActions: false,
   improvementConsentVersion: 0,
-  browserAgentHarness: false,
 };
 
 function mergeSettings(saved: GeneralSettings | null | undefined): GeneralSettings {

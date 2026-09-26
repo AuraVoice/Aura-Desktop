@@ -19,6 +19,7 @@ import {
   permissionAlreadyAsked,
   permissionGranted,
   setDisabled,
+  setToastBusy,
   type StoredNotification,
   toastStored,
   unreadCount as countUnread,
@@ -83,12 +84,16 @@ export function useDesktopNotifications({
   signedIn,
   uid,
   appHidden,
+  busy = false,
 }: {
   signedIn: boolean;
   uid: string | null;
   /** True when Aura is not showing the relevant content (hidden / pill), which
    *  drives the broker's `when_hidden` toast policy. */
   appHidden: boolean;
+  /** True while a call, a meeting capture or an interview is live. Toasts are
+   *  parked in the broker and fired when this clears; the inbox is unaffected. */
+  busy?: boolean;
 }): DesktopNotificationsState {
   const [inbox, setInbox] = useState<StoredNotification[]>([]);
   const [permissionPromptVisible, setPermissionPromptVisible] = useState(false);
@@ -105,6 +110,11 @@ export function useDesktopNotifications({
   // without re-subscribing the listener each time.
   const appHiddenRef = useRef(appHidden);
   appHiddenRef.current = appHidden;
+
+  useEffect(() => {
+    setToastBusy(busy);
+    return () => setToastBusy(false);
+  }, [busy]);
 
   const refresh = useCallback(() => {
     loadInbox()

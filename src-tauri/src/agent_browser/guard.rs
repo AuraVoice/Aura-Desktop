@@ -98,7 +98,7 @@ pub fn check(action: &Action, refs: &HashMap<String, RefTarget>) -> Gate {
             }
             Gate::Allow
         }
-        "back" | "read_more" | "wait" | "done" | "blocked" => Gate::Allow,
+        "back" | "read_more" | "read_page" | "wait" | "done" | "blocked" => Gate::Allow,
         _ => Gate::Refuse("unknown_action"),
     }
 }

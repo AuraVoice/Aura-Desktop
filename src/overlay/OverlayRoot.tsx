@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { isOnline, subscribeOnline } from "../lib/connectivity";
 import { useAuth } from "../state/AuthProvider";
 import { logError } from "../lib/log";
 import { useTauriEvent } from "../lib/useTauriEvent";
@@ -76,6 +77,7 @@ import { useGeneralSettings } from "../state/useGeneralSettings";
 import { dictationSharingActive } from "../lib/generalSettings";
 import { useDictationUpload } from "./useDictationUpload";
 import { ChatSlot, INITIAL_CHAT_SLOT_HEIGHT } from "./ChatSlot";
+import { clearChatDraft } from "./chatDraft";
 import { useChatScreenCapture } from "./useChatScreenCapture";
 import { useChatSession } from "./useChatSession";
 import { useOutputMode } from "./useOutputMode";
@@ -119,6 +121,10 @@ export function OverlayRoot() {
   const [notchEdge, setNotchEdge] = useState<NotchEdge>("top");
   const [dictationHold, setDictationHold] = useState(false);
   const [chatOpen, setChatOpen] = useState(false);
+  // A draft never crosses a sign-out.
+  useEffect(() => {
+    if (user === null) clearChatDraft();
+  }, [user]);
   const [chatHistoryOpen, setChatHistoryOpen] = useState(false);
   const [chatFocusNonce, setChatFocusNonce] = useState(0);
   // Signed in is the whole gate. /chat needs a Firebase token, so a signed-out
@@ -359,6 +365,17 @@ export function OverlayRoot() {
   // Keeps the dictation chord's transcription credential warm: required for
   // dictation to work at all.
   useDictationCredential(user?.uid ?? null);
+  // Rust learns the webview's network state once and on every change, so a
+  // hold while offline fails with "offline" instead of a socket timeout.
+  useEffect(() => {
+    const report = (online: boolean) => {
+      invoke("dictation_set_online", { online }).catch((err) =>
+        logError("OverlayRoot: report online state", err),
+      );
+    };
+    report(isOnline());
+    return subscribeOnline(report);
+  }, []);
   // Keeps the AI-formatting backend credential warm for the same reason. Rust
   // no-ops with it when the polish toggle is off.
   usePolishCredential(user?.uid ?? null);
@@ -437,6 +454,7 @@ export function OverlayRoot() {
     signedIn: user !== null,
     uid: user?.uid ?? null,
     appHidden: presentation !== "bar",
+    busy: callLive || showInterviewHacker || meetingCapture.recording,
   });
   const [inboxOpen, setInboxOpen] = useState(false);
   const callbackCard = useCallbackCard({
@@ -560,6 +578,7 @@ export function OverlayRoot() {
   const showUpdateBanner =
     user !== null
     && (updateReady.version !== null || updateReady.updatedNotice !== null)
+    && !callLive
     && !showInterviewHacker
     && !showInterviewPaste
     && !showVoiceNotice
@@ -821,9 +840,9 @@ export function OverlayRoot() {
       notification.action === "view_research"
       || notification.action === "answer_research_question"
     ) {
-      void openDashboardWindow("/research", notification.resourceId);
+      void openDashboardWindow("/agents", notification.resourceId, "research");
     } else if (notification.action === "view_browser_task") {
-      void openDashboardWindow("/browser-agent", notification.resourceId);
+      void openDashboardWindow("/agents", notification.resourceId, "computer");
     }
   }
 

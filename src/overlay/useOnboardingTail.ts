@@ -12,7 +12,10 @@ import {
 } from "../lib/acquisitionAnalytics";
 import { logError } from "../lib/log";
 import { syncProfileOnSignIn } from "../lib/profile";
-import { DESKTOP_ONBOARDING_COMPLETED as ONBOARDING_COMPLETED_EVENT } from "../lib/ipcEvents";
+import {
+  DESKTOP_ONBOARDING_COMPLETED as ONBOARDING_COMPLETED_EVENT,
+  DESKTOP_ONBOARDING_REPLAY as ONBOARDING_REPLAY_EVENT,
+} from "../lib/ipcEvents";
 
 export type OnboardingTailStatus = "unknown" | "active" | "done";
 
@@ -57,11 +60,20 @@ export function useOnboardingTail(uid: string | null) {
         if (disposed) fn(); else unlisten = fn;
       })
       .catch((err) => logError("useOnboardingTail: listen completion", err));
+    let unlistenReplay: (() => void) | undefined;
+    listen(ONBOARDING_REPLAY_EVENT, () => {
+      if (uid) setStatus("active");
+    })
+      .then((fn) => {
+        if (disposed) fn(); else unlistenReplay = fn;
+      })
+      .catch((err) => logError("useOnboardingTail: listen replay", err));
     return () => {
       disposed = true;
       unlisten?.();
+      unlistenReplay?.();
     };
-  }, []);
+  }, [uid]);
 
   const complete = useCallback(() => {
     void (async () => {

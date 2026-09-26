@@ -112,7 +112,7 @@ impl DictationStatus {
 
 pub use platform::{
     chat_slot_open, composer_focused, held_text_copied, is_holding_text, set_chat_slot_open,
-    set_composer_focused, signal, start, DictationHandle,
+    set_composer_focused, set_online, signal, start, DictationHandle,
 };
 
 /// Read by telemetry.rs for the heartbeat: the same silent health check the
@@ -386,6 +386,20 @@ mod platform {
 
     pub fn set_chat_slot_open(open: bool) {
         CHAT_SLOT_OPEN.store(open, Ordering::Relaxed);
+    }
+
+    /// The webview's view of the network (`navigator.onLine`), reported from
+    /// React on every change. Defaults to true so a webview that never reports
+    /// keeps today's behaviour; a false is trustworthy and lets a hold fail
+    /// with "offline" before it opens a socket that cannot connect.
+    static ONLINE: AtomicBool = AtomicBool::new(true);
+
+    pub fn online() -> bool {
+        ONLINE.load(Ordering::Relaxed)
+    }
+
+    pub fn set_online(online: bool) {
+        ONLINE.store(online, Ordering::Relaxed);
     }
 
     pub fn start(app: AppHandle) -> DictationHandle {
@@ -1056,7 +1070,10 @@ mod platform {
             *capture = open_capture();
         }
 
-        let Some(active_capture) = capture.as_mut() else {
+        // Owned for the length of the hold, so a device that goes away can be
+        // replaced in place below. Every exit drops it, which is what the
+        // release at the end of the hold always did.
+        let Some(mut active_capture) = capture.take() else {
             let shutting_down = drain_until_release(rx);
             hold_failure(
                 app,
@@ -1090,6 +1107,19 @@ mod platform {
         // paid for with two file reads and a metaphone encode per utterance.
         let keyterms: Vec<String> = Vec::new();
 
+        if !online() {
+            let shutting_down = drain_until_release(rx);
+            hold_failure(
+                app,
+                generation,
+                failed,
+                Vec::new(),
+                "offline",
+                "You're offline. Nothing was typed.",
+            );
+            return shutting_down;
+        }
+
         // Opens without blocking: the handshake runs on the async runtime and
         // audio sent before it lands is buffered, not dropped. A handshake
         // failure arrives as a session event a moment later.
@@ -1122,9 +1152,10 @@ mod platform {
         info!("dictation: phase=capture");
         let mut last_level = Instant::now();
         let mut captured_frames = 0usize;
-        let mut heard_speech = false;
+        let mut voiced_frames = 0usize;
         let mut shutting_down = false;
         let mut capped = false;
+        let mut reopened_capture = false;
         let mut utterance: Vec<f32> = Vec::new();
         // When the chord actually came up, so the "key up to text on screen"
         // budget is measured from the release rather than from this line.
@@ -1148,6 +1179,18 @@ mod platform {
             let samples = match active_capture.drain() {
                 Ok(samples) => samples,
                 Err(_) => {
+                    // A headset pulled or a default device switched mid-hold
+                    // reads as an error on the next drain. Open whatever is
+                    // the default now, once, and keep going: the frames lost
+                    // during the swap are simply absent from the utterance.
+                    if !reopened_capture {
+                        reopened_capture = true;
+                        if let Some(fresh) = open_capture() {
+                            info!("dictation: microphone changed mid-hold, reopened");
+                            active_capture = fresh;
+                            continue;
+                        }
+                    }
                     session.cancel();
                     let shutting_down = shutting_down || drain_until_release(rx);
                     hold_failure(
@@ -1164,7 +1207,7 @@ mod platform {
             if !samples.is_empty() {
                 captured_frames += samples.len();
                 if !audio::is_silence(&samples) {
-                    heard_speech = true;
+                    voiced_frames += samples.len();
                 }
                 if session.send_pcm(&audio::to_i16(&samples)).is_err() {
                     session.cancel();
@@ -1267,11 +1310,13 @@ mod platform {
             empty_drains = 0;
             captured_frames += samples.len();
             if !audio::is_silence(&samples) {
-                heard_speech = true;
+                voiced_frames += samples.len();
             }
             let _ = session.send_pcm(&audio::to_i16(&samples));
             utterance.extend_from_slice(&samples);
         }
+        let voiced_ms = (voiced_frames * 1000 / 16_000) as u64;
+        let heard_speech = voiced_frames >= audio::MIN_VOICED_FRAMES;
         // Release the device now. The rest of this function is waiting on the
         // network, and the Windows microphone indicator must not stay lit
         // through it. Drop it out of the slot rather than only stopping it:
@@ -1280,7 +1325,7 @@ mod platform {
         // read a dead stream and capture pure silence. Taking it here forces
         // the next hold to open a fresh, started device. Drop still calls
         // stop(), so the indicator clears exactly as before.
-        let _ = capture.take();
+        drop(active_capture);
 
         // The utterance was silent. Nothing to finalize, and no reason to pay
         // for a round trip or show a failure: releasing without speaking is a
@@ -1288,7 +1333,7 @@ mod platform {
         if !heard_speech {
             session.cancel();
             info!(
-                "dictation: nothing to insert (frames={captured_frames} hold_ms={})",
+                "dictation: nothing to insert (frames={captured_frames} voiced_ms={voiced_ms} hold_ms={})",
                 started_at.elapsed().as_millis()
             );
             finish_with(app, generation, HudUpdate::new(HudPhase::Idle), Duration::ZERO);
@@ -1359,7 +1404,16 @@ mod platform {
             return shutting_down;
         }
 
-        let corrected = decoded;
+        // Strip recognizer artifacts, and drop the one-word phantoms a
+        // short, near-silent hold produces. A scrubbed hold is an empty hold:
+        // no insert, no history row, nothing sent to polish.
+        let Some(corrected) = asr::scrub_transcript(&decoded, voiced_ms) else {
+            info!(
+                "dictation: transcript scrubbed (frames={captured_frames} voiced_ms={voiced_ms} hold_ms={hold_ms})"
+            );
+            finish_with(app, generation, HudUpdate::new(HudPhase::Idle), Duration::ZERO);
+            return shutting_down;
+        };
 
         // Voice command routing (command_brain.rs) starts NOW, on the raw
         // transcript, on its own thread, so its round trip overlaps polish
@@ -1994,6 +2048,13 @@ pub fn dictation_held_text_copied() {
 #[tauri::command]
 pub fn dictation_set_composer_focused(focused: bool) {
     set_composer_focused(focused);
+}
+
+/// React reports `navigator.onLine` so a hold can fail as "offline" instead
+/// of opening a recognizer socket that will never connect.
+#[tauri::command]
+pub fn dictation_set_online(online: bool) {
+    set_online(online);
 }
 
 /// React reports the chat slot mounting/unmounting so that every hold while

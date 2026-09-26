@@ -8,7 +8,8 @@ export type StatusPillKind =
   | "screen-sight-on"
   | "screen-sight-off"
   | "guide-on"
-  | "guide-off";
+  | "guide-off"
+  | "meeting-mic-changed";
 
 export function showStatusPill(kind: StatusPillKind): void {
   logInfo("statusPill: request", `kind=${kind}`);

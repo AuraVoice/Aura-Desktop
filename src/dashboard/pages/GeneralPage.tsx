@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
+import { Store } from "@tauri-apps/plugin-store";
+import { DESKTOP_ONBOARDING_REPLAY } from "../../lib/ipcEvents";
 import {
   DEFAULT_GENERAL_SETTINGS,
   IMPROVEMENT_CONSENT_VERSION,
@@ -13,7 +16,12 @@ import { anySharingActive } from "../../lib/generalSettings";
 import { revokeTraceSharing } from "../../lib/dictationUpload";
 import { useAuth } from "../../state/AuthProvider";
 import { chordKeysOf, useDictationStatus } from "../../lib/dictationStatus";
-import { dictationChord as chordCopy, regionChord as regionCopy } from "../../lib/copy";
+import {
+  desktopOnboardingSeenForUidKey,
+  dictationChord as chordCopy,
+  overlayStorePath,
+  regionChord as regionCopy,
+} from "../../lib/copy";
 import { regionKeysOf, useRegionStatus } from "../../lib/regionStatus";
 import { osName } from "../../lib/platformKeys";
 import { resetHotkeyBindings } from "../../lib/hotkeys";
@@ -73,6 +81,7 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
   const { bindings: hotkeyBindings, voice: voiceHotkey } = useHotkeyBindings();
   const [editingShortcut, setEditingShortcut] = useState<{ id: string; label: string } | null>(null);
   const [resettingShortcuts, setResettingShortcuts] = useState(false);
+  const [replayingTour, setReplayingTour] = useState(false);
   const [shortcutResetError, setShortcutResetError] = useState<string | null>(null);
   const { user } = useAuth();
   const [settings, setSettings] = useState<GeneralSettings>(DEFAULT_GENERAL_SETTINGS);
@@ -306,6 +315,37 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
                 checked={settings.reduceMotion}
                 onChange={(value) => void update("reduceMotion", value)}
               />
+              <div className="db-setting-row">
+                <span>
+                  <span className="db-setting-label">Replay the welcome tour</span>
+                  <span className="db-setting-description">
+                    Run the shortcut tour and the live demo again, the way they appeared on your first day.
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  className="db-shortcut-reset"
+                  disabled={!user?.uid || replayingTour}
+                  onClick={() => {
+                    const uid = user?.uid;
+                    if (!uid) return;
+                    setReplayingTour(true);
+                    (async () => {
+                      const store = await Store.load(overlayStorePath);
+                      // Only this account's flag; the legacy un-suffixed key
+                      // is what tells a fresh window the install has been
+                      // through onboarding at all.
+                      await store.delete(desktopOnboardingSeenForUidKey(uid));
+                      await store.save();
+                      await emit(DESKTOP_ONBOARDING_REPLAY);
+                    })()
+                      .catch((err) => logError("GeneralPage: replay welcome tour", err))
+                      .finally(() => setReplayingTour(false));
+                  }}
+                >
+                  Replay
+                </button>
+              </div>
             </div>
           </SettingsSection>
 
@@ -325,20 +365,6 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
                 description="Silence music and other audio for the length of a dictation, then restore it."
                 checked={settings.muteOthersWhileDictating}
                 onChange={(value) => void update("muteOthersWhileDictating", value)}
-              />
-            </div>
-          </SettingsSection>
-
-          <SettingsSection
-            title="Experimental"
-            description="Early features that are still being measured."
-          >
-            <div className="db-panel db-settings-panel">
-              <ToggleRow
-                label="Browser Agent page"
-                description="Show the page where Buddy runs multi-step web tasks in its own separate browser."
-                checked={settings.browserAgentHarness}
-                onChange={(value) => void update("browserAgentHarness", value)}
               />
             </div>
           </SettingsSection>

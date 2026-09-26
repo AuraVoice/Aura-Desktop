@@ -89,7 +89,9 @@ export type KnownAgentEventType =
   // payload.id and is validated against the client capability registry
   // (desktopCapabilities.ts), so this stays a single message type no matter
   // how many verbs exist - the whole point of the capability-as-data design.
-  | "desktop.run";
+  | "desktop.run"
+  // Worker asks the client to open a dashboard page (settings deep link).
+  | "client.open_settings";
 
 export interface ValidAgentEvent {
   kind: "valid";
@@ -121,6 +123,7 @@ const MAX_TYPE_LENGTH = 64;
  * sends, tight enough that a hostile publisher can't stuff megabytes into
  * React state or the clipboard. */
 const FIELD_CAPS: Record<string, number> = {
+  route: 64,
   frame_id: 64,
   id: 64,
   label: 300,
@@ -184,6 +187,7 @@ const KNOWN_TYPES: ReadonlySet<string> = new Set([
   "interview.material.request",
   "action.proposed",
   "desktop.run",
+  "client.open_settings",
 ] satisfies KnownAgentEventType[]);
 
 // Rejection logging is throttled per reason so a hostile flood can't turn

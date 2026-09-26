@@ -5793,6 +5793,19 @@
   width: 100%;
 }
 
+/* Agents: the Computer and Research panels each lay themselves out as a
+   .db-research-page, so the shell only owns the strip and the stage. */
+.db-agents-page {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 18px;
+}
+
+.db-agents-page .db-tab-stage > [role="tabpanel"] {
+  width: 100%;
+}
+
 @media (max-width: 720px) {
   .db-tab-strip {
     display: flex;

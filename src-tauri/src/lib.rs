@@ -201,8 +201,37 @@ fn open_dashboard_route(
     app: AppHandle,
     route: String,
     resource_id: Option<String>,
+    tab: Option<String>,
 ) -> Result<(), String> {
-    dashboard::open_dashboard_route(&app, Some(&route), resource_id.as_deref())
+    dashboard::open_dashboard_route(&app, Some(&route), resource_id.as_deref(), tab.as_deref())
+}
+
+/// The assistant's way to a Settings page: the same validated route open as
+/// `open_dashboard_route`, minus the resource and tab arguments a spoken
+/// "open my dictation settings" never carries. `normalize_route` falls back to
+/// `/home` for anything off the allow-list, so the worker cannot navigate
+/// anywhere the sidebar could not.
+#[tauri::command]
+async fn open_settings_route(app: AppHandle, route: String) -> Result<(), String> {
+    dashboard::open_dashboard_route(&app, Some(&route), None, None)
+}
+
+/// What a suspend or resume means for the subsystems that hold OS handles
+/// across it. Registered once at launch with the session watcher; a plain fn
+/// so nothing here captures the app.
+fn on_power_event(event: meeting::session::PowerEvent) {
+    match event {
+        // A hold in flight when the lid closed has a dead socket; ending it
+        // now lands on the existing "needs a connection" failure instead of
+        // typing whatever the socket replays at wake.
+        meeting::session::PowerEvent::Suspend => {
+            dictation::signal(dictation::chord::ChordSignal::Cancel);
+        }
+        meeting::session::PowerEvent::Resume => {
+            voice_toggle_key::request_listener_reinstall();
+            audio_capture::request_rebind();
+        }
+    }
 }
 
 fn should_summon_on_start<I, S>(args: I, autostart_enabled: bool, just_updated: bool) -> bool
@@ -419,6 +448,7 @@ pub fn run() {
             summon_onboarding_panel,
             open_dashboard_window,
             open_dashboard_route,
+            open_settings_route,
             connector_oauth::take_connector_oauth_completion,
             dismiss_bar,
             dismiss_idle_bar,
@@ -515,6 +545,7 @@ pub fn run() {
             dictation::dictation_set_hud_hovered,
             dictation::dictation_held_text_copied,
             dictation::dictation_set_composer_focused,
+            dictation::dictation_set_online,
             dictation::dictation_set_chat_open,
             // registered ahead of UI: dictation vocabulary management has no
             // frontend invoke yet
@@ -672,6 +703,13 @@ pub fn run() {
             // After the listener, so the first status the UI sees already
             // reflects whether the key hook / event tap actually came up.
             dictation::emit_status_changed(app.handle());
+
+            // The session watcher used to start with the first meeting
+            // capture; it now runs from boot so suspend/resume reaches the
+            // keyboard hook and the audio broker whether or not Meeting
+            // Notes has ever been armed.
+            meeting::session::ensure_watcher();
+            meeting::session::on_power(on_power_event);
 
             // Background Browser Agent: mirror its persisted opt-in into the
             // security state and sweep a browser a crash may have left

@@ -310,6 +310,47 @@ pub fn evaluate(cdp: &CdpClient, page: &Page, expression: &str) -> Result<Value,
         .unwrap_or(Value::Null))
 }
 
+/// The page's readable text for the `read_page` action: the title, then the
+/// visible text under `main`/`article` (or the body), with navigation, asides,
+/// footers, forms and scripts left out and block boundaries kept as line
+/// breaks. Walks the live DOM so display:none subtrees are skipped the way a
+/// reader would skip them; nothing on the page is mutated.
+pub fn readable_text(cdp: &CdpClient, page: &Page) -> Result<String, String> {
+    const EXTRACT: &str = r#"(() => {
+  const SKIP = new Set(['SCRIPT','STYLE','NOSCRIPT','NAV','ASIDE','FOOTER','FORM','IFRAME','SVG','TEMPLATE','BUTTON','SELECT','INPUT','TEXTAREA']);
+  const BLOCK = new Set(['P','DIV','SECTION','ARTICLE','LI','TR','H1','H2','H3','H4','H5','H6','BR','PRE','BLOCKQUOTE','TD','TH','DT','DD','UL','OL','TABLE','HR','HEADER','MAIN']);
+  const root = document.querySelector('main, article, [role="main"]') || document.body;
+  const out = [];
+  const walk = (node) => {
+    if (node.nodeType === 3) { const t = node.nodeValue.replace(/\s+/g, ' '); if (t.trim()) out.push(t); return; }
+    if (node.nodeType !== 1 || SKIP.has(node.tagName)) return;
+    if (node.hidden || node.getAttribute('aria-hidden') === 'true') return;
+    const cs = getComputedStyle(node);
+    if (cs.display === 'none' || cs.visibility === 'hidden') return;
+    const block = BLOCK.has(node.tagName);
+    if (block) out.push('
+');
+    for (const child of node.childNodes) walk(child);
+    if (block) out.push('
+');
+  };
+  if (root) walk(root);
+  const text = out.join('').replace(/[ 	]+
+/g, '
+').replace(/
+{3,}/g, '
+
+').trim();
+  return (document.title || '') + '
+
+' + text;
+})()"#;
+    match evaluate(cdp, page, EXTRACT)? {
+        Value::String(text) => Ok(text),
+        _ => Err("readable_text: no string returned".to_string()),
+    }
+}
+
 pub fn full_ax_tree(cdp: &CdpClient, page: &Page) -> Result<Vec<Value>, String> {
     let result = cdp.call(Some(&page.session_id), "Accessibility.getFullAXTree", json!({}))?;
     Ok(result

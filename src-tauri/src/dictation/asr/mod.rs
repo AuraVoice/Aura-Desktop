@@ -26,13 +26,66 @@
 //! format it.
 
 
+use std::sync::OnceLock;
 use std::time::Instant;
+
+use regex::Regex;
 
 pub mod deepgram;
 pub mod openai;
 
 /// Every ASR model here expects 16 kHz mono.
 pub const SAMPLE_RATE: i32 = 16_000;
+
+/// A hold with less voiced audio than this is "short" for the phantom check
+/// below. Long enough that a real one-word dictation ("Yes", "Send") is well
+/// under it and still types, because the check only fires on words that are
+/// also on the phantom list.
+const SHORT_HOLD_MS: u64 = 1200;
+
+/// What a streaming recognizer returns for a short burst of room tone: a
+/// polite filler, never a sentence. Matched whole, lowercased, punctuation
+/// stripped, and ONLY on a short hold. "Thank you" said over two seconds is
+/// a real transcript and passes.
+const SHORT_HOLD_PHANTOMS: [&str; 10] = [
+    "you", "thank you", "thanks", "bye", "okay", "yeah", "hmm", "uh", "the", "so",
+];
+
+fn artifact_tokens() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        // Either a tag-like token (<transcript>, [BLANK_AUDIO], (inaudible))
+        // whose body is all caps, or one of the recognizer's own event names
+        // in any case. The caps branch stays case-sensitive on purpose so a
+        // dictated "(see attached)" survives.
+        Regex::new(
+            r"(?:<[^<>]{1,40}>)|(?:[\[(](?:[A-Z0-9_ ]{1,40}|(?i:blank[_ ]audio|silence|inaudible|music|noise|no speech))[\])])",
+        )
+        .expect("static regex")
+    })
+}
+
+/// Cleans a final transcript before anything downstream sees it. Returns
+/// `None` when nothing worth typing is left. Never logs its input.
+pub fn scrub_transcript(raw: &str, voiced_ms: u64) -> Option<String> {
+    let stripped = artifact_tokens().replace_all(raw, " ");
+    let text = stripped.split_whitespace().collect::<Vec<_>>().join(" ");
+    if text.is_empty() {
+        return None;
+    }
+    if voiced_ms < SHORT_HOLD_MS {
+        let bare: String = text
+            .chars()
+            .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+            .collect::<String>()
+            .to_lowercase();
+        let bare = bare.split_whitespace().collect::<Vec<_>>().join(" ");
+        if SHORT_HOLD_PHANTOMS.contains(&bare.as_str()) {
+            return None;
+        }
+    }
+    Some(text)
+}
 
 /// What a session tells the worker. Ordering is guaranteed within one session:
 /// any number of `Partial`s, then at most one terminal `Final` or `Failed`.

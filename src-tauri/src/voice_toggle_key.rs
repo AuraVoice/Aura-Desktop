@@ -261,8 +261,27 @@ pub struct VoiceToggleKeyHandle {
 
 impl VoiceToggleKeyHandle {
     pub fn status(&self) -> VoiceToggleKeyStatus {
-        self.status.clone()
+        #[allow(unused_mut)]
+        let mut status = self.status.clone();
+        // A hook that installed fine can still die later (see the liveness
+        // probe in platform); that reads as unavailable the same way.
+        #[cfg(target_os = "windows")]
+        if status.available {
+            if let Some(reason) = platform::dead_reason() {
+                status.available = false;
+                status.reason = Some(reason);
+            }
+        }
+        status
     }
+}
+
+/// Reinstall the low-level keyboard hook, e.g. after a resume from sleep.
+/// No-op on macOS, where the event tap re-enables itself on the disabled
+/// events the OS sends.
+pub fn request_listener_reinstall() {
+    #[cfg(target_os = "windows")]
+    platform::request_reinstall();
 }
 
 #[tauri::command]
@@ -471,27 +490,153 @@ impl Drop for VoiceToggleKeyHandle {
 mod platform {
     use std::cell::RefCell;
     use std::mem::MaybeUninit;
+    use std::sync::atomic::{AtomicU32, AtomicU64, AtomicU8, Ordering};
     use std::sync::mpsc;
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
 
-    use log::{error, info};
+    use log::{error, info, warn};
     use tauri::AppHandle;
     use tokio::sync::mpsc as tokio_mpsc;
-    use windows::Win32::Foundation::{HINSTANCE, LPARAM, LRESULT, WPARAM};
+    use windows::Win32::Foundation::{HINSTANCE, HMODULE, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows::Win32::System::Threading::GetCurrentThreadId;
-    use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_ESCAPE};
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        GetAsyncKeyState, VK_ESCAPE, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_RCONTROL,
+        VK_RMENU, VK_RSHIFT, VK_RWIN,
+    };
     use windows::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, DispatchMessageW, GetMessageW, PeekMessageW, SetWindowsHookExW,
-        TranslateMessage, UnhookWindowsHookEx, HC_ACTION, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MSG,
-        PM_NOREMOVE, WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+        CallNextHookEx, DispatchMessageW, GetMessageW, KillTimer, PeekMessageW,
+        PostThreadMessageW, SetTimer, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx,
+        HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MSG, PM_NOREMOVE, WH_KEYBOARD_LL,
+        WM_APP, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER,
     };
 
     use crate::dictation::chord::{ChordState, DICTATION_CHORD};
 
     use super::{
         configured_key_label, is_voice_toggle_vk, observe_physical_key_event, TapState,
-        VoiceToggleKeyHandle, VoiceToggleKeyStatus,
+        VoiceToggleKeyHandle, VoiceToggleKeyStatus, VOICE_TOGGLE_VK,
     };
+
+    // Windows silently removes a WH_KEYBOARD_LL hook whose callback overruns
+    // LowLevelHooksTimeout (300 ms by default), and nothing tells the process.
+    // From then on every chord and double-tap is dead until restart, with no
+    // log line anywhere. The hook thread therefore probes itself: the callback
+    // stamps LAST_HOOK_EVENT_MS on every event, and a thread timer checks
+    // whether a modifier is physically held while that stamp is stale. That
+    // pairing is the tell: a live hook sees the keydown (and its auto-repeats)
+    // of any key the user is holding. The macOS tap has the same guard in
+    // kCGEventTapDisabledByTimeout handling; this is its Windows twin.
+    static LAST_HOOK_EVENT_MS: AtomicU64 = AtomicU64::new(0);
+    /// The hook thread's id, for the resume path to post WM_AURA_REHOOK at.
+    static HOOK_THREAD_ID: AtomicU32 = AtomicU32::new(0);
+    const HOOK_LIVE: u8 = 0;
+    const HOOK_DEAD: u8 = 1;
+    static HOOK_STATE: AtomicU8 = AtomicU8::new(HOOK_LIVE);
+    static REINSTALLS: AtomicU32 = AtomicU32::new(0);
+    static HOOK_DEAD_REASON: Mutex<Option<String>> = Mutex::new(None);
+    /// Private thread message: reinstall the hook whether or not it looks
+    /// stale. Posted after a suspend/resume, when a hook can survive on paper
+    /// and never fire again.
+    const WM_AURA_REHOOK: u32 = WM_APP + 0x41;
+    const PROBE_EVERY_MS: u32 = 750;
+    const STALE_AFTER_MS: u64 = 2000;
+    const REINSTALL_COOLDOWN: Duration = Duration::from_secs(5);
+    /// Every key the hook exists to see. A held one with a stale stamp means
+    /// the hook missed a real press.
+    const PROBED_KEYS: [u16; 8] = [
+        VK_LCONTROL.0,
+        VK_RCONTROL.0,
+        VK_LWIN.0,
+        VK_RWIN.0,
+        VK_LMENU.0,
+        VK_RMENU.0,
+        VK_LSHIFT.0,
+        VK_RSHIFT.0,
+    ];
+
+    fn key_physically_down(vk: u32) -> bool {
+        (unsafe { GetAsyncKeyState(vk as i32) } as u16 & 0x8000) != 0
+    }
+
+    fn hook_looks_stale() -> bool {
+        let last = LAST_HOOK_EVENT_MS.load(Ordering::Relaxed);
+        if crate::util::now_ms_u64().saturating_sub(last) < STALE_AFTER_MS {
+            return false;
+        }
+        PROBED_KEYS
+            .iter()
+            .map(|vk| *vk as u32)
+            .chain(std::iter::once(VOICE_TOGGLE_VK.load(Ordering::Relaxed)))
+            .any(key_physically_down)
+    }
+
+    /// Runs on the hook thread only, from its message loop, never from inside
+    /// the callback (see the Drop comment on VoiceToggleKeyHandle).
+    unsafe fn reinstall_hook(hook: Option<HHOOK>, module: HMODULE, app: &AppHandle) -> Option<HHOOK> {
+        if let Some(hook) = hook {
+            if let Err(err) = unsafe { UnhookWindowsHookEx(hook) } {
+                warn!("voice_toggle_key: unhook before reinstall failed: {err}");
+            }
+        }
+        let fresh = unsafe {
+            SetWindowsHookExW(
+                WH_KEYBOARD_LL,
+                Some(keyboard_hook),
+                Some(HINSTANCE::from(module)),
+                0,
+            )
+        };
+        match fresh {
+            Ok(fresh) => {
+                let count = REINSTALLS.fetch_add(1, Ordering::Relaxed) + 1;
+                LAST_HOOK_EVENT_MS.store(crate::util::now_ms_u64(), Ordering::Relaxed);
+                HOOK_STATE.store(HOOK_LIVE, Ordering::Relaxed);
+                *crate::util::lock(&HOOK_DEAD_REASON) = None;
+                info!("voice_toggle_key: hook reinstalled (n={count})");
+                crate::dictation::emit_status_changed(app);
+                Some(fresh)
+            }
+            Err(err) => {
+                let reason = format!(
+                    "Keyboard listener stopped and could not be reinstalled: {err}"
+                );
+                error!("voice_toggle_key: {reason}");
+                HOOK_STATE.store(HOOK_DEAD, Ordering::Relaxed);
+                *crate::util::lock(&HOOK_DEAD_REASON) = Some(reason);
+                crate::dictation::emit_status_changed(app);
+                None
+            }
+        }
+    }
+
+    /// The listener's reason for being down AFTER a successful install, if
+    /// any. `status()` folds it in so a hook that died later reads the same
+    /// way as one that never installed.
+    pub(super) fn dead_reason() -> Option<String> {
+        if HOOK_STATE.load(Ordering::Relaxed) != HOOK_DEAD {
+            return None;
+        }
+        crate::util::lock(&HOOK_DEAD_REASON).clone()
+    }
+
+    /// Ask the hook thread to drop and re-create the hook. Safe from any
+    /// thread; a no-op before the listener is up.
+    pub fn request_reinstall() {
+        let thread_id = HOOK_THREAD_ID.load(Ordering::Relaxed);
+        if thread_id == 0 {
+            return;
+        }
+        unsafe {
+            let _ = PostThreadMessageW(
+                thread_id,
+                WM_AURA_REHOOK,
+                WPARAM::default(),
+                LPARAM::default(),
+            );
+        }
+    }
 
     thread_local! {
         static EVENT_SENDER: RefCell<Option<tokio_mpsc::UnboundedSender<()>>> = const { RefCell::new(None) };
@@ -502,6 +647,9 @@ mod platform {
 
     unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
         if code == HC_ACTION as i32 {
+            // Liveness stamp for the probe timer; one relaxed store, nothing
+            // else may be added to this callback's hot path (300 ms budget).
+            LAST_HOOK_EVENT_MS.store(crate::util::now_ms_u64(), Ordering::Relaxed);
             // KBDLLHOOKSTRUCT is supplied by Windows for this callback and is
             // valid only for the duration of the call. We inspect only the
             // key needed to identify the configured isolated Ctrl tap. No key data
@@ -656,6 +804,7 @@ mod platform {
     pub fn start(app: AppHandle) -> VoiceToggleKeyHandle {
         let (event_tx, event_rx) = tokio_mpsc::unbounded_channel::<()>();
         let (startup_tx, startup_rx) = mpsc::sync_channel::<Result<u32, String>>(1);
+        let hook_app = app.clone();
 
         let hook_thread = std::thread::Builder::new()
             .name("aura-voice-toggle-key".to_string())
@@ -688,14 +837,24 @@ mod platform {
                         0,
                     )
                 };
-                let hook = match hook {
-                    Ok(hook) => hook,
+                let mut hook = match hook {
+                    Ok(hook) => Some(hook),
                     Err(err) => {
                         let _ = startup_tx.send(Err(err.to_string()));
                         EVENT_SENDER.with(|sender| sender.borrow_mut().take());
                         return;
                     }
                 };
+                LAST_HOOK_EVENT_MS.store(crate::util::now_ms_u64(), Ordering::Relaxed);
+                HOOK_THREAD_ID.store(thread_id, Ordering::Relaxed);
+                // A thread timer (no window) lands as WM_TIMER in the loop
+                // below. It only reads nine key states, so it is cheap enough
+                // to run for the life of the process.
+                let probe_timer = unsafe { SetTimer(None, 0, PROBE_EVERY_MS, None) };
+                if probe_timer == 0 {
+                    warn!("voice_toggle_key: liveness probe timer unavailable");
+                }
+                let mut last_reinstall: Option<Instant> = None;
 
                 let _ = startup_tx.send(Ok(thread_id));
                 let mut message = MaybeUninit::<MSG>::zeroed();
@@ -705,14 +864,38 @@ mod platform {
                         break;
                     }
                     let message = unsafe { message.assume_init_ref() };
+                    let thread_message = message.hwnd.0.is_null();
+                    if thread_message
+                        && (message.message == WM_TIMER || message.message == WM_AURA_REHOOK)
+                    {
+                        let forced = message.message == WM_AURA_REHOOK;
+                        let cooled = last_reinstall
+                            .is_none_or(|at| at.elapsed() >= REINSTALL_COOLDOWN);
+                        if cooled && (forced || hook.is_none() || hook_looks_stale()) {
+                            if forced {
+                                info!("voice_toggle_key: reinstalling hook on request");
+                            } else if hook.is_some() {
+                                warn!("voice_toggle_key: hook stopped delivering events, reinstalling");
+                            }
+                            hook = unsafe { reinstall_hook(hook, module, &hook_app) };
+                            last_reinstall = Some(Instant::now());
+                        }
+                        continue;
+                    }
                     unsafe {
                         let _ = TranslateMessage(message);
                         DispatchMessageW(message);
                     }
                 }
 
-                if let Err(err) = unsafe { UnhookWindowsHookEx(hook) } {
-                    error!("voice_toggle_key: failed to unhook cleanly: {err}");
+                HOOK_THREAD_ID.store(0, Ordering::Relaxed);
+                if probe_timer != 0 {
+                    let _ = unsafe { KillTimer(None, probe_timer) };
+                }
+                if let Some(hook) = hook {
+                    if let Err(err) = unsafe { UnhookWindowsHookEx(hook) } {
+                        error!("voice_toggle_key: failed to unhook cleanly: {err}");
+                    }
                 }
                 EVENT_SENDER.with(|sender| sender.borrow_mut().take());
             });

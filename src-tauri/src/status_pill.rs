@@ -20,6 +20,8 @@ pub enum StatusPillKind {
     ScreenSightOff,
     GuideOn,
     GuideOff,
+    /// Meeting Notes swapped or reopened its microphone mid-capture.
+    MeetingMicChanged,
 }
 
 #[derive(Clone, Serialize)]

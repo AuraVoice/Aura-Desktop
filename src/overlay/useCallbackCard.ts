@@ -22,6 +22,19 @@ const DELETE_FAILED_FLASH_MS = 3000;
 const CALLBACK_STORE = "callback-card.json";
 const LAST_SHOWN_KEY = "last_shown_date";
 const DISABLED_KEY = "disabled";
+// Dismissing the card this many days in a row (without opening it) rests it
+// for REST_DAYS. A user who keeps waving it away is telling us something, and
+// the hard off in Settings is a bigger step than most people take.
+const DISMISS_STREAK_KEY = "dismiss_streak";
+const REST_UNTIL_KEY = "rest_until";
+const DISMISS_STREAK_LIMIT = 3;
+const REST_DAYS = 5;
+
+function localDateAfterDays(days: number): string {
+  const date = new Date();
+  date.setDate(date.getDate() + days);
+  return localDateString(date);
+}
 
 interface CallbackCardData {
   visible: boolean;
@@ -119,6 +132,10 @@ export function useCallbackCard(inputs: CallbackCardInputs): CallbackCardState {
         if ((await store.get<boolean>(DISABLED_KEY)) === true) return;
         const today = localDateString();
         if ((await store.get<string>(LAST_SHOWN_KEY)) === today) return;
+        // ISO dates compare lexically, so a rest that has not ended reads as
+        // "today < rest_until".
+        const restUntil = await store.get<string>(REST_UNTIL_KEY);
+        if (restUntil && today < restUntil) return;
 
         const payload = await fetchCallbackCard(FETCH_BUDGET_MS);
         if (cancelled || payload === null) return;
@@ -154,16 +171,34 @@ export function useCallbackCard(inputs: CallbackCardInputs): CallbackCardState {
     }
   }, []);
 
+  // Opening the card (expanding it, or acting on a chip) resets the dismissal
+  // streak; only a run of untouched dismissals earns a rest.
+  const clearDismissStreak = useCallback(() => {
+    (async () => {
+      try {
+        const store =
+          storeRef.current ?? (storeRef.current = await load(CALLBACK_STORE));
+        if (((await store.get<number>(DISMISS_STREAK_KEY)) ?? 0) === 0) return;
+        await store.set(DISMISS_STREAK_KEY, 0);
+        await store.save();
+      } catch (err) {
+        logError("useCallbackCard: clear dismiss streak", err);
+      }
+    })();
+  }, []);
+
   const expand = useCallback(() => {
     trackEngagedOnce();
+    clearDismissStreak();
     setData((prev) => (prev.visible ? { ...prev, expanded: !prev.expanded } : prev));
-  }, [trackEngagedOnce]);
+  }, [clearDismissStreak, trackEngagedOnce]);
 
   const deleteChip = useCallback(
     (id: string) => {
       const chip = dataRef.current.chips.find((c) => c.id === id);
       if (!chip) return;
       trackEngagedOnce();
+      clearDismissStreak();
       // Optimistic: the chip vanishes now, comes back only if the server says no.
       setData((prev) => ({
         ...prev,
@@ -188,13 +223,32 @@ export function useCallbackCard(inputs: CallbackCardInputs): CallbackCardState {
         }, DELETE_FAILED_FLASH_MS);
       });
     },
-    [trackEngagedOnce],
+    [clearDismissStreak, trackEngagedOnce],
   );
 
   const dismiss = useCallback(() => {
     if (!dataRef.current.visible) return;
     reset();
     trackEvent("callback_card_dismissed", {});
+    // The call-yield reset() above this hook never comes through here, so
+    // only a deliberate dismissal counts towards the streak.
+    (async () => {
+      try {
+        const store =
+          storeRef.current ?? (storeRef.current = await load(CALLBACK_STORE));
+        const streak = ((await store.get<number>(DISMISS_STREAK_KEY)) ?? 0) + 1;
+        if (streak >= DISMISS_STREAK_LIMIT) {
+          await store.set(REST_UNTIL_KEY, localDateAfterDays(REST_DAYS));
+          await store.set(DISMISS_STREAK_KEY, 0);
+          trackEvent("callback_card_rested", { days: REST_DAYS });
+        } else {
+          await store.set(DISMISS_STREAK_KEY, streak);
+        }
+        await store.save();
+      } catch (err) {
+        logError("useCallbackCard: dismiss streak", err);
+      }
+    })();
   }, [reset]);
 
   const turnOff = useCallback(() => {

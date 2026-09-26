@@ -3,13 +3,11 @@ import iconUrl from "../assets/icons/Aura-Icon.png";
 import { PolishedPill } from "../components/PolishedPill";
 import { HelpDiscordNavLink } from "./components/HelpDiscordNavLink";
 import {
-  browserAgentNavItem,
   footerNavItems,
   primaryNavItems,
   settingsNavItem,
   type NavItem,
 } from "./navConfig";
-import { useGeneralSettings } from "../state/useGeneralSettings";
 
 const SETTINGS_ROUTES = new Set(["/general", "/system", "/account", "/billing", "/privacy"]);
 
@@ -21,7 +19,6 @@ export function Sidebar({ collapsed }: SidebarProps) {
   const location = useLocation();
   const settingsActive = SETTINGS_ROUTES.has(location.pathname);
   const SettingsIcon = settingsNavItem.Icon;
-  const { browserAgentHarness } = useGeneralSettings();
 
   return (
     <aside className={`db-sidebar${collapsed ? " db-sidebar-collapsed" : ""}`}>
@@ -34,7 +31,6 @@ export function Sidebar({ collapsed }: SidebarProps) {
 
       <nav className="db-nav">
         {primaryNavItems.map((item) => <SidebarLink key={item.to} item={item} collapsed={collapsed} />)}
-        {browserAgentHarness && <SidebarLink item={browserAgentNavItem} collapsed={collapsed} />}
       </nav>
 
       <div className="db-sidebar-foot">

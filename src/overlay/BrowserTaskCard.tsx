@@ -96,7 +96,7 @@ function NoticeRow({ task }: { task: BrowserTaskState }) {
             type="button"
             className="browser-task-primary browser-task-pill"
             onClick={() => {
-              void openDashboardWindow("/browser-agent", result.taskId);
+              void openDashboardWindow("/agents", result.taskId, "computer");
               task.dismissResult();
             }}
           >
@@ -258,7 +258,7 @@ function ResultCard({ task, onHeightChange }: { task: BrowserTaskState; onHeight
               type="button"
               className="browser-task-primary"
               onClick={() => {
-                void openDashboardWindow("/browser-agent", result.taskId);
+                void openDashboardWindow("/agents", result.taskId, "computer");
                 task.dismissResult();
               }}
             >

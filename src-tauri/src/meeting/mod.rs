@@ -26,7 +26,7 @@ pub(crate) mod audio;
 pub(crate) mod crypto;
 mod app_icon;
 pub mod detect;
-mod session;
+pub(crate) mod session;
 
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
@@ -1115,6 +1115,31 @@ pub(crate) fn notify_paused(app: &AppHandle, paused: bool) {
             }
             None => None,
         }
+    };
+    if let Some(payload) = payload {
+        emit_capture_state(app, payload);
+    }
+}
+
+/// A capture device was swapped or reopened under a live capture (headset
+/// unplugged, default device changed, resume from sleep). Recording is still
+/// on; the user just needs to know the gap was noticed. Same payload shape as
+/// a pause so the React listener needs one extra branch, not a new event.
+pub(crate) fn notify_device_rebound(app: &AppHandle) {
+    let handle = app.state::<MeetingCaptureHandle>();
+    let payload = {
+        let guard = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        guard.as_ref().map(|active| CaptureStatePayload {
+            owner_uid: active.owner_uid.clone(),
+            active: true,
+            meeting_id: Some(active.meeting_id.clone()),
+            capture_run_id: Some(active.capture_run_id.clone()),
+            capture_fence: Some(active.capture_fence),
+            event_id: Some(active.event_id.clone()),
+            started_at_ms: Some(active.started_at_ms),
+            paused: active.paused,
+            reason: "device_rebound".to_string(),
+        })
     };
     if let Some(payload) = payload {
         emit_capture_state(app, payload);

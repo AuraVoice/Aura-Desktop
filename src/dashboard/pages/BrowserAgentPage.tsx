@@ -134,10 +134,10 @@ function TaskDetailView({
     if (payload.taskId === taskId) reload();
   });
 
-  if (detail === undefined) return <div className="db-page db-page-wide db-research-page"><p className="db-muted">Loading...</p></div>;
+  if (detail === undefined) return <div className="db-research-page"><p className="db-muted">Loading...</p></div>;
   if (detail === null) {
     return (
-      <div className="db-page db-page-wide db-research-page">
+      <div className="db-research-page">
         <button type="button" className="db-research-back" onClick={onBack}><ArrowLeft size={16} /> Back</button>
         <EmptyState Icon={CircleAlert} heading="This task is gone" copy="It was deleted, or it belonged to another account." />
       </div>
@@ -148,7 +148,7 @@ function TaskDetailView({
   const totalMs = detail.trace.reduce((sum, entry) => sum + entry.ms, 0);
   const live = detail.endedAtMs === 0;
   return (
-    <div className="db-page db-page-wide db-research-page">
+    <div className="db-research-page">
       <div className="db-research-detail-bar">
         <button type="button" className="db-research-back" onClick={onBack}><ArrowLeft size={16} /> All tasks</button>
         {!live && (
@@ -300,8 +300,10 @@ export function BrowserAgentPage() {
     return () => clearInterval(timer);
   }, [brief]);
 
-  const openTask = useCallback((taskId: string) => setSearchParams({ run: taskId }), [setSearchParams]);
-  const closeTask = useCallback(() => setSearchParams({}), [setSearchParams]);
+  // Keep `?tab=`: this panel lives inside the Agents page, whose tab is the
+  // other search param, and replacing the whole set would bounce the user.
+  const openTask = useCallback((taskId: string) => setSearchParams((prev) => { const next = new URLSearchParams(prev); next.set("run", taskId); return next; }), [setSearchParams]);
+  const closeTask = useCallback(() => setSearchParams((prev) => { const next = new URLSearchParams(prev); next.delete("run"); return next; }), [setSearchParams]);
 
   const { activeTasks, historyTasks } = useMemo(() => {
     const active: BrowserTaskSummary[] = [];
@@ -358,7 +360,7 @@ export function BrowserAgentPage() {
   };
 
   return (
-    <div className="db-page db-page-wide db-research-page db-research-home">
+    <div className="db-research-page db-research-home">
       {consent === false && (
         <section className="db-research-command db-browser-agent-consent">
           <div className="db-research-command-copy">

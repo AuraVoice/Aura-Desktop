@@ -1834,3 +1834,38 @@ are "ambient call seen/gone/rekeyed", "capture finished reason=", and
 tab and a bad one for a native app, and an identity that can change mid-call
 needs a rename event, not an end-and-begin pair.
 ================================================================================
+
+2026-09-26  Resume from sleep never reached the app: broadcast messages skip a
+message-only window, and a dropped keyboard hook looked exactly like a live one
+================================================================================
+Problem: borrowing "crash on wake from sleep" and "dictation silently stops
+responding" from a competitor's changelog, the obvious wiring was to handle
+WM_POWERBROADCAST in meeting/session.rs, which already owns a Win32 message
+window for WTS lock/unlock, and to reinstall the WH_KEYBOARD_LL hook on resume.
+
+Issue: that window is created with HWND_MESSAGE. Windows delivers
+WM_POWERBROADCAST as a broadcast to top-level windows, and message-only windows
+are excluded from every broadcast, so a wndproc branch there would compile,
+ship, and never fire. WTS lock events reach it only because
+WTSRegisterSessionNotification targets the hwnd explicitly. Separately, the
+hook's status was a struct frozen at install (available: true), so a hook that
+Windows dropped after a slow callback (LowLevelHooksTimeout, 300 ms) kept
+reporting healthy for the rest of the session; macOS already re-enabled its
+tap on kCGEventTapDisabledByTimeout and Windows had no twin.
+
+Solution: RegisterSuspendResumeNotification(hwnd, DEVICE_NOTIFY_WINDOW_HANDLE)
+after the WTS registration delivers PBT_APMSUSPEND / PBT_APMRESUMEAUTOMATIC to
+that exact hwnd; the watcher now starts at launch (not on the first meeting)
+and publishes a PowerEvent that lib.rs routes to the hook (WM_AURA_REHOOK on
+the hook thread), the audio broker (an unconditional rebind epoch, since WASAPI
+after resume can report the same device id on a dead stream) and dictation
+(Cancel). The hook thread stamps LAST_HOOK_EVENT_MS in the callback and a 750 ms
+thread timer reinstalls when a modifier is physically down while the stamp is
+older than 2 s; status() folds a failed reinstall in as unavailable.
+
+Justification: an explicit registration is the only way a message-only window
+sees a broadcast, and "it compiles and the branch exists" is not evidence it
+runs. A liveness signal must come from the thing that can die (the callback),
+paired with an independent reading (GetAsyncKeyState) of what it should have
+seen, or a dead hook is indistinguishable from a quiet keyboard.
+================================================================================

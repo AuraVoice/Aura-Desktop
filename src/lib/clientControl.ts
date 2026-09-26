@@ -1,4 +1,12 @@
 import type { Room } from "livekit-client";
+import { isDashboardRoute, type DashboardRoute } from "./dashboardWindow";
+
+/** Worker-to-client: open a dashboard page. The payload is already past
+ * `validateAgentDataMessage`; this only narrows the route to the allow-list,
+ * so anything the sidebar could not reach comes back null. */
+export function decodeOpenSettings(payload: Record<string, unknown>): DashboardRoute | null {
+  return isDashboardRoute(payload.route) ? payload.route : null;
+}
 
 export interface GuideModeControl {
   active: boolean;

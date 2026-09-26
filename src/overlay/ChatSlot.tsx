@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ChangeEvent, ClipboardEvent, CSSProperties } from "react";
 import { currentMonitor } from "@tauri-apps/api/window";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -15,6 +15,7 @@ import {
   Gauge,
   Globe,
   History,
+  ArrowDown,
   Lightbulb,
   Mail,
   Paperclip,
@@ -28,6 +29,7 @@ import {
 } from "lucide-react";
 import Markdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { clearChatDraft, readChatDraft, storeChatDraft } from "./chatDraft";
 import { BarIconButton } from "./BarIconButton";
 import { GlassSurface } from "./GlassSurface";
 import { logError } from "../lib/log";
@@ -250,7 +252,7 @@ const TOOL_ICONS: Record<string, LucideIcon> = {
  * right now"; once the turn is over it is a red badge making a standing claim
  * that something is broken, long after Aura recovered or moved on. So it
  * renders only while `live`. */
-function ActivityRow({ message, live }: { message: ChatMessage; live: boolean }) {
+const ActivityRow = memo(function ActivityRow({ message, live }: { message: ChatMessage; live: boolean }) {
   const Icon = TOOL_ICONS[message.tool ?? ""] ?? Wrench;
   const failed = live && message.running !== true && message.ok === false;
   return (
@@ -262,7 +264,7 @@ function ActivityRow({ message, live }: { message: ChatMessage; live: boolean })
       {failed && <span className="chat-activity-failed">failed</span>}
     </div>
   );
-}
+});
 
 /** Claude's summarized reasoning for this turn, collapsible.
  *
@@ -270,7 +272,7 @@ function ActivityRow({ message, live }: { message: ChatMessage; live: boolean })
  * the answer starts, because the reasoning is supporting material and the answer
  * is the point. A manual toggle wins over that: once the user has expressed a
  * preference on this row, the automatic collapse must not override it. */
-function ReasoningRow({ message }: { message: ChatMessage }) {
+const ReasoningRow = memo(function ReasoningRow({ message }: { message: ChatMessage }) {
   const streaming = message.state === "streaming";
   const [open, setOpen] = useState(true);
   const touched = useRef(false);
@@ -297,7 +299,7 @@ function ReasoningRow({ message }: { message: ChatMessage }) {
       {open && <div className="chat-reasoning-body">{message.text}</div>}
     </div>
   );
-}
+});
 
 /** One row in the history panel. Structurally a subset of
  * desktopChatApi's DesktopChatSession, declared locally so this component stays
@@ -360,6 +362,12 @@ interface ChatSlotProps {
 // up means the user scrolled back on purpose and new content must not yank
 // them away from what they were reading.
 const AUTOSCROLL_STICK_PX = 24;
+// Scrolling this close to the top fetches the previous page. The button stays
+// as the accessible fallback.
+const LOAD_OLDER_EDGE_PX = 48;
+// A page that never lands (fetch failed, nothing new) releases the in-flight
+// marker after this long so the next scroll to the top can try again.
+const LOAD_OLDER_RETRY_MS = 4_000;
 const HISTORY_SHEET_SCREEN_RATIO = 0.4;
 const COMPOSER_MIN_HEIGHT = 36;
 const COMPOSER_MAX_HEIGHT = COMPOSER_MIN_HEIGHT * 2;
@@ -540,6 +548,148 @@ const MARKDOWN_COMPONENTS: Components = {
   },
 };
 
+/** Module scope for the same reason as MARKDOWN_COMPONENTS: a fresh array on
+ * every render made each Markdown instance rebuild its processor on every
+ * keystroke in the composer. */
+const REMARK_PLUGINS = [remarkGfm];
+
+/** Provider citation markers that leak into prose from a web-search turn: the
+ * `citeturn0search1` tokens (with or without the private-use characters that
+ * wrap them on the wire) and the lens-bracket form some models emit. Rendered
+ * as literal text they show as little boxed codes inside a sentence. */
+const CITATION_TOKENS = /(?:cite)?\s*turn\d+(?:search|view|news|image|file)\d+|【[^】]*】|[\uE000-\uF8FF]/g;
+
+function stripCitations(text: string): string {
+  return text.replace(CITATION_TOKENS, "");
+}
+
+/** One transcript row. Memoised so a keystroke in the composer, or a delta on
+ * the streaming row, re-renders only the rows whose props changed: `item` is
+ * replaced (never mutated) by useChatSession, `signalling` is a boolean rather
+ * than the Set it is read from, and the callbacks are stable. */
+const MessageRow = memo(function MessageRow({
+  item,
+  signalling,
+  sending,
+  lane,
+  onRetry,
+  onClarification,
+}: {
+  item: ChatMessage;
+  signalling: boolean;
+  sending: boolean;
+  lane: ChatLane;
+  onRetry: (messageId: string) => void;
+  onClarification: (messageId: string, selectedOptions: string[]) => void;
+}) {
+  const markdown = rendersMarkdown(item);
+  const text = useMemo(
+    () => (markdown || item.reminder ? stripCitations(item.text) : item.text),
+    [markdown, item.reminder, item.text],
+  );
+  return (
+    <div className={`chat-message chat-message-${item.role} chat-message-${item.state}`}>
+      <div className={`chat-message-bubble chat-message-kind-${item.kind ?? "text"}${
+        item.reminder?.displayMode === "supplemental"
+          ? " chat-reminder-supplemental"
+          : ""
+      }`}>
+        {item.attachments && item.attachments.length > 0 && (
+          <div className="chat-message-attachments">
+            {item.attachments.map((attachment, index) => attachment.kind === "image" && attachment.previewUrl ? (
+              <img
+                key={index}
+                className="chat-message-attachment-image"
+                src={attachment.previewUrl}
+                alt={attachment.fileName}
+              />
+            ) : (
+              <span key={index} className="chat-message-attachment-doc" title={attachment.fileName}>
+                <FileText size={12} aria-hidden="true" />
+                {extensionLabel(attachment.fileName)}
+              </span>
+            ))}
+          </div>
+        )}
+        {item.kind === "reminder" && item.reminder ? (
+          item.reminder.displayMode === "supplemental" ? (
+            <>
+              <div className="chat-markdown">
+                <Markdown
+                  remarkPlugins={REMARK_PLUGINS}
+                  components={MARKDOWN_COMPONENTS}
+                  skipHtml
+                  disallowedElements={["a", "img"]}
+                  unwrapDisallowed
+                >
+                  {text}
+                </Markdown>
+              </div>
+              <ReminderCard reminder={item.reminder} />
+            </>
+          ) : (
+            <ReminderCard reminder={item.reminder} />
+          )
+        ) : markdown ? (
+          <div className="chat-markdown">
+            <Markdown
+              remarkPlugins={REMARK_PLUGINS}
+              components={MARKDOWN_COMPONENTS}
+              skipHtml
+              disallowedElements={["a", "img"]}
+              unwrapDisallowed
+            >
+              {text}
+            </Markdown>
+          </div>
+        ) : (
+          text
+        )}
+        {item.state === "streaming" && !item.text && !signalling && (
+          <span className="chat-thinking" role="status">
+            <span className="chat-thinking-dots" aria-hidden="true">
+              <i /><i /><i />
+            </span>
+            Aura is thinking
+          </span>
+        )}
+        {item.state === "streaming" && !!item.text && !markdown && (
+          <span className="chat-message-caret" aria-hidden="true" />
+        )}
+        {item.kind === "clarification" && (
+          <ClarificationChoices
+            message={item}
+            disabled={sending}
+            onSubmit={(selectedOptions) => onClarification(item.id, selectedOptions)}
+          />
+        )}
+      </div>
+      {item.state === "queued" && (
+        <span className="chat-message-note">
+          {item.queuePosition ? `Queued, ${item.queuePosition} ahead` : "Queued"}
+        </span>
+      )}
+      {item.role === "user" && item.lane === "live" && item.state === "sent" && (
+        <span className="chat-message-note">Sending</span>
+      )}
+      {item.role === "user" && item.state === "failed" && (
+        <div className="chat-message-failure">
+          <span className="chat-message-note">Failed</span>
+          <button
+            type="button"
+            className="chat-message-retry"
+            disabled={sending || (item.lane === "live" && lane !== "live")}
+            title={item.lane === "live" && lane !== "live" ? "Start a voice session to retry" : "Retry"}
+            onClick={() => onRetry(item.id)}
+          >
+            Retry
+          </button>
+        </div>
+      )}
+    </div>
+  );
+});
+
 function ClarificationChoices({
   message,
   disabled,
@@ -632,7 +782,11 @@ export function ChatSlot({
   screen,
   onHeightChange,
 }: ChatSlotProps) {
-  const [message, setMessage] = useState("");
+  const [message, setMessage] = useState(readChatDraft);
+  // Mirrored on every change so closing the chat mid-sentence keeps the text.
+  useEffect(() => {
+    storeChatDraft(message);
+  }, [message]);
   const [historySheetHeight, setHistorySheetHeight] = useState(fallbackHistorySheetHeight);
   const [historySheetBounds, setHistorySheetBounds] = useState({ left: 0, width: 380 });
   // Set the moment a row is clicked, cleared when the switch settles. The panel
@@ -743,9 +897,25 @@ export function ChatSlot({
     if (!history.openError) onHistoryOpenChange(false);
   }, [awaitingSelection, history.opening, history.openError, onHistoryOpenChange]);
 
+  // Mirrors !stickToBottomRef into render state so the jump-to-newest pill can
+  // appear. The ref stays the source of truth for the auto-scroll effect (it
+  // must be readable synchronously before paint); this only drives the pill.
+  const [detached, setDetached] = useState(false);
+  // The transcript height at the moment an older page was requested, so the
+  // rows on screen stay put when that page lands above them. Doubles as the
+  // in-flight marker for the scroll-to-top fetch.
+  const olderAnchorRef = useRef<number | null>(null);
+  const olderRequestedAtRef = useRef(0);
+
   useEffect(() => {
     const body = bodyRef.current;
-    if (!body || !stickToBottomRef.current) return;
+    if (!body) return;
+    if (olderAnchorRef.current !== null) {
+      body.scrollTop += body.scrollHeight - olderAnchorRef.current;
+      olderAnchorRef.current = null;
+      return;
+    }
+    if (!stickToBottomRef.current) return;
     body.scrollTop = body.scrollHeight;
   }, [messages]);
 
@@ -754,13 +924,34 @@ export function ChatSlot({
     if (!body) return;
     const distanceFromBottom = body.scrollHeight - body.scrollTop - body.clientHeight;
     stickToBottomRef.current = distanceFromBottom <= AUTOSCROLL_STICK_PX;
+    setDetached(!stickToBottomRef.current);
+    const olderInFlight =
+      olderAnchorRef.current !== null
+      && Date.now() - olderRequestedAtRef.current < LOAD_OLDER_RETRY_MS;
+    if (body.scrollTop < LOAD_OLDER_EDGE_PX && hasOlderMessages && !olderInFlight) {
+      olderAnchorRef.current = body.scrollHeight;
+      olderRequestedAtRef.current = Date.now();
+      onLoadOlder();
+    }
+  }
+
+  function jumpToLatest() {
+    const body = bodyRef.current;
+    if (!body) return;
+    body.scrollTop = body.scrollHeight;
+    stickToBottomRef.current = true;
+    setDetached(false);
   }
 
   const chipVisible = screenChipVisible(lane, screen);
-  const signallingTurns = turnsSignallingProgress(messages);
+  const signallingTurns = useMemo(() => turnsSignallingProgress(messages), [messages]);
   // Deliberately NOT fed the filtered list below: a superseded row always
   // settled, so it never counted towards progress in the first place.
-  const superseded = supersededActivityIds(messages);
+  const superseded = useMemo(() => supersededActivityIds(messages), [messages]);
+  const visibleMessages = useMemo(
+    () => displayOrder(messages.filter((item) => !superseded.has(item.id))),
+    [messages, superseded],
+  );
 
   // A readback of what the browser already drew, not a prediction of it: CSS
   // sizes the card to its content, and the window is told that exact number. A
@@ -834,10 +1025,11 @@ export function ChatSlot({
 
   function sendMessage() {
     if (!canSend) return;
-    // Sending always returns the user to the live end of the transcript.
-    stickToBottomRef.current = true;
+    // A reader who scrolled up stays where they were; the jump pill takes them
+    // to their own message when they want it.
     if (onSend(trimmedMessage, attachments.items, effort)) {
       setMessage("");
+      clearChatDraft();
       // The bubble now owns the preview URLs.
       attachments.clear({ keepPreviews: true });
     }
@@ -897,7 +1089,9 @@ export function ChatSlot({
             onClick={() => {
               if (!onNewConversation()) return;
               setMessage("");
+              clearChatDraft();
               stickToBottomRef.current = true;
+              setDetached(false);
               onHistoryOpenChange(false);
               composerRef.current?.focus();
             }}
@@ -911,122 +1105,48 @@ export function ChatSlot({
         </header>
 
         <div className="chat-slot-body" aria-live="polite" ref={bodyRef} onScroll={handleBodyScroll}>
-          <div className="chat-slot-transcript" onCopy={copySelectionAsPlainText}>
+          <div
+            className="chat-slot-transcript"
+            onCopy={copySelectionAsPlainText}
+            // The overlay surface is a deep drag region; opting the transcript
+            // out is what lets a drag across replies select text instead of
+            // moving the window. Buttons inside stay unselectable via CSS.
+            data-tauri-drag-region="false"
+          >
           {hasOlderMessages && (
             <button type="button" className="chat-history-more" onClick={onLoadOlder}>
               Load earlier messages
             </button>
           )}
-          {displayOrder(messages.filter((item) => !superseded.has(item.id))).map((item) => item.kind === "activity" ? (
+          {visibleMessages.map((item) => item.kind === "activity" ? (
             <ActivityRow key={item.id} message={item} live={item.turnId === activeTurnId} />
           ) : item.kind === "thinking" ? (
             <ReasoningRow key={item.id} message={item} />
           ) : (
-            <div
+            <MessageRow
               key={item.id}
-              className={`chat-message chat-message-${item.role} chat-message-${item.state}`}
-            >
-              <div className={`chat-message-bubble chat-message-kind-${item.kind ?? "text"}${
-                item.reminder?.displayMode === "supplemental"
-                  ? " chat-reminder-supplemental"
-                  : ""
-              }`}>
-                {item.attachments && item.attachments.length > 0 && (
-                  <div className="chat-message-attachments">
-                    {item.attachments.map((attachment, index) => attachment.kind === "image" && attachment.previewUrl ? (
-                      <img
-                        key={index}
-                        className="chat-message-attachment-image"
-                        src={attachment.previewUrl}
-                        alt={attachment.fileName}
-                      />
-                    ) : (
-                      <span key={index} className="chat-message-attachment-doc" title={attachment.fileName}>
-                        <FileText size={12} aria-hidden="true" />
-                        {extensionLabel(attachment.fileName)}
-                      </span>
-                    ))}
-                  </div>
-                )}
-                {item.kind === "reminder" && item.reminder ? (
-                  item.reminder.displayMode === "supplemental" ? (
-                    <>
-                      <div className="chat-markdown">
-                        <Markdown
-                          remarkPlugins={[remarkGfm]}
-                          components={MARKDOWN_COMPONENTS}
-                          skipHtml
-                          disallowedElements={["a", "img"]}
-                          unwrapDisallowed
-                        >
-                          {item.text}
-                        </Markdown>
-                      </div>
-                      <ReminderCard reminder={item.reminder} />
-                    </>
-                  ) : (
-                    <ReminderCard reminder={item.reminder} />
-                  )
-                ) : rendersMarkdown(item) ? (
-                  <div className="chat-markdown">
-                    <Markdown
-                      remarkPlugins={[remarkGfm]}
-                      components={MARKDOWN_COMPONENTS}
-                      skipHtml
-                      disallowedElements={["a", "img"]}
-                      unwrapDisallowed
-                    >
-                      {item.text}
-                    </Markdown>
-                  </div>
-                ) : (
-                  item.text
-                )}
-                {item.state === "streaming" && !item.text
-                  && !(item.turnId && signallingTurns.has(item.turnId)) && (
-                  <span className="chat-thinking" role="status">
-                    <span className="chat-thinking-dots" aria-hidden="true">
-                      <i /><i /><i />
-                    </span>
-                    Aura is thinking
-                  </span>
-                )}
-                {item.state === "streaming" && !!item.text && !rendersMarkdown(item) && (
-                  <span className="chat-message-caret" aria-hidden="true" />
-                )}
-                {item.kind === "clarification" && (
-                  <ClarificationChoices
-                    message={item}
-                    disabled={sending}
-                    onSubmit={(selectedOptions) => onClarification(item.id, selectedOptions)}
-                  />
-                )}
-              </div>
-              {item.state === "queued" && (
-                <span className="chat-message-note">
-                  {item.queuePosition ? `Queued, ${item.queuePosition} ahead` : "Queued"}
-                </span>
-              )}
-              {item.role === "user" && item.lane === "live" && item.state === "sent" && (
-                <span className="chat-message-note">Sending</span>
-              )}
-              {item.role === "user" && item.state === "failed" && (
-                <div className="chat-message-failure">
-                  <span className="chat-message-note">Failed</span>
-                  <button
-                    type="button"
-                    className="chat-message-retry"
-                    disabled={sending || (item.lane === "live" && lane !== "live")}
-                    title={item.lane === "live" && lane !== "live" ? "Start a voice session to retry" : "Retry"}
-                    onClick={() => onRetry(item.id)}
-                  >
-                    Retry
-                  </button>
-                </div>
-              )}
-            </div>
+              item={item}
+              signalling={!!item.turnId && signallingTurns.has(item.turnId)}
+              sending={sending}
+              lane={lane}
+              onRetry={onRetry}
+              onClarification={onClarification}
+            />
           ))}
           </div>
+          {detached && (
+            <div className="chat-slot-jump-anchor">
+              <button
+                type="button"
+                className="chat-slot-jump"
+                onClick={jumpToLatest}
+                aria-label="Jump to newest"
+                title="Jump to newest"
+              >
+                <ArrowDown size={14} aria-hidden="true" />
+              </button>
+            </div>
+          )}
         </div>
 
         {dictation &&
@@ -1283,6 +1403,7 @@ export function ChatSlot({
                       if (!history.select(session.conversationId)) return;
                       setAwaitingSelection(true);
                       stickToBottomRef.current = true;
+                      setDetached(false);
                     }}
                   >
                     <span className="chat-history-preview">

@@ -297,14 +297,46 @@ function shouldToast(
   return true; // "always", or "when_hidden" while hidden
 }
 
+// A live call, a meeting capture or an interview session is the one time a
+// toast is unwelcome: it chimes over the conversation and, on a shared screen,
+// shows the other side a meeting title. Toasts raised while busy are parked
+// here and fired when the busy state clears. Parking happens BEFORE the
+// delivered claim below, so the later replay passes the toast-once check
+// exactly once, and a relaunch mid-call replays nothing: the inbox row is
+// already durable and the parked list is memory only.
+let toastBusy = false;
+const deferredToasts: Array<{ notification: StoredNotification; ctx: ToastContext }> = [];
+
+/** Flip the busy state. Clearing it fires every toast parked while it was set. */
+export function setToastBusy(busy: boolean): void {
+  if (toastBusy === busy) return;
+  toastBusy = busy;
+  if (busy) return;
+  const parked = deferredToasts.splice(0);
+  for (const { notification, ctx } of parked) {
+    void toastStored(notification, ctx);
+  }
+}
+
+function parkToast(notification: StoredNotification, ctx: ToastContext): void {
+  if (deferredToasts.some((d) => d.notification.notificationId === notification.notificationId)) {
+    return;
+  }
+  deferredToasts.push({ notification, ctx });
+}
+
 async function maybeToast(
   store: Store,
-  notification: DesktopNotification,
+  notification: StoredNotification,
   ctx: ToastContext,
 ): Promise<void> {
   if (ctx.suppressToast) return;
   const delivered = await readDelivered(store, ctx.ownerUid);
   if (!shouldToast(notification, ctx, delivered[notification.notificationId] !== undefined)) {
+    return;
+  }
+  if (toastBusy) {
+    parkToast(notification, ctx);
     return;
   }
   try {

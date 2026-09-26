@@ -137,6 +137,49 @@
   flex-direction: column;
   flex: 0 0 auto;
   gap: 10px;
+  /* GlassSurface disables selection globally; a transcript exists to be
+     copied, and a drag across two replies has to select both. */
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.chat-slot-transcript button {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Zero-height sticky anchor at the end of the scroll body, so the pill floats
+   over the last visible rows while the reader is scrolled up and never takes
+   space in the transcript. */
+.chat-slot-jump-anchor {
+  position: sticky;
+  bottom: 8px;
+  height: 0;
+  display: flex;
+  justify-content: center;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.chat-slot-jump {
+  pointer-events: auto;
+  transform: translateY(-100%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: rgba(20, 20, 22, 0.82);
+  color: inherit;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14), 0 4px 12px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+}
+
+.chat-slot-jump:hover {
+  background: rgba(32, 32, 36, 0.9);
 }
 
 .chat-slot-body::-webkit-scrollbar {

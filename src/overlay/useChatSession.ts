@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AuthRequiredError, routeToDashboardForExpiredSession } from "../lib/api";
+import { isOnline, OfflineError } from "../lib/connectivity";
 import {
   clearCachedChat,
   loadCachedConversation,
@@ -104,6 +105,9 @@ function failureText(err: unknown): string {
   if (err instanceof Error && err.message === "Aura could not capture the current screen") {
     return "Aura could not capture this screen. Keep it visible and try again.";
   }
+  if (err instanceof OfflineError) {
+    return "You're offline. Reconnect, then retry this message.";
+  }
   if (!(err instanceof ChatRequestError)) {
     return "The connection dropped before Aura finished. Retry this message to continue.";
   }
@@ -118,6 +122,7 @@ function failureText(err: unknown): string {
 
 function chatFailureReason(err: unknown): string {
   if (err instanceof AuthRequiredError) return "auth_required";
+  if (err instanceof OfflineError) return "offline";
   if (err instanceof ChatRequestError) return `http_${err.status}`;
   if (err instanceof Error && err.message === "Aura could not capture the current screen") {
     return "screen_capture_failed";
@@ -886,6 +891,9 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
     };
 
     try {
+      // Known offline: fail the turn now, before a screenshot is taken for a
+      // request that cannot leave the machine. Retry stays available.
+      if (!isOnline()) throw new OfflineError();
       const screenAttachments = withScreenContext && resolveAttachmentsRef.current
         ? await resolveAttachmentsRef.current(text)
         : [];

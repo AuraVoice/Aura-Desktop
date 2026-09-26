@@ -19,6 +19,7 @@ const DASHBOARD_ROUTES: &[&str] = &[
     "/home",
     "/history",
     "/meetings",
+    "/agents",
     "/research",
     "/browser-agent",
     "/insights",
@@ -47,7 +48,7 @@ fn normalize_route(route: Option<&str>) -> &'static str {
 /// opaque, resizable app window with frontend-owned chrome that shows in the taskbar.
 /// It loads the same bundle as "main"; main.tsx routes on the window label.
 pub fn open_dashboard_window(app: &AppHandle) -> Result<(), String> {
-    open_dashboard_route(app, None, None)
+    open_dashboard_route(app, None, None, None)
 }
 
 /// The global dashboard shortcut is a true toggle. Explicit navigation from
@@ -71,18 +72,28 @@ pub fn open_dashboard_route(
     app: &AppHandle,
     route: Option<&str>,
     resource_id: Option<&str>,
+    tab: Option<&str>,
 ) -> Result<(), String> {
     let route = normalize_route(route);
-    // Both pages read `?run=` for the row to open (ResearchPage and
-    // BrowserAgentPage), so one encoding serves both.
-    let destination = if route == "/research" || route == "/browser-agent" {
-        resource_id
-            .filter(|value| !value.is_empty() && value.len() <= 160)
-            .map(|value| {
-                let encoded: String = url::form_urlencoded::byte_serialize(value.as_bytes()).collect();
-                format!("{route}?run={encoded}")
-            })
-            .unwrap_or_else(|| route.to_string())
+    let run = resource_id
+        .filter(|value| !value.is_empty() && value.len() <= 160)
+        .map(|value| url::form_urlencoded::byte_serialize(value.as_bytes()).collect::<String>());
+    // The Agents page reads `?tab=` for which agent and `?run=` for the row to
+    // open; the two retired routes still read `?run=` and redirect into it.
+    let destination = if route == "/agents" {
+        let tab = match tab {
+            Some("computer") => Some("computer"),
+            Some("research") => Some("research"),
+            _ => None,
+        };
+        match (tab, run) {
+            (Some(tab), Some(run)) => format!("{route}?tab={tab}&run={run}"),
+            (Some(tab), None) => format!("{route}?tab={tab}"),
+            (None, Some(run)) => format!("{route}?run={run}"),
+            (None, None) => route.to_string(),
+        }
+    } else if route == "/research" || route == "/browser-agent" {
+        run.map(|run| format!("{route}?run={run}")).unwrap_or_else(|| route.to_string())
     } else {
         route.to_string()
     };

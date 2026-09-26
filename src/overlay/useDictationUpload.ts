@@ -370,8 +370,16 @@ export function useDictationUpload(
 
     const timer = setInterval(() => void tick(), TICK_MS);
     void tick();
+    // A reconnect re-arms the hourly retry sweep so rows that failed while
+    // offline move as soon as the link is back, not up to an hour later.
+    const onOnline = () => {
+      lastRetryHourRef.current = null;
+      void tick();
+    };
+    window.addEventListener("online", onOnline);
     return () => {
       cancelled = true;
+      window.removeEventListener("online", onOnline);
       clearInterval(timer);
     };
   }, [ownerUid, sharing]);

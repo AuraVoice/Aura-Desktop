@@ -59,6 +59,7 @@ export type AnalyticsEvent =
   | "callback_card_engaged_10s"
   | "callback_card_dismissed"
   | "callback_card_toggle_off"
+  | "callback_card_rested"
   | "callback_chip_deleted"
   | "turn_context_upload"
   | "screen_sight_toggled"

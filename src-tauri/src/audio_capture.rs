@@ -20,7 +20,7 @@
 //! way, which is the point of putting the seam here.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -136,6 +136,18 @@ impl Default for BrokerState {
 }
 
 static BROKER: OnceLock<Mutex<BrokerState>> = OnceLock::new();
+
+/// Bumped on resume from sleep. Every capture thread compares it against the
+/// value it saw at its last open and re-binds when they differ, whether or
+/// not the default device id changed: after a suspend WASAPI can report the
+/// same id on a stream that will never deliver another packet, and the
+/// 15 s mic stall is the only other thing that would catch that.
+static REBIND_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+/// Ask every live capture thread to drop and reopen its device.
+pub(crate) fn request_rebind() {
+    REBIND_EPOCH.fetch_add(1, Ordering::Relaxed);
+}
 
 fn broker() -> &'static Mutex<BrokerState> {
     BROKER.get_or_init(|| Mutex::new(BrokerState::default()))
@@ -428,10 +440,20 @@ fn capture_thread(
 
         let mut last_device_check = Instant::now();
         let mut last_frame_at = Instant::now();
+        let seen_rebind = REBIND_EPOCH.load(Ordering::Relaxed);
         loop {
             if cancellation.load(Ordering::Relaxed) {
                 stream.stop();
                 break 'lifetime;
+            }
+            if REBIND_EPOCH.load(Ordering::Relaxed) != seen_rebind {
+                info!(
+                    "audio.capture: resume from sleep source={}, re-binding",
+                    source_name(source),
+                );
+                stream.stop();
+                publish(generation, CaptureEvent::DeviceRebound { source });
+                continue 'lifetime;
             }
             if source == AudioSource::Microphone && last_frame_at.elapsed() >= MIC_STALL_AFTER {
                 warn!(

@@ -28,6 +28,7 @@ import {
 import { AuthRequiredError } from "../lib/api";
 import { trackEvent } from "../lib/analytics";
 import { logError, logInfo } from "../lib/log";
+import { showStatusPill } from "../lib/statusPill";
 import { installMeetingDebug } from "../debug/meetingDebug";
 import {
   bindMeetingActivityOwner,
@@ -827,6 +828,13 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
       listen<CaptureStatePayload>(MEETING_CAPTURE_STATE, (event) => {
         const payload = event.payload;
         if (payload.ownerUid !== uidRef.current) return;
+        if (payload.active && payload.reason === "device_rebound") {
+          // Still recording; the broker reopened a device that went away.
+          // The status pill is the one transient surface that shows over
+          // any app, so the swap is acknowledged without a toast.
+          showStatusPill("meeting-mic-changed");
+          return;
+        }
         if (payload.active && payload.meetingId) {
           endNotificationPendingRef.current.add(payload.meetingId);
         }

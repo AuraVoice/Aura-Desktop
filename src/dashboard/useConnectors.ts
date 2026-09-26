@@ -133,6 +133,22 @@ const CONNECTED_MESSAGES: Record<ConnectorName, string> = {
 const SCHOOL_BLOCKED_MESSAGE =
   "Your school hasn't allowed Aura to use Google Classroom. Your school's IT admin can turn it on.";
 
+// A background recheck runs at most this often, so switching windows back
+// and forth does not hammer /connectors.
+const RECHECK_MIN_INTERVAL_MS = 60_000;
+
+function reconnectableByName(catalog: ConnectorsCatalog): Record<ConnectorName, boolean> {
+  return {
+    google_calendar: catalog.googleCalendar.canReconnect,
+    gmail: catalog.gmail.canReconnect,
+    notion: catalog.notion.canReconnect,
+    google_classroom: catalog.accounts.google_classroom.canReconnect,
+    github: catalog.accounts.github.canReconnect,
+    linkedin: catalog.accounts.linkedin.canReconnect,
+    x: catalog.accounts.x.canReconnect,
+  };
+}
+
 function connectedByName(catalog: ConnectorsCatalog): Record<ConnectorName, boolean> {
   return {
     google_calendar: catalog.googleCalendar.enabled,
@@ -271,19 +287,46 @@ export function useConnectors(): ConnectorsState {
       : current);
   }, []);
 
-  const reload = useCallback(async () => {
-    if (mountedRef.current) {
+  const catalogRef = useRef<ConnectorsCatalog | null>(null);
+  catalogRef.current = catalog;
+  const lastReloadAtRef = useRef(0);
+
+  /** `quiet` keeps the current catalog on screen while the fetch is out (no
+   * spinner, no error swap) and only replaces it when the new one lands: the
+   * shape a background recheck wants. A token the provider has since revoked
+   * shows up as a connector that was on and now can only be reconnected. */
+  const reload = useCallback(async (options?: { quiet?: boolean }) => {
+    const quiet = options?.quiet === true;
+    lastReloadAtRef.current = Date.now();
+    if (mountedRef.current && !quiet) {
       setLoading(true);
       setLoadError(false);
     }
     try {
       const next = await fetchConnectors();
-      if (mountedRef.current) setCatalog(next);
+      if (!mountedRef.current) return;
+      const previous = catalogRef.current;
+      setCatalog(next);
+      if (quiet && previous) {
+        const wasOn = connectedByName(previous);
+        const isOn = connectedByName(next);
+        const reconnectable = reconnectableByName(next);
+        const dropped = (Object.keys(isOn) as ConnectorName[]).find(
+          (name) => wasOn[name] && !isOn[name] && reconnectable[name],
+        );
+        if (dropped) {
+          setBanner({
+            tone: "error",
+            message: `${PROVIDER_NAMES[dropped]} needs to be reconnected. Turn it on to reconnect.`,
+          });
+        }
+      }
     } catch (err) {
+      if (quiet) return;
       logError("useConnectors: load", err);
       if (mountedRef.current) setLoadError(true);
     } finally {
-      if (mountedRef.current) setLoading(false);
+      if (mountedRef.current && !quiet) setLoading(false);
     }
   }, []);
 
@@ -660,6 +703,17 @@ export function useConnectors(): ConnectorsState {
   useEffect(() => {
     mountedRef.current = true;
     void reload();
+    // A connector verified on connect can be revoked from the provider's side
+    // any time after. Coming back to the window is the natural moment to look
+    // again; `focus` covers the visible-but-unfocused case visibilitychange
+    // misses.
+    const recheck = () => {
+      if (document.visibilityState !== "visible") return;
+      if (Date.now() - lastReloadAtRef.current < RECHECK_MIN_INTERVAL_MS) return;
+      void reload({ quiet: true });
+    };
+    document.addEventListener("visibilitychange", recheck);
+    window.addEventListener("focus", recheck);
     let unlisten: (() => void) | undefined;
     void listen<string>(CONNECTOR_OAUTH_COMPLETE, (event) => {
       void handleOAuthCompletion(event.payload);
@@ -677,6 +731,8 @@ export function useConnectors(): ConnectorsState {
     }).catch((err) => logError("useConnectors: completion listener", err));
     return () => {
       mountedRef.current = false;
+      document.removeEventListener("visibilitychange", recheck);
+      window.removeEventListener("focus", recheck);
       clearBannerTimer();
       clearOAuthWait();
       unlisten?.();

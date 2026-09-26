@@ -13,7 +13,7 @@
 //! Neither can be polled cheaply, so both push into `LOCKED`.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 use log::error;
 
@@ -22,6 +22,36 @@ static WATCHER: OnceLock<()> = OnceLock::new();
 
 pub fn is_locked() -> bool {
     LOCKED.load(Ordering::Relaxed)
+}
+
+/// Suspend and resume, delivered by the same watcher thread because both
+/// platforms hand them to whoever already owns a run loop or a message
+/// window. Nothing here reacts to them; the listeners registered at launch
+/// (`lib.rs`) do, so this file stays about the OS edge and not about audio
+/// or keyboard hooks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PowerEvent {
+    Suspend,
+    Resume,
+}
+
+/// Plain fn pointers on purpose: no captured handles, so registering from
+/// setup cannot keep an `AppHandle` alive on a thread that never exits.
+type PowerListener = fn(PowerEvent);
+static POWER_LISTENERS: OnceLock<Mutex<Vec<PowerListener>>> = OnceLock::new();
+
+pub fn on_power(listener: fn(PowerEvent)) {
+    let listeners = POWER_LISTENERS.get_or_init(|| Mutex::new(Vec::new()));
+    crate::util::lock(listeners).push(listener);
+}
+
+fn fire_power(event: PowerEvent) {
+    log::info!("meeting.session: power {event:?}");
+    let Some(listeners) = POWER_LISTENERS.get() else { return };
+    let snapshot: Vec<PowerListener> = crate::util::lock(listeners).clone();
+    for listener in snapshot {
+        listener(event);
+    }
 }
 
 /// Starts the watcher thread on first call; later calls are no-ops. Failure
@@ -45,14 +75,16 @@ use std::sync::atomic::Ordering;
 
 use log::{error, info};
 use windows::core::w;
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HANDLE, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::System::Power::RegisterSuspendResumeNotification;
 use windows::Win32::System::RemoteDesktop::{
     WTSRegisterSessionNotification, NOTIFY_FOR_THIS_SESSION,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, RegisterClassW,
-    TranslateMessage, HWND_MESSAGE, MSG, WINDOW_EX_STYLE, WINDOW_STYLE, WNDCLASSW,
+    TranslateMessage, DEVICE_NOTIFY_WINDOW_HANDLE, HWND_MESSAGE, MSG, WINDOW_EX_STYLE,
+    WINDOW_STYLE, WNDCLASSW,
 };
 
 /// WM_WTSSESSION_CHANGE and its wParam codes; the windows crate scatters
@@ -61,8 +93,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
 const WM_WTSSESSION_CHANGE: u32 = 0x02B1;
 const WTS_SESSION_LOCK: usize = 0x7;
 const WTS_SESSION_UNLOCK: usize = 0x8;
+/// WM_POWERBROADCAST and the two wParam codes that matter. Pinned the same
+/// way. PBT_APMRESUMEAUTOMATIC fires on EVERY resume; PBT_APMRESUMESUSPEND
+/// only when the user caused it, so the automatic one is the reliable edge.
+const WM_POWERBROADCAST: u32 = 0x0218;
+const PBT_APMSUSPEND: usize = 0x4;
+const PBT_APMRESUMEAUTOMATIC: usize = 0x12;
 
-use super::LOCKED;
+use super::{fire_power, PowerEvent, LOCKED};
 
 unsafe extern "system" fn wndproc(
     hwnd: HWND,
@@ -80,6 +118,13 @@ unsafe extern "system" fn wndproc(
                 info!("meeting.session: session unlocked");
                 LOCKED.store(false, Ordering::Relaxed);
             }
+            _ => {}
+        }
+    }
+    if msg == WM_POWERBROADCAST {
+        match wparam.0 {
+            PBT_APMSUSPEND => fire_power(PowerEvent::Suspend),
+            PBT_APMRESUMEAUTOMATIC => fire_power(PowerEvent::Resume),
             _ => {}
         }
     }
@@ -130,6 +175,17 @@ pub(super) fn run_watcher() {
             error!("meeting.session: WTSRegisterSessionNotification failed: {e}");
             return;
         }
+        // WM_POWERBROADCAST is a broadcast, and broadcasts never reach a
+        // message-only window. This explicit registration delivers it to this
+        // exact hwnd instead. Never unregistered: the thread lives for the
+        // process. A failure only costs the resume handling, so it is logged
+        // and the lock watcher carries on.
+        if let Err(e) = RegisterSuspendResumeNotification(
+            HANDLE(hwnd.0),
+            DEVICE_NOTIFY_WINDOW_HANDLE,
+        ) {
+            error!("meeting.session: RegisterSuspendResumeNotification failed: {e}");
+        }
         info!("meeting.session: watcher running");
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
@@ -155,9 +211,12 @@ mod platform {
 
     use block2::RcBlock;
     use log::{error, info};
+    use objc2_app_kit::{
+        NSWorkspace, NSWorkspaceDidWakeNotification, NSWorkspaceWillSleepNotification,
+    };
     use objc2_foundation::{NSDistributedNotificationCenter, NSNotification, NSString};
 
-    use super::LOCKED;
+    use super::{fire_power, PowerEvent, LOCKED};
 
     const SCREEN_LOCKED: &str = "com.apple.screenIsLocked";
     const SCREEN_UNLOCKED: &str = "com.apple.screenIsUnlocked";
@@ -192,6 +251,29 @@ mod platform {
         };
         observe(SCREEN_LOCKED, true);
         observe(SCREEN_UNLOCKED, false);
+
+        // Sleep and wake come from the workspace center, not the distributed
+        // one. Same leak-for-life pattern as the observers above.
+        let workspace_center = unsafe { NSWorkspace::sharedWorkspace().notificationCenter() };
+        let observe_power = |name: &objc2_foundation::NSNotificationName, event: PowerEvent| {
+            let block = RcBlock::new(move |_notification: std::ptr::NonNull<NSNotification>| {
+                fire_power(event);
+            });
+            let _token = unsafe {
+                workspace_center.addObserverForName_object_queue_usingBlock(
+                    Some(name),
+                    None,
+                    None,
+                    &block,
+                )
+            };
+            std::mem::forget(block);
+            std::mem::forget(_token);
+        };
+        unsafe {
+            observe_power(NSWorkspaceWillSleepNotification, PowerEvent::Suspend);
+            observe_power(NSWorkspaceDidWakeNotification, PowerEvent::Resume);
+        }
 
         let Some(_) = CFRunLoop::current() else {
             error!("meeting.session: no run loop on the watcher thread");

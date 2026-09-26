@@ -21,7 +21,7 @@ interactive extension for pages that need clicks, filters, pagination and JS (§
 ```
 "Buddy, find three SWE internships in Seattle posted this week and list the deadlines"
   L1 ENTRY    voice call (Buddy tool run_desktop_capability) | Jev hold opening with "hey aura"
-              | Browser Agent page (harness)
+              | Agents page, Computer tab (the harness)
   L3 GATE     Operation::StartBrowserTask: signed in + one-time opt-in; one task at a time
   L4 RUNNER   agent_browser::start -> encrypted row (ended_at_ms = 0) -> thread "aura-browser-agent"
   L6 LOOP     launch Chrome/Edge/Brave (own profile, hidden) -> CDP -> AX snapshot
@@ -56,7 +56,10 @@ These are the things that are easy to forget and expensive to rediscover.
 - **Per-step cost estimate** `PER_STEP_ESTIMATE_MICROUSD = 60_000` ($0.06) is what the wallet holds
   before the call and corrects after. Size it from real traces before Phase B reaches users.
   Sonnet 5 at ~8k input tokens a step is roughly $0.60 to $1.50 per 25-step task (§2); Haiku 4.5
-  at a third of the price is the lever to measure.
+  at a third of the price is the lever to measure. Since 2026-09-25 the step runs on the
+  `TIER_AGENT_STEP` chain in `settings.py` (DeepSeek V4 Flash on DeepInfra at $0.09/$0.18 per
+  million, then Haiku, then Sonnet), which prices a 15k-token step at about $0.0015; the trace
+  table's model column is what attributes any reliability number to the model that served it.
 - **The reliability bar (§5.1) must be met before the voice entry is enabled for anyone else:** 3
   of the 4 §3 use cases succeed on 4 of 5 runs, measured from the trace table on the Browser Agent
   page. Use case 3c (job boards) is the headline test (§5.6).
@@ -111,6 +114,7 @@ Resolution: the 12-word cap stays. It becomes 30 only when the hold opens with `
 | `launch.rs` | Executable discovery (App Paths, known paths, `/Applications`), policy pre-check, spawn with own profile, `DevToolsActivePort` wait (stale file deleted first, mtime must postdate spawn, early exit = profile locked), Job Object on Windows, pid file and startup orphan sweep, HWND hide/show |
 | `cdp.rs` | Socket task on tauri's runtime, `call` with a 20 s deadline, flatten-mode attach, the actions (click, type, scroll, navigate, back), load and settle waits, popup and dialog handling |
 | `snapshot.rs` | AX tree to `[eN] role "name" state` lines, 60k-char cap with `read_more` paging, the ref map the guard trusts |
+| `cdp.rs::readable_text` | The `read_page` action: one `Runtime.evaluate` returns the page's readable text (main/article, hidden and chrome subtrees skipped), clipped to 100 KB by BYTES; the loop swaps it in as the next snapshot with an empty ref map, and the next non-paging action refreshes the tree |
 | `guard.rs` | Ref must exist; approval regex on role/name for click and type-with-submit; http(s) only; text bound |
 | `store.rs` | `tasks.sqlite3`, sealed columns, `ended_at_ms = 0` open sentinel, orphan finalisation on every read/write, 90 days / 100 rows, per-account pruning |
 | `consent.rs` | Store file plus the `security.rs` mirror |
@@ -130,8 +134,9 @@ the copy): `browser_not_installed`, `browser_policy_blocked`, `browser_profile_l
 
 `src/handlers/agent.py`, wired beside the dictation command route. Order per call: paid tier
 (402) -> monthly step reservation (429, fail-closed) -> day wallet estimate (429, fail-closed) ->
-`get_model_provider().expert(...)` with `response_model=StepDecision` (flat model: strict
-structured output rejects a discriminated union) -> settle the wallet to the actual cost. The
+`get_model_provider().chain(models=[TIER_AGENT_STEP, ...], caller="browser_agent")` with
+`response_model=StepDecision` (flat model: strict structured output rejects a discriminated
+union) -> settle the wallet to the actual cost. The
 worker prompt is `services/browser_agent/prompt.py`, versioned by `PROMPT_VERSION`, and the trace
 records it. 503 for meter or model failures (the desktop retries once), 422 `action_malformed`
 counts as a step and is fed back as history. Neither the brief nor the page text is ever logged.
@@ -148,9 +153,10 @@ counts as a step and is fed back as history. Neither the brief nor the page text
    Buddy reads it out at the next turn boundary.
 2. **Jev.** `command_brain.rs`: `browser_task` action, `Verb::BrowserTask(brief)`, the two gates in
    §3, caption "Working on it in the background".
-3. **Browser Agent page.** `src/dashboard/pages/BrowserAgentPage.tsx`, route `/browser-agent`,
-   shown after Settings > System > Experimental > "Browser Agent page". Consent card, composer,
-   live status with Watch and Stop, history, per-task detail with the trace table.
+3. **Agents page, Computer tab.** `src/dashboard/pages/BrowserAgentPage.tsx`, rendered by
+   `AgentsPage.tsx` at `/agents?tab=computer` (the old `/browser-agent` route and the Experimental
+   toggle are gone since 2026-09-25; the route redirects with its `?run=`). Consent card,
+   composer, live status with Watch and Stop, history, per-task detail with the trace table.
 
 ### 4.4 Delivery
 
@@ -182,8 +188,7 @@ Run in this order; each phase assumes the previous one passed. Record every task
 
 ### Phase A: the page (proves the loop and produces the numbers)
 
-- [ ] Settings > System > Experimental: turn on "Browser Agent page". The sidebar shows Browser
-      Agent (Beta).
+- [ ] The sidebar shows Agents (Beta); open it and pick the Computer tab.
 - [ ] The page shows the consent card. "Turn on browser tasks" replaces it with the composer.
 - [ ] Type "What is the current price of the Dell U2723QE on dell.com?" and Start. Expected within
       3 s: the overlay's notch shows the chip ("Opening a browser", then "Step N on dell.com"); no

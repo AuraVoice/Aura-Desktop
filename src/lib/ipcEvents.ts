@@ -12,6 +12,9 @@ export const CHAT_TOGGLE_REQUESTED = "chat-toggle-requested";
 export const OUTPUT_MUTE_TOGGLE_REQUESTED = "output-mute-toggle-requested";
 export const END_VOICE_SESSION = "end-voice-session";
 export const SIGN_OUT_REQUESTED = "sign-out-requested";
+/** Settings > System asked for the welcome tour again: the seen flag for this
+ * uid is already cleared, every window re-enters the tail. */
+export const DESKTOP_ONBOARDING_REPLAY = "desktop-onboarding-replay";
 export const POINTING_TARGET = "pointing-target";
 
 // guide/mod.rs, security.rs, screenshot.rs

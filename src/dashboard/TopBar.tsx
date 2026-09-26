@@ -8,6 +8,7 @@ import { NOTIFICATION_TOAST_ACTIVATED } from "../lib/ipcEvents";
 import { logError } from "../lib/log";
 import { signOutSession } from "../lib/signOutSession";
 import { NotificationsPanel } from "./NotificationsPanel";
+import { agentsPath } from "./pages/AgentsPage";
 import { ThemeToggleButton } from "./components/ThemeToggleButton";
 import type { DashboardNotificationsState } from "./useDashboardNotifications";
 import type { StoredNotification } from "../lib/desktopNotifications";
@@ -27,11 +28,11 @@ interface ToastActivation {
 }
 
 function researchDestination(resourceId: string | null | undefined): string {
-  return resourceId ? `/research?run=${encodeURIComponent(resourceId)}` : "/research";
+  return agentsPath("research", resourceId);
 }
 
 function browserTaskDestination(resourceId: string | null | undefined): string {
-  return resourceId ? `/browser-agent?run=${encodeURIComponent(resourceId)}` : "/browser-agent";
+  return agentsPath("computer", resourceId);
 }
 
 function initialsFor(user: FirebaseUser | null): string {

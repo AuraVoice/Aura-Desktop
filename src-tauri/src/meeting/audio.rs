@@ -24,6 +24,7 @@
 //! incomplete and ultimately fails the capture - flagged, never silent.
 
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, TryRecvError};
 use std::time::{Duration, Instant};
 
@@ -37,6 +38,13 @@ use crate::audio_capture::{
 };
 
 const SAMPLE_RATE: usize = audio_capture::SAMPLE_RATE;
+/// When the broker last re-bound a device under a live capture. The drain has
+/// no app handle; the engine loop reads this and tells the user, because a
+/// segment silently marked incomplete is the only trace a swapped headset
+/// used to leave.
+static LAST_REBOUND_MS: AtomicU64 = AtomicU64::new(0);
+/// Two swaps inside this window get one caption.
+const REBOUND_NOTIFY_GAP_MS: u64 = 10_000;
 /// 5-minute segments: ~10 MB of 2ch FLAC, comfortably under the backend's
 /// 30 MB body cap, and small enough that losing one to a crash loses minutes.
 const SEGMENT_FRAMES: usize = SAMPLE_RATE * 300;
@@ -202,7 +210,12 @@ fn drain_capture_events(
                 AudioSource::Microphone => mic.device_id_hash = device_id_hash,
                 AudioSource::Loopback => loopback.device_id_hash = device_id_hash,
             },
-            Ok(CaptureEvent::DeviceRebound { source } | CaptureEvent::Glitch { source }) => {
+            Ok(CaptureEvent::DeviceRebound { source }) => {
+                let _ = source;
+                LAST_REBOUND_MS.store(crate::util::now_ms_u64(), Ordering::Relaxed);
+                *segment_incomplete = true;
+            }
+            Ok(CaptureEvent::Glitch { source }) => {
                 let _ = source;
                 *segment_incomplete = true;
             }
@@ -278,6 +291,8 @@ fn engine_thread(
     let mut emitted_ms: i64 = timeline_base_ms;
     let mut segment_start_ms: i64 = timeline_base_ms;
     let mut segment_incomplete = false;
+    let mut seen_rebound_ms = LAST_REBOUND_MS.load(Ordering::Relaxed);
+    let mut last_rebound_notice_ms = 0u64;
     let mut paused = false;
 
     let mut stop_reason: String = 'run: loop {
@@ -299,6 +314,14 @@ fn engine_thread(
             false,
         ) {
             break 'run "capture_failed".to_string();
+        }
+        let rebound_ms = LAST_REBOUND_MS.load(Ordering::Relaxed);
+        if rebound_ms != seen_rebound_ms {
+            seen_rebound_ms = rebound_ms;
+            if rebound_ms.saturating_sub(last_rebound_notice_ms) >= REBOUND_NOTIFY_GAP_MS {
+                last_rebound_notice_ms = rebound_ms;
+                super::notify_device_rebound(&app);
+            }
         }
         // 4. Session lock transitions.
         let locked = super::session::is_locked();

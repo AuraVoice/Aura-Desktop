@@ -14,6 +14,7 @@ export const voiceCapReachedCode = "voice_cap_reached";
 const CODE_MESSAGES: Record<string, string> = {
   agent_join_timeout: "Buddy's taking too long to pick up. Give it another tap?",
   voice_start_failed: "Buddy couldn't connect. Check your connection and try again.",
+  offline: "You're offline. Buddy needs a connection to start a call.",
   agent_silent: "Buddy's connected but gone quiet on me. Tap to try again?",
   agent_disconnected_early: "Call dropped before Buddy could say anything. Let's try again?",
   provider_unavailable:

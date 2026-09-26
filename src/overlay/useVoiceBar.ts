@@ -4,10 +4,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { validateAgentDataMessage } from "../lib/agentData";
 import { fetchVoiceToken, VoiceCapError, type VoiceSessionMode } from "../lib/voice";
 import { AuthRequiredError, routeToDashboardForExpiredSession } from "../lib/api";
+import { isOnline, OfflineError } from "../lib/connectivity";
 import { logError, logInfo } from "../lib/log";
 import { trackEvent } from "../lib/analytics";
 import { normalizedErrorCode } from "../lib/acquisitionAnalytics";
 import { micCaptureFailedCode, voiceCapReachedCode, voiceErrorMessageForCode } from "../lib/voiceErrorCopy";
+import { decodeOpenSettings } from "../lib/clientControl";
+import { openSettingsRoute } from "../lib/dashboardWindow";
 import { shouldArmInitialAgentSilenceWatchdog } from "./voiceSessionTiming";
 import { startRealtimeLeg, type RealtimeActivity } from "../lib/realtime";
 import { outputMuted, subscribeOutputMode } from "../lib/outputMode";
@@ -666,6 +669,10 @@ export function useVoiceBar() {
           const code = typeof verdict.payload.code === "string" ? verdict.payload.code : null;
           enterErrorState(code, verdict.message ?? null);
         }
+        if (verdict.type === "client.open_settings") {
+          const route = decodeOpenSettings(verdict.payload);
+          if (route) void openSettingsRoute(route);
+        }
       } catch (err) {
         logError("useVoiceBar: DataReceived handler", err);
       }
@@ -676,6 +683,7 @@ export function useVoiceBar() {
       let startStage: "token" | "connect" = "token";
       const tokenRequestedAt = Date.now();
       try {
+        if (!isOnline()) throw new OfflineError();
         logInfo("useVoiceBar: prepareSession", "requesting voice token");
         const voiceToken = await fetchVoiceToken(sessionModeRef.current, bridgedRef.current);
         reportRealtimeBridgeCapability(voiceToken.realtime_bridge_enabled !== false);
@@ -741,6 +749,11 @@ export function useVoiceBar() {
           // Free-tier daily cap: a known state, not a failure. The code is
           // non-retryable, so this shows the capped message and stays put.
           enterErrorState(voiceCapReachedCode);
+          return;
+        }
+        if (err instanceof OfflineError) {
+          // No network at all: not a start failure worth counting.
+          enterErrorState("offline");
           return;
         }
         logError("useVoiceBar: prepareSession", err);

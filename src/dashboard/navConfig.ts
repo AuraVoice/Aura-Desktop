@@ -8,9 +8,8 @@ import {
   Smartphone,
   HelpCircle,
   Mic,
-  Search,
   Briefcase,
-  Globe,
+  Bot,
   type LucideIcon,
 } from "lucide-react";
 
@@ -28,20 +27,19 @@ export const primaryNavItems: NavItem[] = [
   { to: "/history", label: "History", Icon: History },
   { to: "/meetings", label: "Meetings", Icon: Video, beta: true },
   { to: "/interview", label: "Interview", Icon: Briefcase, beta: true },
-  { to: "/research", label: "Research", Icon: Search, beta: true },
+  { to: "/agents", label: "Agents", Icon: Bot, beta: true },
   { to: "/insights", label: "Insights", Icon: LineChart },
   { to: "/dictation", label: "Dictation", Icon: Mic },
   { to: "/connectors", label: "Connectors", Icon: Link2 },
 ];
 
-/** Behind Settings > System > Experimental. The route always exists; the
- * sidebar shows the entry only while the harness flag is on. */
-export const browserAgentNavItem: NavItem = {
-  to: "/browser-agent",
-  label: "Browser Agent",
-  Icon: Globe,
-  beta: true,
-};
+/** The routes the Agents page replaced. Never in the sidebar; they stay
+ * routable because notification rows and deep links written before the merge
+ * still carry them, and each redirects into the matching Agents tab. */
+export const legacyAgentRoutes: NavItem[] = [
+  { to: "/research", label: "Agents", Icon: Bot },
+  { to: "/browser-agent", label: "Agents", Icon: Bot },
+];
 
 export const settingsNavItem: NavItem = {
   to: "/system",
@@ -61,6 +59,6 @@ export const navSections = [
 
 /** Flat lookup of route -> label, for the top-bar title. */
 export const navTitles: Record<string, string> = Object.fromEntries(
-  [...primaryNavItems, browserAgentNavItem, ...footerNavItems].map((item) => [item.to, item.label]),
+  [...primaryNavItems, ...legacyAgentRoutes, ...footerNavItems].map((item) => [item.to, item.label]),
 );
 navTitles["/interview"] = "Interview Companion";

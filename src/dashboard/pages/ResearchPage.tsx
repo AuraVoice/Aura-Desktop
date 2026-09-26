@@ -589,7 +589,7 @@ function ResearchDetail({ runId, onBack, onChanged, onNewRequest }: { runId: str
   const originalRequest = run.request.replace(/\s+/g, " ").trim();
 
   return (
-    <div className="db-page db-page-wide db-research-page">
+    <div className="db-research-page">
       <div className="db-research-detail-bar">
         <button type="button" className="db-research-back" onClick={onBack}><ArrowLeft size={17} /> All research</button>
         <div className="db-research-detail-tools">
@@ -688,8 +688,10 @@ export function ResearchPage() {
   }, [runs]);
 
   // Stable identity, otherwise the memo on the rows below never holds.
-  const openRun = useCallback((runId: string) => setSearchParams({ run: runId }), [setSearchParams]);
-  const closeRun = () => setSearchParams({});
+  // Keep `?tab=`: this panel lives inside the Agents page, whose tab is the
+  // other search param, and replacing the whole set would bounce the user.
+  const openRun = useCallback((runId: string) => setSearchParams((prev) => { const next = new URLSearchParams(prev); next.set("run", runId); return next; }), [setSearchParams]);
+  const closeRun = () => setSearchParams((prev) => { const next = new URLSearchParams(prev); next.delete("run"); return next; });
   const beginRelated = (value: string) => {
     closeRun();
     setRequest(value);
@@ -736,7 +738,7 @@ export function ResearchPage() {
   };
 
   return (
-    <div className="db-page db-page-wide db-research-page db-research-home">
+    <div className="db-research-page db-research-home">
       <section className="db-research-command">
         <div className="db-research-command-copy"><span className="db-research-eyebrow db-research-eyebrow-rotator"><span key={exampleIndex}>{rotatingExamples[exampleIndex].eyebrow}</span></span><h1>What do you want to understand?</h1><p>Buddy turns an open question into a source-backed brief while you keep working.</p></div>
         <div className="db-research-composer-col">

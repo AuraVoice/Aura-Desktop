@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactElement } from "react";
 import { useTauriEvent } from "../lib/useTauriEvent";
-import { DASHBOARD_NAVIGATE } from "../lib/ipcEvents";
+import { DASHBOARD_NAVIGATE, DESKTOP_ONBOARDING_REPLAY } from "../lib/ipcEvents";
 import {
   HashRouter,
   Navigate,
@@ -11,6 +11,7 @@ import {
 } from "react-router-dom";
 import type { User } from "firebase/auth";
 import { Store } from "@tauri-apps/plugin-store";
+import { listen } from "@tauri-apps/api/event";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
@@ -28,8 +29,7 @@ import { ComingSoonPage } from "./pages/ComingSoonPage";
 import { InsightsPage } from "./pages/InsightsPage";
 import { GeneralPage } from "./pages/GeneralPage";
 import { DictationPage } from "./pages/DictationPage";
-import { ResearchPage } from "./pages/ResearchPage";
-import { BrowserAgentPage } from "./pages/BrowserAgentPage";
+import { AgentsPage, LegacyAgentRedirect } from "./pages/AgentsPage";
 import { InterviewPage } from "./pages/InterviewPage";
 import { DashboardOnboarding } from "./DashboardOnboarding";
 import { TrialBanner } from "./TrialBanner";
@@ -43,7 +43,7 @@ import {
 import { useDashboardUser } from "./useDashboardUser";
 import { DashboardResourceScope } from "./useDashboardResource";
 import { useDashboardNotifications } from "./useDashboardNotifications";
-import { browserAgentNavItem, navSections, navTitles } from "./navConfig";
+import { legacyAgentRoutes, navSections, navTitles } from "./navConfig";
 import { desktopOnboardingSeenForUidKey, overlayStorePath } from "../lib/copy";
 import { logError } from "../lib/log";
 import { trackPageView } from "../lib/analytics";
@@ -59,8 +59,9 @@ export const dashboardPages: Record<string, ReactElement> = {
   "/history": <HistoryPage />,
   "/meetings": <MeetingsPage />,
   "/interview": <InterviewPage />,
-  "/research": <ResearchPage />,
-  "/browser-agent": <BrowserAgentPage />,
+  "/agents": <AgentsPage />,
+  "/research": <LegacyAgentRedirect tab="research" />,
+  "/browser-agent": <LegacyAgentRedirect tab="computer" />,
   "/insights": <InsightsPage />,
   "/general": <GeneralPage />,
   "/dictation": <DictationPage />,
@@ -86,9 +87,9 @@ export function DashboardShell({ user, collapsed }: { user: User | null; collaps
   const title = navTitles[mainPath] ?? "Home";
   const notifications = useDashboardNotifications(user?.uid ?? null);
 
-  // The browser agent route is routable whether or not the sidebar shows it:
-  // a notification or the overlay's result card can open it directly.
-  const routes = [...navSections.flatMap((section) => section.items), browserAgentNavItem];
+  // The retired agent routes stay routable so an older notification row or
+  // deep link still lands on the right Agents tab.
+  const routes = [...navSections.flatMap((section) => section.items), ...legacyAgentRoutes];
   const closeSettings = useCallback(() => {
     navigate(lastMainPathRef.current);
   }, [navigate]);
@@ -235,6 +236,23 @@ export function DashboardApp() {
       cancelled = true;
     };
   }, [uid]);
+
+  // Settings > System > "Replay the welcome tour" cleared the seen flag and
+  // emitted this; drop back into the onboarding shell the same way a fresh
+  // install lands there.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    listen(DESKTOP_ONBOARDING_REPLAY, () => setOnboarded(false))
+      .then((fn) => {
+        if (disposed) fn(); else unlisten = fn;
+      })
+      .catch((err) => logError("DashboardApp: listen onboarding replay", err));
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
 
   useEffect(() => {
     if (uid) void loadAccountOnboarding(uid);

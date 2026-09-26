@@ -256,6 +256,14 @@ pub fn is_silence(samples: &[f32]) -> bool {
     rms(samples) < 0.003
 }
 
+/// How much of a hold must be above the `is_silence` floor before it counts
+/// as speech at all: 150 ms at 16 kHz. One drain that crossed the floor used
+/// to be enough, so a key click or a bumped desk on an otherwise silent tap
+/// sent room tone to the recognizer, which then invented a word for it.
+/// Frames rather than drains, because a drain returns whatever the device
+/// had queued and is not a stable unit of time.
+pub const MIN_VOICED_FRAMES: usize = 16_000 * 150 / 1000;
+
 /// One drain's loudness as 0..1, for the HUD's waveform and nothing else. It is
 /// deliberately NOT the `is_silence` threshold: that one decides whether to
 /// insert text and must stay conservative, while this one only has to look
