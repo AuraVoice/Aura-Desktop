@@ -21,8 +21,11 @@ import {
   type ChatDoneMetadata,
   type ChatHistoryEntry,
   type ChatStreamFrame,
+  DEFAULT_CHAT_EFFORT,
+  type ChatEffort,
 } from "../lib/chatStream";
 import type { ChatAttachment } from "../lib/chatScreenCapture";
+import { effortLevel } from "./ChatEffortPopover";
 import {
   toMessageAttachment,
   toRequestAttachment,
@@ -291,6 +294,9 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
   // Request-shaped attachments per user turn, kept only so Retry can resend
   // them. Never read into messages state or written to the cache.
   const attachmentsByTurnRef = useRef(new Map<string, ChatAttachment[]>());
+  // The effort level each in-flight or retryable turn was sent at, so Retry
+  // resends what was asked rather than whatever the composer shows now.
+  const effortByTurnRef = useRef<Map<string, ChatEffort>>(new Map());
   const uidRef = useRef(uid);
   // The conversation refreshes must stay pinned to. A newly-created empty thread
   // is pinned before the server knows it so focus refresh cannot restore the old
@@ -605,6 +611,9 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
     // Files the user picked for this message. They travel on a retry too: they
     // are part of what was said, unlike the screen frame above.
     userAttachments: ChatAttachment[] = [],
+    // The effort level the user had selected when they sent this message. A
+    // retry resends the same level: it is part of what was asked.
+    effort: ChatEffort = DEFAULT_CHAT_EFFORT,
   ) => {
     if (!enabledRef.current || activeRequestRef.current) return;
     const controller = new AbortController();
@@ -700,6 +709,23 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
       trackTurnLatency("done");
       finishAssistantText();
       markUser("sent");
+      // The server ran a lighter level than the one asked for (Ultra without the
+      // entitlement is served as High). Said once, as a status row, so the
+      // speedometer's promise and what happened never silently disagree.
+      if (
+        typeof metadata.effort_served === "string"
+        && typeof metadata.effort === "string"
+        && metadata.effort_served !== metadata.effort
+      ) {
+        upsert({
+          id: `${clientMessageId}:effort`,
+          turnId: clientMessageId,
+          role: "assistant",
+          text: `Answered at ${effortLevel(metadata.effort_served as ChatEffort).label}`,
+          state: "complete",
+          kind: "status",
+        });
+      }
       if (metadata.reminder) {
         const reminder = toChatReminder(metadata.reminder, true);
         setMessages((current) => current.map((message) =>
@@ -870,6 +896,7 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
         sessionId: conversationIdRef.current,
         clientMessageId,
         attachments,
+        effort,
         signal: controller.signal,
         onOpen: () => markUser("sent"),
         onFrame: handleFrame,
@@ -915,7 +942,11 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
     }
   }, []);
 
-  const send = useCallback((text: string, pending: PendingAttachment[] = []) => {
+  const send = useCallback((
+    text: string,
+    pending: PendingAttachment[] = [],
+    effort: ChatEffort = DEFAULT_CHAT_EFFORT,
+  ) => {
     const trimmed = text.trim();
     // A message may be files alone: the backend refuses only when both the
     // text and the attachments are empty.
@@ -943,6 +974,7 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
     // only what it draws, and this map is what a retry resends.
     const requestAttachments = pending.map(toRequestAttachment);
     if (requestAttachments.length > 0) attachmentsByTurnRef.current.set(clientMessageId, requestAttachments);
+    effortByTurnRef.current.set(clientMessageId, effort);
     setMessages((current) => [...current, bubble]);
     // Cached without awaiting, so a slow or broken disk can never delay the
     // request. The settled-transcript effect above rewrites this row once the
@@ -966,7 +998,7 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
       history_len: history.length,
       attachment_count: requestAttachments.length,
     });
-    void runTurn(clientMessageId, trimmed, history, true, requestAttachments);
+    void runTurn(clientMessageId, trimmed, history, true, requestAttachments, effort);
     return true;
   }, [limitReached, messages, runTurn, sending]);
 
@@ -989,7 +1021,10 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
       attachmentsByTurnRef.current.delete(clientMessageId);
       attachmentsByTurnRef.current.set(retryMessageId, retryAttachments);
     }
-    void runTurn(retryMessageId, message.text, history, false, retryAttachments);
+    const retryEffort = effortByTurnRef.current.get(clientMessageId) ?? DEFAULT_CHAT_EFFORT;
+    effortByTurnRef.current.delete(clientMessageId);
+    effortByTurnRef.current.set(retryMessageId, retryEffort);
+    void runTurn(retryMessageId, message.text, history, false, retryAttachments, retryEffort);
   }, [limitReached, messages, runTurn, sending]);
 
   const submitClarification = useCallback((messageId: string, selectedOptions: string[]) => {

@@ -1,15 +1,39 @@
 import { useEffect, useRef, type CSSProperties, type RefObject } from "react";
 
+import { DEFAULT_CHAT_EFFORT, type ChatEffort } from "../lib/chatStream";
+
+export type { ChatEffort };
+export { DEFAULT_CHAT_EFFORT };
+
 /**
  * How hard Aura should think about the next message, mirroring the mobile
- * app's `BuddyEffort` (lib/presentation/widgets/effort_selector.dart).
+ * app's `BuddyEffort` (lib/data/models/buddy_effort.dart).
  *
- * Presentation only for now: the chat request carries no field for it yet, on
- * either platform. The state lives in ChatSlot for the life of the card and is
- * neither persisted nor sent. When the backend grows a field, wire it in
- * useChatSession's send path; nothing here needs to change.
+ * The level is sent as `effort` on every /chat request (see lib/chatStream.ts)
+ * and remembered on this machine so the composer opens where the user left it.
  */
-export type ChatEffort = "low" | "medium" | "high" | "ultra";
+const EFFORT_STORAGE_KEY = "aura.chat.effort";
+
+/** The remembered level, or the default when nothing valid is stored (a private
+ * window, cleared site data, or a value from a build with other levels). */
+export function readStoredEffort(): ChatEffort {
+  try {
+    const raw = localStorage.getItem(EFFORT_STORAGE_KEY);
+    return CHAT_EFFORT_LEVELS.some((level) => level.id === raw)
+      ? (raw as ChatEffort)
+      : DEFAULT_CHAT_EFFORT;
+  } catch {
+    return DEFAULT_CHAT_EFFORT;
+  }
+}
+
+export function storeEffort(effort: ChatEffort): void {
+  try {
+    localStorage.setItem(EFFORT_STORAGE_KEY, effort);
+  } catch {
+    // Losing the memory costs one re-pick, never a failed send.
+  }
+}
 
 export interface ChatEffortLevel {
   id: ChatEffort;
@@ -23,8 +47,6 @@ export const CHAT_EFFORT_LEVELS: readonly ChatEffortLevel[] = [
   { id: "high", label: "High", description: "Deeper reasoning. Slower." },
   { id: "ultra", label: "Ultra", description: "Max effort. Slowest." },
 ];
-
-export const DEFAULT_CHAT_EFFORT: ChatEffort = "medium";
 
 export function effortIndex(effort: ChatEffort): number {
   return Math.max(0, CHAT_EFFORT_LEVELS.findIndex((level) => level.id === effort));

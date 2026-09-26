@@ -7,10 +7,27 @@ export interface ChatHistoryEntry {
   content: string;
 }
 
+/** How hard Aura thinks about a message. Sent as `effort` on every /chat request;
+ * the backend maps each level to a chain of models
+ * (backend/src/services/chat_routing/plans.py), so the client never names one.
+ * Mirrors the mobile app's `BuddyEffort`. */
+export type ChatEffort = "low" | "medium" | "high" | "ultra";
+
+export const DEFAULT_CHAT_EFFORT: ChatEffort = "medium";
+
 export interface ChatDoneMetadata {
   tool_names?: unknown[];
   reminder?: Record<string, unknown>;
   awaiting_clarification?: boolean;
+  /** The model that actually answered, as the provider's own id. */
+  llm_model?: string;
+  /** The level this turn asked for. */
+  effort?: string;
+  /** The level the server actually ran. Differs from `effort` only when `ultra`
+   * was served as `high` for an account without the entitlement. */
+  effort_served?: string;
+  reasoning_depth?: string;
+  termination_reason?: string;
   [key: string]: unknown;
 }
 
@@ -67,6 +84,9 @@ interface StreamChatRequest {
   /** Screen context for this turn. Never replayed into `history`: the backend
    * strips attachments from stored turns too (see chat_completion/turn_store). */
   attachments?: ChatAttachment[];
+  /** Always sent, so the request says what the user asked for even at the
+   * default and the server log can be read without knowing the client's default. */
+  effort: ChatEffort;
   signal?: AbortSignal;
   onOpen?: () => void;
   onFrame: (frame: ChatStreamFrame) => void;
@@ -177,6 +197,7 @@ export async function streamChat({
   sessionId,
   clientMessageId,
   attachments,
+  effort,
   signal,
   onOpen,
   onFrame,
@@ -191,6 +212,7 @@ export async function streamChat({
       client_message_id: clientMessageId,
       surface: "desktop",
       contract_version: CHAT_CONTRACT_VERSION,
+      effort,
       // Omitted entirely when there is nothing to attach, so the text-only
       // request stays byte-identical to what shipped before screen context.
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
