@@ -1869,3 +1869,33 @@ runs. A liveness signal must come from the thing that can die (the callback),
 paired with an independent reading (GetAsyncKeyState) of what it should have
 seen, or a dead hook is indistinguishable from a quiet keyboard.
 ================================================================================
+
+2026-10-01  Signing into a second account deleted weeks of dictation history
+================================================================================
+Problem: the Insights counter said about 24,400 words had been dictated since
+2026-08-13, but the local history held 101 rows (about 3,000 words), all from
+after 2026-09-24. Nothing had been uploaded either, so that speech existed
+nowhere.
+
+Issue: history::retain_only_for_session ran `DELETE FROM transcripts WHERE
+uid <> ?1` and unlinked the clips on every account transition. Switching to a
+second account on 2026-09-09 wiped everything before it, and switching back on
+2026-09-24 wiped the second account's two weeks. The rule was copied from the
+chat and interview stores, and CLAUDE.md called it "the only thing isolating
+dictations across accounts", but that was never true: every read is already
+uid-scoped and every sealed value carries the uid in its AAD. The function's own
+signed-out branch had already reached that conclusion and stopped deleting there;
+the switch arm was never revisited. Uploads could not have saved it: the desktop
+uploader shipped on 2026-09-15 and needs consent v3, which this install never
+recorded.
+
+Solution: an account switch now only ages out other accounts' rows and clips
+past MAX_AGE_MS (90 days). Nothing younger is touched. Clear history and account
+deletion remain the only paths that destroy a user's dictations.
+
+Justification: isolation and deletion are separate jobs. Isolation was already
+done by the uid scope and the AAD, so deleting on top of that added no
+protection and destroyed real data. The 90-day age-out stays because sweep only
+runs for the signed-in uid, and without it a dormant account's rows would never
+expire.
+================================================================================

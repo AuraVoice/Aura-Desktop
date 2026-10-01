@@ -13,8 +13,9 @@
 //!   in a BLOB column; the audio clip is AES-256-GCM over the FLAC bytes.
 //! - Nothing here is logged at any level beyond counts, byte sizes, durations
 //!   and outcomes. No transcript, and no path that could contain user content.
-//! - The store is per-account, and `security::session_changed` wipes every other
-//!   account's rows AND clips on every transition, signed in or out.
+//! - The store is per-account: every read is scoped by uid and every sealed
+//!   value carries the uid in its AAD. An account switch keeps the other
+//!   account's rows and clips; it only ages out the ones past `MAX_AGE_MS`.
 //!
 //! ## What is NOT stored, and why
 //!
@@ -1206,14 +1207,16 @@ fn remove_clips(app: &AppHandle, relatives: &[String]) {
     }
 }
 
-/// Native session-boundary hook, mirroring `interview_store::retain_only_for_session`
-/// but deleting clip files as well as rows. Runs on EVERY transition, not only
-/// a revoke, so a sign-in following a crash still drops the previous account's
-/// dictations before the dashboard can paint them.
+/// Native session-boundary hook. Unlike the chat and interview stores, it does
+/// NOT delete the previous account's dictations: isolation is already the uid
+/// scope on every read plus the uid in every AAD, and deleting on a switch
+/// destroyed weeks of a user's own speech the first time they signed into a
+/// second account of theirs. What it does do is age out other accounts' rows
+/// past `MAX_AGE_MS`, because `sweep` only ever runs for the signed-in uid and
+/// a dormant account's rows would otherwise never expire.
 ///
 /// Paths are collected first, rows deleted second, files unlinked last: a crash
-/// in between leaves orphan files, which the next sweep reaps, rather than rows
-/// pointing at nothing.
+/// in between leaves orphan files rather than rows pointing at nothing.
 pub fn retain_only_for_session(app: &AppHandle, uid: Option<String>) {
     if !ENCRYPTION_AVAILABLE {
         return;
@@ -1224,13 +1227,24 @@ pub fn retain_only_for_session(app: &AppHandle, uid: Option<String>) {
             let conn = open(&app)?;
             match uid {
                 Some(id) if !id.is_empty() => {
-                    let keep = clip_paths(&conn, Some(&id))?;
-                    let doomed: Vec<String> = clip_paths(&conn, None)?
-                        .into_iter()
-                        .filter(|path| !keep.contains(path))
-                        .collect();
-                    conn.execute("DELETE FROM transcripts WHERE uid <> ?1", params![id])
-                        .map_err(|e| e.to_string())?;
+                    let cutoff = now_ms() - MAX_AGE_MS;
+                    let doomed: Vec<String> = {
+                        let mut statement = conn
+                            .prepare(
+                                "SELECT audio_path FROM transcripts
+                                 WHERE uid <> ?1 AND recorded_at_ms < ?2 AND audio_path IS NOT NULL",
+                            )
+                            .map_err(|e| e.to_string())?;
+                        let rows = statement
+                            .query_map(params![id, cutoff], |row| row.get::<_, String>(0))
+                            .map_err(|e| e.to_string())?;
+                        rows.flatten().collect()
+                    };
+                    conn.execute(
+                        "DELETE FROM transcripts WHERE uid <> ?1 AND recorded_at_ms < ?2",
+                        params![id, cutoff],
+                    )
+                    .map_err(|e| e.to_string())?;
                     remove_clips(&app, &doomed);
                 }
                 // No uid to scope by, which means signed out. That is NOT a
@@ -1239,7 +1253,7 @@ pub fn retain_only_for_session(app: &AppHandle, uid: Option<String>) {
                 // return the user's own history. Deleting here conflated "nobody
                 // is looking" with "this must die", and because a transient
                 // signed-out report arrives on every launch it wiped the whole
-                // store between sessions. Account switches still prune, in the
+                // store between sessions. Account switches only age out, in the
                 // arm above. Explicit erasure (account deletion, clear history)
                 // does not route through this function.
                 _ => {
