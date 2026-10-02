@@ -12,7 +12,6 @@ import {
   HopGlyph,
   LatticeGlyph,
   PulseGlyph,
-  RewindGlyph,
   SignalGlyph,
   SparkGlyph,
   StudyGlyph,
@@ -28,6 +27,7 @@ import {
   findManager,
   hueOf,
   managerChannel,
+  roleLabel,
   timeLabel,
   type Author,
   type ChannelId,
@@ -100,12 +100,13 @@ interface Props {
   freeAnswers: Record<string, string>;
   onFreeAnswer: (draftId: string, value: string) => void;
   onAnswer: (draftId: string, label: string, managerId: string) => void;
-  confirmReset: boolean;
-  onAskReset: (ask: boolean) => void;
-  onReset: () => void;
   rosterOpen: boolean;
   onToggleRoster: () => void;
   composerRef: RefObject<HTMLTextAreaElement | null>;
+  /** The New manager button was pressed: the empty composer says what to write. */
+  hireHint: boolean;
+  /** The signed-in user's first name, shown beside "You". */
+  youName: string;
   /** Shown above the messages (the one-time sandbox import). */
   banner?: ReactNode;
 }
@@ -116,12 +117,8 @@ function Confidence({ decision }: { decision: SwarmDecision }) {
   }
   const pct = Math.round(decision.confidence * 100);
   return (
-    <span className="db-swarm-conf" title="How sure the router was of the owner">
-      <svg viewBox="0 0 20 20" aria-hidden="true">
-        <circle className="db-swarm-conf-track" cx="10" cy="10" r="8" />
-        <circle className="db-swarm-conf-fill" cx="10" cy="10" r="8" pathLength={100} style={{ strokeDasharray: `${pct} 100` }} />
-      </svg>
-      {pct}%
+    <span className="db-swarm-conf" title="How sure Aura was about who should own this">
+      {pct}% sure
     </span>
   );
 }
@@ -295,6 +292,7 @@ function DecisionMessage({
     <>
       <div className="db-swarm-msg-head">
         <strong className={`db-swarm-name is-${item.author.role === "manager" ? `hue-${item.author.hue}` : item.author.role}`}>{item.author.name}</strong>
+        <span className="db-swarm-role">{roleLabel(item.author, roster)}</span>
         <span className={`db-swarm-tag is-${d.decision}`}>{DECISION_LABEL[d.decision]}</span>
         {d.subagentTitle && <span className="db-swarm-muted">via {d.subagentTitle}</span>}
         {capability && <span className="db-swarm-cap">{capability}</span>}
@@ -358,7 +356,13 @@ export function SwarmStream(props: Props) {
 
   let lastDay = "";
   let lastAuthorKey = "";
-  const placeholder = readOnly ? "Read only" : view.kind === "manager" ? `Message ${view.name}` : `Message #${view.name}`;
+  const placeholder = readOnly
+    ? "Read only"
+    : view.kind === "manager"
+      ? `Message ${view.name}`
+      : props.hireHint
+        ? "Describe an ongoing job for a new manager, e.g. track my job applications every week"
+        : `Message #${view.name}`;
   const showHero = view.kind === "group" && items.length === 0 && !busyHere;
 
   return (
@@ -372,25 +376,14 @@ export function SwarmStream(props: Props) {
         <h2>{view.name}</h2>
         <span className="db-swarm-topic">{view.topic}</span>
         <div className="db-swarm-head-tools">
-          {props.confirmReset ? (
-            <span className="db-swarm-confirm">
-              <button type="button" className="db-swarm-pill-btn is-danger" onClick={props.onReset}>Reset everything</button>
-              <button type="button" className="db-swarm-pill-btn" onClick={() => props.onAskReset(false)}>Keep</button>
-            </span>
-          ) : (
-            <button type="button" className="db-swarm-icon-btn" onClick={() => props.onAskReset(true)} disabled={busy} aria-label="Reset roster and thread" title="Reset roster and thread">
-              <RewindGlyph size={18} />
-            </button>
-          )}
           <button
             type="button"
-            className={`db-swarm-icon-btn db-swarm-roster-toggle${props.rosterOpen ? " is-active" : ""}`}
+            className={`db-swarm-icon-btn is-labelled db-swarm-roster-toggle${props.rosterOpen ? " is-active" : ""}`}
             onClick={props.onToggleRoster}
-            aria-label="Show team"
             aria-pressed={props.rosterOpen}
-            title="Show team"
+            title="Each manager's job, team, connectors and routines"
           >
-            <TeamGlyph size={18} />
+            <TeamGlyph size={18} /> Team
           </button>
         </div>
       </header>
@@ -467,7 +460,8 @@ export function SwarmStream(props: Props) {
                           <>
                             {!continued && (
                               <div className="db-swarm-msg-head">
-                                <strong className="db-swarm-name is-you">You</strong>
+                                <strong className="db-swarm-name is-you">{props.youName || "You"}</strong>
+                                {props.youName && <span className="db-swarm-role">You</span>}
                                 {item.at > 0 && <time>{timeLabel(item.at)}</time>}
                               </div>
                             )}
@@ -477,6 +471,7 @@ export function SwarmStream(props: Props) {
                           <>
                             <div className="db-swarm-msg-head">
                               <strong className={`db-swarm-name is-${item.author.role === "manager" ? `hue-${item.author.hue}` : item.author.role}`}>{item.author.name}</strong>
+                              <span className="db-swarm-role">{roleLabel(item.author, props.roster)}</span>
                               {item.at > 0 && <time>{timeLabel(item.at)}</time>}
                             </div>
                             {item.kind === "say" && <p className="db-swarm-text">{item.text}</p>}

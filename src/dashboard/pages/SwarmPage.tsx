@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { AuthRequiredError, TimeoutError } from "../../lib/api";
+import { useAuth } from "../../state/AuthProvider";
 import {
   answerSession,
   cancelRound,
@@ -13,7 +14,6 @@ import {
   importSandbox,
   listChannelMessages,
   mapRoster,
-  resetSwarm,
   runManager,
   sendSwarmMessage,
   setGrants,
@@ -40,6 +40,7 @@ import {
   isChannelId,
   managerChannel,
   managerIdOfChannel,
+  roleLabel,
   supervisorActive,
   type ChannelId,
   type ThreadEntry,
@@ -229,11 +230,13 @@ function channelView(channel: ChannelId, roster: SwarmRoster): ChannelView {
   return {
     kind: "group",
     name: groupChannelName(roster),
-    topic: supervisorActive(roster)
-      ? `${backer.name} routes every message here to the manager that owns it.`
-      : backer.role === "manager"
-        ? `${backer.name} answers here until a second manager joins.`
-        : "Describe something ongoing and Aura decides who should own it.",
+    topic: `Talking to ${backer.name} · ${roleLabel(backer, roster)}. ${
+      supervisorActive(roster)
+        ? "It routes every message here to the manager that owns it."
+        : backer.role === "manager"
+          ? "It answers here until a second manager joins, then a Supervisor takes over."
+          : "Describe something ongoing and Aura decides who should own it."
+    }`,
   };
 }
 
@@ -273,7 +276,6 @@ export function SwarmPage() {
   const [busySince, setBusySince] = useState(0);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
-  const [confirmReset, setConfirmReset] = useState(false);
   const [rosterOpen, setRosterOpen] = useState(false);
   const [legacy, setLegacy] = useState<Legacy | null>(readLegacy);
   const [seen, setSeen] = useState<Record<string, number>>(loadSeen);
@@ -281,6 +283,9 @@ export function SwarmPage() {
   const [freshManagers, markManagers] = useFreshSet();
   const [supervisorFresh, setSupervisorFresh] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const [hireHint, setHireHint] = useState(false);
+  const { user } = useAuth();
+  const youName = (user?.displayName || user?.email?.split("@")[0] || "").split(" ")[0];
   const loading = useRef<Set<string>>(new Set());
   const lastSeq = useRef<Record<string, number>>({});
   const requested = useRef<Set<string>>(new Set());
@@ -460,9 +465,9 @@ export function SwarmPage() {
 
   const select = (next: ChannelId) => {
     setChannel(next);
+    setHireHint(false);
     saveChannel(next);
     setError("");
-    setConfirmReset(false);
     setRosterOpen(false);
   };
 
@@ -533,7 +538,10 @@ export function SwarmPage() {
     const message = text.trim();
     if (!message) return;
     const ok = view.kind === "manager" && view.manager ? await run(view.manager.id, message, "dm") : await route({ text: message });
-    if (ok) setText("");
+    if (ok) {
+      setText("");
+      setHireHint(false);
+    }
   };
 
   const stop = async (sessionId: string) => {
@@ -597,23 +605,6 @@ export function SwarmPage() {
     void run(managerId, brief, "run_now");
   };
 
-  const reset = async () => {
-    setConfirmReset(false);
-    try {
-      await resetSwarm();
-      setMessages({});
-      setSessions({});
-      setWatched(new Set());
-      lastSeq.current = {};
-      select("group");
-      setText("");
-      setError("");
-      reloadState();
-    } catch (err) {
-      setError(errorCopy(err, roster));
-    }
-  };
-
   const bringOver = async () => {
     if (!legacy) return;
     const legacyRoster = mapRoster(legacy.rosterWire);
@@ -633,6 +624,7 @@ export function SwarmPage() {
 
   const newWorkflow = () => {
     select("group");
+    setHireHint(true);
     window.requestAnimationFrame(() => composerRef.current?.focus());
   };
 
@@ -666,7 +658,6 @@ export function SwarmPage() {
 
   return (
     <div className={`db-swarm${rosterOpen ? " is-roster-open" : ""}`}>
-      <div className="db-swarm-aurora" aria-hidden="true" />
       <SwarmChannels
         roster={roster}
         channel={liveChannel}
@@ -709,12 +700,11 @@ export function SwarmPage() {
           freeAnswers={freeAnswers}
           onFreeAnswer={(draftId, value) => setFreeAnswers((prev) => ({ ...prev, [draftId]: value }))}
           onAnswer={(draftId, label, managerId) => void route({ text: "", draftId, choiceLabel: label, choiceManagerId: managerId })}
-          confirmReset={confirmReset}
-          onAskReset={setConfirmReset}
-          onReset={() => void reset()}
           rosterOpen={rosterOpen}
           onToggleRoster={() => setRosterOpen((open) => !open)}
           composerRef={composerRef}
+          hireHint={hireHint}
+          youName={youName}
           banner={banner}
         />
       <SwarmRosterPanel

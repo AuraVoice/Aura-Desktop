@@ -8511,7 +8511,7 @@
   --sw-panel-border: rgba(255, 255, 255, 0.82);
   --sw-panel-fill: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
   --sw-panel-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
-  --sw-rail-fill: linear-gradient(180deg, rgba(255, 255, 255, 0.7), rgba(232, 244, 241, 0.42));
+  --sw-rail-fill: var(--sw-panel-fill);
   --sw-divider: rgba(63, 86, 78, 0.1);
   --sw-hover: rgba(255, 255, 255, 0.55);
   --sw-active: rgba(255, 255, 255, 0.92);
@@ -8525,35 +8525,37 @@
   --sw-text: var(--db-text);
   --sw-dim: var(--db-text-dim);
   --sw-mute: var(--db-text-mute);
+  /* The app's one teal accent, nothing else: managers, the Supervisor and you are all
+     the page's own ink, and managers differ by their glyph shape, not a hue. */
   --sw-accent: #0f9f8a;
   --sw-accent-strong: #0b7f6e;
   --sw-accent-soft: rgba(30, 200, 176, 0.14);
   --sw-accent-ring: rgba(30, 200, 176, 0.38);
   --sw-on-accent: #ffffff;
-  --sw-sup: #6d28d9;
-  --sw-sup-soft: rgba(109, 40, 217, 0.1);
-  --sw-sup-ring: rgba(139, 92, 246, 0.4);
+  --sw-sup: var(--db-text);
+  --sw-sup-soft: rgba(32, 35, 42, 0.07);
+  --sw-sup-ring: rgba(32, 35, 42, 0.28);
   --sw-warn: #b45309;
   --sw-warn-soft: rgba(217, 119, 6, 0.12);
   --sw-danger: #c2410c;
   --sw-you: #20232a;
   --sw-you-soft: rgba(32, 35, 42, 0.08);
-  --sw-aurora-a: rgba(30, 200, 176, 0.16);
-  --sw-aurora-b: rgba(139, 92, 246, 0.11);
+  --sw-aurora-a: transparent;
+  --sw-aurora-b: transparent;
   --sw-drawer-shadow: -18px 0 40px rgba(24, 29, 35, 0.16);
   --sw-scroll-thumb: rgba(63, 86, 78, 0.18);
-  --sw-h0: #0f8f7d;
-  --sw-h0-soft: rgba(20, 184, 166, 0.15);
-  --sw-h1: #0369a1;
-  --sw-h1-soft: rgba(14, 165, 233, 0.14);
-  --sw-h2: #b45309;
-  --sw-h2-soft: rgba(245, 158, 11, 0.17);
-  --sw-h3: #be123c;
-  --sw-h3-soft: rgba(244, 63, 94, 0.13);
-  --sw-h4: #4d7c0f;
-  --sw-h4-soft: rgba(132, 204, 22, 0.17);
-  --sw-h5: #4338ca;
-  --sw-h5-soft: rgba(99, 102, 241, 0.14);
+  --sw-h0: var(--db-text);
+  --sw-h0-soft: rgba(32, 35, 42, 0.07);
+  --sw-h1: var(--db-text);
+  --sw-h1-soft: rgba(32, 35, 42, 0.07);
+  --sw-h2: var(--db-text);
+  --sw-h2-soft: rgba(32, 35, 42, 0.07);
+  --sw-h3: var(--db-text);
+  --sw-h3-soft: rgba(32, 35, 42, 0.07);
+  --sw-h4: var(--db-text);
+  --sw-h4-soft: rgba(32, 35, 42, 0.07);
+  --sw-h5: var(--db-text);
+  --sw-h5-soft: rgba(32, 35, 42, 0.07);
   --sw-out: cubic-bezier(0.16, 1, 0.3, 1);
   --sw-spring: cubic-bezier(0.34, 1.3, 0.64, 1);
 
@@ -8786,6 +8788,54 @@
 .db-swarm-ch-hash { display: inline-grid; place-items: center; width: 26px; color: var(--sw-mute); flex: none; }
 .db-swarm-ch.is-active .db-swarm-ch-hash { color: var(--sw-accent); }
 .db-swarm-ch-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Name over role, so every row reads as a person with a title. */
+.db-swarm-ch-text { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+.db-swarm-ch-text .db-swarm-ch-name { flex: none; }
+.db-swarm-ch-role { font-size: 11.5px; font-weight: 450; color: var(--sw-mute); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-swarm-ch.is-ghost { opacity: 0.55; cursor: default; }
+.db-swarm-ch.is-ghost:hover { background: transparent; color: var(--sw-dim); transform: none; }
+.db-swarm-contact {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px;
+  border: 1px solid var(--sw-chip-border);
+  border-radius: 12px;
+  background: var(--sw-chip);
+  color: var(--sw-text);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: background 180ms var(--sw-out);
+}
+.db-swarm-contact:hover { background: var(--sw-hover); }
+.db-swarm-contact:focus-visible { outline: 2px solid var(--sw-accent-ring); outline-offset: 2px; }
+.db-swarm-contact .db-swarm-ch-role { white-space: normal; }
+.db-swarm-new-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--sw-chip-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--sw-dim);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+  transition: background 160ms var(--sw-out), color 160ms var(--sw-out);
+}
+.db-swarm-new-btn:hover { background: var(--sw-hover); color: var(--sw-text); }
+.db-swarm-new-btn:focus-visible { outline: 2px solid var(--sw-accent-ring); outline-offset: 2px; }
+.db-swarm-role { font-size: 11.5px; color: var(--sw-mute); }
+.db-swarm-icon-btn.is-labelled { width: auto; gap: 6px; padding: 0 10px; font: inherit; font-size: 12.5px; font-weight: 550; display: inline-flex; align-items: center; }
 .db-swarm-ch-avatar { position: relative; display: inline-flex; flex: none; }
 .db-swarm-presence {
   position: absolute;

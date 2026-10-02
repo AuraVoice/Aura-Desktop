@@ -96,6 +96,24 @@ export function supervisorActive(roster: SwarmRoster): boolean {
   return roster.supervisor?.status === "active";
 }
 
+/** The short role shown under or beside a name, so every voice reads as name plus title. */
+export function roleLabel(author: Author, roster: SwarmRoster): string {
+  if (author.role === "you") return "You";
+  if (author.role === "supervisor") return "Supervisor";
+  if (author.role === "aura") return "Hires your managers";
+  const manager = roster.managers.find((m) => m.id === author.id);
+  if (manager?.status === "paused") return "Manager · paused";
+  return manager?.isCoordinator ? "Manager · point of contact" : "Manager";
+}
+
+/** What the front door's current owner does there, for the point-of-contact block. */
+export function contactDuty(roster: SwarmRoster): string {
+  const backer = frontDoorAuthor(roster);
+  if (backer.role === "supervisor") return "Routes #group to your managers";
+  if (backer.role === "manager") return "Answers #front-door until a second manager joins";
+  return "Hires a manager for each ongoing job";
+}
+
 export function groupChannelName(roster: SwarmRoster): string {
   return supervisorActive(roster) ? "group" : "front-door";
 }
