@@ -55,8 +55,8 @@ export function AnimatedHotkeyGuide({ onTryVoice }: { onTryVoice: () => void }) 
       });
     if (guide) items.push({
         keys: guide.keys,
-        action: "Get guidance while your screen changes.",
-        detail: "Let Aura follow meaningful screen changes while you work.",
+        action: "Have Buddy watch your screen with you.",
+        detail: "Buddy stays quiet while you work or study, corrects you when you're wrong, and walks you through a task when you ask.",
       });
     return items;
   }, [bindings, voiceStatus]);

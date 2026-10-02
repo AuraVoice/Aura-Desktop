@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   useDraftCard: vi.fn(),
   useUpdateReady: vi.fn(),
   guideStop: vi.fn(),
+  startSession: vi.fn(() => Promise.resolve()),
   startBridgedSession: vi.fn(() => Promise.resolve()),
 }));
 
@@ -36,7 +37,7 @@ vi.mock("./useVoiceBar", () => ({
     showMicSettingsHint: false,
     isVoiceCapped: false,
     desiredActive: false,
-    startSession: vi.fn(),
+    startSession: mocks.startSession,
     startBridgedSession: mocks.startBridgedSession,
     endSession: vi.fn(() => Promise.resolve()),
     toggleSession: vi.fn(),
@@ -172,7 +173,9 @@ describe("OverlayRoot meeting background services", () => {
     expect(text).not.toContain("Still checking");
     expect(text).toContain('"children":["draft"]');
     expect(mocks.invoke).toHaveBeenCalledWith("set_slot_height", { height: 180, centered: false });
-    expect(mocks.startBridgedSession).toHaveBeenCalledWith("guide");
+    // Guide opens silent on the cold path; the Realtime bridge is for chat summons.
+    expect(mocks.startSession).toHaveBeenCalledWith("guide");
+    expect(mocks.startBridgedSession).not.toHaveBeenCalled();
   });
 
   it("stops Guide mode and clears the slot when sign-out reaches the root", () => {

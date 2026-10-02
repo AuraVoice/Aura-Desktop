@@ -261,11 +261,11 @@ export function OverlayRoot() {
     setScreenContextRequested(false);
   }, []);
   const guideVoiceEpochRef = useRef<number | null>(null);
-  // Same rule as the notch gesture: a muted call never opens the audio-only
-  // Realtime leg, so Guide's voice start goes straight to the cold path.
-  const startGuideVoiceBridged = voice.startBridgedSession;
-  const startGuideVoiceCold = voice.startSession;
-  const startGuideVoice = outputMode.muted ? startGuideVoiceCold : startGuideVoiceBridged;
+  // Guide always starts on the cold LiveKit path, never through the Realtime
+  // bridge. The bridge exists to speak first on a chat summon; a watch session
+  // must open silent, with the first word coming only when Buddy has a reason,
+  // and the bridge has no Guide instructions to give anyway.
+  const startGuideVoice = voice.startSession;
   useEffect(() => {
     if (!guide.armed) {
       guideVoiceEpochRef.current = null;

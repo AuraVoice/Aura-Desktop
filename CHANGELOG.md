@@ -16,6 +16,15 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+## [0.16.1] - 2026-10-02
+
+### Changed
+- Guide Mode is now one mode. Press Ctrl+Alt+G (Control+Option+G on a Mac) or ask Buddy to watch with you: Buddy watches your screen and listens quietly, speaks only when you are wrong, ask, or get stuck, checks official docs before correcting you, and walks you through a task step by step with the pointer when you ask. The separate "coach me" command is gone; starting Guide Mode does all of it.
+- Starting Guide Mode no longer opens with a greeting. Buddy's first word comes only when there is a reason for one.
+
+### Fixed
+- The Guide Mode dot in the notch now lights up as soon as Buddy is watching, not only once a walkthrough has started.
+
 ## [0.16.0] - 2026-10-02
 
 ### Added

@@ -1184,7 +1184,10 @@ export function useGuideMode({ room, status, signedIn, onPoint }: UseGuideModeOp
             activeModeGenerationRef.current !== null
           ) {
             firstFrameReadyGenerationRef.current = activeModeGenerationRef.current;
-            if (taskStateRef.current !== null) setActive(true);
+            // Watching is live once the agent has accepted a frame. A task is
+            // optional: the quiet watcher has none until the user asks for one,
+            // and the dot must not wait for that.
+            setActive(true);
           } else if (verdict.payload.accepted !== true) {
             setActive(false);
             readyAgentRoomRef.current = null;

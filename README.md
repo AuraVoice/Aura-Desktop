@@ -373,7 +373,7 @@ sequenceDiagram
     Rust->>Rust: cancel_pointing after ~3.4s, restore prior presentation
 ```
 
-Standard desktop voice sessions capture the cursor display once per spoken turn (`useTurnScreenCapture.ts`). Ctrl+Alt+G starts or stops Guide Mode: while explicitly active, `useGuideMode.ts` samples the pinned cursor display every two seconds, but Rust's fingerprint detector sends only stable, meaningfully changed frames. The voice agent keeps one pending frame and one hot image in conversation context, then responds through the existing spoken conversation. Guide Mode has no checklist card or Check Now/Stop buttons; the notch shows only a passive green status dot.
+Standard desktop voice sessions capture the cursor display once per spoken turn (`useTurnScreenCapture.ts`). Ctrl+Alt+G starts or stops Guide Mode: while explicitly active, `useGuideMode.ts` samples the pinned cursor display every two seconds, but Rust's fingerprint detector sends only stable, meaningfully changed frames. The worker forwards each frame to one Gemini Live agent that watches and listens quietly, speaks only when the user is wrong, asks, is stuck or skips a step, and walks them through a task one verified step at a time (with the pointer) when they ask. Guide Mode has no checklist card or Check Now/Stop buttons; the notch shows only a passive green status dot.
 
 When the agent saves something it saw (a `screen_save.created` data-channel message), the bar's caption shows a brief "Saved to ..." confirmation before yielding back to the normal caption (`useScreenSight.ts` feeding `VoiceBar.tsx`).
 
