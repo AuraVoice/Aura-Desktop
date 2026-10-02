@@ -243,9 +243,12 @@ about storage. The reversal is narrow and the invariants around it are not:
   `audio_path` while KEEPING the row, so "audio gone, transcript present"
   (`has_audio: false`) is a designed state, not an error. Any new UI must handle
   it as normal.
-- `security::session_changed` calls `history::retain_only_for_session` on EVERY
-  transition, deleting clip files as well as rows. That is the only thing
-  isolating dictations across accounts; do not make it conditional on `revoked`.
+- **An account switch never deletes the other account's dictations.** Isolation
+  is the uid scope on every read plus the uid in every AAD. `security::session_changed`
+  calls `history::retain_only_for_session`, which only ages out other accounts'
+  rows and clips past 90 days (`sweep` runs for the signed-in uid alone). Deleting
+  on every switch wiped weeks of a user's own speech when they signed into their
+  second account (2026-10-01); do not bring it back.
 - The transcript column is ciphertext, so there is no SQL search and there must
   never be a plaintext-searchable copy. `dictation_history_list` decrypts once
   and the page filters in memory.

@@ -672,9 +672,9 @@ pub fn session_changed(app: &AppHandle, signed_in: bool, uid: Option<String>) {
     if let Some(uid) = session_uid.clone() {
         crate::interview::hydrate_preparation(app, uid);
     }
-    // Dictation history holds transcripts AND audio clips for one account, and
-    // the backend has no copy of either, so this hook is the only thing that
-    // isolates them across accounts. It deletes clip files as well as rows.
+    // Dictation history is uid-scoped on every read and uid-bound in every AAD,
+    // so this hook does not delete the other account's dictations; it only
+    // ages out their rows and clips past the 90-day cap.
     #[cfg(windows)]
     crate::dictation::history::retain_only_for_session(app, session_uid);
 }
