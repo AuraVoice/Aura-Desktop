@@ -26,6 +26,9 @@ export interface Entitlement {
   status: EntitlementStatus;
   trialEndDate: string | null;
   cancelAtPeriodEnd: boolean;
+  /** Whether Manage billing has a billing account to open. Null when the
+   * backend predates the field, which keeps the old behaviour (show it). */
+  billingManageable: boolean | null;
   raw: unknown;
 }
 
@@ -59,6 +62,7 @@ export function parseEntitlement(json: unknown): Entitlement | null {
     status: asStatus(obj.status),
     trialEndDate: typeof obj.trial_end_date === "string" ? obj.trial_end_date : null,
     cancelAtPeriodEnd: obj.cancel_at_period_end === true,
+    billingManageable: typeof obj.billing_manageable === "boolean" ? obj.billing_manageable : null,
     raw: json,
   };
 }
@@ -101,10 +105,31 @@ export async function postCheckout(tier: CheckoutTier, period: CheckoutPeriod): 
   return data.checkout_url;
 }
 
+/** Why GET /billing/portal refused, from the backend's `error` field. Each one
+ * needs different copy: only `portal_failed` and `unavailable` are worth a retry. */
+export type BillingPortalReason =
+  | "no_billing_account"
+  | "billing_not_configured"
+  | "portal_failed"
+  | "unavailable";
+
+export class BillingPortalError extends Error {
+  constructor(readonly reason: BillingPortalReason, status: number) {
+    super(`fetchBillingPortal failed: ${status} ${reason}`);
+    this.name = "BillingPortalError";
+  }
+}
+
 export async function fetchBillingPortal(): Promise<string> {
   const response = await authFetchWithTimeout("/billing/portal", undefined, CHECKOUT_TIMEOUT_MS);
   if (!response.ok) {
-    throw new Error(`fetchBillingPortal failed: ${response.status}`);
+    const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
+    const code = typeof body?.error === "string" ? body.error : "";
+    const reason: BillingPortalReason =
+      code === "no_billing_account" || code === "billing_not_configured" || code === "portal_failed"
+        ? code
+        : "unavailable";
+    throw new BillingPortalError(reason, response.status);
   }
   const data = (await response.json()) as { portal_url?: unknown };
   if (typeof data.portal_url !== "string" || !data.portal_url) {

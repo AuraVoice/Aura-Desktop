@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bell, ChevronDown, LogOut, UserRound } from "lucide-react";
+import { Bell, LogOut, UserRound } from "lucide-react";
 import { type User as FirebaseUser } from "firebase/auth";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -9,15 +9,8 @@ import { logError } from "../lib/log";
 import { signOutSession } from "../lib/signOutSession";
 import { NotificationsPanel } from "./NotificationsPanel";
 import { agentsPath } from "./pages/AgentsPage";
-import { ThemeToggleButton } from "./components/ThemeToggleButton";
 import type { DashboardNotificationsState } from "./useDashboardNotifications";
 import type { StoredNotification } from "../lib/desktopNotifications";
-
-interface TopBarProps {
-  title: string;
-  user: FirebaseUser | null;
-  notifications?: DashboardNotificationsState;
-}
 
 /** Payload of a clicked Windows toast, forwarded by src-tauri/src/toast.rs
  *  either live (event) or via the pending-activation handoff when the click
@@ -88,19 +81,16 @@ function useDismissable(ref: React.RefObject<HTMLDivElement | null>, open: boole
   }, [ref, open, close]);
 }
 
-export function TopBar({ title, user, notifications }: TopBarProps) {
-  const [open, setOpen] = useState(false);
+/** The bell beside the window buttons. It also owns toast-click routing, so it must
+ * mount with the shell: a click that opened the window is drained from here. */
+export function NotificationBell({ notifications }: { notifications?: DashboardNotificationsState }) {
   const [notifOpen, setNotifOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
   const notifRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
 
-  const name = user?.displayName || user?.email?.split("@")[0] || "Signed out";
-  const email = user?.email ?? "";
   const unread = notifications?.unreadCount ?? 0;
   const markNotificationSeen = notifications?.markSeen;
 
-  useDismissable(menuRef, open, () => setOpen(false));
   useDismissable(notifRef, notifOpen, () => setNotifOpen(false));
 
   // A clicked Windows toast routes here: mark the row seen and open the
@@ -129,7 +119,6 @@ export function TopBar({ title, user, notifications }: TopBarProps) {
         setNotifOpen(false);
         navigate(browserTaskDestination(row?.resourceId));
       } else {
-        setOpen(false);
         setNotifOpen(true);
       }
     };
@@ -174,16 +163,6 @@ export function TopBar({ title, user, notifications }: TopBarProps) {
     };
   }, [markNotificationSeen, navigate, notifications?.inbox]);
 
-  function viewProfile() {
-    setOpen(false);
-    navigate("/account");
-  }
-
-  function handleSignOut() {
-    setOpen(false);
-    signOutSession().catch((err) => logError("TopBar: sign out", err));
-  }
-
   function selectNotification(row: StoredNotification) {
     if (!row.seen) notifications?.markSeen(row.notificationId);
     if (row.action === "view_meeting" || row.action === "retry_meeting_upload") {
@@ -199,89 +178,100 @@ export function TopBar({ title, user, notifications }: TopBarProps) {
   }
 
   return (
-    <header className="db-topbar">
-      <h1 className="db-topbar-title">{title}</h1>
-      <div className="db-topbar-actions">
-        <ThemeToggleButton />
-        <div className="db-notif-menu" ref={notifRef}>
-          <button
-            type="button"
-            className="db-icon-btn"
-            aria-label={unread > 0 ? `Notifications, ${unread} unread` : "Notifications"}
-            aria-haspopup="true"
-            aria-expanded={notifOpen}
-            title="Notifications"
-            onClick={() => {
-              setOpen(false);
-              setNotifOpen((v) => !v);
-            }}
-          >
-            <Bell size={20} aria-hidden />
-            {unread > 0 && (
-              <span className="db-badge db-badge-count" aria-hidden>
-                {unread > 9 ? "9+" : unread}
-              </span>
-            )}
-          </button>
+    <div className="db-notif-menu" ref={notifRef}>
+      <button
+        type="button"
+        className="db-window-bell"
+        aria-label={unread > 0 ? `Notifications, ${unread} unread` : "Notifications"}
+        aria-haspopup="true"
+        aria-expanded={notifOpen}
+        title="Notifications"
+        onDoubleClick={(event) => event.stopPropagation()}
+        onClick={() => setNotifOpen((v) => !v)}
+      >
+        <Bell aria-hidden />
+        {unread > 0 && (
+          <span className="db-badge db-badge-count" aria-hidden>
+            {unread > 9 ? "9+" : unread}
+          </span>
+        )}
+      </button>
 
-          {notifOpen && notifications && (
-            <NotificationsPanel
-              rows={notifications.inbox}
-              onSelect={selectNotification}
-              onDismiss={notifications.dismiss}
-              onMarkAllRead={notifications.markAllSeen}
-              hasUnread={unread > 0}
-            />
-          )}
-        </div>
+      {notifOpen && notifications && (
+        <NotificationsPanel
+          rows={notifications.inbox}
+          onSelect={selectNotification}
+          onDismiss={notifications.dismiss}
+          onMarkAllRead={notifications.markAllSeen}
+          hasUnread={unread > 0}
+        />
+      )}
+    </div>
+  );
+}
 
-        <div className="db-account-menu" ref={menuRef}>
-          <button
-            type="button"
-            className={`db-account-btn${open ? " db-account-btn-open" : ""}`}
-            onClick={() => {
-              setNotifOpen(false);
-              setOpen((v) => !v);
-            }}
-            aria-haspopup="menu"
-            aria-expanded={open}
-            aria-label="Account"
-          >
-            <Avatar user={user} size="sm" />
-            <span className="db-account-meta">
-              <span className="db-account-name">{name}</span>
-              {email && <span className="db-account-email">{email}</span>}
-            </span>
-            <ChevronDown size={16} className="db-account-chevron" aria-hidden />
-          </button>
+/** The profile beside the collapse button: avatar and name, with the email,
+ * View profile and Sign out in its menu. */
+export function AccountMenu({ user }: { user: FirebaseUser | null }) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
 
-          {open && (
-            <div className="db-popover" role="menu">
-              <div className="db-popover-head">
-                <Avatar user={user} size="lg" />
-                <div className="db-popover-id">
-                  <span className="db-popover-name">{name}</span>
-                  {email && <span className="db-popover-email">{email}</span>}
-                </div>
-              </div>
-              <div className="db-popover-sep" />
-              <button type="button" className="db-popover-item" role="menuitem" onClick={viewProfile}>
-                <UserRound size={17} aria-hidden />
-                <span>View profile</span>
-              </button>
-              <button
-                type="button"
-                className="db-popover-item db-popover-item-danger"
-                role="menuitem"
-                onClick={handleSignOut}
-              >
-                <LogOut size={17} aria-hidden />
-                <span>Sign out</span>
-              </button>
+  const name = user?.displayName || user?.email?.split("@")[0] || "Signed out";
+  const email = user?.email ?? "";
+
+  useDismissable(menuRef, open, () => setOpen(false));
+
+  function viewProfile() {
+    setOpen(false);
+    navigate("/account");
+  }
+
+  function handleSignOut() {
+    setOpen(false);
+    signOutSession().catch((err) => logError("TopBar: sign out", err));
+  }
+
+  return (
+    <div className="db-account-menu" ref={menuRef}>
+      <button
+        type="button"
+        className={`db-account-btn${open ? " db-account-btn-open" : ""}`}
+        onClick={() => setOpen((v) => !v)}
+        onDoubleClick={(event) => event.stopPropagation()}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label={`Account: ${name}`}
+        title={name}
+      >
+        <UserRound size={22} aria-hidden />
+      </button>
+
+      {open && (
+        <div className="db-popover" role="menu">
+          <div className="db-popover-head">
+            <Avatar user={user} size="lg" />
+            <div className="db-popover-id">
+              <span className="db-popover-name">{name}</span>
+              {email && <span className="db-popover-email">{email}</span>}
             </div>
-          )}
+          </div>
+          <div className="db-popover-sep" />
+          <button type="button" className="db-popover-item" role="menuitem" onClick={viewProfile}>
+            <UserRound size={17} aria-hidden />
+            <span>View profile</span>
+          </button>
+          <button
+            type="button"
+            className="db-popover-item db-popover-item-danger"
+            role="menuitem"
+            onClick={handleSignOut}
+          >
+            <LogOut size={17} aria-hidden />
+            <span>Sign out</span>
+          </button>
         </div>
-      </div>
-    </header>
+      )}
+    </div>
   );
 }

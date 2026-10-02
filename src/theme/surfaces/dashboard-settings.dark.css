@@ -51,6 +51,23 @@
 :root[data-theme="dark"] .db-insight-range button.is-active {
   background: var(--dk-surface-2);
 }
+:root[data-theme="dark"] .db-insight-range-trigger {
+  border-color: var(--dk-border);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .db-insight-range-trigger:hover {
+  background: var(--dk-hover);
+}
+:root[data-theme="dark"] .db-insight-range-trigger:focus-visible {
+  outline-color: var(--dk-accent);
+}
+:root[data-theme="dark"] .db-insight-range-trigger svg {
+  color: var(--dk-text-mute);
+}
+:root[data-theme="dark"] .db-insight-range-check {
+  color: var(--dk-accent);
+}
 :root[data-theme="dark"] .db-insight-share {
   border-color: var(--dk-glass-border);
   background: var(--dk-glass-fill);

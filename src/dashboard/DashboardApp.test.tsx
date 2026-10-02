@@ -22,7 +22,7 @@ vi.mock("./AccountOnboarding", () => ({
 }));
 vi.mock("./DashboardOnboarding", () => ({ DashboardOnboarding: () => <div>dashboard-onboarding</div> }));
 vi.mock("./Sidebar", () => ({ Sidebar: () => <aside>sidebar</aside> }));
-vi.mock("./TopBar", () => ({ TopBar: () => <header>topbar</header> }));
+vi.mock("./TopBar", () => ({ AccountMenu: () => <div>account</div>, NotificationBell: () => <div>bell</div> }));
 vi.mock("react-router-dom", () => ({
   HashRouter: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   Navigate: () => null,

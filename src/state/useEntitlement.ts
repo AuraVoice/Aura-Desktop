@@ -56,6 +56,9 @@ export interface EntitlementState {
   trialDaysLeft: number;
   trialEndDate: string | null;
   cancelAtPeriodEnd: boolean;
+  /** False only when the backend says there is no billing account behind the
+   * plan (a granted plan); null when it has not said. */
+  billingManageable: boolean | null;
   isTrialing: boolean;
   /** The purchased tier is paid (not merely trial-derived pro): drives the
    * "show Upgrade" vs "show plan only" split in the UI. */
@@ -297,6 +300,7 @@ export function useEntitlement({
     trialDaysLeft: computeTrialDaysLeft(entitlement),
     trialEndDate: entitlement?.trialEndDate ?? null,
     cancelAtPeriodEnd: entitlement?.cancelAtPeriodEnd ?? false,
+    billingManageable: entitlement?.billingManageable ?? null,
     isTrialing: entitlement?.status === "trialing",
     isPurchased: (entitlement?.tier ?? "free") !== "free",
     checkout,

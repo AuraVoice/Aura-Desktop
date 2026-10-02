@@ -25,6 +25,7 @@
   position: fixed;
   inset: 0;
   display: flex;
+  flex-direction: column;
   background: var(--db-bg);
   color: var(--db-text);
   font-family: var(--font-body, system-ui, sans-serif);
@@ -50,6 +51,13 @@
 .db-window-content .db-app {
   position: absolute;
 }
+/* The window bar sits inside .db-app (so the profile and bell get the theme
+   tokens), above this row of sidebar and page. */
+.db-app-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
 .db-window-titlebar {
   position: relative;
   z-index: 200;
@@ -60,13 +68,94 @@
   user-select: none;
 }
 .db-window-sidebar-control {
-  width: 228px;
-  padding: 8px 14px 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 228px;
+  /* Even top and bottom, so the collapse icon and profile share a centre line
+     with the bell and window buttons, which centre in the bar. */
+  padding: 4px 14px;
   flex-shrink: 0;
-  transition: width 0.28s cubic-bezier(0.22, 0.61, 0.36, 1);
+  transition: min-width 0.28s cubic-bezier(0.22, 0.61, 0.36, 1);
 }
 .db-window-sidebar-control.is-collapsed {
-  width: 68px;
+  min-width: 68px;
+}
+/* The profile, compact, right beside the collapse button. */
+.db-window-titlebar .db-account-btn {
+  min-height: 0;
+  padding: 6px;
+  border-radius: 10px;
+  color: #6b7280;
+}
+/* .db-account-menu raises specificity: the generic .db-account-btn:hover fill
+   further down the file would otherwise paint a box behind the icon. */
+.db-window-titlebar .db-account-menu .db-account-btn:hover,
+.db-window-titlebar .db-account-menu .db-account-btn-open {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: #1f2328;
+}
+.db-window-titlebar .db-avatar-sm {
+  width: 26px;
+  height: 26px;
+  font-size: 11px;
+}
+.db-window-titlebar .db-popover {
+  top: calc(100% + 6px);
+  right: auto;
+  left: 0;
+}
+/* The bell, the same 21px round as the window buttons beside it, in a neutral
+   fill so it never reads as a fourth traffic light. */
+.db-window-extra {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  padding: 0 0 0 12px;
+}
+.db-window-extra + .db-window-controls {
+  margin-left: 0;
+}
+.db-window-bell {
+  position: relative;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: #2b2f36;
+  cursor: pointer;
+  transition: filter 0.15s var(--db-ease), transform 0.15s var(--db-ease);
+}
+.db-window-bell svg {
+  width: 20px;
+  height: 20px;
+  stroke-width: 2;
+}
+.db-window-bell:hover {
+  filter: brightness(0.96);
+  transform: translateY(-1px) scale(1.08);
+}
+.db-window-bell:active {
+  transform: translateY(0) scale(0.94);
+}
+.db-window-bell:focus-visible {
+  outline: 2px solid rgba(31, 35, 40, 0.7);
+  outline-offset: 2px;
+}
+.db-window-bell .db-badge-count {
+  top: -6px;
+  right: -9px;
+  color: #000;
+  font-weight: 900;
+}
+.db-window-titlebar .db-notif-panel {
+  top: calc(100% + 4px);
+  right: 12px;
 }
 .db-window-sidebar-control .db-collapse {
   width: 38px;
@@ -535,64 +624,6 @@
   box-shadow: 0 2px 6px rgba(24, 29, 35, 0.04), 0 12px 32px rgba(24, 29, 35, 0.06);
 }
 
-.db-topbar {
-  position: relative;
-  z-index: 20;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  min-height: 72px;
-  padding: 0 32px;
-  flex-shrink: 0;
-  border-radius: 28px 28px 0 0;
-  background: rgba(250, 249, 245, 0.72);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-}
-/* Left-aligned in flow: the centered variant sat out of flow and a long title
-   ("Interview Companion") ran under the bell and its unread badge. As a flex
-   child it now truncates against the actions cluster instead of overlapping. */
-.db-topbar-title {
-  min-width: 0;
-  flex: 1;
-  margin: 0;
-  padding-left: 12px;
-  overflow: hidden;
-  font-family: var(--font-title, system-ui, sans-serif);
-  font-weight: 700;
-  font-size: 28px;
-  letter-spacing: -0.025em;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.db-topbar-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
-}
-.db-icon-btn {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 38px;
-  height: 38px;
-  border: none;
-  border-radius: 10px;
-  background: transparent;
-  color: var(--db-text-dim);
-  cursor: pointer;
-  transition: background 0.15s var(--db-ease), color 0.15s var(--db-ease),
-    transform 0.12s var(--db-ease);
-}
-.db-icon-btn:hover {
-  background: var(--db-hover);
-  color: var(--db-text);
-}
-.db-icon-btn:active {
-  transform: scale(0.94);
-}
 .db-badge {
   position: absolute;
   top: 8px;
@@ -4349,6 +4380,55 @@
   background: #fff;
   color: var(--db-text);
   box-shadow: var(--db-shadow-sm);
+}
+/* The range dropdown: a pill trigger, and the shared row-menu panel anchored
+   under it (absolute here, since the header is not inside a transformed list). */
+.db-insight-range-menu {
+  position: relative;
+}
+.db-insight-range-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 12px 0 16px;
+  border: 1px solid #e2dfd5;
+  border-radius: 30px;
+  background: #f6f4ef;
+  color: var(--db-text);
+  font-family: var(--font-body, system-ui, sans-serif);
+  font-size: 12.5px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background 0.16s var(--db-ease), transform 0.12s var(--db-ease);
+}
+.db-insight-range-trigger:hover {
+  background: #fff;
+}
+.db-insight-range-trigger:active {
+  transform: scale(0.97);
+}
+.db-insight-range-trigger:focus-visible {
+  outline: 2px solid var(--db-teal);
+  outline-offset: 2px;
+}
+.db-insight-range-trigger svg {
+  color: var(--db-text-mute);
+  transition: transform 0.18s var(--db-ease);
+}
+.db-insight-range-trigger[aria-expanded="true"] svg {
+  transform: rotate(180deg);
+}
+.db-insight-range-menu .db-row-menu-panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 150px;
+}
+.db-insight-range-check {
+  display: inline-flex;
+  width: 14px;
+  color: var(--db-teal);
 }
 .db-insight-range-group {
   display: flex;

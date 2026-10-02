@@ -13,6 +13,7 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   AudioLines,
   Check,
+  ChevronDown,
   FileText,
   Info,
   Keyboard,
@@ -39,9 +40,22 @@ import { durationCoarse as formatDuration, localDateKey } from "../format";
 import { useVoiceLexicon } from "../useVoiceLexicon";
 import { PageError } from "../components/PageError";
 import { RefreshIndicator } from "../components/RefreshIndicator";
+import { useOutsideClick } from "../components/useOutsideClick";
 import { useDashboardResource } from "../useDashboardResource";
 
-type InsightRange = "7d" | "30d";
+type InsightRange = "7d" | "30d" | "90d" | "all";
+
+/** `days: null` is all time, which has no previous period to compare against. */
+const RANGE_OPTIONS: { key: InsightRange; label: string; days: number | null }[] = [
+  { key: "7d", label: "7 days", days: 7 },
+  { key: "30d", label: "30 days", days: 30 },
+  { key: "90d", label: "90 days", days: 90 },
+  { key: "all", label: "All time", days: null },
+];
+
+/** Twice the longest windowed range, so 90 days still has a full previous 90 to
+ * compare against. All time fetches with no cutoff instead. */
+const HISTORY_DAYS = 180;
 type InsightTab = "usage" | "voice";
 
 interface InsightSnapshot {
@@ -284,21 +298,68 @@ function UsageBars({ rows }: { rows: UsageRow[] }) {
   );
 }
 
+/** The range filter: one pill showing the current range, opening a menu of all four. */
+function RangeMenu({ value, onChange }: { value: InsightRange; onChange: (range: InsightRange) => void }) {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
+  useOutsideClick(menuRef, () => setOpen(false), open, triggerRef);
+  const current = RANGE_OPTIONS.find((option) => option.key === value) ?? RANGE_OPTIONS[0];
+  return (
+    <div className="db-insight-range-menu">
+      <button
+        ref={triggerRef}
+        type="button"
+        className="db-insight-range-trigger"
+        aria-label={`Insights range: ${current.label}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {current.label}
+        <ChevronDown size={14} aria-hidden />
+      </button>
+      {open && (
+        <div className="db-row-menu-panel" role="menu" ref={menuRef}>
+          {RANGE_OPTIONS.map((option) => (
+            <button
+              key={option.key}
+              type="button"
+              role="menuitemradio"
+              aria-checked={option.key === value}
+              className="db-row-menu-item"
+              onClick={() => {
+                setOpen(false);
+                onChange(option.key);
+              }}
+            >
+              <span className="db-insight-range-check">{option.key === value && <Check size={14} aria-hidden />}</span>
+              {option.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function InsightsPage() {
   const [range, setRange] = useState<InsightRange>("7d");
   const [tab, setTab] = useState<InsightTab>("usage");
   const [shareState, setShareState] = useState<"idle" | "done" | "error">("idle");
   const [heatmapTooltip, setHeatmapTooltip] = useState<HeatmapTooltip | null>(null);
   const [dictationUsage, setDictationUsage] = useState<DictationUsageEntry[]>([]);
-  const rangeDays = range === "7d" ? 7 : 30;
-  const currentCutoff = useMemo(() => daysAgo(rangeDays - 1), [rangeDays]);
-  const previousCutoff = useMemo(() => daysAgo(rangeDays * 2 - 1), [rangeDays]);
-  const historyCutoff = useMemo(() => daysAgo(HEATMAP_WEEKS * 7), []);
+  const rangeDays = RANGE_OPTIONS.find((option) => option.key === range)?.days ?? null;
+  const allTime = rangeDays === null;
+  // All time counts from the epoch and leaves the previous window empty.
+  const currentCutoff = useMemo(() => (rangeDays === null ? new Date(0) : daysAgo(rangeDays - 1)), [rangeDays]);
+  const previousCutoff = useMemo(() => (rangeDays === null ? new Date(0) : daysAgo(rangeDays * 2 - 1)), [rangeDays]);
+  const historyCutoff = useMemo(() => daysAgo(Math.max(HISTORY_DAYS, HEATMAP_WEEKS * 7)), []);
   const res = useDashboardResource<InsightSnapshot>(
-    "insights:polished",
+    allTime ? "insights:polished:all" : "insights:polished",
     async (signal) => {
       const [history, drafts, saves, meetings] = await Promise.all([
-        getHistorySessions(historyCutoff.toISOString(), signal),
+        getHistorySessions(allTime ? undefined : historyCutoff.toISOString(), signal),
         getDrafts(signal),
         getScreenSaves(signal),
         getMeetings(signal),
@@ -453,6 +514,13 @@ export function InsightsPage() {
         .map(localDateKey)
         .filter(Boolean),
     ).size;
+    // All time measures active days against the days since the first activity.
+    const firstActivityMs = Math.min(...allActivityDates.map(timestamp).filter((t) => !Number.isNaN(t)));
+    const periodDays =
+      rangeDays ??
+      (Number.isFinite(firstActivityMs)
+        ? Math.max(1, Math.round((today.getTime() - startOfLocalDay(new Date(firstActivityMs)).getTime()) / 86_400_000) + 1)
+        : 1);
     const actions = sessions.reduce(
       (sum, item) => sum + item.num_of_tool_calls + item.screen_sight_frame_count,
       0,
@@ -479,6 +547,7 @@ export function InsightsPage() {
       streak,
       longestStreak: longestStreak(allActivityDates),
       activeDays,
+      periodDays,
       heatmap,
     };
   }, [res.data, currentCutoff, previousCutoff, rangeDays, dictationUsage]);
@@ -601,18 +670,7 @@ export function InsightsPage() {
         </div>
         <div className="db-insight-header-actions">
           <div className="db-insight-range-group">
-            <div className="db-insight-range" aria-label="Insights range">
-              {(["7d", "30d"] as const).map((item) => (
-                <button
-                  type="button"
-                  key={item}
-                  className={range === item ? "is-active" : ""}
-                  onClick={() => setRange(item)}
-                >
-                  {item === "7d" ? "7 days" : "30 days"}
-                </button>
-              ))}
-            </div>
+            <RangeMenu value={range} onChange={setRange} />
             {/* cachedAt stays null by design: the "Updated <time>" line is
                 permanently suppressed here; refreshing and retry states remain. */}
             <RefreshIndicator
@@ -686,7 +744,7 @@ export function InsightsPage() {
                   animateValue
                 >
                   <Gauge
-                    value={percentage(metrics.activeDays, rangeDays)}
+                    value={percentage(metrics.activeDays, metrics.periodDays)}
                     label={`${metrics.activeDays} active day${metrics.activeDays === 1 ? "" : "s"}`}
                   />
                 </SummaryCard>
@@ -711,10 +769,12 @@ export function InsightsPage() {
                   <div className="db-insight-device is-compact">
                     <span><Monitor size={19} aria-hidden /> Desktop</span>
                     <span className="db-insight-comparison">
-                      {comparisonLabel(
-                        metrics.conversations,
-                        metrics.previousConversations,
-                      )}
+                      {allTime
+                        ? "All time"
+                        : comparisonLabel(
+                            metrics.conversations,
+                            metrics.previousConversations,
+                          )}
                     </span>
                   </div>
                 </SummaryCard>
@@ -739,7 +799,7 @@ export function InsightsPage() {
                 >
                   <Gauge
                     value={Math.min(100, percentage(metrics.voiceSeconds, 60 * 60))}
-                    label={comparisonLabel(metrics.voiceSeconds, metrics.previousVoiceSeconds)}
+                    label={allTime ? "All time" : comparisonLabel(metrics.voiceSeconds, metrics.previousVoiceSeconds)}
                   />
                 </SummaryCard>
                 <SummaryCard
