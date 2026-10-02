@@ -470,3 +470,61 @@
 :root[data-theme="dark"] .db-discord-btn:hover {
   box-shadow: 0 10px 22px rgba(0, 0, 0, 0.45);
 }
+
+
+/* ── Agents > Swarm ── the light sheet draws every colour from --sw-* tokens, so dark
+   only re-points them, onto the --dk-* vocabulary. This is the "Aura Swarm" design
+   artifact's palette one to one. */
+:root[data-theme="dark"] .db-swarm {
+  --sw-panel-border: var(--dk-glass-border);
+  --sw-panel-fill: var(--dk-glass-fill);
+  --sw-panel-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
+  --sw-rail-fill: linear-gradient(180deg, rgba(14, 14, 15, 0.82), rgba(10, 10, 11, 0.7));
+  --sw-divider: var(--dk-divider);
+  --sw-hover: var(--dk-hover);
+  --sw-active: var(--dk-active);
+  --sw-active-ring: var(--dk-border-strong);
+  --sw-lift: rgba(0, 0, 0, 0.35);
+  --sw-field: var(--dk-field-bg);
+  --sw-field-border: var(--dk-field-border);
+  --sw-chip: rgba(255, 255, 255, 0.035);
+  --sw-chip-border: var(--dk-border);
+  --sw-sheen: rgba(255, 255, 255, 0.12);
+  --sw-text: var(--dk-text);
+  --sw-dim: var(--dk-text-dim);
+  --sw-mute: var(--dk-text-mute);
+  --sw-accent: var(--dk-accent);
+  --sw-accent-strong: #19b89f;
+  --sw-accent-soft: var(--dk-accent-soft);
+  --sw-accent-ring: var(--dk-accent-ring);
+  --sw-on-accent: #04231d;
+  --sw-sup: #c9a4ff;
+  --sw-sup-soft: rgba(201, 164, 255, 0.14);
+  --sw-sup-ring: rgba(201, 164, 255, 0.4);
+  --sw-warn: var(--dk-warning);
+  --sw-warn-soft: var(--dk-warning-soft);
+  --sw-danger: var(--dk-danger);
+  --sw-you: var(--dk-accent);
+  --sw-you-soft: var(--dk-accent-soft);
+  --sw-aurora-a: rgba(46, 224, 196, 0.1);
+  --sw-aurora-b: rgba(201, 164, 255, 0.08);
+  --sw-drawer-shadow: -18px 0 44px rgba(0, 0, 0, 0.55);
+  --sw-scroll-thumb: var(--dk-scroll-thumb);
+  --sw-h0: #5fd6c1;
+  --sw-h0-soft: rgba(46, 224, 196, 0.13);
+  --sw-h1: #7cc8f8;
+  --sw-h1-soft: rgba(56, 189, 248, 0.14);
+  --sw-h2: #f0c060;
+  --sw-h2-soft: rgba(240, 192, 96, 0.14);
+  --sw-h3: #fb8fa6;
+  --sw-h3-soft: rgba(251, 113, 133, 0.14);
+  --sw-h4: #b5e06a;
+  --sw-h4-soft: rgba(163, 230, 53, 0.13);
+  --sw-h5: #a5b4fc;
+  --sw-h5-soft: rgba(129, 140, 248, 0.15);
+}
+/* The danger pill keeps white text on light; on dark it needs the dark ink. */
+:root[data-theme="dark"] .db-swarm-pill-btn.is-danger,
+:root[data-theme="dark"] .db-swarm-pill-btn.is-danger:hover {
+  color: #2a0b07;
+}

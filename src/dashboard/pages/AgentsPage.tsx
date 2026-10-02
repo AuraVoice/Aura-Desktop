@@ -1,15 +1,17 @@
 import { useEffect, useState } from "react";
 import { Navigate, useSearchParams } from "react-router-dom";
-import { Globe, Search } from "lucide-react";
+import { Globe, Network, Search } from "lucide-react";
 import { SlidingTabs, useTabStage, type SlidingTab } from "../components/SlidingTabs";
 import { BrowserAgentPage } from "./BrowserAgentPage";
 import { ResearchPage } from "./ResearchPage";
+import { SwarmPage } from "./SwarmPage";
 
-export type AgentTab = "computer" | "research";
+export type AgentTab = "computer" | "research" | "swarm";
 
 const AGENT_TABS: Array<SlidingTab<AgentTab>> = [
   { value: "computer", label: "Computer", Icon: Globe },
   { value: "research", label: "Research", Icon: Search },
+  { value: "swarm", label: "Swarm", Icon: Network },
 ];
 
 const LAST_TAB_KEY = "aura.dashboard.agents-tab";
@@ -84,7 +86,7 @@ export function AgentsPage() {
           id={`agents-${stage.renderedTab}-panel`}
           aria-labelledby={`agents-${stage.renderedTab}-tab`}
         >
-          {stage.renderedTab === "computer" ? <BrowserAgentPage /> : <ResearchPage />}
+          {stage.renderedTab === "computer" ? <BrowserAgentPage /> : stage.renderedTab === "swarm" ? <SwarmPage /> : <ResearchPage />}
         </div>
       </div>
     </div>

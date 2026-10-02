@@ -84,6 +84,7 @@ pub fn open_dashboard_route(
         let tab = match tab {
             Some("computer") => Some("computer"),
             Some("research") => Some("research"),
+            Some("swarm") => Some("swarm"),
             _ => None,
         };
         match (tab, run) {

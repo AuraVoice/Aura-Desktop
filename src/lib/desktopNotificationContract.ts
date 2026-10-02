@@ -49,6 +49,12 @@ export const NOTIFICATION_TYPES = [
   "browser_task_ready",
   "browser_task_partial",
   "browser_task_failed",
+  // Swarm session outcomes (juno-backend services/swarm/runner.py _notify). Listed
+  // for the same reason as the research types: an unlisted type is dropped.
+  "swarm_report_ready",
+  "swarm_report_partial",
+  "swarm_needs_input",
+  "swarm_failed",
 ] as const;
 export type DesktopNotificationType = (typeof NOTIFICATION_TYPES)[number];
 
@@ -69,6 +75,8 @@ export const ACTIONS = [
   "view_research",
   "answer_research_question",
   "view_browser_task",
+  // resource_id is the Swarm channel (m:<manager_id>), opened on the Agents page.
+  "view_swarm_channel",
 ] as const;
 export type NotificationAction = (typeof ACTIONS)[number];
 

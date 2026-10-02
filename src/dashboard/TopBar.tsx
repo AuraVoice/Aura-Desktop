@@ -35,6 +35,10 @@ function browserTaskDestination(resourceId: string | null | undefined): string {
   return agentsPath("computer", resourceId);
 }
 
+function swarmDestination(resourceId: string | null | undefined): string {
+  return agentsPath("swarm", resourceId);
+}
+
 function initialsFor(user: FirebaseUser | null): string {
   const source = user?.displayName || user?.email || "";
   const parts = source.trim().split(/\s+/).filter(Boolean);
@@ -128,6 +132,10 @@ export function TopBar({ title, user, notifications }: TopBarProps) {
         const row = notifications?.inbox.find((item) => item.notificationId === activation.notificationId);
         setNotifOpen(false);
         navigate(browserTaskDestination(row?.resourceId));
+      } else if (activation.action === "view_swarm_channel") {
+        const row = notifications?.inbox.find((item) => item.notificationId === activation.notificationId);
+        setNotifOpen(false);
+        navigate(swarmDestination(row?.resourceId));
       } else {
         setOpen(false);
         setNotifOpen(true);
@@ -195,6 +203,9 @@ export function TopBar({ title, user, notifications }: TopBarProps) {
     } else if (row.action === "view_browser_task") {
       setNotifOpen(false);
       navigate(browserTaskDestination(row.resourceId));
+    } else if (row.action === "view_swarm_channel") {
+      setNotifOpen(false);
+      navigate(swarmDestination(row.resourceId));
     }
   }
 
