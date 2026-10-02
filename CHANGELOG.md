@@ -16,6 +16,8 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-02
+
 ### Added
 - When Aura decides a #group request is not Swarm work, she now says what to do instead: what the built-in feature does for that request and how to start it, with a button that opens it, and a **Hire that instead** button when an ongoing version would fit, which resends your message and its files as a hire. Files attached to a declined request are called out as unused instead of silently dropped.
 - A **Swarm** tab on the Agents page, laid out like a chat app: describe ongoing work in #group and Aura hires a manager for it, gives that manager a team, and brings in a Supervisor once you have two. Your team now lives in your account, not on this computer.
