@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import {
   approvePendingAction,
   fetchPendingAction,
+  pendingActionOutcomeCopy,
   rejectPendingAction,
   type PendingAction,
 } from "../../../lib/pendingActions";
@@ -111,16 +112,18 @@ function Elapsed({ since }: { since: number }) {
 export function WorkingEmbed({
   name,
   session,
+  reported,
   stopping,
   onStop,
 }: {
   name: string;
   session: SwarmSessionView | undefined;
+  reported: boolean;
   stopping: boolean;
   onStop: () => void;
 }) {
-  if (!session) return <p className="db-swarm-muted">{name} took this on.</p>;
-  if (TERMINAL_SESSION_STATES.has(session.state)) {
+  if (!session && !reported) return <p className="db-swarm-muted">{name} took this on.</p>;
+  if (!session || TERMINAL_SESSION_STATES.has(session.state)) {
     return <p className="db-swarm-muted">{name} worked on this. The report is below.</p>;
   }
   const tasks = session.lanes.filter((l) => l.kind === "task");
@@ -304,7 +307,13 @@ const TARGET_LABEL: Record<string, string> = {
   calendar: "Add to your calendar",
 };
 const TARGET_LIMIT: Record<string, number> = { x: 280, linkedin: 3000 };
-const TARGET_NAME: Record<string, string> = { x: "X", linkedin: "LinkedIn", calendar: "your calendar" };
+
+/** True when a report carries a draft Review can act on, which needs the session's
+ * draftActions to find its approval. Every other finished session is already told in full. */
+export function hasActionableDraft(report: SwarmMessage): boolean {
+  const body = (report.data.report && typeof report.data.report === "object" ? report.data.report : {}) as Json;
+  return list(body.drafts).some((d) => Boolean(TARGET_LABEL[str(d.target)] && str(d.id)));
+}
 
 /** Why Review could not prepare an approval (actions.py and pending_actions.py codes). */
 const PROPOSE_COPY: Record<string, string> = {
@@ -319,27 +328,6 @@ const PROPOSE_COPY: Record<string, string> = {
   time_invalid: "That time doesn't work for a calendar hold.",
   title_required: "The calendar hold needs a title.",
 };
-
-/** What happened after Approve, from the pending action's own status and reason. */
-function outcomeCopy(item: PendingAction, target: string): string {
-  const where = TARGET_NAME[target] ?? "there";
-  switch (item.status) {
-    case "done":
-      return target === "calendar" ? "Added to your calendar." : `Posted to ${where}.`;
-    case "unknown":
-      return `We couldn't confirm it went through. Check ${where} before trying again.`;
-    case "expired":
-      return "This approval expired before it was used.";
-    case "rejected":
-      return "Not done. You said not now.";
-    case "failed":
-      if (item.resultReason === "reauthorization_required") return "That account needs reconnecting under Connectors.";
-      if (item.resultReason?.startsWith("budget_")) return "The posting budget for today is used up.";
-      return `${where === "your calendar" ? "Your calendar" : where} refused it, so nothing happened.`;
-    default:
-      return "";
-  }
-}
 
 function localTime(iso: string): string {
   const at = Date.parse(iso);
@@ -457,7 +445,7 @@ function DraftAction({
         </>
       ) : (
         <div className="db-swarm-act-row">
-          {finished && item && <span className="db-swarm-muted">{outcomeCopy(item, target)}</span>}
+          {finished && item && <span className="db-swarm-muted">{pendingActionOutcomeCopy(item)}</span>}
           {finished && item?.status === "done" && item.resultUrl && (
             <button type="button" className="db-swarm-pill-btn" onClick={() => onOpenLink(item.resultUrl as string)}>
               Open

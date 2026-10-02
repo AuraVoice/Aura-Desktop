@@ -33,6 +33,10 @@ was started and read like commit subjects rather than release notes.
 - A Swarm report now says why it stopped short (an account not connected, nothing new found, budget used up) instead of just "Partial report", and a run that only hit its own safety rules no longer counts as partial.
 - Interview company research that runs out of room now says the dossier came out too long, instead of claiming the research service was not responding.
 - Signing into a different account no longer deletes your dictation history. Each account's dictations and recordings stay on this computer, visible only to that account, until they reach the 90-day limit.
+- A Swarm DM now stops you at 2,000 characters, the most a manager's brief can hold, instead of letting you type up to 4,000 and then refusing the send.
+- Approving a Swarm draft now tells you the same thing the approval card does: X's monthly posting limit is no longer called today's, and "X is limiting requests, try again in a few minutes" is no longer hidden behind "X refused it".
+- A Swarm request that times out after a few seconds no longer claims it waited two minutes.
+- The Swarm tab no longer piles up requests for team rounds that already finished, and typing in its composer no longer redraws every message.
 
 ## [0.15.33] - 2026-09-26
 

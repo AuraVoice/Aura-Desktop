@@ -122,6 +122,38 @@ export function parsePendingAction(raw: unknown): PendingAction | null {
   };
 }
 
+export const CONNECTOR_NAMES: Record<PendingActionConnector, string> = {
+  x: "X",
+  linkedin: "LinkedIn",
+  google_calendar: "Google Calendar",
+};
+
+/** What happened after Approve, from the action's own status and result reason. One copy
+ * for the overlay card and Swarm's report drafts, so a cause reads the same in both. */
+export function pendingActionOutcomeCopy(action: PendingAction): string {
+  const name = CONNECTOR_NAMES[action.connector];
+  const calendar = action.connector === "google_calendar";
+  const nothing = calendar ? "Nothing was booked." : "Nothing was posted.";
+  if (action.status === "done") return calendar ? `Added to ${name}.` : `Posted to ${name}.`;
+  if (action.status === "expired") return "This expired. Ask again to prepare it.";
+  if (action.status === "rejected") return `Discarded. ${nothing}`;
+  if (action.status === "unknown" || action.status === "executing") {
+    return `Aura couldn't confirm it went through. Check ${name} before trying again.`;
+  }
+  switch (action.resultReason) {
+    case "reauthorization_required":
+      return `${name} needs to be reconnected. Turn it back on in Connectors.`;
+    case "budget_user":
+      return `You've reached this month's posting limit for ${name}.`;
+    case "budget_global":
+      return `Posting to ${name} is paused for now. Try again later.`;
+    case "rate_limited":
+      return `${name} is limiting requests right now. Try again in a few minutes.`;
+    default:
+      return `${name} didn't accept it. ${nothing}`;
+  }
+}
+
 async function readItem(response: Response): Promise<PendingAction | null> {
   if (response.status === 404) return null;
   if (!response.ok) throw new Error(`actions request failed (${response.status})`);

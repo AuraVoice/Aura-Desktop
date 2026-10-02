@@ -31,6 +31,7 @@ import { useDashboardResource } from "../useDashboardResource";
 import { SwarmChannels } from "./swarm/SwarmChannels";
 import { SwarmRoster as SwarmRosterPanel } from "./swarm/SwarmRoster";
 import { SwarmStream, type ChannelView } from "./swarm/SwarmStream";
+import { hasActionableDraft } from "./swarm/SwarmWork";
 import {
   channelItems,
   frontDoorAuthor,
@@ -130,7 +131,12 @@ function clientId(): string {
 /** One line per cause, so a refusal says what actually went wrong. */
 function errorCopy(error: unknown, roster: SwarmRoster): string {
   if (error instanceof AuthRequiredError) return "Your session expired. Sign in again to use Swarm.";
-  if (error instanceof TimeoutError) return "No answer after two minutes. The models may be slow right now; try again.";
+  if (error instanceof TimeoutError) {
+    // Sends wait out the model deadline; everything else is a quick read that stalled.
+    return error.timeoutMs !== null && error.timeoutMs >= 60_000
+      ? "No answer after two minutes. The models may be slow right now; try again."
+      : "Aura didn't answer in time. Check your connection and try again.";
+  }
   if (error instanceof SwarmRequestError) {
     switch (error.reason) {
       case "models_unset":
@@ -373,27 +379,44 @@ export function SwarmPage() {
   const [pollError, setPollError] = useState(false);
   useEffect(() => {
     if (liveIds.length === 0) return;
+    // A re-armed effect must not leave the old loop walking its ids, and a slow request
+    // must not let the interval start a second walk on top of it.
+    let disposed = false;
+    let running = false;
     const tick = async () => {
-      if (document.visibilityState !== "visible" || !navigator.onLine) return;
+      if (running || document.visibilityState !== "visible" || !navigator.onLine) return;
+      running = true;
       let failed = false;
       let ended = false;
-      for (const id of liveIds) {
-        try {
-          const view = await getSession(id, sessions[id]?.stateRevision);
-          if (!view) continue;
-          setSessions((prev) => ({ ...prev, [id]: view }));
-          void pull(managerChannel(view.managerId), true);
-          if (TERMINAL_SESSION_STATES.has(view.state)) ended = true;
-        } catch {
-          failed = true;
+      try {
+        for (const id of liveIds) {
+          if (disposed) break;
+          try {
+            const view = await getSession(id, sessions[id]?.stateRevision);
+            if (disposed) break;
+            if (!view) continue;
+            // A Stop or an answer may already have stored a newer view than this poll's.
+            setSessions((prev) => (prev[id] && prev[id].stateRevision > view.stateRevision ? prev : { ...prev, [id]: view }));
+            void pull(managerChannel(view.managerId), true);
+            if (TERMINAL_SESSION_STATES.has(view.state)) ended = true;
+          } catch {
+            failed = true;
+          }
         }
+        // A walk cut short by a re-arm still reloads for a session it saw end; the new
+        // walk no longer asks about that session.
+        if (!disposed) setPollError(failed);
+        if (ended) reloadState();
+      } finally {
+        running = false;
       }
-      setPollError(failed);
-      if (ended) reloadState();
     };
     const timer = window.setInterval(() => void tick(), pollError ? POLL_BACKOFF_MS : POLL_MS);
     void tick();
-    return () => window.clearInterval(timer);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
     // `sessions` is read for the rev only; re-arming on every view change would double-poll.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveIds.join(","), pollError, pull, reloadState]);
@@ -416,43 +439,71 @@ export function SwarmPage() {
     for (const [id, view] of Object.entries(rounds)) if (view.state === "done") ids.delete(id);
     return [...ids].filter(Boolean);
   }, [groupRoundIds, rounds, sessions]);
+  const [roundPollError, setRoundPollError] = useState(false);
   useEffect(() => {
     if (liveRoundIds.length === 0) return;
+    // Every round that finishes re-arms this effect; without `disposed` each re-arm left
+    // the previous walk running, so requests grew with the square of the rounds.
+    let disposed = false;
+    let running = false;
     const tick = async () => {
-      if (document.visibilityState !== "visible" || !navigator.onLine) return;
+      if (running || document.visibilityState !== "visible" || !navigator.onLine) return;
+      running = true;
       let finished = false;
-      for (const id of liveRoundIds) {
-        try {
-          const view = await getRound(id, rounds[id]?.stateRevision);
-          if (!view) continue;
-          setRounds((prev) => ({ ...prev, [id]: view }));
-          if (view.state === "done") finished = true;
-        } catch (err) {
-          // A round that no longer exists (reset, another account) stops being asked about;
-          // anything else is a blip the next tick retries.
-          if (err instanceof SwarmRequestError && err.status === 404) {
-            setRounds((prev) => ({ ...prev, [id]: { roundId: id, state: "done", stateRevision: 0, members: [] } }));
+      let failed = false;
+      try {
+        for (const id of liveRoundIds) {
+          if (disposed) break;
+          try {
+            const view = await getRound(id, rounds[id]?.stateRevision);
+            if (disposed) break;
+            if (!view) continue;
+            setRounds((prev) => ({ ...prev, [id]: view }));
+            if (view.state === "done") finished = true;
+          } catch (err) {
+            // A round that no longer exists (reset, another account) stops being asked about;
+            // anything else is a blip the next tick retries, after the same backoff as sessions.
+            if (err instanceof SwarmRequestError && err.status === 404) {
+              setRounds((prev) => ({ ...prev, [id]: { roundId: id, state: "done", stateRevision: 0, members: [] } }));
+            } else {
+              failed = true;
+            }
           }
         }
-      }
-      if (finished) {
-        await pull("group", true);
-        reloadState();
+        // The round that finished is what re-armed this effect, and the new walk no longer
+        // asks about it, so this walk still pulls #group for it.
+        if (!disposed) setRoundPollError(failed);
+        if (finished) {
+          await pull("group", true);
+          reloadState();
+        }
+      } finally {
+        running = false;
       }
     };
-    const timer = window.setInterval(() => void tick(), POLL_MS);
+    const timer = window.setInterval(() => void tick(), roundPollError ? POLL_BACKOFF_MS : POLL_MS);
     void tick();
-    return () => window.clearInterval(timer);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
     // `rounds` is read for the rev only, as with sessions above.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveRoundIds.join(","), pull, reloadState]);
+  }, [liveRoundIds.join(","), roundPollError, pull, reloadState]);
 
-  const items = useMemo(() => channelItems(messages[liveChannel] ?? [], roster), [messages, liveChannel, roster]);
+  // Keyed on this channel's array alone: pull() keeps every other channel's reference.
+  const channelMessages = messages[liveChannel];
+  const items = useMemo(() => channelItems(channelMessages ?? [], roster), [channelMessages, roster]);
 
-  // A finished session's working message still wants its final state once.
+  // A finished session's working message still wants its final state once, unless its
+  // report is already in the thread and has no draft that needs the session's approvals.
   useEffect(() => {
+    const settled = new Set<string>();
     for (const item of items) {
-      if (item.kind !== "working" || sessions[item.sessionId] || requested.current.has(item.sessionId)) continue;
+      if (item.kind === "report" && !hasActionableDraft(item.message)) settled.add(item.message.sessionId);
+    }
+    for (const item of items) {
+      if (item.kind !== "working" || sessions[item.sessionId] || settled.has(item.sessionId) || requested.current.has(item.sessionId)) continue;
       requested.current.add(item.sessionId);
       void getSession(item.sessionId)
         .then((view) => view && setSessions((prev) => ({ ...prev, [item.sessionId]: view })))

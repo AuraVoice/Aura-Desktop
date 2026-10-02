@@ -5,39 +5,9 @@ import { BarIconButton } from "./BarIconButton";
 import { CloseIcon } from "./icons";
 import { boundedDraftSlotHeight } from "./DraftCard";
 import { logError } from "../lib/log";
-import type { PendingAction } from "../lib/pendingActions";
+import { CONNECTOR_NAMES, pendingActionOutcomeCopy } from "../lib/pendingActions";
 import type { PendingActionsState } from "./usePendingActions";
 import "./ActionApprovalCard.css";
-
-const CONNECTOR_NAMES: Record<PendingAction["connector"], string> = {
-  x: "X",
-  linkedin: "LinkedIn",
-  google_calendar: "Google Calendar",
-};
-
-function outcomeCopy(action: PendingAction): string {
-  const name = CONNECTOR_NAMES[action.connector];
-  if (action.status === "done") {
-    return `Posted to ${name}.`;
-  }
-  if (action.status === "expired") return "This expired. Ask again to prepare it.";
-  if (action.status === "rejected") return "Discarded. Nothing was posted.";
-  if (action.status === "unknown" || action.status === "executing") {
-    return `Aura couldn't confirm it went through. Check ${name} before trying again.`;
-  }
-  switch (action.resultReason) {
-    case "reauthorization_required":
-      return `${name} needs to be reconnected. Turn it back on in Connectors.`;
-    case "budget_user":
-      return "You've reached this month's posting limit for X.";
-    case "budget_global":
-      return "Posting to X is paused for now. Try again later.";
-    case "rate_limited":
-      return `${name} is limiting requests right now. Try again in a few minutes.`;
-    default:
-      return `${name} didn't accept it. Nothing was posted.`;
-  }
-}
 
 /**
  * The approval card for one connector write. Nothing is posted until the user
@@ -106,7 +76,7 @@ export function ActionApprovalCard({
 
         {showingOutcome ? (
           <p className={`action-card-outcome${action.status === "done" ? "" : " action-card-outcome-error"}`}>
-            {outcomeCopy(action)}
+            {pendingActionOutcomeCopy(action)}
           </p>
         ) : (
           <>

@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import type { SwarmDecision, SwarmManager, SwarmRoster, SwarmRoundView, SwarmSessionView } from "../../../lib/swarmApi";
 import { SwarmAvatar } from "./SwarmAvatar";
 import {
@@ -34,9 +34,11 @@ import {
   type StreamItem,
 } from "./swarmThread";
 
-/** Equal to juno-backend swarm/models.py's message and answer limits; a larger value
- * here fails every send with invalid_body. */
-const MESSAGE_MAX = 4000;
+/** Equal to juno-backend swarm/runtime_models.py's limits: a #group message's text (4000)
+ * and a DM's brief (MAX_BRIEF_CHARS, 2000). A larger value here fails the send with
+ * invalid_body. */
+const GROUP_MESSAGE_MAX = 4000;
+const BRIEF_MAX = 2000;
 const ANSWER_MAX = 400;
 
 const YOU: Author = { id: "you", name: "You", role: "you", hue: 0 };
@@ -324,9 +326,13 @@ export function SwarmStream(props: Props) {
   const { view, items, busy, busyHere, error, text, composerRef } = props;
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const readOnly = view.kind === "activity";
-  // Only a session's newest question can be open; earlier ones were already answered.
-  const latestQuestion: Record<string, string> = {};
-  for (const item of items) if (item.kind === "question") latestQuestion[item.message.sessionId] = item.key;
+  const messageMax = view.kind === "manager" ? BRIEF_MAX : GROUP_MESSAGE_MAX;
+  // Handlers are read at click time, so the list below need not rebuild when only the
+  // composer's text (or a fresh inline arrow from the page) changed.
+  const live = useRef(props);
+  useLayoutEffect(() => {
+    live.current = props;
+  });
 
   // Stick to the bottom on new content, the way a chat does.
   useLayoutEffect(() => {
@@ -344,7 +350,7 @@ export function SwarmStream(props: Props) {
 
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
-    if (!busy && text.trim() && !readOnly) props.onSubmit();
+    if (!busy && text.trim() && !readOnly && text.length <= messageMax) props.onSubmit();
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -354,8 +360,160 @@ export function SwarmStream(props: Props) {
     }
   };
 
-  let lastDay = "";
-  let lastAuthorKey = "";
+  const rows = useMemo(() => {
+    // Only a session's newest question can be open; earlier ones were already answered.
+    const latestQuestion: Record<string, string> = {};
+    // A session whose report is in the thread needs no fetch to say it finished.
+    const reported = new Set<string>();
+    for (const item of items) {
+      if (item.kind === "question") latestQuestion[item.message.sessionId] = item.key;
+      if (item.kind === "report") reported.add(item.message.sessionId);
+    }
+    let lastDay = "";
+    let lastAuthorKey = "";
+    return items.map((item) => {
+      const fresh = props.fresh.has(item.key);
+      const day = item.at ? dayLabel(item.at) : "";
+      const daySep = day && day !== lastDay ? (lastDay = day) : "";
+      if (item.kind === "system") {
+        lastAuthorKey = "";
+        return (
+          <Fragment key={item.key}>
+            {daySep && <div className="db-swarm-daysep"><span>{daySep}</span></div>}
+            <div className={`db-swarm-sys${item.tone === "supervisor" ? " is-supervisor" : ""}${fresh ? " is-fresh" : ""}`}>
+              <span className="db-swarm-sys-icon">
+                {item.tone === "supervisor" ? <CrownGlyph size={15} /> : item.tone === "routine" ? <CycleGlyph size={15} /> : <SparkGlyph size={15} />}
+              </span>
+              <span className="db-swarm-sys-text">{item.text}</span>
+              {item.at > 0 && <time>{timeLabel(item.at)}</time>}
+            </div>
+          </Fragment>
+        );
+      }
+      if (item.kind === "step") {
+        lastAuthorKey = "";
+        return (
+          <Fragment key={item.key}>
+            {daySep && <div className="db-swarm-daysep"><span>{daySep}</span></div>}
+            <div className={`db-swarm-step-wrap${fresh ? " is-fresh" : ""}`}>
+              <StepRow
+                message={item.message}
+                managerId={item.author.id}
+                granted={props.grants[item.author.id] ?? []}
+                onGrant={(managerId, connector) => live.current.onGrant(managerId, connector)}
+              />
+            </div>
+          </Fragment>
+        );
+      }
+      if (item.kind === "crosspost") {
+        lastAuthorKey = "";
+        return (
+          <Fragment key={item.key}>
+            {daySep && <div className="db-swarm-daysep"><span>{daySep}</span></div>}
+            <div className={`db-swarm-sys is-crosspost${fresh ? " is-fresh" : ""}`}>
+              <span className="db-swarm-sys-icon"><HopGlyph size={15} /></span>
+              <span className="db-swarm-sys-text">
+                <b>Routed</b> from #{props.roster.supervisor?.status === "active" ? "group" : "front-door"}: {item.text}
+              </span>
+              {item.at > 0 && <time>{timeLabel(item.at)}</time>}
+            </div>
+          </Fragment>
+        );
+      }
+      const author = item.kind === "user" ? YOU : item.author;
+      const authorKey = item.kind === "user" ? "you" : `${author.id}-${item.key}`;
+      const continued = item.kind === "user" && authorKey === lastAuthorKey && !daySep;
+      lastAuthorKey = authorKey;
+      return (
+        <Fragment key={item.key}>
+          {daySep && <div className="db-swarm-daysep"><span>{daySep}</span></div>}
+          <article className={`db-swarm-msg${item.kind === "user" ? " is-you" : ""}${continued ? " is-continued" : ""}${fresh ? " is-fresh" : ""}`}>
+            <div className="db-swarm-msg-gutter">{!continued && <SwarmAvatar author={author} />}</div>
+            <div className="db-swarm-msg-body">
+              {item.kind === "user" ? (
+                <>
+                  {!continued && (
+                    <div className="db-swarm-msg-head">
+                      <strong className="db-swarm-name is-you">{props.youName || "You"}</strong>
+                      {props.youName && <span className="db-swarm-role">You</span>}
+                      {item.at > 0 && <time>{timeLabel(item.at)}</time>}
+                    </div>
+                  )}
+                  <p className="db-swarm-text">{item.text}</p>
+                </>
+              ) : item.kind !== "decision" ? (
+                <>
+                  <div className="db-swarm-msg-head">
+                    <strong className={`db-swarm-name is-${item.author.role === "manager" ? `hue-${item.author.hue}` : item.author.role}`}>{item.author.name}</strong>
+                    <span className="db-swarm-role">{roleLabel(item.author, props.roster)}</span>
+                    {item.at > 0 && <time>{timeLabel(item.at)}</time>}
+                  </div>
+                  {item.kind === "say" && <p className="db-swarm-text">{item.text}</p>}
+                  {item.kind === "working" && (
+                    <WorkingEmbed
+                      name={item.author.name}
+                      session={props.sessions[item.sessionId]}
+                      reported={reported.has(item.sessionId)}
+                      stopping={props.stopping.has(item.sessionId)}
+                      onStop={() => live.current.onStop(item.sessionId)}
+                    />
+                  )}
+                  {item.kind === "plan" && <PlanEmbed message={item.message} />}
+                  {item.kind === "question" && (
+                    <QuestionEmbed
+                      message={item.message}
+                      open={props.sessions[item.message.sessionId]?.state === "waiting_user" && latestQuestion[item.message.sessionId] === item.key}
+                      busy={busy}
+                      onAnswer={(value) => live.current.onAnswerSession(item.message.sessionId, value)}
+                    />
+                  )}
+                  {item.kind === "report" && (
+                    <ReportEmbed
+                      message={item.message}
+                      managerId={item.author.id}
+                      granted={props.grants[item.author.id] ?? []}
+                      draftActions={props.sessions[item.message.sessionId]?.draftActions ?? {}}
+                      onGrant={(managerId, connector) => live.current.onGrant(managerId, connector)}
+                      onOpenSource={(url) => live.current.onOpenSource(url)}
+                      onOpenResearch={(runId) => live.current.onOpenResearch(runId)}
+                    />
+                  )}
+                  {item.kind === "round" && (
+                    <RoundEmbed
+                      message={item.message}
+                      round={props.rounds[item.roundId]}
+                      sessions={props.sessions}
+                      stopping={props.stopping.has(item.roundId)}
+                      onStop={() => live.current.onStopRound(item.roundId)}
+                      onOpen={(managerId) => live.current.onOpenChannel(managerChannel(managerId))}
+                    />
+                  )}
+                  {item.kind === "roundReply" && (
+                    <RoundReplyEmbed
+                      message={item.message}
+                      onOpen={(managerId) => live.current.onOpenChannel(managerChannel(managerId))}
+                    />
+                  )}
+                </>
+              ) : (
+                <DecisionMessage
+                  item={item}
+                  roster={props.roster}
+                  openDrafts={props.openDrafts}
+                  busy={busy}
+                  freeAnswers={props.freeAnswers}
+                  onFreeAnswer={(draftId, value) => live.current.onFreeAnswer(draftId, value)}
+                  onAnswer={(draftId, label, managerId) => live.current.onAnswer(draftId, label, managerId)}
+                />
+              )}
+            </div>
+          </article>
+        </Fragment>
+      );
+    });
+  }, [items, props.fresh, props.grants, props.roster, props.sessions, props.stopping, props.rounds, props.openDrafts, props.freeAnswers, props.youName, busy]);
+
   const placeholder = readOnly
     ? "Read only"
     : view.kind === "manager"
@@ -396,146 +554,7 @@ export function SwarmStream(props: Props) {
           ) : (
             <>
               <ChannelIntro view={view} />
-              {items.map((item) => {
-                const fresh = props.fresh.has(item.key);
-                const day = item.at ? dayLabel(item.at) : "";
-                const daySep = day && day !== lastDay ? (lastDay = day) : "";
-                if (item.kind === "system") {
-                  lastAuthorKey = "";
-                  return (
-                    <Fragment key={item.key}>
-                      {daySep && <div className="db-swarm-daysep"><span>{daySep}</span></div>}
-                      <div className={`db-swarm-sys${item.tone === "supervisor" ? " is-supervisor" : ""}${fresh ? " is-fresh" : ""}`}>
-                        <span className="db-swarm-sys-icon">
-                          {item.tone === "supervisor" ? <CrownGlyph size={15} /> : item.tone === "routine" ? <CycleGlyph size={15} /> : <SparkGlyph size={15} />}
-                        </span>
-                        <span className="db-swarm-sys-text">{item.text}</span>
-                        {item.at > 0 && <time>{timeLabel(item.at)}</time>}
-                      </div>
-                    </Fragment>
-                  );
-                }
-                if (item.kind === "step") {
-                  lastAuthorKey = "";
-                  return (
-                    <Fragment key={item.key}>
-                      {daySep && <div className="db-swarm-daysep"><span>{daySep}</span></div>}
-                      <div className={`db-swarm-step-wrap${fresh ? " is-fresh" : ""}`}>
-                        <StepRow
-                          message={item.message}
-                          managerId={item.author.id}
-                          granted={props.grants[item.author.id] ?? []}
-                          onGrant={props.onGrant}
-                        />
-                      </div>
-                    </Fragment>
-                  );
-                }
-                if (item.kind === "crosspost") {
-                  lastAuthorKey = "";
-                  return (
-                    <Fragment key={item.key}>
-                      {daySep && <div className="db-swarm-daysep"><span>{daySep}</span></div>}
-                      <div className={`db-swarm-sys is-crosspost${fresh ? " is-fresh" : ""}`}>
-                        <span className="db-swarm-sys-icon"><HopGlyph size={15} /></span>
-                        <span className="db-swarm-sys-text">
-                          <b>Routed</b> from #{props.roster.supervisor?.status === "active" ? "group" : "front-door"}: {item.text}
-                        </span>
-                        {item.at > 0 && <time>{timeLabel(item.at)}</time>}
-                      </div>
-                    </Fragment>
-                  );
-                }
-                const author = item.kind === "user" ? YOU : item.author;
-                const authorKey = item.kind === "user" ? "you" : `${author.id}-${item.key}`;
-                const continued = item.kind === "user" && authorKey === lastAuthorKey && !daySep;
-                lastAuthorKey = authorKey;
-                return (
-                  <Fragment key={item.key}>
-                    {daySep && <div className="db-swarm-daysep"><span>{daySep}</span></div>}
-                    <article className={`db-swarm-msg${item.kind === "user" ? " is-you" : ""}${continued ? " is-continued" : ""}${fresh ? " is-fresh" : ""}`}>
-                      <div className="db-swarm-msg-gutter">{!continued && <SwarmAvatar author={author} />}</div>
-                      <div className="db-swarm-msg-body">
-                        {item.kind === "user" ? (
-                          <>
-                            {!continued && (
-                              <div className="db-swarm-msg-head">
-                                <strong className="db-swarm-name is-you">{props.youName || "You"}</strong>
-                                {props.youName && <span className="db-swarm-role">You</span>}
-                                {item.at > 0 && <time>{timeLabel(item.at)}</time>}
-                              </div>
-                            )}
-                            <p className="db-swarm-text">{item.text}</p>
-                          </>
-                        ) : item.kind !== "decision" ? (
-                          <>
-                            <div className="db-swarm-msg-head">
-                              <strong className={`db-swarm-name is-${item.author.role === "manager" ? `hue-${item.author.hue}` : item.author.role}`}>{item.author.name}</strong>
-                              <span className="db-swarm-role">{roleLabel(item.author, props.roster)}</span>
-                              {item.at > 0 && <time>{timeLabel(item.at)}</time>}
-                            </div>
-                            {item.kind === "say" && <p className="db-swarm-text">{item.text}</p>}
-                            {item.kind === "working" && (
-                              <WorkingEmbed
-                                name={item.author.name}
-                                session={props.sessions[item.sessionId]}
-                                stopping={props.stopping.has(item.sessionId)}
-                                onStop={() => props.onStop(item.sessionId)}
-                              />
-                            )}
-                            {item.kind === "plan" && <PlanEmbed message={item.message} />}
-                            {item.kind === "question" && (
-                              <QuestionEmbed
-                                message={item.message}
-                                open={props.sessions[item.message.sessionId]?.state === "waiting_user" && latestQuestion[item.message.sessionId] === item.key}
-                                busy={busy}
-                                onAnswer={(value) => props.onAnswerSession(item.message.sessionId, value)}
-                              />
-                            )}
-                            {item.kind === "report" && (
-                              <ReportEmbed
-                                message={item.message}
-                                managerId={item.author.id}
-                                granted={props.grants[item.author.id] ?? []}
-                                draftActions={props.sessions[item.message.sessionId]?.draftActions ?? {}}
-                                onGrant={props.onGrant}
-                                onOpenSource={props.onOpenSource}
-                                onOpenResearch={props.onOpenResearch}
-                              />
-                            )}
-                            {item.kind === "round" && (
-                              <RoundEmbed
-                                message={item.message}
-                                round={props.rounds[item.roundId]}
-                                sessions={props.sessions}
-                                stopping={props.stopping.has(item.roundId)}
-                                onStop={() => props.onStopRound(item.roundId)}
-                                onOpen={(managerId) => props.onOpenChannel(managerChannel(managerId))}
-                              />
-                            )}
-                            {item.kind === "roundReply" && (
-                              <RoundReplyEmbed
-                                message={item.message}
-                                onOpen={(managerId) => props.onOpenChannel(managerChannel(managerId))}
-                              />
-                            )}
-                          </>
-                        ) : (
-                          <DecisionMessage
-                            item={item}
-                            roster={props.roster}
-                            openDrafts={props.openDrafts}
-                            busy={busy}
-                            freeAnswers={props.freeAnswers}
-                            onFreeAnswer={props.onFreeAnswer}
-                            onAnswer={props.onAnswer}
-                          />
-                        )}
-                      </div>
-                    </article>
-                  </Fragment>
-                );
-              })}
+              {rows}
               {readOnly && items.length === 0 && <p className="db-swarm-empty-line">Nothing has happened yet.</p>}
             </>
           )}
@@ -564,14 +583,14 @@ export function SwarmStream(props: Props) {
           ref={composerRef}
           rows={1}
           value={readOnly ? "" : text}
-          maxLength={MESSAGE_MAX}
+          maxLength={messageMax}
           disabled={readOnly}
           onChange={(event) => props.onText(event.target.value)}
           onKeyDown={onKeyDown}
           placeholder={placeholder}
         />
-        {!readOnly && text.length > MESSAGE_MAX - 400 && <span className="db-swarm-count">{MESSAGE_MAX - text.length}</span>}
-        <button type="submit" className="db-swarm-send" disabled={readOnly || busy || !text.trim()} aria-label="Send">
+        {!readOnly && text.length > messageMax - 400 && <span className="db-swarm-count">{messageMax - text.length}</span>}
+        <button type="submit" className="db-swarm-send" disabled={readOnly || busy || !text.trim() || text.length > messageMax} aria-label="Send">
           <DartGlyph size={19} />
         </button>
       </form>
