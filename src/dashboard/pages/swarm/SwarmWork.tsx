@@ -269,6 +269,19 @@ const REPORT_KICKER: Record<string, string> = {
   failed: "Could not finish",
 };
 
+/** Why a run stopped short, from the session's stop_reason (runner.py _terminal_state_for
+ * and the fallback paths). An unknown code adds nothing rather than a raw slug. */
+const STOP_REASON_COPY: Record<string, string> = {
+  missing_access: "Some accounts it needed are not connected to this manager.",
+  no_progress: "It kept finding the same things, so it stopped.",
+  decision_cap: "It used all its steps for this run.",
+  lane_failed: "One part kept failing and was dropped.",
+  incomplete: "Some sources could not be read.",
+  wallet_exhausted: "Today's Swarm budget ran out.",
+  timed_out: "It ran past its 30 minute limit.",
+  no_answer: "It asked you something and did not hear back.",
+};
+
 const DRAFT_KIND: Record<string, string> = {
   email: "Email draft",
   post: "Post draft",
@@ -328,6 +341,9 @@ export function ReportEmbed({
           </span>
         )}
       </div>
+      {state === "partial" && STOP_REASON_COPY[str(data.stop_reason)] && (
+        <p className="db-swarm-note">{STOP_REASON_COPY[str(data.stop_reason)]}</p>
+      )}
       {report.summary ? <p className="db-swarm-report-summary">{str(report.summary)}</p> : null}
       {findings.length > 0 && (
         <ul className="db-swarm-findings">
