@@ -54,7 +54,9 @@ export function usePendingActions(room: Room | null, uid: string | null): Pendin
     fetchPendingActions()
       .then((next) => {
         if (seq !== requestSeq.current || uidRef.current !== requestUid) return;
-        setItems(next);
+        // A Swarm draft's approval belongs to its report; the backend already leaves it
+        // out of this list, and this keeps an older backend from popping it up here.
+        setItems(next.filter((item) => item.origin !== "swarm"));
       })
       .catch((err) => {
         if (err instanceof AuthRequiredError) return;

@@ -9923,6 +9923,33 @@ button:hover > .sw-g-dismiss { transform: rotate(90deg); }
 }
 .db-swarm-embed .db-swarm-draft p { white-space: pre-wrap; color: var(--sw-text); }
 .db-swarm-gaps { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--sw-divider); }
+/* A report draft that can become an action: Review, an editable text, the server's
+   preview, then Approve. Tokens only, so the dark sheet needs no twin. */
+.db-swarm-act { display: grid; gap: 8px; margin-top: 8px; }
+.db-swarm-act textarea {
+  border: 1px solid var(--sw-field-border);
+  background: var(--sw-field);
+  color: var(--sw-text);
+  font: inherit;
+  font-size: 12.5px;
+  border-radius: 10px;
+  padding: 7px 9px;
+  resize: none;
+}
+.db-swarm-act textarea::-webkit-scrollbar { display: none; }
+.db-swarm-act textarea:focus { outline: none; border-color: var(--sw-accent); box-shadow: 0 0 0 3px var(--sw-accent-soft); }
+.db-swarm-act-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.db-swarm-act-count { margin-left: auto; font-size: 11px; color: var(--sw-mute); font-variant-numeric: tabular-nums; }
+.db-swarm-act-count.is-over { color: var(--sw-danger); }
+.db-swarm-embed .db-swarm-act-preview {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--sw-field);
+  white-space: pre-wrap;
+  font-size: 12.5px;
+  color: var(--sw-text);
+}
 .db-swarm-gaps-label,
 .db-swarm-tools-label {
   display: block;

@@ -1,6 +1,12 @@
 import { useEffect, useState, type ReactNode } from "react";
+import {
+  approvePendingAction,
+  fetchPendingAction,
+  rejectPendingAction,
+  type PendingAction,
+} from "../../../lib/pendingActions";
 import type { SwarmMessage, SwarmRoundMember, SwarmRoundView, SwarmSessionView } from "../../../lib/swarmApi";
-import { mapRoundMember, TERMINAL_SESSION_STATES } from "../../../lib/swarmApi";
+import { mapRoundMember, proposeDraft, SwarmRequestError, TERMINAL_SESSION_STATES } from "../../../lib/swarmApi";
 import {
   BlockGlyph,
   BranchGlyph,
@@ -289,7 +295,186 @@ const DRAFT_KIND: Record<string, string> = {
   post: "Post draft",
   message: "Message draft",
   application: "Application draft",
+  event: "Calendar hold",
 };
+
+const TARGET_LABEL: Record<string, string> = {
+  x: "Post to X",
+  linkedin: "Post to LinkedIn",
+  calendar: "Add to your calendar",
+};
+const TARGET_LIMIT: Record<string, number> = { x: 280, linkedin: 3000 };
+const TARGET_NAME: Record<string, string> = { x: "X", linkedin: "LinkedIn", calendar: "your calendar" };
+
+/** Why Review could not prepare an approval (actions.py and pending_actions.py codes). */
+const PROPOSE_COPY: Record<string, string> = {
+  private_data_in_session:
+    "This run read your private accounts, so Aura won't post from it. Copy the text and post it yourself if you want to.",
+  not_connected: "That account isn't connected. Connect it under Connectors, then try again.",
+  when_unclear: "The time in this draft isn't clear enough to book. Ask the manager for an exact time.",
+  draft_not_actionable: "This draft can't be acted on any more.",
+  text_too_long: "That's longer than this place allows.",
+  text_required: "There's nothing to post.",
+  time_out_of_range: "That time is in the past or too far ahead to book.",
+  time_invalid: "That time doesn't work for a calendar hold.",
+  title_required: "The calendar hold needs a title.",
+};
+
+/** What happened after Approve, from the pending action's own status and reason. */
+function outcomeCopy(item: PendingAction, target: string): string {
+  const where = TARGET_NAME[target] ?? "there";
+  switch (item.status) {
+    case "done":
+      return target === "calendar" ? "Added to your calendar." : `Posted to ${where}.`;
+    case "unknown":
+      return `We couldn't confirm it went through. Check ${where} before trying again.`;
+    case "expired":
+      return "This approval expired before it was used.";
+    case "rejected":
+      return "Not done. You said not now.";
+    case "failed":
+      if (item.resultReason === "reauthorization_required") return "That account needs reconnecting under Connectors.";
+      if (item.resultReason?.startsWith("budget_")) return "The posting budget for today is used up.";
+      return `${where === "your calendar" ? "Your calendar" : where} refused it, so nothing happened.`;
+    default:
+      return "";
+  }
+}
+
+function localTime(iso: string): string {
+  const at = Date.parse(iso);
+  return Number.isFinite(at)
+    ? new Date(at).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+    : iso;
+}
+
+/** One report draft that can become a real action. Review prepares an approval on the
+ * server (which re-reads the draft and applies any edit); Approve runs exactly what the
+ * preview shows, once. Nothing here can post or book without that second click. */
+function DraftAction({
+  sessionId,
+  draft,
+  approvalId,
+  onOpenLink,
+}: {
+  sessionId: string;
+  draft: Json;
+  approvalId: string;
+  onOpenLink: (url: string) => void;
+}) {
+  const target = str(draft.target);
+  const limit = TARGET_LIMIT[target] ?? 0;
+  const [item, setItem] = useState<PendingAction | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(str(draft.body));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!approvalId || item) return;
+    let live = true;
+    void fetchPendingAction(approvalId).then((found) => live && found && setItem(found)).catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [approvalId, item]);
+
+  const run = async (work: () => Promise<PendingAction | null>) => {
+    setBusy(true);
+    setError("");
+    try {
+      const next = await work();
+      if (next) setItem(next);
+    } catch (err) {
+      const reason = err instanceof SwarmRequestError ? err.reason : "";
+      setError(PROPOSE_COPY[reason] ?? "That didn't go through. Try again in a moment.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const review = () =>
+    void run(async () => {
+      const next = await proposeDraft(sessionId, str(draft.id), limit ? text : "");
+      setEditing(false);
+      return next;
+    });
+
+  const pending = item?.status === "pending";
+  const finished = item !== null && !pending && item.status !== "executing";
+  const over = limit > 0 && text.trim().length > limit;
+
+  return (
+    <div className="db-swarm-act">
+      {pending && item ? (
+        <>
+          <span className="db-swarm-gaps-label">
+            {item.title}
+            {item.preview.account && ` · ${item.preview.account}`}
+          </span>
+          {target === "calendar" ? (
+            <p className="db-swarm-act-preview">
+              <b>{item.preview.eventTitle}</b>
+              {"\n"}
+              {localTime(item.preview.start)} to {localTime(item.preview.end)}
+            </p>
+          ) : (
+            <p className="db-swarm-act-preview">{item.preview.text}</p>
+          )}
+          <div className="db-swarm-act-row">
+            <button type="button" className="db-swarm-pill-btn is-primary" disabled={busy} onClick={() => void run(() => approvePendingAction(item.approvalId))}>
+              {busy ? "Working" : "Approve"}
+            </button>
+            <button type="button" className="db-swarm-pill-btn" disabled={busy} onClick={() => void run(() => rejectPendingAction(item.approvalId))}>
+              Not now
+            </button>
+            <span className="db-swarm-act-count">
+              {item.preview.estimatedCostUsd !== null && `about $${item.preview.estimatedCostUsd.toFixed(2)} · `}
+              Exactly this, once
+            </span>
+          </div>
+        </>
+      ) : editing ? (
+        <>
+          {limit > 0 ? (
+            <textarea rows={Math.min(8, Math.max(3, Math.ceil(text.length / 70)))} value={text} onChange={(e) => setText(e.target.value)} />
+          ) : (
+            <p className="db-swarm-act-preview">
+              <b>{str(draft.title) || "Hold"}</b>
+              {"\n"}
+              {str(draft.when)}
+            </p>
+          )}
+          <div className="db-swarm-act-row">
+            <button type="button" className="db-swarm-pill-btn is-primary" disabled={busy || over || (limit > 0 && !text.trim())} onClick={review}>
+              {busy ? "Preparing" : "Prepare"}
+            </button>
+            <button type="button" className="db-swarm-pill-btn" disabled={busy} onClick={() => setEditing(false)}>
+              Cancel
+            </button>
+            {limit > 0 && <span className={`db-swarm-act-count${over ? " is-over" : ""}`}>{text.trim().length}/{limit}</span>}
+          </div>
+        </>
+      ) : (
+        <div className="db-swarm-act-row">
+          {finished && item && <span className="db-swarm-muted">{outcomeCopy(item, target)}</span>}
+          {finished && item?.status === "done" && item.resultUrl && (
+            <button type="button" className="db-swarm-pill-btn" onClick={() => onOpenLink(item.resultUrl as string)}>
+              Open
+            </button>
+          )}
+          {(!finished || item?.status !== "done") && item?.status !== "executing" && (
+            <button type="button" className="db-swarm-pill-btn" onClick={() => { setItem(null); setEditing(true); }}>
+              {item ? "Review again" : `Review: ${TARGET_LABEL[target]}`}
+            </button>
+          )}
+          {item?.status === "executing" && <span className="db-swarm-muted">Working on it.</span>}
+        </div>
+      )}
+      {error && <p className="db-swarm-note">{error}</p>}
+    </div>
+  );
+}
 
 /** The report. Every finding shows the sources it cites, a finding with none is marked
  * unsourced, and drafts are labelled as never sent. Gaps carry a Grant button when the
@@ -298,6 +483,7 @@ export function ReportEmbed({
   message,
   managerId,
   granted,
+  draftActions,
   onGrant,
   onOpenSource,
   onOpenResearch,
@@ -305,6 +491,7 @@ export function ReportEmbed({
   message: SwarmMessage;
   managerId: string;
   granted: string[];
+  draftActions: Record<string, string>;
   onGrant: (managerId: string, connector: string) => void;
   onOpenSource: (url: string) => void;
   onOpenResearch: (runId: string) => void;
@@ -369,9 +556,17 @@ export function ReportEmbed({
               <span className="db-swarm-draft-head">
                 <b>{DRAFT_KIND[str(d.kind)] ?? "Draft"}</b>
                 {str(d.destination) && <span> to {str(d.destination)}</span>}
-                <em>not sent</em>
+                <em>{TARGET_LABEL[str(d.target)] && str(d.id) ? "needs your approval" : "not sent"}</em>
               </span>
               <p>{str(d.body)}</p>
+              {TARGET_LABEL[str(d.target)] && str(d.id) && message.sessionId && (
+                <DraftAction
+                  sessionId={message.sessionId}
+                  draft={d}
+                  approvalId={draftActions[str(d.id)] ?? ""}
+                  onOpenLink={onOpenSource}
+                />
+              )}
             </div>
           ))}
         </div>

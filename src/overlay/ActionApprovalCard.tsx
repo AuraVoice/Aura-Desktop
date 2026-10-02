@@ -12,6 +12,7 @@ import "./ActionApprovalCard.css";
 const CONNECTOR_NAMES: Record<PendingAction["connector"], string> = {
   x: "X",
   linkedin: "LinkedIn",
+  google_calendar: "Google Calendar",
 };
 
 function outcomeCopy(action: PendingAction): string {

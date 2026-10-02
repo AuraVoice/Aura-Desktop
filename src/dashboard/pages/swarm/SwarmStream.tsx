@@ -502,6 +502,7 @@ export function SwarmStream(props: Props) {
                                 message={item.message}
                                 managerId={item.author.id}
                                 granted={props.grants[item.author.id] ?? []}
+                                draftActions={props.sessions[item.message.sessionId]?.draftActions ?? {}}
                                 onGrant={props.onGrant}
                                 onOpenSource={props.onOpenSource}
                                 onOpenResearch={props.onOpenResearch}

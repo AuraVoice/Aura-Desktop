@@ -8,6 +8,7 @@
  */
 
 import { authFetchWithTimeout } from "./api";
+import { parsePendingAction, type PendingAction } from "./pendingActions";
 
 /** juno-backend swarm/sandbox.py _MESSAGE_DEADLINE_S (110 s) plus network slack. The
  * backend stops every model call at its own deadline and answers timed_out, so this
@@ -238,6 +239,8 @@ export interface SwarmSessionView {
   sources: number;
   /** The #group round this session answers for, or empty. */
   roundId: string;
+  /** Report draft id (d1..) to the approval it became, when the user pressed Review. */
+  draftActions: Record<string, string>;
 }
 
 export const TERMINAL_SESSION_STATES: ReadonlySet<string> = new Set(["done", "partial", "failed", "cancelled"]);
@@ -453,6 +456,9 @@ function mapSession(raw: Json): SwarmSessionView {
     maxDecisions: num(raw.max_decisions) || 12,
     sources: num(raw.sources),
     roundId: str(raw.round_id),
+    draftActions: Object.fromEntries(
+      Object.entries(obj(raw.draft_actions)).filter((e): e is [string, string] => typeof e[1] === "string"),
+    ),
   };
 }
 
@@ -569,6 +575,23 @@ export async function getRound(roundId: string, rev?: number, signal?: AbortSign
 /** Stop every manager still working on a round; each ends with what it had found. */
 export async function cancelRound(roundId: string): Promise<SwarmRoundView> {
   return mapRound(await call(`/swarm/rounds/${encodeURIComponent(roundId)}/cancel`, { method: "POST" }));
+}
+
+/** Review on a report draft: the server reads the draft from the session, applies the
+ * user's edit and returns the approval to show. Nothing happens until it is approved. */
+export async function proposeDraft(
+  sessionId: string,
+  draftId: string,
+  text: string,
+): Promise<PendingAction> {
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone ?? "";
+  const body = await call(
+    `/swarm/sessions/${encodeURIComponent(sessionId)}/drafts/${encodeURIComponent(draftId)}/propose`,
+    { method: "POST", body: JSON.stringify({ text, timezone }) },
+  );
+  const item = parsePendingAction(body.item);
+  if (!item) throw new SwarmRequestError(502, "invalid_response");
+  return item;
 }
 
 export async function answerSession(sessionId: string, text: string): Promise<SwarmSessionView> {
