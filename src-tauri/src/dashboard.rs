@@ -168,7 +168,7 @@ fn initial_background(app: &AppHandle) -> Color {
             .is_some_and(|theme| theme == Theme::Dark),
     };
     if dark {
-        Color(0x0a, 0x0a, 0x0b, 0xff)
+        Color(0x00, 0x00, 0x00, 0xff)
     } else {
         Color(0xf1, 0xf0, 0xea, 0xff)
     }

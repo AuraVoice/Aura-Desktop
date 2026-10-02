@@ -39,7 +39,7 @@
 }
 :root[data-theme="dark"] .db-research-secondary:hover {
   border-color: var(--dk-glass-border-hover);
-  background: linear-gradient(135deg, rgba(38, 38, 41, 0.8), rgba(18, 18, 20, 0.64));
+  background: var(--dk-surface-2);
 }
 :root[data-theme="dark"] .db-research-eyebrow,
 :root[data-theme="dark"] .db-research-section-kicker,
@@ -50,12 +50,7 @@
 /* ── Research home ── */
 :root[data-theme="dark"] .db-research-command {
   border-color: var(--dk-border);
-  background:
-    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-    radial-gradient(70% 120% at 0% 100%, rgba(46, 224, 196, 0.06), transparent 62%),
-    var(--dk-surface);
-  background-size: 24px 24px, 24px 24px, auto, auto;
+  background: var(--dk-surface);
 }
 :root[data-theme="dark"] .db-research-command::after {
   border-color: rgba(255, 255, 255, 0.1);
@@ -432,7 +427,7 @@
 /* ── Research paywall ── more opaque than page glass: it floats over a scrim. */
 :root[data-theme="dark"] .db-modal-panel.db-research-paywall {
   border-color: var(--dk-glass-border);
-  background: linear-gradient(135deg, rgba(30, 30, 32, 0.94), rgba(16, 16, 17, 0.9));
+  background: var(--dk-popover-bg);
   box-shadow: var(--dk-glass-inset), var(--dk-shadow-pop);
 }
 :root[data-theme="dark"] .db-research-paywall-glyph::before {
@@ -451,7 +446,7 @@
 /* ── Help: community panel and Discord button ── */
 :root[data-theme="dark"] .db-settings-page .db-help-discord {
   border-color: var(--dk-glass-border);
-  background: linear-gradient(135deg, rgba(34, 44, 58, 0.72), rgba(14, 14, 15, 0.56));
+  background: var(--dk-glass-fill);
   box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
 }
 :root[data-theme="dark"] .db-help-discord::after {
@@ -489,7 +484,7 @@
   --sw-field-border: var(--dk-field-border);
   --sw-chip: rgba(255, 255, 255, 0.035);
   --sw-chip-border: var(--dk-border);
-  --sw-sheen: rgba(255, 255, 255, 0.12);
+  --sw-sheen: transparent;
   --sw-text: var(--dk-text);
   --sw-dim: var(--dk-text-dim);
   --sw-mute: var(--dk-text-mute);

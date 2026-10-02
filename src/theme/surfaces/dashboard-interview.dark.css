@@ -153,14 +153,14 @@
   background: rgba(255, 255, 255, 0.04);
 }
 :root[data-theme="dark"] .db-resume-drop {
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.02));
+  background: rgba(255, 255, 255, 0.03);
 }
 :root[data-theme="dark"] .db-resume-drop.is-dragging {
   background: color-mix(in srgb, var(--db-teal) 12%, rgba(255, 255, 255, 0.04));
 }
 :root[data-theme="dark"] .db-resume-clipboard {
   border-color: var(--dk-glass-border);
-  background: linear-gradient(135deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.02));
+  background: rgba(255, 255, 255, 0.04);
   box-shadow: var(--dk-glass-inset);
 }
 :root[data-theme="dark"] .db-resume-editor textarea {
