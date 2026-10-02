@@ -6,6 +6,8 @@ import {
   rejectPendingAction,
   type PendingAction,
 } from "../../../lib/pendingActions";
+import { openPath } from "@tauri-apps/plugin-opener";
+import { FORMAT_LABEL, saveDocumentDraft, type DocumentFormat } from "../../../lib/swarmDocumentFile";
 import type { SwarmMessage, SwarmRoundMember, SwarmRoundView, SwarmSessionView } from "../../../lib/swarmApi";
 import { mapRoundMember, proposeDraft, SwarmRequestError, TERMINAL_SESSION_STATES } from "../../../lib/swarmApi";
 import {
@@ -299,6 +301,7 @@ const DRAFT_KIND: Record<string, string> = {
   message: "Message draft",
   application: "Application draft",
   event: "Calendar hold",
+  document: "Document",
 };
 
 const TARGET_LABEL: Record<string, string> = {
@@ -464,6 +467,85 @@ function DraftAction({
   );
 }
 
+const DOC_PREVIEW_CHARS = 700;
+const SAVE_FORMATS: DocumentFormat[] = ["docx", "pdf", "txt"];
+
+/** A document the manager wrote (a revised resume, a cover letter). It is saved on this
+ * computer, never sent anywhere, so there is no approval step: the user reads it, can
+ * edit it, and picks Word, PDF or text. The original file they attached is never touched. */
+function DocumentDraft({ draft }: { draft: Json }) {
+  const title = str(draft.title) || "Aura document";
+  const preferred = (SAVE_FORMATS as string[]).includes(str(draft.format)) ? (str(draft.format) as DocumentFormat) : "docx";
+  const formats = [preferred, ...SAVE_FORMATS.filter((f) => f !== preferred)];
+  const [text, setText] = useState(str(draft.body));
+  const [editing, setEditing] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const [busy, setBusy] = useState<DocumentFormat | "">("");
+  const [saved, setSaved] = useState("");
+  const [error, setError] = useState("");
+  const long = text.length > DOC_PREVIEW_CHARS;
+
+  const save = async (format: DocumentFormat) => {
+    setBusy(format);
+    setError("");
+    try {
+      setSaved(await saveDocumentDraft(title, text, format));
+    } catch (err) {
+      setError(typeof err === "string" ? err : "Aura couldn't save that file. Try again in a moment.");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  return (
+    <div className="db-swarm-doc">
+      <span className="db-swarm-doc-name">{title}</span>
+      {editing ? (
+        <textarea
+          className="db-swarm-doc-edit"
+          rows={Math.min(18, Math.max(6, text.split("\n").length + 1))}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+        />
+      ) : (
+        <p className={`db-swarm-doc-body${long && !expanded ? " is-clipped" : ""}`}>
+          {long && !expanded ? `${text.slice(0, DOC_PREVIEW_CHARS)}…` : text}
+        </p>
+      )}
+      <div className="db-swarm-act-row">
+        {formats.map((format, i) => (
+          <button
+            key={format}
+            type="button"
+            className={`db-swarm-pill-btn${i === 0 ? " is-primary" : ""}`}
+            disabled={busy !== "" || !text.trim()}
+            onClick={() => void save(format)}
+          >
+            {busy === format ? "Saving" : `Save as ${FORMAT_LABEL[format]}`}
+          </button>
+        ))}
+        <button type="button" className="db-swarm-pill-btn" onClick={() => setEditing((v) => !v)}>
+          {editing ? "Done editing" : "Edit"}
+        </button>
+        {long && !editing && (
+          <button type="button" className="db-swarm-pill-btn" onClick={() => setExpanded((v) => !v)}>
+            {expanded ? "Show less" : "Show all"}
+          </button>
+        )}
+      </div>
+      {saved && (
+        <div className="db-swarm-act-row">
+          <span className="db-swarm-muted">Saved to Downloads, Aura Documents.</span>
+          <button type="button" className="db-swarm-pill-btn" onClick={() => void openPath(saved).catch(() => setError("Aura couldn't open it. Find it in Downloads, Aura Documents."))}>
+            Open
+          </button>
+        </div>
+      )}
+      {error && <p className="db-swarm-note">{error}</p>}
+    </div>
+  );
+}
+
 /** The report. Every finding shows the sources it cites, a finding with none is marked
  * unsourced, and drafts are labelled as never sent. Gaps carry a Grant button when the
  * missing piece is a connector this manager was not given. */
@@ -544,9 +626,15 @@ export function ReportEmbed({
               <span className="db-swarm-draft-head">
                 <b>{DRAFT_KIND[str(d.kind)] ?? "Draft"}</b>
                 {str(d.destination) && <span> to {str(d.destination)}</span>}
-                <em>{TARGET_LABEL[str(d.target)] && str(d.id) ? "needs your approval" : "not sent"}</em>
+                <em>
+                  {str(d.target) === "file"
+                    ? "saved only on your computer"
+                    : TARGET_LABEL[str(d.target)] && str(d.id)
+                      ? "needs your approval"
+                      : "not sent"}
+                </em>
               </span>
-              <p>{str(d.body)}</p>
+              {str(d.target) === "file" ? <DocumentDraft draft={d} /> : <p>{str(d.body)}</p>}
               {TARGET_LABEL[str(d.target)] && str(d.id) && message.sessionId && (
                 <DraftAction
                   sessionId={message.sessionId}

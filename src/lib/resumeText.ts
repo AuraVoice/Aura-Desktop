@@ -41,7 +41,9 @@ function tidy(text: string): string {
     .trim();
 }
 
-async function extractPdf(file: File): Promise<string> {
+/** One string per page. Swarm documents (documentText.ts) keep the pages apart so a
+ * manager can read and cite "page 2"; a resume joins them. */
+export async function extractPdfPages(file: File): Promise<string[]> {
   const pdfjs = await import("pdfjs-dist");
   pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -87,10 +89,14 @@ async function extractPdf(file: File): Promise<string> {
   } finally {
     await loadingTask.destroy();
   }
-  return pages.join("\n\n");
+  return pages;
 }
 
-async function extractDocx(file: File): Promise<string> {
+async function extractPdf(file: File): Promise<string> {
+  return (await extractPdfPages(file)).join("\n\n");
+}
+
+export async function extractDocx(file: File): Promise<string> {
   const mammoth = await import("mammoth/mammoth.browser.js");
   const { value } = await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() });
   return value;

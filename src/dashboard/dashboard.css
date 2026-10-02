@@ -9409,7 +9409,7 @@
   align-items: flex-end;
   gap: 8px;
   margin: 0 16px;
-  padding: 7px 7px 7px 16px;
+  padding: 7px;
   border-radius: 16px;
   border: 1px solid var(--sw-field-border);
   background: var(--sw-field);
@@ -9421,7 +9421,7 @@
   transform: translateY(-1px);
 }
 .db-swarm-composer.is-busy { border-color: var(--sw-sup-ring); }
-.db-swarm-composer.is-readonly { opacity: 0.6; }
+.db-swarm-composer.is-readonly { opacity: 0.6; padding-left: 16px; }
 .db-swarm-composer textarea {
   flex: 1;
   min-width: 0;
@@ -9459,6 +9459,73 @@
 .db-swarm-send:disabled { opacity: 0.4; box-shadow: none; filter: saturate(0.4); cursor: default; }
 .db-swarm-send.is-small { width: 32px; height: 32px; border-radius: 10px; }
 .db-swarm-composer-hint { margin: 6px 20px 12px; font-size: 11.5px; color: var(--sw-mute); }
+/* Files: the attach button, the chips waiting above the composer, and the chips on a sent
+   message. Tokens only, so the dark sheet needs no twin. */
+.db-swarm-attach {
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border: 0;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  color: var(--sw-dim);
+  background: transparent;
+  cursor: pointer;
+  transition: transform 260ms var(--sw-spring), background 160ms var(--sw-out), color 160ms var(--sw-out);
+}
+.db-swarm-attach:hover:not(:disabled) { background: var(--sw-hover); color: var(--sw-accent-strong); transform: translateY(-1px); }
+.db-swarm-attach:active:not(:disabled) { transform: scale(0.92); }
+.db-swarm-attach:disabled { opacity: 0.4; cursor: default; }
+.db-swarm-attach:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--sw-accent-soft); }
+.db-swarm-attachments,
+.db-swarm-files { display: flex; flex-wrap: wrap; gap: 6px; }
+.db-swarm-attachments { margin: 0 16px 8px; }
+.db-swarm-files { margin-top: 6px; }
+.db-swarm-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 6px 4px 9px;
+  border-radius: 10px;
+  border: 1px solid var(--sw-chip-border);
+  background: var(--sw-chip);
+  color: var(--sw-text);
+  font-size: 12px;
+}
+.db-swarm-file svg { color: var(--sw-accent-strong); flex: none; }
+.db-swarm-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 240px; font-weight: 600; }
+.db-swarm-file-state { font-size: 11px; color: var(--sw-mute); }
+.db-swarm-file.is-reading svg .sw-node { animation: db-swarm-file-read 1.1s ease-in-out infinite; }
+.db-swarm-file.is-failed { border-color: var(--sw-warn-soft); }
+.db-swarm-file.is-failed .db-swarm-file-state { color: var(--sw-warn); white-space: normal; }
+.db-swarm-file.is-gone { opacity: 0.55; }
+.db-swarm-file-remove,
+.db-swarm-file-pin {
+  border: 0;
+  background: transparent;
+  color: var(--sw-dim);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 650;
+  padding: 2px 6px;
+  border-radius: 7px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.db-swarm-file-remove { font-size: 14px; line-height: 1; padding: 1px 5px; }
+.db-swarm-file-remove:hover,
+.db-swarm-file-pin:hover { background: var(--sw-hover); color: var(--sw-text); }
+.db-swarm-file-pin.is-on { color: var(--sw-accent-strong); background: var(--sw-accent-soft); }
+.db-swarm-file-pin:focus-visible,
+.db-swarm-file-remove:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--sw-accent-soft); }
+@keyframes db-swarm-file-read {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
 
 /* ── Team panel ── */
 .db-swarm-roster-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 8px 0 6px; }
@@ -9991,6 +10058,33 @@ button:hover > .sw-g-dismiss { transform: rotate(90deg); }
 .db-swarm-act-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .db-swarm-act-count { margin-left: auto; font-size: 11px; color: var(--sw-mute); font-variant-numeric: tabular-nums; }
 .db-swarm-act-count.is-over { color: var(--sw-danger); }
+/* A document draft: saved on this computer, so Save buttons instead of an approval. */
+.db-swarm-doc { display: grid; gap: 8px; margin-top: 6px; }
+.db-swarm-doc-name { font-size: 13px; font-weight: 700; color: var(--sw-text); }
+.db-swarm-embed .db-swarm-doc-body {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--sw-field);
+  white-space: pre-wrap;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--sw-text);
+}
+.db-swarm-embed .db-swarm-doc-body.is-clipped { color: var(--sw-dim); }
+.db-swarm-doc-edit {
+  border: 1px solid var(--sw-field-border);
+  background: var(--sw-field);
+  color: var(--sw-text);
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.55;
+  border-radius: 10px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+.db-swarm-doc-edit::-webkit-scrollbar { display: none; }
+.db-swarm-doc-edit:focus { outline: none; border-color: var(--sw-accent); box-shadow: 0 0 0 3px var(--sw-accent-soft); }
 .db-swarm-embed .db-swarm-act-preview {
   margin: 0;
   padding: 8px 10px;

@@ -13,13 +13,17 @@ import {
   getSwarmState,
   importSandbox,
   listChannelMessages,
+  listSwarmDocs,
   mapRoster,
+  pinSwarmDoc,
   runManager,
   sendSwarmMessage,
   setGrants,
   SwarmRequestError,
   TERMINAL_SESSION_STATES,
+  uploadSwarmDoc,
   upsertRoutine,
+  type SwarmDoc,
   type SwarmMessage,
   type SwarmRoster,
   type SwarmRoundView,
@@ -30,7 +34,8 @@ import {
 import { useDashboardResource } from "../useDashboardResource";
 import { SwarmChannels } from "./swarm/SwarmChannels";
 import { SwarmRoster as SwarmRosterPanel } from "./swarm/SwarmRoster";
-import { SwarmStream, type ChannelView } from "./swarm/SwarmStream";
+import { DocumentExtractionError, extractDocument } from "../../lib/documentText";
+import { MAX_ATTACHMENTS, SwarmStream, type ChannelView, type ComposerDoc } from "./swarm/SwarmStream";
 import { hasActionableDraft } from "./swarm/SwarmWork";
 import {
   channelItems,
@@ -186,6 +191,25 @@ function errorCopy(error: unknown, roster: SwarmRoster): string {
   return `Couldn't reach Aura (${roster.managers.length > 0 ? "your team is safe on the server" : "nothing was lost"}). Check your connection and try again.`;
 }
 
+/** Why one attached file did not make it onto the shelf, short enough for its chip. */
+function attachErrorCopy(error: unknown, roster: SwarmRoster): string {
+  if (error instanceof DocumentExtractionError) return error.message;
+  if (error instanceof SwarmRequestError) {
+    switch (error.reason) {
+      case "too_many_docs":
+        return "You have 20 files with Swarm. Older ones clear after 30 days.";
+      case "doc_too_large":
+        return "Too much text to send. Try a shorter file.";
+      case "doc_empty":
+        return "There's no text in it.";
+      case "doc_kind_unsupported":
+        return "Only PDF, Word (.docx) and text files.";
+    }
+    if (error.status === 404 && !error.reason) return "Documents aren't available on the server yet.";
+  }
+  return errorCopy(error, roster);
+}
+
 function runtimeNotice(problem: string): string {
   switch (problem) {
     case "":
@@ -276,6 +300,17 @@ export function SwarmPage() {
   const [watched, setWatched] = useState<ReadonlySet<string>>(() => new Set());
   const [stopping, setStopping] = useState<ReadonlySet<string>>(() => new Set());
   const [text, setText] = useState("");
+  const [attachments, setAttachments] = useState<ComposerDoc[]>([]);
+  const [docShelf, setDocShelf] = useState<Record<string, SwarmDoc>>({});
+
+  // The shelf, once: a sent message's file chips show whether it is pinned or gone.
+  useEffect(() => {
+    const controller = new AbortController();
+    void listSwarmDocs(controller.signal)
+      .then((docs) => setDocShelf(Object.fromEntries(docs.map((d) => [d.id, d]))))
+      .catch(() => undefined);
+    return () => controller.abort();
+  }, []);
   const [freeAnswers, setFreeAnswers] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState(false);
   const [busyChannel, setBusyChannel] = useState<ChannelId>("group");
@@ -517,6 +552,8 @@ export function SwarmPage() {
   const select = (next: ChannelId) => {
     setChannel(next);
     setHireHint(false);
+    // Files picked for one channel are never sent from another by accident.
+    if (next !== liveChannel) setAttachments([]);
     saveChannel(next);
     setError("");
     setRosterOpen(false);
@@ -536,7 +573,7 @@ export function SwarmPage() {
   };
 
   /** #group, or the answer to a routing question. */
-  const route = async (req: { text: string; draftId?: string; choiceLabel?: string; choiceManagerId?: string }) => {
+  const route = async (req: { text: string; draftId?: string; choiceLabel?: string; choiceManagerId?: string; docIds?: string[] }) => {
     if (busy) return false;
     setBusy(true);
     setBusyChannel("group");
@@ -565,14 +602,14 @@ export function SwarmPage() {
   };
 
   /** A DM, or Run now on a routine: the text is the manager's brief. */
-  const run = async (managerId: string, brief: string, origin: "dm" | "run_now") => {
+  const run = async (managerId: string, brief: string, origin: "dm" | "run_now", docIds: string[] = []) => {
     if (busy) return false;
     setBusy(true);
     setBusyChannel(managerChannel(managerId));
     setBusySince(Date.now());
     setError("");
     try {
-      const started = await runManager(managerId, brief, clientId(), origin);
+      const started = await runManager(managerId, brief, clientId(), origin, docIds);
       watch(started.sessionId);
       reloadState();
       await pull(managerChannel(managerId), true);
@@ -587,11 +624,57 @@ export function SwarmPage() {
 
   const submit = async () => {
     const message = text.trim();
-    if (!message) return;
-    const ok = view.kind === "manager" && view.manager ? await run(view.manager.id, message, "dm") : await route({ text: message });
+    if (!message || attachments.some((a) => a.status === "reading")) return;
+    const docIds = attachments.filter((a) => a.status === "ready").map((a) => a.docId);
+    const ok = view.kind === "manager" && view.manager
+      ? await run(view.manager.id, message, "dm", docIds)
+      : await route({ text: message, docIds });
     if (ok) {
       setText("");
       setHireHint(false);
+      setAttachments([]);
+    }
+  };
+
+  /** Each file is read here, then its text goes on the shelf; the chip says which step failed. */
+  const attach = (files: File[]) => {
+    const room = MAX_ATTACHMENTS - attachments.length;
+    for (const file of files.slice(0, Math.max(0, room))) {
+      const key = clientId();
+      setAttachments((prev) => [...prev, { key, name: file.name, status: "reading", docId: "", error: "" }]);
+      const settle = (patch: Partial<ComposerDoc>) =>
+        setAttachments((prev) => prev.map((a) => (a.key === key ? { ...a, ...patch } : a)));
+      void (async () => {
+        try {
+          const extracted = await extractDocument(file);
+          const doc = await uploadSwarmDoc({
+            clientDocId: key,
+            name: file.name,
+            kind: extracted.kind,
+            pages: extracted.pages,
+            truncated: extracted.truncated,
+          });
+          setDocShelf((prev) => ({ ...prev, [doc.id]: doc }));
+          settle({ status: "ready", docId: doc.id, error: doc.truncated ? "Only the start of this file was kept" : "" });
+        } catch (err) {
+          settle({ status: "failed", error: attachErrorCopy(err, roster) });
+        }
+      })();
+    }
+  };
+
+  const pinDoc = async (docId: string, managerId: string, pinned: boolean) => {
+    try {
+      const doc = await pinSwarmDoc(docId, managerId, pinned);
+      setDocShelf((prev) => ({ ...prev, [doc.id]: doc }));
+    } catch (err) {
+      setError(
+        err instanceof SwarmRequestError && err.reason === "too_many_pinned"
+          ? "A manager can keep 3 pinned files. Unpin one first."
+          : err instanceof SwarmRequestError && err.reason === "doc_not_found"
+            ? "That file is no longer on the shelf. Attach it again."
+            : errorCopy(err, roster),
+      );
     }
   };
 
@@ -755,6 +838,11 @@ export function SwarmPage() {
           onToggleRoster={() => setRosterOpen((open) => !open)}
           composerRef={composerRef}
           hireHint={hireHint}
+          attachments={attachments}
+          onAttach={attach}
+          onRemoveAttachment={(key) => setAttachments((prev) => prev.filter((a) => a.key !== key))}
+          docShelf={docShelf}
+          onPinDoc={(docId, managerId, pinned) => void pinDoc(docId, managerId, pinned)}
           youName={youName}
           banner={banner}
         />

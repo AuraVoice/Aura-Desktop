@@ -89,6 +89,28 @@ export function DartGlyph(p: GlyphProps) {
   );
 }
 
+/** Attach a file: a page with a folded corner and a node docking onto it. */
+export function SheetGlyph(p: GlyphProps) {
+  return (
+    <Glyph name="sheet" {...p}>
+      <path d="M6 3.5h7.6L18 7.9V20.5H6Z" strokeWidth={1.5} />
+      <path d="M13.4 3.7v4.4h4.4" strokeWidth={1.3} opacity="0.7" />
+      <path d="M9 13h6M9 16.4h4" strokeWidth={1.3} opacity="0.55" />
+      <circle cx="18.2" cy="18.4" r="2.1" className="sw-node" fill="currentColor" stroke="none" />
+    </Glyph>
+  );
+}
+
+/** Pin a file to a manager: a node held by a stem. */
+export function TackGlyph(p: GlyphProps) {
+  return (
+    <Glyph name="tack" {...p}>
+      <path d="M12 13.2v7.3" strokeWidth={1.6} />
+      <circle cx="12" cy="8.6" r="4.4" className="sw-node" fill="currentColor" stroke="none" opacity="0.9" />
+    </Glyph>
+  );
+}
+
 /** Reset: an orbit rewinding into its starting node. */
 export function RewindGlyph(p: GlyphProps) {
   return (

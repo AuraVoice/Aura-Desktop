@@ -1,5 +1,7 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
-import type { SwarmDecision, SwarmManager, SwarmRoster, SwarmRoundView, SwarmSessionView } from "../../../lib/swarmApi";
+import type { SwarmDecision, SwarmDoc, SwarmManager, SwarmRoster, SwarmRoundView, SwarmSessionView } from "../../../lib/swarmApi";
+import { DOCUMENT_ACCEPT } from "../../../lib/documentText";
+import { Paperclip } from "lucide-react";
 import { SwarmAvatar } from "./SwarmAvatar";
 import {
   AscentGlyph,
@@ -12,10 +14,12 @@ import {
   HopGlyph,
   LatticeGlyph,
   PulseGlyph,
+  SheetGlyph,
   SignalGlyph,
   SparkGlyph,
   StudyGlyph,
   SwarmMark,
+  TackGlyph,
   TeamGlyph,
   WatchGlyph,
 } from "./SwarmGlyphs";
@@ -60,6 +64,16 @@ const STARTERS = [
     text: "I'm a student this semester: track every deadline from Google Classroom, build study plans before exams and quiz me on weak topics.",
   },
 ];
+
+export const MAX_ATTACHMENTS = 5;
+
+export interface ComposerDoc {
+  key: string;
+  name: string;
+  status: "reading" | "ready" | "failed";
+  docId: string;
+  error: string;
+}
 
 export interface ChannelView {
   kind: "group" | "activity" | "manager";
@@ -107,6 +121,13 @@ interface Props {
   composerRef: RefObject<HTMLTextAreaElement | null>;
   /** The New manager button was pressed: the empty composer says what to write. */
   hireHint: boolean;
+  /** Files picked for the next message, each read on this machine then put on the shelf. */
+  attachments: ComposerDoc[];
+  onAttach: (files: File[]) => void;
+  onRemoveAttachment: (key: string) => void;
+  /** Shelf files by id, for the pin state on a sent message's file chips. */
+  docShelf: Record<string, SwarmDoc>;
+  onPinDoc: (docId: string, managerId: string, pinned: boolean) => void;
   /** The signed-in user's first name, shown beside "You". */
   youName: string;
   /** Shown above the messages (the one-time sandbox import). */
@@ -348,9 +369,11 @@ export function SwarmStream(props: Props) {
     el.style.height = `${Math.min(el.scrollHeight, 168)}px`;
   }, [text, composerRef]);
 
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const reading = props.attachments.some((a) => a.status === "reading");
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
-    if (!busy && text.trim() && !readOnly && text.length <= messageMax) props.onSubmit();
+    if (!busy && !reading && text.trim() && !readOnly && text.length <= messageMax) props.onSubmit();
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -441,6 +464,32 @@ export function SwarmStream(props: Props) {
                     </div>
                   )}
                   <p className="db-swarm-text">{item.text}</p>
+                  {item.docs.length > 0 && (
+                    <div className="db-swarm-files">
+                      {item.docs.map((doc) => {
+                        const shelf = props.docShelf[doc.id];
+                        const managerId = view.kind === "manager" ? view.manager?.id ?? "" : "";
+                        const pinned = Boolean(managerId && shelf?.pinnedTo.includes(managerId));
+                        return (
+                          <span key={doc.id} className={`db-swarm-file${shelf ? "" : " is-gone"}`} title={shelf ? doc.name : `${doc.name} is no longer on the shelf`}>
+                            <SheetGlyph size={15} />
+                            <span className="db-swarm-file-name">{doc.name}</span>
+                            {managerId && shelf && (
+                              <button
+                                type="button"
+                                className={`db-swarm-file-pin${pinned ? " is-on" : ""}`}
+                                aria-pressed={pinned}
+                                title={pinned ? `Pinned: ${view.name} reads it on every run, routines included` : `Pin so ${view.name} can read it on every run, routines included`}
+                                onClick={() => live.current.onPinDoc(doc.id, managerId, !pinned)}
+                              >
+                                <TackGlyph size={13} /> {pinned ? "Pinned" : "Pin"}
+                              </button>
+                            )}
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
                 </>
               ) : item.kind !== "decision" ? (
                 <>
@@ -512,7 +561,7 @@ export function SwarmStream(props: Props) {
         </Fragment>
       );
     });
-  }, [items, props.fresh, props.grants, props.roster, props.sessions, props.stopping, props.rounds, props.openDrafts, props.freeAnswers, props.youName, busy]);
+  }, [items, props.fresh, props.grants, props.roster, props.sessions, props.stopping, props.rounds, props.openDrafts, props.freeAnswers, props.youName, props.docShelf, view, busy]);
 
   const placeholder = readOnly
     ? "Read only"
@@ -576,7 +625,48 @@ export function SwarmStream(props: Props) {
         </div>
       )}
 
+      {!readOnly && props.attachments.length > 0 && (
+        <div className="db-swarm-attachments" aria-label="Files for this message">
+          {props.attachments.map((a) => (
+            <span key={a.key} className={`db-swarm-file is-${a.status}`} title={a.error || a.name}>
+              <SheetGlyph size={15} />
+              <span className="db-swarm-file-name">{a.name}</span>
+              {a.status === "reading" && <span className="db-swarm-file-state">Reading</span>}
+              {a.status === "failed" && <span className="db-swarm-file-state">{a.error}</span>}
+              <button type="button" className="db-swarm-file-remove" aria-label={`Remove ${a.name}`} onClick={() => props.onRemoveAttachment(a.key)}>
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
       <form className={`db-swarm-composer${readOnly ? " is-readonly" : ""}${busy ? " is-busy" : ""}`} onSubmit={submit}>
+        {!readOnly && (
+          <>
+            <input
+              ref={fileRef}
+              type="file"
+              accept={DOCUMENT_ACCEPT}
+              multiple
+              hidden
+              onChange={(event) => {
+                const files = Array.from(event.target.files ?? []);
+                event.target.value = "";
+                if (files.length) props.onAttach(files);
+              }}
+            />
+            <button
+              type="button"
+              className="db-swarm-attach"
+              disabled={busy || props.attachments.length >= MAX_ATTACHMENTS}
+              onClick={() => fileRef.current?.click()}
+              aria-label="Attach a PDF, Word or text file"
+              title="Attach a PDF, Word or text file. Aura reads it on this computer and sends only the text."
+            >
+              <Paperclip size={19} aria-hidden="true" />
+            </button>
+          </>
+        )}
         <label htmlFor="swarm-message" className="db-swarm-sr">Message</label>
         <textarea
           id="swarm-message"
@@ -590,7 +680,7 @@ export function SwarmStream(props: Props) {
           placeholder={placeholder}
         />
         {!readOnly && text.length > messageMax - 400 && <span className="db-swarm-count">{messageMax - text.length}</span>}
-        <button type="submit" className="db-swarm-send" disabled={readOnly || busy || !text.trim() || text.length > messageMax} aria-label="Send">
+        <button type="submit" className="db-swarm-send" disabled={readOnly || busy || reading || !text.trim() || text.length > messageMax} aria-label="Send">
           <DartGlyph size={19} />
         </button>
       </form>
@@ -598,8 +688,12 @@ export function SwarmStream(props: Props) {
         {readOnly
           ? "Activity is written by the swarm."
           : view.kind === "manager"
-            ? "This becomes the manager's brief. It only reads; drafts are never sent."
-            : "Aura routes this to the manager that owns it, and that manager starts on it."}
+            ? props.attachments.length > 0
+              ? "The manager reads these files with your brief. Only their text leaves this computer."
+              : "This becomes the manager's brief. It only reads; drafts are never sent."
+            : props.attachments.length > 0
+              ? "Only the manager this goes to gets the files. Only their text leaves this computer."
+              : "Aura routes this to the manager that owns it, and that manager starts on it."}
         <span> Enter to send, Shift+Enter for a new line.</span>
       </p>
     </section>

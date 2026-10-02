@@ -51,7 +51,7 @@ export interface Author {
 }
 
 export type StreamItem =
-  | { key: string; kind: "user"; text: string; at: number }
+  | { key: string; kind: "user"; text: string; at: number; docs: { id: string; name: string }[] }
   | { key: string; kind: "decision"; decision: SwarmDecision; author: Author; at: number }
   | { key: string; kind: "crosspost"; text: string; at: number }
   | { key: string; kind: "system"; text: string; tone: "supervisor" | "routine" | "plain"; at: number }
@@ -144,7 +144,14 @@ export function channelItems(messages: SwarmMessage[], roster: SwarmRoster): Str
     const key = `${m.channelId}-${m.seq}`;
     const speaker = m.authorKind === "manager" ? managerAuthor(roster, m.authorId) : backer;
     if (m.authorKind === "user") {
-      items.push({ key, kind: "user", text: m.text, at: m.at });
+      // Files sent with the message (swarm/docs.py): names only, the text stays on the server.
+      const docs = Array.isArray(m.data.docs)
+        ? (m.data.docs as unknown[]).flatMap((d) => {
+            const row = d && typeof d === "object" ? (d as Record<string, unknown>) : {};
+            return typeof row.id === "string" && typeof row.name === "string" ? [{ id: row.id, name: row.name }] : [];
+          })
+        : [];
+      items.push({ key, kind: "user", text: m.text, at: m.at, docs });
       continue;
     }
     switch (m.kind) {

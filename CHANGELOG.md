@@ -24,6 +24,8 @@ was started and read like commit subjects rather than release notes.
 - A manager can hand a question off to a full Aura Research run, and a separate checker can mark a report **Verified** when every goal is backed by its sources.
 - Ask **#group** something that spans your work and up to three managers work on it at once; the Supervisor then posts one combined answer in #group, with a link to each manager's full report and one notification instead of several.
 - A Swarm draft meant for **X**, **LinkedIn** or **your calendar** now has a **Review** button: edit it, see exactly what will be posted or booked, and press **Approve** to do it once. Calendar holds go on your own calendar with no invitees, and Aura refuses to post publicly from a run that read your private accounts.
+- Attach a **PDF, Word (.docx) or text file** to any Swarm message. Aura reads it on your computer and sends only its text, and the manager the message goes to can then read it, find things in it and quote it in its report. **Pin** a file in a manager's DM and it reads that file on every run, routines included. Unpinned files are cleared after 30 days.
+- Ask a manager for a document (a tailored resume, a cover letter, a plan, a fixed-up version of a file you attached) and its report carries it ready to edit, with **Save as Word**, **Save as PDF** and **Save as Text**. Files land in Downloads, in an Aura Documents folder, and never overwrite anything, including the file you attached.
 - A one-time button brings a Swarm sandbox team from an earlier build into your account.
 
 ### Changed

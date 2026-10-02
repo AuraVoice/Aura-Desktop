@@ -10,4 +10,8 @@ declare module "mammoth/mammoth.browser.js" {
     value: string;
     messages: Array<{ type: string; message: string }>;
   }>;
+  export function convertToHtml(input: { arrayBuffer: ArrayBuffer }): Promise<{
+    value: string;
+    messages: Array<{ type: string; message: string }>;
+  }>;
 }

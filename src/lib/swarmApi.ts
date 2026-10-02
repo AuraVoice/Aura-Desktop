@@ -156,6 +156,8 @@ export interface SwarmMessageRequest {
   draftId?: string;
   choiceLabel?: string;
   choiceManagerId?: string;
+  /** Files from the shelf this message hands to whichever manager it is routed to. */
+  docIds?: string[];
 }
 
 export type SwarmAuthorKind = "user" | "manager" | "aura" | "system";
@@ -526,6 +528,7 @@ export async function sendSwarmMessage(req: SwarmMessageRequest): Promise<SwarmR
         draft_id: req.draftId ?? "",
         choice_label: req.choiceLabel ?? "",
         choice_manager_id: req.choiceManagerId ?? "",
+        doc_ids: req.docIds ?? [],
       }),
     },
     MESSAGE_TIMEOUT_MS,
@@ -546,10 +549,11 @@ export async function runManager(
   brief: string,
   clientSessionId: string,
   origin: "dm" | "run_now" = "dm",
+  docIds: string[] = [],
 ): Promise<{ sessionId: string; replayed: boolean }> {
   const body = await call(`/swarm/managers/${encodeURIComponent(managerId)}/run`, {
     method: "POST",
-    body: JSON.stringify({ brief, client_session_id: clientSessionId, origin }),
+    body: JSON.stringify({ brief, client_session_id: clientSessionId, origin, doc_ids: docIds }),
   });
   return { sessionId: str(body.session_id), replayed: body.replayed === true };
 }
@@ -671,4 +675,77 @@ export async function importSandbox(clientImportId: string, rosterWire: unknown,
 
 export async function resetSwarm(): Promise<void> {
   await call("/swarm", { method: "DELETE" }, MESSAGE_TIMEOUT_MS);
+}
+
+/** One file on the user's document shelf (juno-backend swarm/docs.py). Never the text. */
+export interface SwarmDoc {
+  id: string;
+  name: string;
+  kind: string;
+  chars: number;
+  pages: number;
+  parts: number;
+  /** Only the start of a very long file was kept. */
+  truncated: boolean;
+  outline: string[];
+  pinnedTo: string[];
+  /** Empty while pinned: pinned files do not expire. */
+  expiresAt: string;
+}
+
+function mapDoc(raw: Json): SwarmDoc {
+  return {
+    id: str(raw.id),
+    name: str(raw.name),
+    kind: str(raw.kind),
+    chars: num(raw.chars),
+    pages: num(raw.pages),
+    parts: num(raw.parts),
+    truncated: raw.truncated === true,
+    outline: strings(raw.outline),
+    pinnedTo: strings(raw.pinned_to),
+    expiresAt: str(raw.expires_at),
+  };
+}
+
+/** Sends a file's text, already extracted on this machine. Idempotent on clientDocId. */
+export async function uploadSwarmDoc(input: {
+  clientDocId: string;
+  name: string;
+  kind: string;
+  pages: string[];
+  truncated: boolean;
+}): Promise<SwarmDoc> {
+  const body = await call(
+    "/swarm/docs",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        client_doc_id: input.clientDocId,
+        name: input.name,
+        kind: input.kind,
+        pages: input.pages,
+        truncated: input.truncated,
+      }),
+    },
+    MESSAGE_TIMEOUT_MS,
+  );
+  return mapDoc(obj(body.doc));
+}
+
+export async function listSwarmDocs(signal?: AbortSignal): Promise<SwarmDoc[]> {
+  const body = await call("/swarm/docs", { signal });
+  return list(body.docs).map(mapDoc);
+}
+
+export async function deleteSwarmDoc(docId: string): Promise<void> {
+  await call(`/swarm/docs/${encodeURIComponent(docId)}`, { method: "DELETE" });
+}
+
+export async function pinSwarmDoc(docId: string, managerId: string, pinned: boolean): Promise<SwarmDoc> {
+  const body = await call(`/swarm/docs/${encodeURIComponent(docId)}/pin`, {
+    method: "PUT",
+    body: JSON.stringify({ manager_id: managerId, pinned }),
+  });
+  return mapDoc(obj(body.doc));
 }
