@@ -843,6 +843,8 @@ export function OverlayRoot() {
       void openDashboardWindow("/agents", notification.resourceId, "research");
     } else if (notification.action === "view_browser_task") {
       void openDashboardWindow("/agents", notification.resourceId, "computer");
+    } else if (notification.action === "view_swarm_channel") {
+      void openDashboardWindow("/agents", notification.resourceId, "swarm");
     }
   }
 

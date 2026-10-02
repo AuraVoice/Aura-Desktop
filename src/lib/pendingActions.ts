@@ -11,12 +11,16 @@ import { AuthRequiredError, authFetchWithTimeout } from "./api";
  * card and the executed action cannot disagree.
  */
 
-export type PendingActionTool = "post_to_x" | "post_to_linkedin";
+export type PendingActionTool = "post_to_x" | "post_to_linkedin" | "swarm_calendar_hold";
 
 export const PENDING_ACTION_TOOLS: ReadonlySet<string> = new Set<PendingActionTool>([
   "post_to_x",
   "post_to_linkedin",
+  "swarm_calendar_hold",
 ]);
+
+export type PendingActionConnector = "x" | "linkedin" | "google_calendar";
+const CONNECTORS: ReadonlySet<string> = new Set<PendingActionConnector>(["x", "linkedin", "google_calendar"]);
 
 export type PendingActionStatus =
   | "pending"
@@ -33,12 +37,19 @@ export interface PendingActionPreview {
   charLimit: number | null;
   hasLink: boolean;
   account: string;
+  /** Calendar holds only: the event title and its UTC start and end, as booked. */
+  eventTitle: string;
+  start: string;
+  end: string;
+  timezone: string;
+  /** X only: what the post costs against the X budget, when the backend says. */
+  estimatedCostUsd: number | null;
 }
 
 export interface PendingAction {
   approvalId: string;
   tool: PendingActionTool;
-  connector: "x" | "linkedin";
+  connector: PendingActionConnector;
   title: string;
   status: PendingActionStatus;
   preview: PendingActionPreview;
@@ -46,6 +57,8 @@ export interface PendingAction {
   expiresAt: string;
   resultUrl: string | null;
   resultReason: string | null;
+  /** "swarm" for a Swarm report draft's approval, which renders in its report only. */
+  origin: string;
 }
 
 const LIST_TIMEOUT_MS = 10_000;
@@ -70,7 +83,7 @@ export function parsePendingAction(raw: unknown): PendingAction | null {
   if (
     !APPROVAL_ID_RE.test(approvalId)
     || !PENDING_ACTION_TOOLS.has(tool)
-    || (connector !== "x" && connector !== "linkedin")
+    || !CONNECTORS.has(connector)
     || !STATUSES.has(status)
   ) {
     return null;
@@ -85,7 +98,7 @@ export function parsePendingAction(raw: unknown): PendingAction | null {
   return {
     approvalId,
     tool: tool as PendingActionTool,
-    connector,
+    connector: connector as PendingActionConnector,
     title: str(data.title),
     status: status as PendingActionStatus,
     preview: {
@@ -94,13 +107,51 @@ export function parsePendingAction(raw: unknown): PendingAction | null {
       charLimit: typeof preview.char_limit === "number" ? preview.char_limit : null,
       hasLink: preview.has_link === true,
       account: str(preview.account),
+      eventTitle: tool === "swarm_calendar_hold" ? str(preview.title) : "",
+      start: str(preview.start),
+      end: str(preview.end),
+      timezone: str(preview.timezone),
+      estimatedCostUsd: typeof preview.estimated_cost_usd === "number" ? preview.estimated_cost_usd : null,
     },
     createdAt: str(data.created_at),
     expiresAt: str(data.expires_at),
     // Only an https link is ever handed to openUrl.
     resultUrl: url.startsWith("https://") ? url : null,
     resultReason: str(result.reason) || null,
+    origin: str(data.origin) || "chat",
   };
+}
+
+export const CONNECTOR_NAMES: Record<PendingActionConnector, string> = {
+  x: "X",
+  linkedin: "LinkedIn",
+  google_calendar: "Google Calendar",
+};
+
+/** What happened after Approve, from the action's own status and result reason. One copy
+ * for the overlay card and Swarm's report drafts, so a cause reads the same in both. */
+export function pendingActionOutcomeCopy(action: PendingAction): string {
+  const name = CONNECTOR_NAMES[action.connector];
+  const calendar = action.connector === "google_calendar";
+  const nothing = calendar ? "Nothing was booked." : "Nothing was posted.";
+  if (action.status === "done") return calendar ? `Added to ${name}.` : `Posted to ${name}.`;
+  if (action.status === "expired") return "This expired. Ask again to prepare it.";
+  if (action.status === "rejected") return `Discarded. ${nothing}`;
+  if (action.status === "unknown" || action.status === "executing") {
+    return `Aura couldn't confirm it went through. Check ${name} before trying again.`;
+  }
+  switch (action.resultReason) {
+    case "reauthorization_required":
+      return `${name} needs to be reconnected. Turn it back on in Connectors.`;
+    case "budget_user":
+      return `You've reached this month's posting limit for ${name}.`;
+    case "budget_global":
+      return `Posting to ${name} is paused for now. Try again later.`;
+    case "rate_limited":
+      return `${name} is limiting requests right now. Try again in a few minutes.`;
+    default:
+      return `${name} didn't accept it. ${nothing}`;
+  }
 }
 
 async function readItem(response: Response): Promise<PendingAction | null> {
@@ -118,6 +169,11 @@ export async function fetchPendingActions(): Promise<PendingAction[]> {
   return Array.isArray(body.items)
     ? body.items.map(parsePendingAction).filter((item): item is PendingAction => item !== null)
     : [];
+}
+
+export async function fetchPendingAction(approvalId: string): Promise<PendingAction | null> {
+  const response = await authFetchWithTimeout(`/actions/${encodeURIComponent(approvalId)}`, undefined, LIST_TIMEOUT_MS);
+  return readItem(response);
 }
 
 export async function approvePendingAction(approvalId: string): Promise<PendingAction | null> {

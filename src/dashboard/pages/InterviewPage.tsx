@@ -424,8 +424,9 @@ function researchFailureCopy(err: unknown): string {
     case "unavailable":
       return "Company research is not responding right now. Your inputs are still here, so try again shortly.";
     case "invalid":
-    case "too_large":
       return "Aura could not read these inputs. Check the company website and job description, then try again.";
+    case "too_large":
+      return "The research found more than fits in one dossier. Shorten the job description, then try again.";
     default:
       return "Aura could not complete the company research. Your inputs are still here, so you can try again.";
   }

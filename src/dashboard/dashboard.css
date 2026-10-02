@@ -8580,3 +8580,1772 @@
 .db-browser-agent-withdraw:hover {
   color: var(--db-text);
 }
+
+
+/* ── Agents > Swarm ── a chat app: channels | stream | team. Every colour is a --sw-*
+   token so dark mode only re-points tokens (dashboard-data.dark.css). Panels sit on the
+   flat page colour, so they take the glass fill, hairline and inset highlight with no
+   backdrop-filter; repeated rows carry contain: layout paint. Motion animates only
+   transform, opacity and filter, and .db-reduce-motion flattens all of it. */
+.db-swarm {
+  --sw-panel-border: rgba(255, 255, 255, 0.82);
+  --sw-panel-fill: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
+  --sw-panel-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
+  --sw-rail-fill: var(--sw-panel-fill);
+  --sw-divider: rgba(63, 86, 78, 0.1);
+  --sw-hover: rgba(255, 255, 255, 0.55);
+  --sw-active: rgba(255, 255, 255, 0.92);
+  --sw-active-ring: rgba(63, 86, 78, 0.08);
+  --sw-lift: rgba(63, 86, 78, 0.08);
+  --sw-field: rgba(255, 255, 255, 0.72);
+  --sw-field-border: rgba(63, 86, 78, 0.14);
+  --sw-chip: rgba(255, 255, 255, 0.62);
+  --sw-chip-border: rgba(63, 86, 78, 0.1);
+  --sw-sheen: rgba(255, 255, 255, 0.55);
+  --sw-text: var(--db-text);
+  --sw-dim: var(--db-text-dim);
+  --sw-mute: var(--db-text-mute);
+  /* The app's one teal accent, nothing else: managers, the Supervisor and you are all
+     the page's own ink, and managers differ by their glyph shape, not a hue. */
+  --sw-accent: #0f9f8a;
+  --sw-accent-strong: #0b7f6e;
+  --sw-accent-soft: rgba(30, 200, 176, 0.14);
+  --sw-accent-ring: rgba(30, 200, 176, 0.38);
+  --sw-on-accent: #ffffff;
+  --sw-sup: var(--db-text);
+  --sw-sup-soft: rgba(32, 35, 42, 0.07);
+  --sw-sup-ring: rgba(32, 35, 42, 0.28);
+  --sw-warn: #b45309;
+  --sw-warn-soft: rgba(217, 119, 6, 0.12);
+  --sw-danger: #c2410c;
+  --sw-you: #20232a;
+  --sw-you-soft: rgba(32, 35, 42, 0.08);
+  --sw-aurora-a: transparent;
+  --sw-aurora-b: transparent;
+  --sw-drawer-shadow: -18px 0 40px rgba(24, 29, 35, 0.16);
+  --sw-scroll-thumb: rgba(63, 86, 78, 0.18);
+  --sw-h0: var(--db-text);
+  --sw-h0-soft: rgba(32, 35, 42, 0.07);
+  --sw-h1: var(--db-text);
+  --sw-h1-soft: rgba(32, 35, 42, 0.07);
+  --sw-h2: var(--db-text);
+  --sw-h2-soft: rgba(32, 35, 42, 0.07);
+  --sw-h3: var(--db-text);
+  --sw-h3-soft: rgba(32, 35, 42, 0.07);
+  --sw-h4: var(--db-text);
+  --sw-h4-soft: rgba(32, 35, 42, 0.07);
+  --sw-h5: var(--db-text);
+  --sw-h5-soft: rgba(32, 35, 42, 0.07);
+  --sw-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --sw-spring: cubic-bezier(0.34, 1.3, 0.64, 1);
+
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: 236px minmax(0, 1fr);
+  gap: 12px;
+  height: clamp(560px, calc(100vh - 176px), 1200px);
+  color: var(--sw-text);
+}
+@supports (animation-timing-function: linear(0, 1)) {
+  .db-swarm {
+    /* A soft spring, about 6% overshoot, settled by ~60% of the duration. */
+    --sw-spring: linear(0, 0.0326 1.4%, 0.1226 2.9%, 0.4026 6.6%, 0.6838 10.6%, 0.8742 14.6%, 0.9893 18.6%, 1.0466 22.5%, 1.0642 26.5%, 1.0589 30.5%, 1.0443 34.4%, 1.0158 42.3%, 1.0007 50.2%, 0.996 58.1%, 0.9984 73.8%, 1);
+  }
+}
+
+/* Two slow colour fields drift behind the translucent panels: one composited layer. */
+.db-swarm-aurora {
+  position: absolute;
+  inset: -40px -20px;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(38% 46% at 22% 30%, var(--sw-aurora-a), transparent 70%),
+    radial-gradient(34% 40% at 78% 70%, var(--sw-aurora-b), transparent 70%);
+  animation: db-swarm-aurora 26s ease-in-out infinite alternate;
+  will-change: transform;
+}
+@keyframes db-swarm-aurora {
+  from { transform: translate3d(-2%, -1%, 0) scale(1); }
+  to { transform: translate3d(3%, 2%, 0) scale(1.08); }
+}
+
+.db-swarm-rail,
+.db-swarm-stream,
+.db-swarm-roster {
+  min-height: 0;
+  border: 1px solid var(--sw-panel-border);
+  background: var(--sw-panel-fill);
+  box-shadow: var(--sw-panel-shadow);
+  border-radius: 18px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: db-swarm-panel-in 520ms var(--sw-out) both;
+}
+.db-swarm-rail { background: var(--sw-rail-fill); }
+.db-swarm-stream { animation-delay: 60ms; }
+.db-swarm-roster { animation-delay: 120ms; }
+@keyframes db-swarm-panel-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+
+.db-swarm-sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+.db-swarm-icon-btn {
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  border: 0;
+  background: transparent;
+  color: var(--sw-dim);
+  display: inline-grid;
+  place-items: center;
+  cursor: pointer;
+  flex: none;
+  transition: background 160ms var(--sw-out), color 160ms var(--sw-out), transform 220ms var(--sw-spring);
+}
+.db-swarm-icon-btn:hover { background: var(--sw-hover); color: var(--sw-text); transform: translateY(-1px); }
+.db-swarm-icon-btn:active { transform: scale(0.9); }
+.db-swarm-icon-btn.is-active { background: var(--sw-accent-soft); color: var(--sw-accent); }
+.db-swarm-icon-btn:disabled { opacity: 0.45; cursor: default; transform: none; }
+.db-swarm-icon-btn:focus-visible,
+.db-swarm-ch:focus-visible,
+.db-swarm-card-head:focus-visible,
+.db-swarm-starter:focus-visible,
+.db-swarm-choice:focus-visible,
+.db-swarm-pill-btn:focus-visible,
+.db-swarm-send:focus-visible {
+  outline: 2px solid var(--sw-accent-ring);
+  outline-offset: 2px;
+}
+.db-swarm-group-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 10px 6px;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--sw-mute);
+}
+.db-swarm-group-count {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--sw-chip);
+  color: var(--sw-dim);
+}
+
+/* ── Avatars ── */
+.db-swarm-avatar {
+  --sw-av: var(--sw-dim);
+  --sw-av-soft: var(--sw-chip);
+  position: relative;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border-radius: 12px;
+  display: inline-grid;
+  place-items: center;
+  font-family: var(--font-title, inherit);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  color: var(--sw-av);
+  background: var(--sw-av-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sw-av) 18%, transparent);
+  transition: transform 260ms var(--sw-spring);
+}
+.db-swarm-avatar.is-sm { width: 26px; height: 26px; border-radius: 8px; font-size: 10.5px; }
+.db-swarm-avatar.is-lg { width: 68px; height: 68px; border-radius: 20px; font-size: 22px; }
+.db-swarm-avatar.is-you { --sw-av: var(--sw-you); --sw-av-soft: var(--sw-you-soft); }
+.db-swarm-avatar.is-supervisor { --sw-av: var(--sw-sup); --sw-av-soft: var(--sw-sup-soft); }
+.db-swarm-avatar.is-aura { --sw-av: var(--sw-accent); --sw-av-soft: var(--sw-accent-soft); }
+.db-swarm .is-hue-0 { --sw-av: var(--sw-h0); --sw-av-soft: var(--sw-h0-soft); }
+.db-swarm .is-hue-1 { --sw-av: var(--sw-h1); --sw-av-soft: var(--sw-h1-soft); }
+.db-swarm .is-hue-2 { --sw-av: var(--sw-h2); --sw-av-soft: var(--sw-h2-soft); }
+.db-swarm .is-hue-3 { --sw-av: var(--sw-h3); --sw-av-soft: var(--sw-h3-soft); }
+.db-swarm .is-hue-4 { --sw-av: var(--sw-h4); --sw-av-soft: var(--sw-h4-soft); }
+.db-swarm .is-hue-5 { --sw-av: var(--sw-h5); --sw-av-soft: var(--sw-h5-soft); }
+/* A live agent wears a slowly turning ring. */
+.db-swarm-avatar.is-live::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 14px;
+  padding: 1.5px;
+  background: conic-gradient(from 0deg, transparent 0 55%, var(--sw-av) 80%, transparent 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0.75;
+  animation: db-swarm-spin 6s linear infinite;
+}
+.db-swarm-avatar.is-sm.is-live::after { border-radius: 10px; }
+@keyframes db-swarm-spin { to { transform: rotate(1turn); } }
+
+/* ── Left rail ── */
+.db-swarm-rail-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 12px 12px 14px;
+  border-bottom: 1px solid var(--sw-divider);
+}
+.db-swarm-logo {
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  display: grid;
+  place-items: center;
+  color: var(--sw-on-accent);
+  background: linear-gradient(135deg, var(--sw-accent), var(--sw-sup));
+  box-shadow: 0 6px 16px var(--sw-accent-ring);
+  flex: none;
+  animation: db-swarm-float 7s ease-in-out infinite;
+}
+@keyframes db-swarm-float {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50% { transform: translateY(-2px) rotate(-4deg); }
+}
+.db-swarm-rail-title { flex: 1; min-width: 0; line-height: 1.2; }
+.db-swarm-rail-title strong { display: block; font-family: var(--font-title, inherit); font-size: 15px; }
+.db-swarm-rail-title span { font-size: 11.5px; color: var(--sw-mute); font-variant-numeric: tabular-nums; }
+.db-swarm-rail-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 8px 10px; }
+.db-swarm-rail-empty { margin: 4px 10px; font-size: 12px; color: var(--sw-mute); }
+.db-swarm-ch {
+  position: relative;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 7px 9px;
+  margin: 1px 0;
+  border: 0;
+  border-radius: 11px;
+  background: transparent;
+  color: var(--sw-dim);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 550;
+  text-align: left;
+  cursor: pointer;
+  transition: background 180ms var(--sw-out), color 180ms var(--sw-out), transform 260ms var(--sw-spring), box-shadow 200ms var(--sw-out);
+}
+.db-swarm-ch::before {
+  content: "";
+  position: absolute;
+  left: -8px;
+  top: 50%;
+  width: 4px;
+  height: 18px;
+  border-radius: 0 4px 4px 0;
+  background: var(--sw-accent);
+  transform: translateY(-50%) scaleY(0);
+  transition: transform 320ms var(--sw-spring);
+}
+.db-swarm-ch:hover { background: var(--sw-hover); color: var(--sw-text); transform: translateX(2px); }
+.db-swarm-ch:hover .db-swarm-avatar { transform: scale(1.08) rotate(-3deg); }
+.db-swarm-ch:active { transform: scale(0.97); }
+.db-swarm-ch.is-active {
+  background: var(--sw-active);
+  color: var(--sw-text);
+  box-shadow: 0 0 0 1px var(--sw-active-ring), 0 4px 12px var(--sw-lift);
+}
+.db-swarm-ch.is-active::before { transform: translateY(-50%) scaleY(1); }
+.db-swarm-ch.is-paused { opacity: 0.6; }
+.db-swarm-ch-hash { display: inline-grid; place-items: center; width: 26px; color: var(--sw-mute); flex: none; }
+.db-swarm-ch.is-active .db-swarm-ch-hash { color: var(--sw-accent); }
+.db-swarm-ch-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Name over role, so every row reads as a person with a title. */
+.db-swarm-ch-text { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
+.db-swarm-ch-text .db-swarm-ch-name { flex: none; }
+.db-swarm-ch-role { font-size: 11.5px; font-weight: 450; color: var(--sw-mute); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-swarm-ch.is-ghost { opacity: 0.55; cursor: default; }
+.db-swarm-ch.is-ghost:hover { background: transparent; color: var(--sw-dim); transform: none; }
+.db-swarm-contact {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px;
+  border: 1px solid var(--sw-chip-border);
+  border-radius: 12px;
+  background: var(--sw-chip);
+  color: var(--sw-text);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  transition: background 180ms var(--sw-out);
+}
+.db-swarm-contact:hover { background: var(--sw-hover); }
+.db-swarm-contact:focus-visible { outline: 2px solid var(--sw-accent-ring); outline-offset: 2px; }
+.db-swarm-contact .db-swarm-ch-role { white-space: normal; }
+.db-swarm-new-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border: 1px solid var(--sw-chip-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--sw-dim);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+  transition: background 160ms var(--sw-out), color 160ms var(--sw-out);
+}
+.db-swarm-new-btn:hover { background: var(--sw-hover); color: var(--sw-text); }
+.db-swarm-new-btn:focus-visible { outline: 2px solid var(--sw-accent-ring); outline-offset: 2px; }
+.db-swarm-role { font-size: 11.5px; color: var(--sw-mute); }
+.db-swarm-icon-btn.is-labelled { width: auto; gap: 6px; padding: 0 10px; font: inherit; font-size: 12.5px; font-weight: 550; display: inline-flex; align-items: center; }
+.db-swarm-ch-avatar { position: relative; display: inline-flex; flex: none; }
+.db-swarm-presence {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--sw-accent);
+  border: 2px solid var(--sw-active);
+  animation: db-swarm-breathe 2.6s ease-in-out infinite;
+}
+.db-swarm-presence.is-paused { background: var(--sw-mute); animation: none; }
+@keyframes db-swarm-breathe {
+  0%, 100% { box-shadow: 0 0 0 0 var(--sw-accent-ring); }
+  50% { box-shadow: 0 0 0 4px transparent; }
+}
+.db-swarm-ch-paused { color: var(--sw-mute); flex: none; }
+.db-swarm-admin {
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: var(--sw-sup);
+  background: var(--sw-sup-soft);
+}
+.db-swarm-unread {
+  min-width: 18px;
+  padding: 0 6px;
+  height: 18px;
+  border-radius: 999px;
+  display: inline-grid;
+  place-items: center;
+  font-size: 10.5px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--sw-on-accent);
+  background: var(--sw-accent);
+  box-shadow: 0 2px 8px var(--sw-accent-ring);
+  animation: db-swarm-pop 420ms var(--sw-spring) both;
+}
+@keyframes db-swarm-pop {
+  0% { transform: scale(0.4); opacity: 0; }
+  100% { transform: scale(1); opacity: 1; }
+}
+/* A manager that was just hired lands in the rail with a pop and one ring pulse. */
+.db-swarm-ch.is-fresh { animation: db-swarm-hire 700ms var(--sw-spring) both; }
+.db-swarm-ch.is-fresh .db-swarm-ch-avatar::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 10px;
+  border: 2px solid var(--sw-accent);
+  animation: db-swarm-ring 900ms var(--sw-out) 120ms both;
+}
+@keyframes db-swarm-hire {
+  0% { opacity: 0; transform: translateX(-14px) scale(0.6); }
+  60% { opacity: 1; }
+  100% { opacity: 1; transform: none; }
+}
+@keyframes db-swarm-ring {
+  from { opacity: 0.9; transform: scale(0.8); }
+  to { opacity: 0; transform: scale(1.7); }
+}
+/* A Supervisor appearing sweeps a violet light down the rail, once. */
+.db-swarm-rail.is-supervisor-fresh { position: relative; }
+.db-swarm-rail.is-supervisor-fresh::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(180deg, transparent 0%, var(--sw-sup-soft) 42%, var(--sw-sup-ring) 50%, var(--sw-sup-soft) 58%, transparent 100%);
+  background-size: 100% 260%;
+  animation: db-swarm-sweep 1.4s var(--sw-out) both;
+}
+@keyframes db-swarm-sweep {
+  from { background-position: 0 100%; opacity: 1; }
+  to { background-position: 0 0%; opacity: 0; }
+}
+.db-swarm-meter {
+  margin: 0 10px 12px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: var(--sw-chip);
+  border: 1px solid var(--sw-chip-border);
+  font-size: 11.5px;
+  color: var(--sw-mute);
+  display: grid;
+  gap: 2px;
+}
+.db-swarm-meter strong { color: var(--sw-text); font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* ── Stream ── */
+.db-swarm-stream-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 56px;
+  padding: 10px 12px 10px 18px;
+  border-bottom: 1px solid var(--sw-divider);
+}
+.db-swarm-stream-head h2 {
+  margin: 0;
+  font-family: var(--font-title, inherit);
+  font-size: 16px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.db-swarm-head-hash { color: var(--sw-mute); display: inline-grid; }
+.db-swarm-topic {
+  flex: 1;
+  min-width: 0;
+  padding-left: 12px;
+  border-left: 1px solid var(--sw-divider);
+  font-size: 12.5px;
+  color: var(--sw-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.db-swarm-head-tools { display: flex; align-items: center; gap: 4px; }
+.db-swarm-confirm { display: inline-flex; gap: 6px; animation: db-swarm-pop 260ms var(--sw-spring) both; }
+.db-swarm-pill-btn {
+  border: 1px solid var(--sw-field-border);
+  background: var(--sw-field);
+  color: var(--sw-text);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: transform 220ms var(--sw-spring), background 160ms var(--sw-out);
+}
+.db-swarm-pill-btn:hover { transform: translateY(-1px); background: var(--sw-active); }
+.db-swarm-pill-btn:active { transform: scale(0.95); }
+.db-swarm-pill-btn.is-danger,
+.db-swarm-pill-btn.is-danger:hover { color: #ffffff; background: var(--sw-danger); border-color: transparent; }
+
+.db-swarm-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--sw-scroll-thumb) transparent;
+}
+.db-app .db-swarm-scroll::-webkit-scrollbar { display: block; width: 8px; height: 8px; }
+.db-app .db-swarm-scroll::-webkit-scrollbar-thumb { background: var(--sw-scroll-thumb); border-radius: 8px; }
+/* The empty welcome screen shows no scrollbar; a short window still scrolls it by wheel. */
+.db-swarm-scroll.is-hero { scrollbar-width: none; }
+.db-app .db-swarm-scroll.is-hero::-webkit-scrollbar { display: none; }
+.db-swarm-channel-pane {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  padding: 14px 0 10px;
+  animation: db-swarm-channel-in 320ms var(--sw-out) both;
+}
+@keyframes db-swarm-channel-in {
+  from { opacity: 0; transform: translateX(10px); filter: blur(3px); }
+  to { opacity: 1; transform: none; filter: none; }
+}
+
+.db-swarm-intro { padding: 18px 20px 14px; display: grid; justify-items: start; gap: 6px; }
+.db-swarm-intro h2 { margin: 6px 0 0; font-family: var(--font-title, inherit); font-size: 22px; }
+.db-swarm-intro p { margin: 0; max-width: 56ch; color: var(--sw-dim); font-size: 13.5px; }
+.db-swarm-intro.is-compact h2 { font-size: 18px; margin-top: 2px; }
+.db-swarm-intro-icon {
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  color: var(--sw-accent);
+  background: var(--sw-accent-soft);
+}
+.db-swarm-intro .db-swarm-avatar { animation: db-swarm-pop 520ms var(--sw-spring) both; }
+
+.db-swarm-daysep {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 10px 20px 4px;
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--sw-mute);
+}
+.db-swarm-daysep::before,
+.db-swarm-daysep::after { content: ""; flex: 1; height: 1px; background: var(--sw-divider); }
+
+.db-swarm-msg {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 12px;
+  padding: 8px 20px;
+  contain: layout paint;
+  transition: background 160ms var(--sw-out);
+}
+.db-swarm-msg:hover { background: var(--sw-hover); }
+.db-swarm-msg.is-continued { padding-top: 1px; }
+.db-swarm-msg.is-fresh { animation: db-swarm-msg-in 480ms var(--sw-spring) both; transform-origin: 0 100%; }
+.db-swarm-msg.is-fresh + .db-swarm-msg.is-fresh { animation-delay: 90ms; }
+@keyframes db-swarm-msg-in {
+  from { opacity: 0; transform: translateY(12px) scale(0.965); filter: blur(4px); }
+  to { opacity: 1; transform: none; filter: none; }
+}
+.db-swarm-msg-gutter { padding-top: 2px; }
+.db-swarm-msg-body { min-width: 0; }
+.db-swarm-msg-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; line-height: 1.35; }
+.db-swarm-msg-head time { font-size: 11px; color: var(--sw-mute); font-variant-numeric: tabular-nums; }
+.db-swarm-name { font-weight: 650; font-size: 14px; }
+.db-swarm-name.is-supervisor { color: var(--sw-sup); }
+.db-swarm-name.is-aura { color: var(--sw-accent); }
+.db-swarm-name.is-hue-0 { color: var(--sw-h0); }
+.db-swarm-name.is-hue-1 { color: var(--sw-h1); }
+.db-swarm-name.is-hue-2 { color: var(--sw-h2); }
+.db-swarm-name.is-hue-3 { color: var(--sw-h3); }
+.db-swarm-name.is-hue-4 { color: var(--sw-h4); }
+.db-swarm-name.is-hue-5 { color: var(--sw-h5); }
+.db-swarm-text { margin: 2px 0 0; font-size: 14px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.db-swarm-note { margin: 6px 0 0; font-size: 12.5px; color: var(--sw-warn); }
+.db-swarm-muted { color: var(--sw-mute); font-size: 12px; }
+.db-swarm-alt { margin: 4px 0 0; }
+
+.db-swarm-tag {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 6px;
+  color: var(--sw-dim);
+  background: var(--sw-chip);
+  box-shadow: inset 0 0 0 1px var(--sw-chip-border);
+}
+.db-swarm-tag.is-new_manager,
+.db-swarm-tag.is-extend { color: var(--sw-accent-strong); background: var(--sw-accent-soft); box-shadow: none; }
+.db-swarm-tag.is-route { color: var(--sw-h1); background: var(--sw-h1-soft); box-shadow: none; }
+.db-swarm-tag.is-ask { color: var(--sw-warn); background: var(--sw-warn-soft); box-shadow: none; }
+.db-swarm-tag.is-stop { color: var(--sw-danger); background: var(--sw-warn-soft); box-shadow: none; }
+.db-swarm-tag.is-reassign { color: var(--sw-sup); background: var(--sw-sup-soft); box-shadow: none; }
+.db-swarm-cap {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 999px;
+  color: var(--sw-sup);
+  background: var(--sw-sup-soft);
+}
+.db-swarm-via { font-size: 11px; color: var(--sw-mute); font-style: italic; }
+.db-swarm-conf {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--sw-dim);
+  font-variant-numeric: tabular-nums;
+}
+.db-swarm-conf svg { width: 16px; height: 16px; transform: rotate(-90deg); }
+.db-swarm-conf circle { fill: none; stroke-width: 3; }
+.db-swarm-conf-track { stroke: var(--sw-divider); }
+.db-swarm-conf-fill {
+  stroke: var(--sw-accent);
+  stroke-linecap: round;
+  stroke-dashoffset: 0;
+}
+.db-swarm-msg.is-fresh .db-swarm-conf-fill { animation: db-swarm-conf-draw 900ms var(--sw-out) 150ms both; }
+@keyframes db-swarm-conf-draw { from { stroke-dashoffset: 100; } }
+
+/* System lines: hires, handovers, the Supervisor appearing. */
+.db-swarm-sys {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 2px 20px 2px 70px;
+  padding: 4px 10px;
+  border-radius: 10px;
+  font-size: 12.5px;
+  color: var(--sw-dim);
+}
+.db-swarm-sys time { margin-left: auto; font-size: 10.5px; color: var(--sw-mute); white-space: nowrap; }
+.db-swarm-sys-icon { color: var(--sw-accent); display: inline-grid; transform: translateY(2px); }
+.db-swarm-sys-text { min-width: 0; }
+.db-swarm-sys-text b { font-weight: 650; color: var(--sw-text); }
+.db-swarm-sys-origin { font-size: 10.5px; color: var(--sw-mute); white-space: nowrap; }
+.db-swarm-sys.is-supervisor { color: var(--sw-sup); background: var(--sw-sup-soft); }
+.db-swarm-sys.is-supervisor .db-swarm-sys-icon { color: var(--sw-sup); }
+.db-swarm-sys.is-crosspost { margin-left: 20px; background: var(--sw-chip); border: 1px solid var(--sw-chip-border); }
+.db-swarm-sys.is-fresh { animation: db-swarm-sys-in 520ms var(--sw-spring) 160ms both; }
+.db-swarm-sys.is-supervisor.is-fresh { animation: db-swarm-sys-in 520ms var(--sw-spring) 160ms both, db-swarm-glow 1.6s var(--sw-out) 400ms both; }
+@keyframes db-swarm-sys-in {
+  from { opacity: 0; transform: translateX(-10px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes db-swarm-glow {
+  0% { box-shadow: 0 0 0 0 var(--sw-sup-ring); }
+  100% { box-shadow: 0 0 0 10px transparent; }
+}
+.db-swarm-usage {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 20px 6px 70px;
+  font-size: 11px;
+  color: var(--sw-mute);
+  font-variant-numeric: tabular-nums;
+}
+.db-swarm-usage.is-fresh { animation: db-swarm-sys-in 420ms var(--sw-out) 260ms both; }
+.db-swarm-empty-line { margin: 0 20px; color: var(--sw-mute); font-size: 13px; }
+
+/* Embeds: a hired manager, and a question waiting on you. */
+.db-swarm-embed {
+  --sw-av: var(--sw-accent);
+  --sw-av-soft: var(--sw-accent-soft);
+  position: relative;
+  margin-top: 8px;
+  max-width: 560px;
+  padding: 12px 14px 12px 16px;
+  border-radius: 12px;
+  background: var(--sw-chip);
+  border: 1px solid var(--sw-chip-border);
+  overflow: hidden;
+}
+.db-swarm-embed::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: linear-gradient(180deg, var(--sw-av), var(--sw-sup));
+}
+.db-swarm-embed.is-ask { --sw-av: var(--sw-warn); --sw-av-soft: var(--sw-warn-soft); }
+.db-swarm-embed.is-ask::before { background: var(--sw-warn); }
+.db-swarm-msg.is-fresh .db-swarm-embed { animation: db-swarm-embed-in 560ms var(--sw-spring) 180ms both; transform-origin: 0 0; }
+@keyframes db-swarm-embed-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+/* One sheen across a freshly hired manager's card. */
+.db-swarm-msg.is-fresh .db-swarm-embed.is-hired::after {
+  content: "";
+  position: absolute;
+  inset: -20% auto -20% -40%;
+  width: 40%;
+  background: linear-gradient(100deg, transparent, var(--sw-sheen), transparent);
+  transform: skewX(-18deg);
+  animation: db-swarm-sheen 1.1s var(--sw-out) 520ms both;
+}
+@keyframes db-swarm-sheen {
+  from { transform: translateX(0) skewX(-18deg); }
+  to { transform: translateX(380%) skewX(-18deg); }
+}
+.db-swarm-embed-kicker {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sw-av);
+}
+.db-swarm-embed-title { display: block; margin-top: 4px; font-family: var(--font-title, inherit); font-size: 15px; }
+.db-swarm-embed p { margin: 4px 0 0; font-size: 13px; color: var(--sw-dim); line-height: 1.5; }
+.db-swarm-embed-team,
+.db-swarm-embed-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.db-swarm-embed-team span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--sw-av);
+  background: var(--sw-av-soft);
+}
+.db-swarm-embed-team span.is-verifier { color: var(--sw-sup); background: var(--sw-sup-soft); }
+.db-swarm-msg.is-fresh .db-swarm-embed-team span { animation: db-swarm-pop 420ms var(--sw-spring) both; }
+.db-swarm-embed-row em {
+  font-style: normal;
+  font-size: 11.5px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  color: var(--sw-dim);
+  background: var(--sw-field);
+  border: 1px solid var(--sw-chip-border);
+}
+.db-swarm-embed-row em.is-warn { color: var(--sw-warn); background: var(--sw-warn-soft); border-color: transparent; }
+.db-swarm-embed-foot { display: flex; align-items: center; gap: 6px; margin-top: 10px; font-size: 12px; color: var(--sw-dim); }
+.db-swarm-choice-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.db-swarm-choice {
+  border: 1px solid var(--sw-field-border);
+  background: var(--sw-field);
+  color: var(--sw-text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 7px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  animation: db-swarm-pop 380ms var(--sw-spring) both;
+  transition: transform 220ms var(--sw-spring), background 160ms var(--sw-out), border-color 160ms var(--sw-out);
+}
+.db-swarm-choice:hover { transform: translateY(-2px); border-color: var(--sw-accent-ring); background: var(--sw-active); }
+.db-swarm-choice:active { transform: scale(0.95); }
+.db-swarm-choice:disabled { opacity: 0.5; cursor: default; transform: none; }
+.db-swarm-free-answer { display: flex; gap: 8px; margin-top: 10px; }
+.db-swarm-free-answer input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--sw-field-border);
+  background: var(--sw-field);
+  color: var(--sw-text);
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 12px;
+  border-radius: 10px;
+  outline: none;
+  transition: border-color 160ms var(--sw-out), box-shadow 160ms var(--sw-out);
+}
+.db-swarm-free-answer input:focus { border-color: var(--sw-accent); box-shadow: 0 0 0 3px var(--sw-accent-soft); }
+
+/* Typing: three dots, and a clock once it takes a while. */
+.db-swarm-typing {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 20px 0 70px;
+  font-size: 12.5px;
+  color: var(--sw-dim);
+  animation: db-swarm-sys-in 320ms var(--sw-out) both;
+}
+.db-swarm-typing strong { color: var(--sw-text); font-weight: 650; }
+.db-swarm-typing-dots {
+  display: inline-flex;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 999px;
+  background: var(--sw-chip);
+  border: 1px solid var(--sw-chip-border);
+}
+.db-swarm-typing-dots i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--sw-accent);
+  animation: db-swarm-bounce 1.2s var(--sw-out) infinite;
+}
+.db-swarm-typing-dots i:nth-child(2) { animation-delay: 0.15s; background: color-mix(in srgb, var(--sw-accent) 50%, var(--sw-sup)); }
+.db-swarm-typing-dots i:nth-child(3) { animation-delay: 0.3s; background: var(--sw-sup); }
+@keyframes db-swarm-bounce {
+  0%, 60%, 100% { transform: translateY(0) scale(1); opacity: 0.55; }
+  30% { transform: translateY(-5px) scale(1.15); opacity: 1; }
+}
+.db-swarm-typing-time { font-size: 11px; color: var(--sw-mute); font-variant-numeric: tabular-nums; }
+
+/* Empty front door: an orbiting core and three ways to start. */
+.db-swarm-hero {
+  margin: auto;
+  padding: 24px 24px 12px;
+  max-width: 640px;
+  display: grid;
+  justify-items: center;
+  text-align: center;
+  gap: 10px;
+}
+.db-swarm-hero h2 { margin: 8px 0 0; font-family: var(--font-title, inherit); font-size: 24px; letter-spacing: -0.01em; }
+.db-swarm-hero > p { margin: 0; max-width: 48ch; color: var(--sw-dim); font-size: 14px; }
+.db-swarm-hero-orb { position: relative; width: 120px; height: 120px; display: grid; place-items: center; }
+.db-swarm-hero-core {
+  position: relative;
+  z-index: 1;
+  width: 54px;
+  height: 54px;
+  border-radius: 18px;
+  display: grid;
+  place-items: center;
+  color: var(--sw-on-accent);
+  background: linear-gradient(135deg, var(--sw-accent), var(--sw-sup));
+  box-shadow: 0 10px 30px var(--sw-accent-ring);
+  animation: db-swarm-float 6s ease-in-out infinite;
+}
+.db-swarm-hero-ring {
+  position: absolute;
+  inset: 18px;
+  border-radius: 50%;
+  border: 1px dashed var(--sw-accent-ring);
+  animation: db-swarm-spin 22s linear infinite;
+}
+.db-swarm-hero-ring.is-outer { inset: 0; border-color: var(--sw-sup-ring); animation-duration: 34s; animation-direction: reverse; }
+.db-swarm-hero-sat {
+  position: absolute;
+  inset: 0;
+  animation: db-swarm-spin 9s linear infinite;
+}
+.db-swarm-hero-sat::after {
+  content: "";
+  position: absolute;
+  top: -4px;
+  left: calc(50% - 5px);
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--sw-accent);
+  box-shadow: 0 0 12px var(--sw-accent-ring);
+}
+.db-swarm-hero-sat.is-b { inset: 18px; animation-duration: 6s; animation-direction: reverse; }
+.db-swarm-hero-sat.is-b::after { background: var(--sw-sup); width: 8px; height: 8px; left: calc(50% - 4px); }
+.db-swarm-hero-sat.is-c { animation-duration: 13s; animation-delay: -4s; }
+.db-swarm-hero-sat.is-c::after { background: var(--sw-h2); width: 7px; height: 7px; }
+.db-swarm-starters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 14px; width: 100%; }
+.db-swarm-starter {
+  position: relative;
+  overflow: hidden;
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  justify-items: start;
+  text-align: left;
+  padding: 14px;
+  border-radius: 14px;
+  border: 1px solid var(--sw-chip-border);
+  background: var(--sw-chip);
+  color: var(--sw-text);
+  font: inherit;
+  cursor: pointer;
+  animation: db-swarm-msg-in 520ms var(--sw-spring) both;
+  transition: transform 260ms var(--sw-spring), border-color 160ms var(--sw-out), background 160ms var(--sw-out), box-shadow 200ms var(--sw-out);
+}
+.db-swarm-starter svg { color: var(--sw-accent); }
+.db-swarm-starter strong { font-size: 13.5px; }
+.db-swarm-starter span { font-size: 12px; line-height: 1.45; color: var(--sw-dim); }
+.db-swarm-starter:hover {
+  transform: translateY(-3px) scale(1.015);
+  border-color: var(--sw-accent-ring);
+  background: var(--sw-active);
+  box-shadow: 0 12px 26px var(--sw-lift);
+}
+.db-swarm-starter:active { transform: scale(0.97); }
+.db-swarm-starter::after {
+  content: "";
+  position: absolute;
+  inset: -20% auto -20% -60%;
+  width: 45%;
+  background: linear-gradient(100deg, transparent, var(--sw-sheen), transparent);
+  transform: translateX(0) skewX(-18deg);
+  opacity: 0;
+}
+.db-swarm-starter:hover::after { animation: db-swarm-sheen 900ms var(--sw-out) both; opacity: 1; }
+
+/* Error and composer. */
+.db-swarm-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 16px 8px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  font-size: 13px;
+  color: var(--sw-danger);
+  background: var(--sw-warn-soft);
+  animation: db-swarm-msg-in 380ms var(--sw-spring) both;
+}
+.db-swarm-error span { flex: 1; }
+.db-swarm-error button { border: 0; background: none; color: inherit; font: inherit; font-weight: 650; cursor: pointer; text-decoration: underline; }
+.db-swarm-composer {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  margin: 0 16px;
+  padding: 7px;
+  border-radius: 24px;
+  border: 1px solid var(--sw-field-border);
+  background: var(--sw-field);
+  transition: border-color 200ms var(--sw-out), box-shadow 260ms var(--sw-out), transform 260ms var(--sw-spring);
+}
+.db-swarm-composer:focus-within {
+  border-color: var(--sw-accent-ring);
+  box-shadow: 0 0 0 4px var(--sw-accent-soft), 0 10px 26px var(--sw-lift);
+  transform: translateY(-1px);
+}
+.db-swarm-composer.is-busy { border-color: var(--sw-sup-ring); }
+.db-swarm-composer.is-readonly { opacity: 0.6; padding-left: 16px; }
+.db-swarm-composer textarea {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--sw-text);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.5;
+  resize: none;
+  outline: none;
+  padding: 6px 0;
+  max-height: 168px;
+}
+.db-swarm-composer textarea::placeholder { color: var(--sw-mute); }
+.db-swarm-count { align-self: center; font-size: 11px; color: var(--sw-warn); font-variant-numeric: tabular-nums; }
+.db-swarm-send {
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border: 0;
+  border-radius: 24px;
+  display: grid;
+  place-items: center;
+  color: var(--sw-on-accent);
+  background: linear-gradient(135deg, var(--sw-accent), var(--sw-accent-strong));
+  box-shadow: 0 6px 16px var(--sw-accent-ring);
+  cursor: pointer;
+  transition: transform 260ms var(--sw-spring), box-shadow 200ms var(--sw-out), opacity 200ms var(--sw-out), filter 200ms var(--sw-out);
+}
+.db-swarm-send svg { transition: transform 300ms var(--sw-spring); }
+.db-swarm-send:hover:not(:disabled) { transform: translateY(-1px) scale(1.04); }
+.db-swarm-send:hover:not(:disabled) svg { transform: translate(2px, -2px) rotate(-8deg); }
+.db-swarm-send:active:not(:disabled) { transform: scale(0.9); }
+.db-swarm-send:disabled { opacity: 0.4; box-shadow: none; filter: saturate(0.4); cursor: default; }
+.db-swarm-send.is-small { width: 32px; height: 32px; border-radius: 10px; }
+.db-swarm-composer-hint { margin: 6px 20px 12px; font-size: 11.5px; color: var(--sw-mute); text-align: center; }
+/* Files: the attach button, the chips waiting above the composer, and the chips on a sent
+   message. Tokens only, so the dark sheet needs no twin. */
+.db-swarm-attach {
+  width: 38px;
+  height: 38px;
+  flex: none;
+  border: 0;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  color: var(--sw-dim);
+  background: transparent;
+  cursor: pointer;
+  transition: transform 260ms var(--sw-spring), background 160ms var(--sw-out), color 160ms var(--sw-out);
+}
+.db-swarm-attach:hover:not(:disabled) { background: var(--sw-hover); color: var(--sw-accent-strong); transform: translateY(-1px); }
+.db-swarm-attach:active:not(:disabled) { transform: scale(0.92); }
+.db-swarm-attach:disabled { opacity: 0.4; cursor: default; }
+.db-swarm-attach:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--sw-accent-soft); }
+.db-swarm-attachments,
+.db-swarm-files { display: flex; flex-wrap: wrap; gap: 6px; }
+.db-swarm-attachments { margin: 0 16px 8px; }
+.db-swarm-files { margin-top: 6px; }
+.db-swarm-file {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 4px 6px 4px 9px;
+  border-radius: 10px;
+  border: 1px solid var(--sw-chip-border);
+  background: var(--sw-chip);
+  color: var(--sw-text);
+  font-size: 12px;
+}
+.db-swarm-file svg { color: var(--sw-accent-strong); flex: none; }
+.db-swarm-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 240px; font-weight: 600; }
+.db-swarm-file-state { font-size: 11px; color: var(--sw-mute); }
+.db-swarm-file.is-reading svg .sw-node { animation: db-swarm-file-read 1.1s ease-in-out infinite; }
+.db-swarm-file.is-failed { border-color: var(--sw-warn-soft); }
+.db-swarm-file.is-failed .db-swarm-file-state { color: var(--sw-warn); white-space: normal; }
+.db-swarm-file.is-gone { opacity: 0.55; }
+.db-swarm-file-thumb {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  border-radius: 5px;
+  border: 1px solid var(--sw-chip-border);
+  object-fit: cover;
+}
+.db-swarm-file.is-reading .db-swarm-file-thumb { animation: db-swarm-thumb-read 1.1s ease-in-out infinite; }
+@keyframes db-swarm-thumb-read { 50% { opacity: 0.45; } }
+.db-swarm-file-remove,
+.db-swarm-file-pin {
+  border: 0;
+  background: transparent;
+  color: var(--sw-dim);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 650;
+  padding: 2px 6px;
+  border-radius: 7px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.db-swarm-file-remove { font-size: 14px; line-height: 1; padding: 1px 5px; }
+.db-swarm-file-remove:hover,
+.db-swarm-file-pin:hover { background: var(--sw-hover); color: var(--sw-text); }
+.db-swarm-file-pin.is-on { color: var(--sw-accent-strong); background: var(--sw-accent-soft); }
+.db-swarm-file-pin:focus-visible,
+.db-swarm-file-remove:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--sw-accent-soft); }
+@keyframes db-swarm-file-read {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+/* ── Team panel ── */
+.db-swarm-roster-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 8px 0 6px; }
+.db-swarm-roster-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 0 10px 12px; }
+.db-swarm-constellation-wrap {
+  margin: 4px 0 10px;
+  border-radius: 14px;
+  background: radial-gradient(120% 90% at 50% 0%, var(--sw-accent-soft), transparent 70%);
+  border: 1px solid var(--sw-chip-border);
+}
+.db-swarm-constellation { display: block; width: 100%; height: auto; overflow: visible; }
+.db-swarm-edge {
+  fill: none;
+  stroke: var(--sw-accent-ring);
+  stroke-width: 1.4;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  animation: db-swarm-draw 900ms var(--sw-out) both;
+}
+.db-swarm-edge.is-sub { stroke-width: 1; stroke: var(--sw-field-border); }
+.db-swarm-edge.is-dim { stroke-dasharray: 0.04 0.04; stroke-dashoffset: 0; animation: none; opacity: 0.6; }
+@keyframes db-swarm-draw { to { stroke-dashoffset: 0; } }
+.db-swarm-node { animation: db-swarm-node-in 640ms var(--sw-spring) both; }
+.db-swarm-node-core { fill: var(--sw-av-soft, var(--sw-accent-soft)); stroke: var(--sw-av, var(--sw-accent)); stroke-width: 1.4; }
+.db-swarm-node-ring { fill: none; stroke: var(--sw-av, var(--sw-accent)); stroke-width: 1; opacity: 0.25; }
+.db-swarm-node { color: var(--sw-av, var(--sw-accent)); }
+.db-swarm-node.is-supervisor { --sw-av: var(--sw-sup); --sw-av-soft: var(--sw-sup-soft); }
+.db-swarm-node.is-dim { opacity: 0.45; }
+.db-swarm-node.is-dim .db-swarm-node-core { stroke-dasharray: 3 3; }
+.db-swarm-node .db-swarm-node-ring { transform-box: fill-box; transform-origin: center; animation: db-swarm-halo 3.2s ease-in-out infinite; }
+.db-swarm-node.is-fresh .db-swarm-node-ring { animation: db-swarm-burst 1.1s var(--sw-out) 200ms both; }
+@keyframes db-swarm-node-in {
+  from { opacity: 0; transform: scale(0.3); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes db-swarm-halo {
+  0%, 100% { transform: scale(1); opacity: 0.22; }
+  50% { transform: scale(1.12); opacity: 0.4; }
+}
+@keyframes db-swarm-burst {
+  0% { transform: scale(0.7); opacity: 0.9; stroke-width: 3; }
+  100% { transform: scale(1.9); opacity: 0; stroke-width: 0.5; }
+}
+.db-swarm-sat {
+  fill: var(--sw-av);
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: db-swarm-node-in 520ms var(--sw-spring) both;
+}
+.db-swarm-sat.is-verifier { fill: var(--sw-sup); }
+.db-swarm-orbit { fill: none; stroke: var(--sw-accent-ring); stroke-dasharray: 3 5; transform-box: view-box; transform-origin: 50% 50%; animation: db-swarm-spin 30s linear infinite; }
+.db-swarm-orbit.is-inner { stroke: var(--sw-sup-ring); animation-direction: reverse; animation-duration: 20s; }
+.db-swarm-orbit-dot { fill: var(--sw-accent); transform-box: view-box; transform-origin: 50% 50%; animation: db-swarm-spin 8s linear infinite; }
+.db-swarm-orbit-dot.is-inner { fill: var(--sw-sup); animation-duration: 5s; animation-direction: reverse; }
+
+.db-swarm-cards { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.db-swarm-card {
+  border-radius: 14px;
+  border: 1px solid var(--sw-chip-border);
+  background: var(--sw-chip);
+  overflow: hidden;
+  contain: layout paint;
+  transition: border-color 200ms var(--sw-out), box-shadow 240ms var(--sw-out), background 200ms var(--sw-out);
+}
+.db-swarm-card:hover { border-color: var(--sw-field-border); box-shadow: 0 8px 20px var(--sw-lift); }
+.db-swarm-card.is-open { background: var(--sw-active); }
+.db-swarm-card.is-paused { opacity: 0.6; }
+.db-swarm-card.is-supervisor { margin-bottom: 8px; border-color: var(--sw-sup-ring); background: linear-gradient(160deg, var(--sw-sup-soft), var(--sw-chip) 70%); }
+.db-swarm-card.is-fresh { animation: db-swarm-hire 700ms var(--sw-spring) both; }
+.db-swarm-card-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border: 0;
+  background: transparent;
+  color: var(--sw-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.db-swarm-card-head.is-static { cursor: default; }
+.db-swarm-card-title { flex: 1; min-width: 0; line-height: 1.25; }
+.db-swarm-card-title strong { display: block; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.db-swarm-card-title span { font-size: 11.5px; color: var(--sw-mute); }
+.db-swarm-card-chev { color: var(--sw-mute); flex: none; transition: transform 320ms var(--sw-spring); }
+.db-swarm-card.is-open .db-swarm-card-chev { transform: rotate(90deg); }
+.db-swarm-card-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 380ms var(--sw-out); }
+.db-swarm-card.is-open .db-swarm-card-body { grid-template-rows: 1fr; }
+.db-swarm-card-inner {
+  min-height: 0;
+  overflow: hidden;
+  padding: 0 12px;
+  opacity: 0;
+  transform: translateY(-4px);
+  transition: opacity 260ms var(--sw-out), transform 320ms var(--sw-out), padding 380ms var(--sw-out);
+}
+.db-swarm-card.is-open .db-swarm-card-inner { padding-bottom: 12px; opacity: 1; transform: none; }
+.db-swarm-card-inner.is-static { padding: 0 12px 12px; opacity: 1; transform: none; }
+.db-swarm-card-desc { margin: 0 0 8px; font-size: 12.5px; line-height: 1.5; color: var(--sw-dim); }
+.db-swarm-card-boundary { display: flex; gap: 6px; align-items: flex-start; margin: 8px 0 0; font-size: 11.5px; color: var(--sw-dim); }
+.db-swarm-card-boundary svg { flex: none; margin-top: 2px; color: var(--sw-sup); }
+.db-swarm-chips { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 6px; align-items: start; margin-top: 6px; }
+.db-swarm-chips > span { font-size: 10.5px; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; color: var(--sw-mute); padding-top: 3px; }
+.db-swarm-chips > div { display: flex; flex-wrap: wrap; gap: 4px; }
+.db-swarm-chips em {
+  font-style: normal;
+  font-size: 11.5px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  color: var(--sw-dim);
+  background: var(--sw-field);
+  border: 1px solid var(--sw-chip-border);
+}
+.db-swarm-chips em.is-warn { color: var(--sw-warn); background: var(--sw-warn-soft); border-color: transparent; }
+.db-swarm-card.is-open .db-swarm-chips em { animation: db-swarm-pop 360ms var(--sw-spring) both; }
+.db-swarm-subs { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
+.db-swarm-subs li { display: flex; gap: 8px; align-items: flex-start; }
+.db-swarm-card.is-open .db-swarm-subs li { animation: db-swarm-sys-in 380ms var(--sw-out) both; }
+.db-swarm-subs strong { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
+.db-swarm-subs strong em { font-style: normal; font-size: 9.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 0 5px; border-radius: 4px; color: var(--sw-sup); background: var(--sw-sup-soft); }
+.db-swarm-subs span:not(.db-swarm-sub-icon) { display: block; font-size: 11.5px; color: var(--sw-mute); line-height: 1.4; }
+.db-swarm-sub-icon { width: 24px; height: 24px; flex: none; border-radius: 8px; display: grid; place-items: center; color: var(--sw-accent); background: var(--sw-accent-soft); }
+.db-swarm-sub-icon.is-verifier { color: var(--sw-sup); background: var(--sw-sup-soft); }
+.db-swarm-facts { margin: 0 0 4px; padding-left: 16px; font-size: 12px; color: var(--sw-dim); display: grid; gap: 3px; }
+
+/* The team panel is a drawer at every width, opened from the Team button, so the
+   conversation keeps the full width. */
+.db-swarm-roster-toggle,
+.db-swarm-roster-close { display: inline-grid; }
+.db-swarm-roster {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(320px, 88%);
+  z-index: 3;
+  /* A drawer over the messages: varied content sits behind it, so blur is earned here. */
+  backdrop-filter: blur(18px) saturate(1.2);
+  box-shadow: var(--sw-panel-shadow), var(--sw-drawer-shadow);
+  transform: translateX(calc(100% + 20px));
+  opacity: 0;
+  pointer-events: none;
+  animation: none;
+  transition: transform 420ms var(--sw-spring), opacity 240ms var(--sw-out);
+}
+.db-swarm.is-roster-open .db-swarm-roster { transform: none; opacity: 1; pointer-events: auto; }
+
+/* ── Narrow windows: a slimmer rail, then a chip strip. ── */
+@media (max-width: 1180px) {
+  .db-swarm { grid-template-columns: 220px minmax(0, 1fr); }
+}
+@media (max-width: 860px) {
+  .db-swarm { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); height: auto; min-height: 640px; }
+  .db-swarm-rail { flex-direction: row; align-items: center; }
+  .db-swarm-rail-head { border-bottom: 0; border-right: 1px solid var(--sw-divider); }
+  .db-swarm-rail-title,
+  .db-swarm-meter,
+  .db-swarm-group-label,
+  .db-swarm-rail-empty { display: none; }
+  .db-swarm-rail-scroll { display: flex; gap: 4px; overflow-x: auto; overflow-y: hidden; padding: 8px; }
+  .db-swarm-ch { width: auto; flex: none; }
+  .db-swarm-stream { min-height: 560px; }
+  .db-swarm-starters { grid-template-columns: 1fr; }
+}
+
+/* ── Swarm glyphs (SwarmGlyphs.tsx) ── each mark has its own motion. Loops run only
+   where they carry meaning (the live core, the open channel, a live agent); the rest
+   play on hover, press or arrival. Parts rotate about their own box unless they orbit
+   the glyph's centre, which uses the view box. */
+.sw-g { display: block; flex: none; overflow: visible; }
+.sw-g circle,
+.sw-g path,
+.sw-g g { transform-box: fill-box; transform-origin: center; }
+.db-swarm-node-glyph { overflow: visible; }
+
+/* Mark: three agents orbit the core, the dashed ring drifts the other way. */
+.sw-g-mark .sw-sats,
+.sw-g-mark .sw-orbit { transform-box: view-box; transform-origin: 50% 50%; }
+.sw-g-mark .sw-sats { animation: db-swarm-g-orbit 9s linear infinite; }
+.sw-g-mark .sw-orbit { animation: db-swarm-g-orbit 26s linear infinite reverse; }
+.sw-g-mark .sw-core { animation: db-swarm-g-breathe 2.8s ease-in-out infinite; }
+@keyframes db-swarm-g-orbit { to { transform: rotate(1turn); } }
+@keyframes db-swarm-g-breathe {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.16); }
+}
+
+/* Spawn: the arms fly out and twist a quarter turn; the core pinches. */
+.sw-g-spawn .sw-arms { transform-box: view-box; transform-origin: 50% 50%; transition: transform 520ms var(--sw-spring); }
+.sw-g-spawn .sw-core { transition: transform 420ms var(--sw-spring); }
+button:hover > .sw-g-spawn .sw-arms { transform: rotate(90deg) scale(1.22); }
+button:hover > .sw-g-spawn .sw-core { transform: scale(0.7); }
+button:active > .sw-g-spawn .sw-core { transform: scale(1.3); }
+
+/* Lattice: the live crossing pulses in the open channel and hops crossings on hover. */
+.sw-g-lattice .sw-node { transition: transform 460ms var(--sw-spring); }
+.db-swarm-ch.is-active .sw-g-lattice .sw-node,
+.db-swarm-head-hash .sw-g-lattice .sw-node { animation: db-swarm-g-ping 2.4s ease-in-out infinite; }
+.db-swarm-ch:hover .sw-g-lattice .sw-node { transform: translate(-7.5px, 6px); }
+@keyframes db-swarm-g-ping {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.45); opacity: 0.7; }
+}
+
+/* Pulse: a bright segment runs the trace. */
+.sw-g-pulse .sw-trace { stroke-dasharray: 0.22 1; stroke-dashoffset: 1.22; }
+.db-swarm-ch.is-active .sw-g-pulse .sw-trace,
+.db-swarm-ch:hover .sw-g-pulse .sw-trace,
+.db-swarm-head-hash .sw-g-pulse .sw-trace,
+.db-swarm-intro-icon .sw-g-pulse .sw-trace { animation: db-swarm-g-trace 1.9s linear infinite; }
+@keyframes db-swarm-g-trace { to { stroke-dashoffset: 0; } }
+
+/* Dart: lunges forward while its trail streams behind it. */
+.sw-g-dart .sw-head { transition: transform 360ms var(--sw-spring); }
+.sw-g-dart .sw-trail circle { transform-box: view-box; transform-origin: 50% 50%; }
+button:hover:not(:disabled) > .sw-g-dart .sw-head { transform: translate(1.6px, -1.6px); }
+button:hover:not(:disabled) > .sw-g-dart .sw-trail circle { animation: db-swarm-g-stream 640ms linear infinite; }
+button:hover:not(:disabled) > .sw-g-dart .sw-trail circle:nth-child(2) { animation-delay: -210ms; }
+button:hover:not(:disabled) > .sw-g-dart .sw-trail circle:nth-child(3) { animation-delay: -420ms; }
+button:active:not(:disabled) > .sw-g-dart .sw-head { transform: translate(5px, -5px) scale(0.85); }
+@keyframes db-swarm-g-stream {
+  0% { transform: translate(3px, -3px); opacity: 0; }
+  30% { opacity: 1; }
+  100% { transform: translate(-4px, 4px); opacity: 0; }
+}
+
+/* Rewind: the orbit spins backward into its node. */
+.sw-g-rewind .sw-spin { transform-box: view-box; transform-origin: 50% 50%; transition: transform 760ms var(--sw-spring); }
+button:hover:not(:disabled) > .sw-g-rewind .sw-spin { transform: rotate(-1turn); }
+
+/* Team: the links redraw and the agents bob; pressed, they spread out. */
+.sw-g-team .sw-links { stroke-dasharray: 1; stroke-dashoffset: 0; }
+.sw-g-team circle { transition: transform 420ms var(--sw-spring); }
+button:hover > .sw-g-team .sw-links { animation: db-swarm-g-draw 620ms var(--sw-out) both; }
+button:hover > .sw-g-team .sw-n1 { animation: db-swarm-g-bob 900ms var(--sw-out) both; }
+button:hover > .sw-g-team .sw-n2 { animation: db-swarm-g-bob 900ms var(--sw-out) 90ms both; }
+button:hover > .sw-g-team .sw-n3 { animation: db-swarm-g-bob 900ms var(--sw-out) 180ms both; }
+button[aria-pressed="true"] > .sw-g-team .sw-n2 { transform: translate(-1px, 1px); }
+button[aria-pressed="true"] > .sw-g-team .sw-n3 { transform: translate(1px, 1px); }
+@keyframes db-swarm-g-draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+@keyframes db-swarm-g-bob {
+  0%, 100% { transform: translateY(0); }
+  40% { transform: translateY(-2.4px); }
+}
+
+/* Dismiss: the links swing a quarter turn. */
+.sw-g-dismiss { transition: transform 420ms var(--sw-spring); }
+button:hover > .sw-g-dismiss { transform: rotate(90deg); }
+
+/* Caret: its tip glows on hover. */
+.sw-g-caret .sw-tip { transition: transform 360ms var(--sw-spring); }
+.db-swarm-card-head:hover .sw-g-caret .sw-tip { transform: scale(1.5); }
+
+/* Signal: breathes while waiting on you; shakes once when it is an error. */
+.db-swarm-embed.is-ask .sw-g-signal .sw-cell { animation: db-swarm-g-breathe 2.4s ease-in-out infinite; }
+.db-swarm-error .sw-g-signal { animation: db-swarm-g-shake 520ms var(--sw-out) both; }
+@keyframes db-swarm-g-shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-2.5px) rotate(-6deg); }
+  45% { transform: translateX(2.5px) rotate(5deg); }
+  70% { transform: translateX(-1.2px); }
+}
+
+/* Flux: the bars run like a meter when a new bill lands, or on hover. */
+.sw-g-flux path { transform-origin: 50% 100%; }
+.db-swarm-usage.is-fresh .sw-g-flux .sw-b1,
+.db-swarm-usage:hover .sw-g-flux .sw-b1 { animation: db-swarm-g-eq 900ms var(--sw-out) 3; }
+.db-swarm-usage.is-fresh .sw-g-flux .sw-b2,
+.db-swarm-usage:hover .sw-g-flux .sw-b2 { animation: db-swarm-g-eq 900ms var(--sw-out) 120ms 3; }
+.db-swarm-usage.is-fresh .sw-g-flux .sw-b3,
+.db-swarm-usage:hover .sw-g-flux .sw-b3 { animation: db-swarm-g-eq 900ms var(--sw-out) 240ms 3; }
+@keyframes db-swarm-g-eq {
+  0%, 100% { transform: scaleY(1); }
+  50% { transform: scaleY(0.35); }
+}
+
+/* Hop: the dashed path flows toward this channel. */
+.sw-g-hop .sw-path { animation: db-swarm-g-flow 1.4s linear infinite; }
+@keyframes db-swarm-g-flow { to { stroke-dashoffset: -9.2; } }
+
+/* Spark: twinkles as an event lands, and on hover. */
+.db-swarm-sys.is-fresh .sw-g-spark .sw-star,
+.db-swarm-sys:hover .sw-g-spark .sw-star,
+.db-swarm-embed-foot:hover .sw-g-spark .sw-star { animation: db-swarm-g-twinkle 900ms var(--sw-spring) both; }
+.db-swarm-sys.is-fresh .sw-g-spark .sw-sat { animation: db-swarm-g-pop 600ms var(--sw-spring) 200ms both; }
+@keyframes db-swarm-g-twinkle {
+  0% { transform: scale(0.4) rotate(-45deg); opacity: 0.4; }
+  60% { transform: scale(1.18) rotate(8deg); opacity: 1; }
+  100% { transform: scale(1) rotate(0deg); }
+}
+@keyframes db-swarm-g-pop {
+  from { transform: scale(0); }
+  to { transform: scale(1); }
+}
+
+/* Crown: the three nodes rise in turn while the Supervisor is live, and on arrival. */
+.db-swarm-avatar.is-live .sw-g-crown .sw-c1,
+.db-swarm-sys.is-fresh .sw-g-crown .sw-c1 { animation: db-swarm-g-rise 3.2s ease-in-out infinite; }
+.db-swarm-avatar.is-live .sw-g-crown .sw-c2,
+.db-swarm-sys.is-fresh .sw-g-crown .sw-c2 { animation: db-swarm-g-rise 3.2s ease-in-out 0.25s infinite; }
+.db-swarm-avatar.is-live .sw-g-crown .sw-c3,
+.db-swarm-sys.is-fresh .sw-g-crown .sw-c3 { animation: db-swarm-g-rise 3.2s ease-in-out 0.5s infinite; }
+@keyframes db-swarm-g-rise {
+  0%, 70%, 100% { transform: translateY(0); }
+  35% { transform: translateY(-1.6px); }
+}
+
+/* Burst: the rays turn slowly around a breathing core; on arrival they flare open. */
+.sw-g-burst .sw-rays { transform-box: view-box; transform-origin: 50% 50%; animation: db-swarm-g-orbit 14s linear infinite; }
+.sw-g-burst .sw-core { animation: db-swarm-g-breathe 2.4s ease-in-out infinite; }
+.db-swarm-msg.is-fresh .sw-g-burst .sw-rays { animation: db-swarm-g-flare 900ms var(--sw-spring) 300ms both; }
+@keyframes db-swarm-g-flare {
+  from { transform: rotate(-60deg) scale(0.3); opacity: 0; }
+  to { transform: rotate(0deg) scale(1); opacity: 1; }
+}
+
+/* Cell: its core lights up when the row is hovered. */
+.sw-g-cell .sw-core { transition: transform 360ms var(--sw-spring); }
+.db-swarm-subs li:hover .sw-g-cell .sw-core,
+.db-swarm-embed-team span:hover .sw-g-cell .sw-core { transform: scale(1.4); }
+
+/* Watch: the verifier's eye blinks every few seconds. */
+.sw-g-watch .sw-eye { animation: db-swarm-g-blink 4.6s ease-in-out infinite; }
+@keyframes db-swarm-g-blink {
+  0%, 44%, 52%, 100% { transform: scaleY(1); }
+  48% { transform: scaleY(0.1); }
+}
+
+/* Starters: the route climbs and the flag waves; the orb circles the build; the
+   spark lifts off the book. */
+.sw-g-ascent .sw-route { stroke-dasharray: 1; stroke-dashoffset: 0; }
+.sw-g-ascent .sw-flag { transform-origin: 0% 100%; }
+.db-swarm-starter:hover .sw-g-ascent .sw-route { animation: db-swarm-g-draw 700ms var(--sw-out) both; }
+.db-swarm-starter:hover .sw-g-ascent .sw-flag { animation: db-swarm-g-wave 900ms var(--sw-spring) 400ms both; }
+@keyframes db-swarm-g-wave {
+  0% { transform: scaleX(0.2); }
+  60% { transform: scaleX(1.2) skewY(-8deg); }
+  100% { transform: scaleX(1); }
+}
+.sw-g-build .sw-orb { transform-box: view-box; transform-origin: 50% 50%; animation: db-swarm-g-orbit 5s linear infinite; }
+.db-swarm-starter:hover .sw-g-build .sw-orb { animation-duration: 1.2s; }
+.sw-g-study .sw-rise { animation: db-swarm-g-lift 3s ease-in-out infinite; }
+@keyframes db-swarm-g-lift {
+  0%, 100% { transform: translateY(0) rotate(0deg); opacity: 0.85; }
+  50% { transform: translateY(-1.8px) rotate(20deg); opacity: 1; }
+}
+
+/* You: a ring turns around your core. */
+.sw-g-you .sw-ring { transform-box: view-box; transform-origin: 50% 50%; animation: db-swarm-g-orbit 12s linear infinite; }
+
+/* Sigils: a live manager's mark turns slowly and its core breathes; hover spins it. */
+.sw-sigil .sw-sigil-body { transform-box: view-box; transform-origin: 50% 50%; transition: transform 700ms var(--sw-spring); }
+.db-swarm-avatar.is-live .sw-sigil .sw-sigil-body,
+.db-swarm-node:not(.is-dim) .sw-sigil .sw-sigil-body { animation: db-swarm-g-orbit 28s linear infinite; }
+.db-swarm-avatar.is-live .sw-sigil .sw-core { animation: db-swarm-g-breathe 3.2s ease-in-out infinite; }
+.db-swarm-ch:hover .sw-sigil .sw-sigil-body { transform: rotate(120deg); }
+.db-swarm-intro .sw-sigil .sw-sigil-body { animation: db-swarm-g-unfold 900ms var(--sw-spring) both; }
+@keyframes db-swarm-g-unfold {
+  from { transform: rotate(-120deg) scale(0.3); opacity: 0; }
+  to { transform: rotate(0deg) scale(1); opacity: 1; }
+}
+
+/* ── Swarm Stage 2: managers at work ───────────────────────────────────────────────────
+   The live chip, plan, step rows, question, report, and the roster's grant switches and
+   routine editor. Every colour is a --sw-* token, so the dark sheet's token remap covers
+   these with no twin rules. No backdrop-filter: these sit on the panel's flat fill. */
+
+.db-swarm-embed.is-work { --sw-av: var(--sw-accent); }
+.db-swarm-embed.is-work.is-stopping { --sw-av: var(--sw-warn); }
+.db-swarm-embed.is-work.is-stopping::before { background: var(--sw-warn); }
+.db-swarm-work-dots { display: inline-flex; gap: 3px; margin-right: 2px; }
+.db-swarm-work-dots i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: db-swarm-bounce 1.2s var(--sw-out) infinite;
+}
+.db-swarm-work-dots i:nth-child(2) { animation-delay: 150ms; }
+.db-swarm-work-dots i:nth-child(3) { animation-delay: 300ms; }
+.db-swarm-work-time,
+.db-swarm-work-budget {
+  margin-left: auto;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--sw-mute);
+  font-variant-numeric: tabular-nums;
+}
+.db-swarm-work-budget { margin-left: 8px; }
+.db-swarm-lanes { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
+.db-swarm-lanes li {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--sw-dim);
+}
+.db-swarm-lanes li em { font-style: normal; font-size: 11.5px; color: var(--sw-mute); font-variant-numeric: tabular-nums; }
+.db-swarm-lanes li.is-leased .sw-g-cell .sw-core { animation: db-swarm-g-breathe 1.6s ease-in-out infinite; }
+.db-swarm-lanes li.is-done { color: var(--sw-mute); }
+.db-swarm-lanes li.is-failed em { color: var(--sw-warn); }
+.db-swarm-work-foot { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.db-swarm-work-foot .db-swarm-pill-btn { margin-left: auto; }
+
+.db-swarm-pill-btn { display: inline-flex; align-items: center; gap: 6px; }
+.db-swarm-pill-btn:disabled { opacity: 0.5; cursor: default; transform: none; }
+.db-swarm-pill-btn.is-primary,
+.db-swarm-pill-btn.is-primary:hover { color: var(--sw-on-accent); background: var(--sw-accent); border-color: transparent; }
+.db-swarm-pill-btn.is-stop { color: var(--sw-danger); }
+.db-swarm-pill-btn.is-stop:hover:not(:disabled) .sw-g-halt .sw-orbit { animation: db-swarm-g-orbit 1.4s linear infinite; }
+.sw-g-halt .sw-orbit { transform-box: view-box; transform-origin: 50% 50%; }
+
+.db-swarm-embed.is-plan { --sw-av: var(--sw-sup); }
+.db-swarm-criteria { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 3px; font-size: 12.5px; color: var(--sw-dim); }
+
+.db-swarm-step-wrap { padding: 2px 16px 2px 58px; }
+.db-swarm-step-wrap.is-fresh { animation: db-swarm-sys-in 420ms var(--sw-spring) both; }
+.db-swarm-step {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 8px;
+  max-width: 560px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  contain: layout paint;
+}
+.db-swarm-step:hover { background: var(--sw-hover); border-color: var(--sw-chip-border); }
+.db-swarm-step-icon {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  color: var(--sw-accent);
+}
+.db-swarm-step.is-gap .db-swarm-step-icon { color: var(--sw-warn); }
+.db-swarm-step-body { display: grid; gap: 2px; min-width: 0; }
+.db-swarm-step-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; font-size: 12.5px; }
+.db-swarm-step-head strong { font-weight: 650; }
+.db-swarm-step-why { font-size: 12.5px; color: var(--sw-dim); line-height: 1.45; }
+.db-swarm-step-gap { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--sw-warn); }
+.db-swarm-step-gap .db-swarm-pill-btn { padding: 3px 10px; font-size: 11.5px; }
+
+.db-swarm-embed.is-report { max-width: 640px; contain: layout paint; }
+.db-swarm-embed.is-report.is-partial { --sw-av: var(--sw-warn); }
+.db-swarm-embed.is-report.is-cancelled,
+.db-swarm-embed.is-report.is-failed { --sw-av: var(--sw-mute); }
+.db-swarm-embed.is-report.is-partial::before { background: linear-gradient(180deg, var(--sw-warn), var(--sw-sup)); }
+.db-swarm-embed.is-report.is-cancelled::before,
+.db-swarm-embed.is-report.is-failed::before { background: var(--sw-mute); }
+.db-swarm-verified {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: var(--sw-accent-strong);
+  background: var(--sw-accent-soft);
+  letter-spacing: 0.04em;
+}
+.db-swarm-verified .sw-g-seal .sw-check { stroke-dasharray: 1; animation: db-swarm-g-draw 700ms var(--sw-out) 200ms both; }
+.db-swarm-embed p.db-swarm-report-summary { color: var(--sw-text); font-size: 13.5px; }
+.db-swarm-findings { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
+.db-swarm-findings li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: start;
+  padding: 7px 10px;
+  border-radius: 10px;
+  background: var(--sw-hover);
+  border: 1px solid var(--sw-chip-border);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.db-swarm-findings li.is-unsourced { color: var(--sw-dim); border-style: dashed; }
+.db-swarm-findings li.is-verified { border-color: var(--sw-accent-ring); }
+.db-swarm-src-row { display: inline-flex; flex-wrap: wrap; gap: 4px; justify-content: flex-end; }
+.db-swarm-src-row em { font-style: normal; font-size: 11px; color: var(--sw-mute); }
+.db-swarm-src {
+  border: 1px solid var(--sw-chip-border);
+  background: var(--sw-chip);
+  color: var(--sw-accent-strong);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  padding: 1px 7px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: transform 200ms var(--sw-spring), background 160ms var(--sw-out);
+}
+.db-swarm-src:hover { transform: translateY(-1px); background: var(--sw-active); }
+.db-swarm-src.is-static { cursor: default; color: var(--sw-dim); }
+.db-swarm-src.is-static:hover { transform: none; background: var(--sw-chip); }
+.db-swarm-drafts { display: grid; gap: 8px; margin-top: 10px; }
+.db-swarm-draft { padding: 8px 10px; border-radius: 10px; border: 1px dashed var(--sw-field-border); }
+.db-swarm-draft-head { display: flex; gap: 6px; align-items: baseline; font-size: 12px; color: var(--sw-dim); }
+.db-swarm-draft-head em {
+  margin-left: auto;
+  font-style: normal;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--sw-mute);
+}
+.db-swarm-embed .db-swarm-draft p { white-space: pre-wrap; color: var(--sw-text); }
+.db-swarm-gaps { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--sw-divider); }
+/* A report draft that can become an action: Review, an editable text, the server's
+   preview, then Approve. Tokens only, so the dark sheet needs no twin. */
+.db-swarm-act { display: grid; gap: 8px; margin-top: 8px; }
+.db-swarm-act textarea {
+  border: 1px solid var(--sw-field-border);
+  background: var(--sw-field);
+  color: var(--sw-text);
+  font: inherit;
+  font-size: 12.5px;
+  border-radius: 10px;
+  padding: 7px 9px;
+  resize: none;
+}
+.db-swarm-act textarea::-webkit-scrollbar { display: none; }
+.db-swarm-act textarea:focus { outline: none; border-color: var(--sw-accent); box-shadow: 0 0 0 3px var(--sw-accent-soft); }
+.db-swarm-act-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.db-swarm-act-count { margin-left: auto; font-size: 11px; color: var(--sw-mute); font-variant-numeric: tabular-nums; }
+.db-swarm-act-count.is-over { color: var(--sw-danger); }
+/* A document draft: saved on this computer, so Save buttons instead of an approval. */
+.db-swarm-doc { display: grid; gap: 8px; margin-top: 6px; }
+.db-swarm-doc-name { font-size: 13px; font-weight: 700; color: var(--sw-text); }
+.db-swarm-embed .db-swarm-doc-body {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--sw-field);
+  white-space: pre-wrap;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--sw-text);
+}
+.db-swarm-embed .db-swarm-doc-body.is-clipped { color: var(--sw-dim); }
+.db-swarm-doc-edit {
+  border: 1px solid var(--sw-field-border);
+  background: var(--sw-field);
+  color: var(--sw-text);
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 1.55;
+  border-radius: 10px;
+  padding: 8px 10px;
+  resize: vertical;
+}
+.db-swarm-doc-edit::-webkit-scrollbar { display: none; }
+.db-swarm-doc-edit:focus { outline: none; border-color: var(--sw-accent); box-shadow: 0 0 0 3px var(--sw-accent-soft); }
+.db-swarm-embed .db-swarm-act-preview {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--sw-field);
+  white-space: pre-wrap;
+  font-size: 12.5px;
+  color: var(--sw-text);
+}
+.db-swarm-gaps-label,
+.db-swarm-tools-label {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 650;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--sw-mute);
+}
+.db-swarm-embed .db-swarm-gaps p { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--sw-warn); font-size: 12.5px; }
+.db-swarm-gaps .db-swarm-pill-btn { padding: 3px 10px; font-size: 11.5px; }
+.db-swarm-next { margin: 10px 0 0; padding-left: 18px; display: grid; gap: 3px; font-size: 12.5px; color: var(--sw-dim); }
+
+.db-swarm-notice,
+.db-swarm-import {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin: 0 16px 8px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  font-size: 13px;
+  border: 1px solid var(--sw-chip-border);
+  background: var(--sw-chip);
+}
+.db-swarm-notice { color: var(--sw-warn); background: var(--sw-warn-soft); border-color: transparent; }
+.db-swarm-notice span,
+.db-swarm-import span { flex: 1 1 260px; }
+.db-swarm-import { margin-top: 10px; }
+
+.db-swarm-presence.is-working { background: var(--sw-sup); animation: db-swarm-breathe 1.1s ease-in-out infinite; }
+.db-swarm-meter.is-warn strong { color: var(--sw-warn); }
+
+.db-swarm-grants,
+.db-swarm-routines { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--sw-divider); }
+.db-swarm-grant-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.db-swarm-grant {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 10px 4px 5px;
+  border-radius: 999px;
+  border: 1px solid var(--sw-chip-border);
+  background: var(--sw-chip);
+  color: var(--sw-dim);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 160ms var(--sw-out), color 160ms var(--sw-out);
+}
+.db-swarm-grant i {
+  position: relative;
+  width: 24px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--sw-field-border);
+  transition: background 200ms var(--sw-out);
+}
+.db-swarm-grant i::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--sw-active);
+  transition: transform 260ms var(--sw-spring);
+}
+.db-swarm-grant:hover:not(:disabled) { background: var(--sw-hover); color: var(--sw-text); }
+.db-swarm-grant.is-on { color: var(--sw-text); }
+.db-swarm-grant.is-on i { background: var(--sw-accent); }
+.db-swarm-grant.is-on i::after { transform: translateX(10px); }
+.db-swarm-grant.is-asked:not(.is-on) { border-style: dashed; border-color: var(--sw-accent-ring); }
+.db-swarm-grant:disabled { opacity: 0.55; cursor: default; }
+.db-swarm-grant:focus-visible,
+.db-swarm-day:focus-visible,
+.db-swarm-src:focus-visible { outline: 2px solid var(--sw-accent-ring); outline-offset: 2px; }
+.db-swarm-grant.is-mini { padding: 3px; }
+.db-swarm-tools-hint { margin: 6px 0 0; font-size: 11.5px; color: var(--sw-mute); }
+
+.db-swarm-routine {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--sw-chip-border);
+  background: var(--sw-chip);
+  color: var(--sw-dim);
+}
+.db-swarm-routine.is-on { color: var(--sw-text); }
+.db-swarm-routine.is-on .sw-g-cycle .sw-hand { transform-box: view-box; transform-origin: 50% 50%; animation: db-swarm-g-orbit 12s linear infinite; }
+.db-swarm-routine.is-suggested { grid-template-columns: 16px minmax(0, 1fr) auto; border-style: dashed; }
+.db-swarm-routine-main {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+span.db-swarm-routine-main { cursor: default; }
+.db-swarm-routine-main strong { font-size: 12px; font-weight: 650; }
+.db-swarm-routine-main span { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-swarm-icon-btn.is-small { width: 26px; height: 26px; }
+.db-swarm-add-routine { margin-top: 8px; }
+.db-swarm-routine-form { display: grid; gap: 8px; margin-top: 8px; }
+.db-swarm-routine-form textarea,
+.db-swarm-days input {
+  border: 1px solid var(--sw-field-border);
+  background: var(--sw-field);
+  color: var(--sw-text);
+  font: inherit;
+  font-size: 12.5px;
+  border-radius: 10px;
+  padding: 7px 9px;
+  resize: none;
+}
+.db-swarm-routine-form textarea::-webkit-scrollbar { display: none; }
+.db-swarm-routine-form textarea:focus,
+.db-swarm-days input:focus { outline: none; border-color: var(--sw-accent); box-shadow: 0 0 0 3px var(--sw-accent-soft); }
+.db-swarm-days { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.db-swarm-days input { margin-left: auto; padding: 4px 8px; }
+.db-swarm-day {
+  width: 28px;
+  height: 26px;
+  border-radius: 8px;
+  border: 1px solid var(--sw-chip-border);
+  background: var(--sw-chip);
+  color: var(--sw-dim);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  cursor: pointer;
+}
+.db-swarm-day.is-on { background: var(--sw-accent-soft); border-color: var(--sw-accent-ring); color: var(--sw-accent-strong); }
+.db-swarm-routine-actions { display: flex; justify-content: flex-end; gap: 6px; }
+
+/* Capability glyph motion: long-period, low amplitude, on hover or while live. */
+.sw-g-seek .sw-sat,
+.sw-g-deep .sw-sat { transform-box: view-box; transform-origin: 45% 45%; }
+.db-swarm-step:hover .sw-g-seek .sw-sat { animation: db-swarm-g-orbit 1.6s linear infinite; }
+.sw-g-deep .sw-sat { transform-origin: 50% 50%; }
+.db-swarm-step:hover .sw-g-deep .sw-sat,
+.db-swarm-embed-foot .db-swarm-pill-btn:hover .sw-g-deep .sw-sat { animation: db-swarm-g-orbit 2.4s linear infinite; }
+.sw-g-leaf .sw-lines { stroke-dasharray: 1; }
+.db-swarm-step-wrap.is-fresh .sw-g-leaf .sw-lines { animation: db-swarm-g-draw 800ms var(--sw-out) both; }
+.db-swarm-step:hover .sw-g-mail .sw-flap,
+.db-swarm-step:hover .sw-g-day .sw-node,
+.db-swarm-step:hover .sw-g-course .sw-node,
+.db-swarm-step:hover .sw-g-branch .sw-node,
+.db-swarm-step:hover .sw-g-keep .sw-node,
+.db-swarm-step:hover .sw-g-block .sw-node { animation: db-swarm-g-breathe 1.4s ease-in-out infinite; }

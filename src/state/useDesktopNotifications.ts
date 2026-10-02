@@ -199,7 +199,7 @@ export function useDesktopNotifications({
           account_enabled: true,
           notification_contract_version: 1,
           research_ui_version: 1,
-          supported_actions: ["view_research", "answer_research_question"],
+          supported_actions: ["view_research", "answer_research_question", "view_swarm_channel"],
         });
       } catch (err) {
         if (!cancelled) {
@@ -388,7 +388,7 @@ export function useDesktopNotifications({
       account_enabled: true,
       notification_contract_version: 1,
       research_ui_version: 1,
-      supported_actions: ["view_research", "answer_research_question"],
+      supported_actions: ["view_research", "answer_research_question", "view_swarm_channel"],
     }).catch((err) => {
       setNotificationsEnabledState(!enabled);
       void setDisabled(enabled);

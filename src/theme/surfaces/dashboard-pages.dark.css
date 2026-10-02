@@ -91,7 +91,7 @@
 /* Denser than the page glass: a dialog has to stay readable over whatever sits behind it. */
 :root[data-theme="dark"] .db-local-confirm-panel {
   border-color: var(--dk-glass-border);
-  background: linear-gradient(145deg, rgba(30, 30, 32, 0.95), rgba(16, 16, 17, 0.92));
+  background: var(--dk-popover-bg);
   box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55), var(--dk-glass-inset);
 }
 :root[data-theme="dark"] .db-local-confirm-icon {
@@ -258,7 +258,7 @@
 /* ── Update dialog ── */
 :root[data-theme="dark"] .db-modal-panel.db-update-dialog {
   border-color: var(--dk-glass-border);
-  background: linear-gradient(135deg, rgba(30, 30, 32, 0.95), rgba(14, 14, 15, 0.92));
+  background: var(--dk-popover-bg);
   box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
 }
 /* #0c594e sinks into the dark glass; these stay above 4.5:1 against the white label. */

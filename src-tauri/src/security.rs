@@ -134,6 +134,8 @@ pub enum Operation {
     /// plus the one-time opt-in; deliberately NOT tied to a live voice call,
     /// because the task must outlive the call that started it.
     StartBrowserTask,
+    /// Write a document a Swarm manager drafted into Downloads/Aura Documents.
+    SaveDocument,
 }
 
 /// Proof of a successful `authorize` call, carrying the auth epoch it was
@@ -333,7 +335,9 @@ impl SecurityState {
             | Operation::MarkSegmentUploaded
             | Operation::MarkMeetingAcked
             | Operation::StartJoinWatch
-            | Operation::ReadLogs => {}
+            | Operation::ReadLogs
+            // A file the user clicked Save on, written only under Downloads/Aura Documents.
+            | Operation::SaveDocument => {}
             Operation::StartBrowserTask => {
                 if !self.browser_task_consented {
                     return Err(Denied::BrowserTaskNotEnabled);

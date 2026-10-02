@@ -72,7 +72,7 @@ export const dashboardPages: Record<string, ReactElement> = {
   "/help": <HelpPage />,
 };
 
-export function DashboardShell({ user, collapsed, onToggle }: { user: User | null; collapsed: boolean; onToggle: () => void }) {
+export function DashboardShell({ user, collapsed, onToggle, onCollapse }: { user: User | null; collapsed: boolean; onToggle: () => void; onCollapse?: () => void }) {
   const generalSettings = useGeneralSettings();
   const updateReady = useUpdateReady();
   const location = useLocation();
@@ -119,7 +119,8 @@ export function DashboardShell({ user, collapsed, onToggle }: { user: User | nul
         right={<NotificationBell notifications={notifications} />}
       />
       <div className="db-app-body">
-      <Sidebar collapsed={collapsed} />
+      {/* Agents needs the width for its three-pane Swarm, so opening it folds the sidebar. */}
+      <Sidebar collapsed={collapsed} onNavigate={(to) => { if (to === "/agents") onCollapse?.(); }} />
       <div className="db-main">
         <UpdateDialog
           version={updateReady.version}
@@ -273,7 +274,7 @@ export function DashboardApp() {
           <ErrorBoundary>
             {showApp ? (
               <HashRouter>
-                <DashboardShell user={user} collapsed={collapsed} onToggle={() => setCollapsed((current) => !current)} />
+                <DashboardShell user={user} collapsed={collapsed} onToggle={() => setCollapsed((current) => !current)} onCollapse={() => setCollapsed(true)} />
               </HashRouter>
             ) : (
               <DashboardOnboarding

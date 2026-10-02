@@ -74,9 +74,13 @@ export async function authFetch(
  * so callers can tell a timeout from any other transport failure without
  * matching on AbortError DOMExceptions. */
 export class TimeoutError extends Error {
-  constructor(message: string) {
+  /** The deadline that expired, when the thrower knows it, so copy can name it. */
+  readonly timeoutMs: number | null;
+
+  constructor(message: string, timeoutMs: number | null = null) {
     super(message);
     this.name = "TimeoutError";
+    this.timeoutMs = timeoutMs;
   }
 }
 
@@ -89,8 +93,8 @@ async function withDeadline(
   try {
     return await run(controller.signal);
   } catch (err) {
-    if (err instanceof DOMException && err.name === "AbortError") {
-      throw new TimeoutError(`request timed out after ${timeoutMs}ms`);
+    if (controller.signal.aborted && err instanceof DOMException && err.name === "AbortError") {
+      throw new TimeoutError(`request timed out after ${timeoutMs}ms`, timeoutMs);
     }
     throw err;
   } finally {
@@ -114,7 +118,10 @@ export function authFetchWithTimeout(
   init: RequestInit | undefined,
   timeoutMs: number,
 ): Promise<Response> {
-  return withDeadline(timeoutMs, (signal) => authFetch(path, { ...init, signal }));
+  // Keep a caller's own signal (a resource's deadline, a cancel) alive next to ours.
+  return withDeadline(timeoutMs, (signal) =>
+    authFetch(path, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal }),
+  );
 }
 
 interface AuthGetJsonOptions {

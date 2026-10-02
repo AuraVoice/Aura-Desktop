@@ -29,11 +29,12 @@
    sheets should reach for these before inventing a new value. */
 :root[data-theme="dark"] {
   /* Matte black with white ink. Teal is kept for accents only (active icons,
-     links, toggles), never for a surface, so nothing reads green. */
-  --dk-bg: #0a0a0b;
-  --dk-bg-raised: #0f0f10;
-  --dk-surface: #151517;
-  --dk-surface-2: #1c1c1f;
+     links, toggles), never for a surface, so nothing reads green. Three flat
+     steps: page #000, panel #0b0b0c, raised #141415. */
+  --dk-bg: #000000;
+  --dk-bg-raised: #050506;
+  --dk-surface: #0b0b0c;
+  --dk-surface-2: #141415;
   --dk-text: #f5f5f5;
   --dk-text-dim: #a3a3a8;
   --dk-text-mute: #6f6f75;
@@ -42,27 +43,29 @@
   --dk-divider: rgba(255, 255, 255, 0.06);
   --dk-hover: rgba(255, 255, 255, 0.06);
   --dk-press: rgba(255, 255, 255, 0.09);
-  --dk-active: #1f1f22;
+  --dk-active: #141415;
   --dk-accent: #2ee0c4;
   --dk-accent-text: #5fd6c1;
   --dk-accent-soft: rgba(46, 224, 196, 0.12);
   --dk-accent-ring: rgba(46, 224, 196, 0.35);
 
-  /* The bright glass recipe, after dark. Same layers as CLAUDE.md's canonical
-     light recipe, minus the backdrop-filter: dashboard surfaces sit on a flat
-     page colour, so the blur cost a scroll's worth of raster and drew nothing.
-     Only the top bar, which real content scrolls under, still blurs. */
-  --dk-glass-fill: linear-gradient(135deg, rgba(30, 30, 32, 0.72), rgba(14, 14, 15, 0.6));
-  --dk-glass-border: rgba(255, 255, 255, 0.09);
-  --dk-glass-border-hover: rgba(255, 255, 255, 0.16);
-  --dk-glass-inset: inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  --dk-glass-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-  --dk-glass-shadow-hover: 0 16px 36px rgba(0, 0, 0, 0.45);
-  --dk-glass-hover: rgba(255, 255, 255, 0.05);
-  --dk-sheen-soft: rgba(255, 255, 255, 0.03);
-  --dk-sheen-peak: rgba(255, 255, 255, 0.1);
+  /* Dark is matte, not glass: a flat fill, a hairline border, no gradient, no
+     top highlight, no sheen sweep and no lift shadow. The names stay so every
+     dark sheet that reads them goes matte without a rule change. The shadow and
+     inset tokens are a zero-size transparent shadow rather than `none`, because
+     sheets list them inside comma-separated box-shadow values where `none` is
+     invalid and would drop the whole declaration. */
+  --dk-glass-fill: #0b0b0c;
+  --dk-glass-border: rgba(255, 255, 255, 0.08);
+  --dk-glass-border-hover: rgba(255, 255, 255, 0.14);
+  --dk-glass-inset: 0 0 0 transparent;
+  --dk-glass-shadow: 0 0 0 transparent;
+  --dk-glass-shadow-hover: 0 0 0 transparent;
+  --dk-glass-hover: rgba(255, 255, 255, 0.04);
+  --dk-sheen-soft: transparent;
+  --dk-sheen-peak: transparent;
 
-  --dk-popover-bg: rgba(22, 22, 24, 0.97);
+  --dk-popover-bg: #0f0f10;
   --dk-field-bg: rgba(255, 255, 255, 0.04);
   --dk-field-border: rgba(255, 255, 255, 0.12);
   --dk-scrim: rgba(0, 0, 0, 0.6);

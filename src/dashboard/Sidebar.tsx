@@ -13,9 +13,11 @@ const SETTINGS_ROUTES = new Set(["/general", "/system", "/account", "/billing", 
 
 interface SidebarProps {
   collapsed: boolean;
+  /** Fired on every nav click, including a click on the page already open. */
+  onNavigate?: (to: string) => void;
 }
 
-export function Sidebar({ collapsed }: SidebarProps) {
+export function Sidebar({ collapsed, onNavigate }: SidebarProps) {
   const location = useLocation();
   const settingsActive = SETTINGS_ROUTES.has(location.pathname);
   const SettingsIcon = settingsNavItem.Icon;
@@ -30,7 +32,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
       </div>
 
       <nav className="db-nav">
-        {primaryNavItems.map((item) => <SidebarLink key={item.to} item={item} collapsed={collapsed} />)}
+        {primaryNavItems.map((item) => <SidebarLink key={item.to} item={item} collapsed={collapsed} onNavigate={onNavigate} />)}
       </nav>
 
       <div className="db-sidebar-foot">
@@ -53,11 +55,12 @@ export function Sidebar({ collapsed }: SidebarProps) {
   );
 }
 
-function SidebarLink({ item, collapsed }: { item: NavItem; collapsed: boolean }) {
+function SidebarLink({ item, collapsed, onNavigate }: { item: NavItem; collapsed: boolean; onNavigate?: (to: string) => void }) {
   const { to, label, Icon } = item;
   return (
     <NavLink
       to={to}
+      onClick={() => onNavigate?.(to)}
       className={({ isActive }) => `db-nav-item${isActive ? " db-nav-item-active" : ""}`}
       title={collapsed ? `${label}${item.beta ? " (Beta)" : ""}` : undefined}
     >

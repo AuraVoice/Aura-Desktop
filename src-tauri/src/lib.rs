@@ -72,6 +72,7 @@ mod sentry_setup;
 mod telemetry;
 mod site_icons;
 mod status_pill;
+mod swarm_documents;
 mod system_control;
 mod system_idle;
 mod toast;
@@ -590,6 +591,7 @@ pub fn run() {
             interview::stop_interview_hacker,
             interview::save_interview_reflection,
             interview::save_interview_prep,
+            swarm_documents::save_swarm_document,
             interview_store::interview_session_save,
             interview_store::interview_session_checkpoint,
             interview_store::interview_sessions_list,

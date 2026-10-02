@@ -8,9 +8,9 @@
    that were written as literals. */
 :root[data-theme="dark"] .db-app,
 :root[data-theme="dark"] .db-window {
-  --db-bg: #0a0a0b;
-  --db-surface: #151517;
-  --db-content-bg: #0d0d0e;
+  --db-bg: #000000;
+  --db-surface: #0b0b0c;
+  --db-content-bg: #050506;
   --db-text: #f5f5f5;
   --db-text-dim: #a3a3a8;
   --db-text-mute: #6f6f75;
@@ -18,7 +18,7 @@
   --db-hover: rgba(255, 255, 255, 0.06);
   /* A raised charcoal chip rather than an inverted light one: every active
      state pairs this with literal #fff text, which then keeps working. */
-  --db-active: #1f1f22;
+  --db-active: #141415;
   --db-teal: #2ee0c4;
   /* deep-a is mostly used as TEXT (links, eyebrows), so dark lifts it to a
      readable mint. The one gradient that uses it (Home hero) is re-set in
@@ -77,12 +77,11 @@
 
 /* ── Sidebar ── */
 :root[data-theme="dark"] .db-sidebar {
-  background: rgba(10, 10, 11, 0.82);
+  background: var(--dk-bg);
 }
 :root[data-theme="dark"] .db-nav-item-active,
 :root[data-theme="dark"] .db-nav-item-active:hover {
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 0 0 1px rgba(46, 224, 196, 0.14),
-    0 4px 14px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 0 0 1px rgba(46, 224, 196, 0.14);
 }
 /* The one teal on an active row is its icon; the chip itself stays charcoal. */
 :root[data-theme="dark"] .db-nav-item-active .db-nav-icon:not(.db-nav-help-icon-discord),
@@ -118,8 +117,7 @@
 :root[data-theme="dark"] .db-main {
   border-color: rgba(255, 255, 255, 0.07);
   background: var(--db-content-bg);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04), 0 2px 6px rgba(0, 0, 0, 0.3),
-    0 12px 32px rgba(0, 0, 0, 0.35);
+  box-shadow: none;
 }
 :root[data-theme="dark"] .db-badge-count {
   color: #062a24;
@@ -214,7 +212,7 @@
 }
 :root[data-theme="dark"] .db-card-accent {
   border-color: rgba(255, 173, 96, 0.3);
-  background: linear-gradient(135deg, rgba(70, 44, 22, 0.62), rgba(38, 26, 16, 0.52));
+  background: rgba(56, 36, 20, 0.55);
 }
 :root[data-theme="dark"] .db-card-accent:hover {
   border-color: rgba(255, 173, 96, 0.45);
@@ -256,13 +254,12 @@
 /* ── Sliding tab strip ── */
 :root[data-theme="dark"] .db-tab-strip {
   border-color: var(--dk-border);
-  background: rgba(255, 255, 255, 0.04);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  background: var(--dk-surface);
+  box-shadow: none;
 }
 :root[data-theme="dark"] .db-tab-strip::before {
-  background: linear-gradient(135deg, rgba(46, 224, 196, 0.24), rgba(46, 224, 196, 0.12));
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.08),
-    0 0 0 1px rgba(46, 224, 196, 0.16);
+  background: rgba(46, 224, 196, 0.16);
+  box-shadow: 0 0 0 1px rgba(46, 224, 196, 0.16);
 }
 
 /* ── Settings dialog ── */

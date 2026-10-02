@@ -39,6 +39,11 @@ jobs:
             $details = ($versions.GetEnumerator() | ForEach-Object { "$($_.Key)=$($_.Value)" }) -join ", "
             throw "Release tag ${{ github.ref_name }} does not match app versions: $details"
           }
+          # CHANGELOG.md is the release body (see the publish job), so a tag
+          # with no section there fails here, in seconds, not after the build.
+          if (-not (Select-String -Path CHANGELOG.md -Pattern "^## \[$tagVersion\]" -Quiet)) {
+            throw "CHANGELOG.md has no '## [$tagVersion] - YYYY-MM-DD' section; write the release notes before tagging"
+          }
 
       - uses: actions/setup-node@v4
         with:
@@ -548,8 +553,27 @@ jobs:
             console.log(`latest.json ${json.version}: ${have.join(", ")}`);
           ' "$RUNNER_TEMP/latest.json"
 
+      - uses: actions/checkout@v4
+
+      # The release body is this version's CHANGELOG.md section, verbatim.
+      - name: Read release notes from CHANGELOG.md
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '
+            index($0, "## [" v "]") == 1 { on = 1; next }
+            on && /^## / { exit }
+            on { print }
+          ' CHANGELOG.md | sed -e '1{/^$/d}' > "$RUNNER_TEMP/release-notes.md"
+          if [ ! -s "$RUNNER_TEMP/release-notes.md" ]; then
+            echo "CHANGELOG.md section for $version is empty" >&2
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/release-notes.md"
+
       - name: Publish verified release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release edit "${{ github.ref_name }}" --repo "${{ github.repository }}" --draft=false --latest
+        run: gh release edit "${{ github.ref_name }}" --repo "${{ github.repository }}" --notes-file "$RUNNER_TEMP/release-notes.md" --draft=false --latest

@@ -39,7 +39,7 @@
 }
 :root[data-theme="dark"] .db-research-secondary:hover {
   border-color: var(--dk-glass-border-hover);
-  background: linear-gradient(135deg, rgba(38, 38, 41, 0.8), rgba(18, 18, 20, 0.64));
+  background: var(--dk-surface-2);
 }
 :root[data-theme="dark"] .db-research-eyebrow,
 :root[data-theme="dark"] .db-research-section-kicker,
@@ -50,12 +50,7 @@
 /* ── Research home ── */
 :root[data-theme="dark"] .db-research-command {
   border-color: var(--dk-border);
-  background:
-    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-    radial-gradient(70% 120% at 0% 100%, rgba(46, 224, 196, 0.06), transparent 62%),
-    var(--dk-surface);
-  background-size: 24px 24px, 24px 24px, auto, auto;
+  background: var(--dk-surface);
 }
 :root[data-theme="dark"] .db-research-command::after {
   border-color: rgba(255, 255, 255, 0.1);
@@ -432,7 +427,7 @@
 /* ── Research paywall ── more opaque than page glass: it floats over a scrim. */
 :root[data-theme="dark"] .db-modal-panel.db-research-paywall {
   border-color: var(--dk-glass-border);
-  background: linear-gradient(135deg, rgba(30, 30, 32, 0.94), rgba(16, 16, 17, 0.9));
+  background: var(--dk-popover-bg);
   box-shadow: var(--dk-glass-inset), var(--dk-shadow-pop);
 }
 :root[data-theme="dark"] .db-research-paywall-glyph::before {
@@ -451,7 +446,7 @@
 /* ── Help: community panel and Discord button ── */
 :root[data-theme="dark"] .db-settings-page .db-help-discord {
   border-color: var(--dk-glass-border);
-  background: linear-gradient(135deg, rgba(34, 44, 58, 0.72), rgba(14, 14, 15, 0.56));
+  background: var(--dk-glass-fill);
   box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
 }
 :root[data-theme="dark"] .db-help-discord::after {
@@ -469,4 +464,62 @@
 }
 :root[data-theme="dark"] .db-discord-btn:hover {
   box-shadow: 0 10px 22px rgba(0, 0, 0, 0.45);
+}
+
+
+/* ── Agents > Swarm ── the light sheet draws every colour from --sw-* tokens, so dark
+   only re-points them, onto the --dk-* vocabulary. This is the "Aura Swarm" design
+   artifact's palette one to one. */
+:root[data-theme="dark"] .db-swarm {
+  --sw-panel-border: var(--dk-glass-border);
+  --sw-panel-fill: var(--dk-glass-fill);
+  --sw-panel-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
+  --sw-rail-fill: var(--dk-glass-fill);
+  --sw-divider: var(--dk-divider);
+  --sw-hover: var(--dk-hover);
+  --sw-active: var(--dk-active);
+  --sw-active-ring: var(--dk-border-strong);
+  --sw-lift: rgba(0, 0, 0, 0.35);
+  --sw-field: var(--dk-field-bg);
+  --sw-field-border: var(--dk-field-border);
+  --sw-chip: rgba(255, 255, 255, 0.035);
+  --sw-chip-border: var(--dk-border);
+  --sw-sheen: transparent;
+  --sw-text: var(--dk-text);
+  --sw-dim: var(--dk-text-dim);
+  --sw-mute: var(--dk-text-mute);
+  --sw-accent: var(--dk-accent);
+  --sw-accent-strong: var(--dk-accent-text);
+  --sw-accent-soft: var(--dk-accent-soft);
+  --sw-accent-ring: var(--dk-accent-ring);
+  --sw-on-accent: #04231d;
+  --sw-sup: var(--dk-text);
+  --sw-sup-soft: rgba(255, 255, 255, 0.08);
+  --sw-sup-ring: rgba(255, 255, 255, 0.3);
+  --sw-warn: var(--dk-warning);
+  --sw-warn-soft: var(--dk-warning-soft);
+  --sw-danger: var(--dk-danger);
+  --sw-you: var(--dk-text);
+  --sw-you-soft: rgba(255, 255, 255, 0.08);
+  --sw-aurora-a: transparent;
+  --sw-aurora-b: transparent;
+  --sw-drawer-shadow: -18px 0 44px rgba(0, 0, 0, 0.55);
+  --sw-scroll-thumb: var(--dk-scroll-thumb);
+  --sw-h0: var(--dk-text);
+  --sw-h0-soft: rgba(255, 255, 255, 0.07);
+  --sw-h1: var(--dk-text);
+  --sw-h1-soft: rgba(255, 255, 255, 0.07);
+  --sw-h2: var(--dk-text);
+  --sw-h2-soft: rgba(255, 255, 255, 0.07);
+  --sw-h3: var(--dk-text);
+  --sw-h3-soft: rgba(255, 255, 255, 0.07);
+  --sw-h4: var(--dk-text);
+  --sw-h4-soft: rgba(255, 255, 255, 0.07);
+  --sw-h5: var(--dk-text);
+  --sw-h5-soft: rgba(255, 255, 255, 0.07);
+}
+/* The danger pill keeps white text on light; on dark it needs the dark ink. */
+:root[data-theme="dark"] .db-swarm-pill-btn.is-danger,
+:root[data-theme="dark"] .db-swarm-pill-btn.is-danger:hover {
+  color: #2a0b07;
 }

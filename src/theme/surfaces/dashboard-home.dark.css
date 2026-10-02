@@ -6,10 +6,8 @@
    own charcoal gradient here instead of reading those tokens. Teal is only a faint
    glow in one corner, so the card reads black, not green. */
 :root[data-theme="dark"] .db-hero {
-  background:
-    radial-gradient(70% 110% at 0% 100%, rgba(46, 224, 196, 0.07), transparent 62%),
-    linear-gradient(135deg, #1a1a1c, #0f0f10);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08), var(--dk-glass-inset), var(--dk-shadow-md);
+  background: var(--dk-surface);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
 /* White pills keep working on the dark hero, but their mint token text would
@@ -26,7 +24,7 @@
 :root[data-theme="dark"] .db-hero-keycaps kbd {
   border-color: rgba(255, 255, 255, 0.14);
   border-bottom-color: rgba(0, 0, 0, 0.5);
-  background: linear-gradient(145deg, #2b2b2e, #18181a);
+  background: var(--dk-surface-2);
   box-shadow:
     0 5px 0 #050505,
     0 7px 13px rgba(0, 0, 0, 0.45),

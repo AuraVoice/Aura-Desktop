@@ -1869,6 +1869,27 @@ runs. A liveness signal must come from the thing that can die (the callback),
 paired with an independent reading (GetAsyncKeyState) of what it should have
 seen, or a dead hook is indistinguishable from a quiet keyboard.
 ================================================================================
+2026-10-02  Swarm's round poller multiplied itself, and every abort signal into authFetchWithTimeout was dropped.
+=========================================================================Problem: an audit of PR #29 found the #group round poll sending about R(R+1)/2
+requests on mount instead of R (about 55 for 10 finished rounds), and the dashboard
+resource's 15 s deadline never reaching /swarm/state.
+
+Issue: the poll effect's cleanup cleared the interval but not a tick already walking
+its ids. Each round that finished changed liveRoundIds, re-armed the effect and started
+a new walk at once while the old one kept going. Separately, withDeadline handed
+authFetch { ...init, signal } with its own controller's signal, which overwrote the
+caller's. swarmApi was the first caller to pass one, so nothing had noticed.
+
+Solution: both Swarm pollers carry a disposed flag checked after every await and a
+running flag so ticks never overlap; a walk cut short still does the #group pull or
+state reload for what it saw finish, because the re-armed walk no longer asks about it.
+authFetchWithTimeout combines the two signals with AbortSignal.any, and only its own
+deadline maps to TimeoutError.
+
+Justification: an async loop started from an effect is not owned by the effect unless
+it checks a flag the cleanup sets. A spread that sets a field the caller may also set
+silently wins; combine, never overwrite.
+=======
 
 2026-10-01  Signing into a second account deleted weeks of dictation history
 ================================================================================

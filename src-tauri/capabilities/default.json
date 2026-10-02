@@ -23,7 +23,9 @@
         { "path": "$DOWNLOAD/Aura Dictation" },
         { "path": "$DOWNLOAD/Aura Dictation/**" },
         { "path": "$DOWNLOAD/Aura Recordings" },
-        { "path": "$DOWNLOAD/Aura Recordings/**" }
+        { "path": "$DOWNLOAD/Aura Recordings/**" },
+        { "path": "$DOWNLOAD/Aura Documents" },
+        { "path": "$DOWNLOAD/Aura Documents/**" }
       ]
     },
     "os:allow-hostname",
