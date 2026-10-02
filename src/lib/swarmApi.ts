@@ -733,6 +733,33 @@ export async function uploadSwarmDoc(input: {
   return mapDoc(obj(body.doc));
 }
 
+/** juno-backend swarm/images.py CALL_TIMEOUT_S (90 s) plus upload and network slack. */
+const IMAGE_TIMEOUT_MS = 110_000;
+
+/** Sends a pasted picture (already a 1600 px JPEG) to be read once into shelf text.
+ * The server never keeps the bytes. Idempotent on clientDocId. */
+export async function uploadSwarmImage(input: {
+  clientDocId: string;
+  name: string;
+  mediaType: string;
+  data: string;
+}): Promise<SwarmDoc> {
+  const body = await call(
+    "/swarm/docs/image",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        client_doc_id: input.clientDocId,
+        name: input.name,
+        media_type: input.mediaType,
+        data: input.data,
+      }),
+    },
+    IMAGE_TIMEOUT_MS,
+  );
+  return mapDoc(obj(body.doc));
+}
+
 export async function listSwarmDocs(signal?: AbortSignal): Promise<SwarmDoc[]> {
   const body = await call("/swarm/docs", { signal });
   return list(body.docs).map(mapDoc);

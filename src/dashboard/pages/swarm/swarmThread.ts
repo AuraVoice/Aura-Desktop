@@ -38,6 +38,14 @@ export const CAPABILITY_LABEL: Record<SwarmDecision["capability"], string> = {
   interview_brief: "Interview Companion brief",
 };
 
+/** Where a "not a swarm job" sends you: the dashboard route of the feature that does it.
+ * Buddy chat has no page of its own (you are already talking to Aura), so no button. */
+export const CAPABILITY_PATH: Partial<Record<SwarmDecision["capability"], { path: string; label: string }>> = {
+  computer_task: { path: "/agents?tab=computer", label: "Open the Computer tab" },
+  research_run: { path: "/agents?tab=research", label: "Open Research" },
+  interview_brief: { path: "/interview", label: "Open Interview Companion" },
+};
+
 /** Decisions a manager answers for itself; the rest come from whoever backs the front door. */
 const MANAGER_VOICED = new Set<SwarmDecision["decision"]>(["route", "extend", "new_manager", "stop", "reassign"]);
 
@@ -52,7 +60,15 @@ export interface Author {
 
 export type StreamItem =
   | { key: string; kind: "user"; text: string; at: number; docs: { id: string; name: string }[] }
-  | { key: string; kind: "decision"; decision: SwarmDecision; author: Author; at: number }
+  | {
+      key: string;
+      kind: "decision";
+      decision: SwarmDecision;
+      author: Author;
+      at: number;
+      /** The message this decision answered, so a "not a swarm job" can offer to resend it. */
+      asked: { text: string; docs: { id: string; name: string }[] };
+    }
   | { key: string; kind: "crosspost"; text: string; at: number }
   | { key: string; kind: "system"; text: string; tone: "supervisor" | "routine" | "plain"; at: number }
   | { key: string; kind: "say"; text: string; author: Author; at: number }
@@ -140,6 +156,7 @@ function decisionsOf(message: SwarmMessage): SwarmDecision[] {
 export function channelItems(messages: SwarmMessage[], roster: SwarmRoster): StreamItem[] {
   const backer = frontDoorAuthor(roster);
   const items: StreamItem[] = [];
+  let asked: { text: string; docs: { id: string; name: string }[] } = { text: "", docs: [] };
   for (const m of messages) {
     const key = `${m.channelId}-${m.seq}`;
     const speaker = m.authorKind === "manager" ? managerAuthor(roster, m.authorId) : backer;
@@ -152,12 +169,13 @@ export function channelItems(messages: SwarmMessage[], roster: SwarmRoster): Str
           })
         : [];
       items.push({ key, kind: "user", text: m.text, at: m.at, docs });
+      asked = { text: m.text, docs };
       continue;
     }
     switch (m.kind) {
       case "routing":
         decisionsOf(m).forEach((decision, i) =>
-          items.push({ key: `${key}-d${i}`, kind: "decision", decision, author: decisionAuthor(decision, roster, backer), at: m.at }),
+          items.push({ key: `${key}-d${i}`, kind: "decision", decision, author: decisionAuthor(decision, roster, backer), at: m.at, asked }),
         );
         break;
       case "activity":

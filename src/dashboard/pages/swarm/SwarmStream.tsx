@@ -1,6 +1,7 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import type { SwarmDecision, SwarmDoc, SwarmManager, SwarmRoster, SwarmRoundView, SwarmSessionView } from "../../../lib/swarmApi";
 import { DOCUMENT_ACCEPT } from "../../../lib/documentText";
+import { IMAGE_ACCEPT } from "../../../lib/chatAttachments";
 import { Paperclip, Send } from "lucide-react";
 import { SwarmAvatar } from "./SwarmAvatar";
 import {
@@ -25,6 +26,7 @@ import {
 import { PlanEmbed, QuestionEmbed, ReportEmbed, RoundEmbed, RoundReplyEmbed, StepRow, WorkingEmbed } from "./SwarmWork";
 import {
   CAPABILITY_LABEL,
+  CAPABILITY_PATH,
   DECISION_LABEL,
   dayLabel,
   findManager,
@@ -75,6 +77,10 @@ export interface ComposerDoc {
   status: "reading" | "ready" | "failed";
   docId: string;
   error: string;
+  /** A picture, read once in the cloud rather than on this computer. */
+  image?: boolean;
+  /** An image's thumbnail while it sits in the composer; never kept after send. */
+  previewUrl?: string;
 }
 
 export interface ChannelView {
@@ -112,6 +118,10 @@ interface Props {
   onGrant: (managerId: string, connector: string) => void;
   onOpenSource: (url: string) => void;
   onOpenResearch: (runId: string) => void;
+  /** A "not a swarm job" named a feature: go to its page. */
+  onOpenPath: (path: string) => void;
+  /** Resend a declined request as a hire, with the files it came with. */
+  onHireInstead: (text: string, docIds: string[]) => void;
   text: string;
   onText: (value: string) => void;
   onSubmit: () => void;
@@ -306,13 +316,20 @@ function DecisionMessage({
   freeAnswers,
   onFreeAnswer,
   onAnswer,
+  onOpenPath,
+  onHireInstead,
 }: {
   item: Extract<StreamItem, { kind: "decision" }>;
-} & Pick<Props, "roster" | "openDrafts" | "busy" | "freeAnswers" | "onFreeAnswer" | "onAnswer">) {
+} & Pick<Props, "roster" | "openDrafts" | "busy" | "freeAnswers" | "onFreeAnswer" | "onAnswer" | "onOpenPath" | "onHireInstead">) {
   const d = item.decision;
   const capability = CAPABILITY_LABEL[d.capability];
   const hired = d.decision === "new_manager" && d.applied ? findManager(roster, d.targetManagerId) : undefined;
   const asking = d.decision === "ask" && openDrafts.has(d.draftId);
+  const declined = d.decision === "not_swarm";
+  const feature = declined ? CAPABILITY_PATH[d.capability] : undefined;
+  // The classifier's first alternative is the ongoing version of what was declined.
+  const ongoing = declined && item.asked.text ? d.alternatives[0] : undefined;
+  const unusedDocs = declined ? item.asked.docs : [];
   return (
     <>
       <div className="db-swarm-msg-head">
@@ -330,6 +347,36 @@ function DecisionMessage({
         <p className="db-swarm-muted db-swarm-alt">Also considered: {d.alternatives.map((a) => a.why).join("; ")}</p>
       )}
       {hired && <HiredEmbed manager={hired} />}
+      {(feature || ongoing) && (
+        <div className="db-swarm-choice-row">
+          {feature && (
+            <button type="button" className="db-swarm-choice" onClick={() => onOpenPath(feature.path)}>
+              {feature.label}
+            </button>
+          )}
+          {ongoing && (
+            <button
+              type="button"
+              className="db-swarm-choice"
+              disabled={busy}
+              onClick={() =>
+                onHireInstead(
+                  `Hire a manager for this, as ongoing work: ${ongoing.why}\n\nMy original request: ${item.asked.text}`,
+                  item.asked.docs.map((doc) => doc.id),
+                )
+              }
+            >
+              Hire that instead
+            </button>
+          )}
+        </div>
+      )}
+      {unusedDocs.length > 0 && (
+        <p className="db-swarm-muted db-swarm-alt">
+          {unusedDocs.length === 1 ? "Your attached file was not used." : `Your ${unusedDocs.length} attached files were not used.`}
+          {ongoing ? " Hire that instead sends them again." : ""}
+        </p>
+      )}
       {asking && (
         <AskEmbed
           decision={d}
@@ -376,6 +423,25 @@ export function SwarmStream(props: Props) {
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
     if (!busy && !reading && text.trim() && !readOnly && text.length <= messageMax) props.onSubmit();
+  };
+
+  const canAttach = !readOnly && !busy && props.attachments.length < MAX_ATTACHMENTS;
+  const hasImage = props.attachments.some((a) => a.image);
+
+  // A copied screenshot or a file copied in Explorer arrives as clipboard files. Copying
+  // from Word puts a picture of the text next to the text itself, so text wins when both.
+  const onPaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    const files = Array.from(event.clipboardData.files);
+    if (!files.length || event.clipboardData.getData("text/plain").trim()) return;
+    event.preventDefault();
+    if (canAttach) props.onAttach(files);
+  };
+
+  const onDrop = (event: DragEvent<HTMLFormElement>) => {
+    const files = Array.from(event.dataTransfer.files);
+    if (!files.length) return;
+    event.preventDefault();
+    if (canAttach) props.onAttach(files);
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -556,6 +622,8 @@ export function SwarmStream(props: Props) {
                   freeAnswers={props.freeAnswers}
                   onFreeAnswer={(draftId, value) => live.current.onFreeAnswer(draftId, value)}
                   onAnswer={(draftId, label, managerId) => live.current.onAnswer(draftId, label, managerId)}
+                  onOpenPath={(path) => live.current.onOpenPath(path)}
+                  onHireInstead={(text, docIds) => live.current.onHireInstead(text, docIds)}
                 />
               )}
             </div>
@@ -631,7 +699,7 @@ export function SwarmStream(props: Props) {
         <div className="db-swarm-attachments" aria-label="Files for this message">
           {props.attachments.map((a) => (
             <span key={a.key} className={`db-swarm-file is-${a.status}`} title={a.error || a.name}>
-              <SheetGlyph size={15} />
+              {a.previewUrl ? <img className="db-swarm-file-thumb" src={a.previewUrl} alt="" /> : <SheetGlyph size={15} />}
               <span className="db-swarm-file-name">{a.name}</span>
               {a.status === "reading" && <span className="db-swarm-file-state">Reading</span>}
               {a.status === "failed" && <span className="db-swarm-file-state">{a.error}</span>}
@@ -642,13 +710,18 @@ export function SwarmStream(props: Props) {
           ))}
         </div>
       )}
-      <form className={`db-swarm-composer${readOnly ? " is-readonly" : ""}${busy ? " is-busy" : ""}`} onSubmit={submit}>
+      <form
+        className={`db-swarm-composer${readOnly ? " is-readonly" : ""}${busy ? " is-busy" : ""}`}
+        onSubmit={submit}
+        onDragOver={(event) => { if (!readOnly && event.dataTransfer.types.includes("Files")) event.preventDefault(); }}
+        onDrop={onDrop}
+      >
         {!readOnly && (
           <>
             <input
               ref={fileRef}
               type="file"
-              accept={DOCUMENT_ACCEPT}
+              accept={`${DOCUMENT_ACCEPT},${IMAGE_ACCEPT}`}
               multiple
               hidden
               onChange={(event) => {
@@ -660,10 +733,10 @@ export function SwarmStream(props: Props) {
             <button
               type="button"
               className="db-swarm-attach"
-              disabled={busy || props.attachments.length >= MAX_ATTACHMENTS}
+              disabled={!canAttach}
               onClick={() => fileRef.current?.click()}
-              aria-label="Attach a PDF, Word or text file"
-              title="Attach a PDF, Word or text file. Aura reads it on this computer and sends only the text."
+              aria-label="Attach a file or image"
+              title="Attach a PDF, Word, text file or image, or paste a screenshot. Files are read on this computer; images are read once in the cloud and not kept."
             >
               <Paperclip size={19} aria-hidden="true" />
             </button>
@@ -679,6 +752,7 @@ export function SwarmStream(props: Props) {
           disabled={readOnly}
           onChange={(event) => props.onText(event.target.value)}
           onKeyDown={onKeyDown}
+          onPaste={onPaste}
           placeholder={placeholder}
         />
         {!readOnly && text.length > messageMax - 400 && <span className="db-swarm-count">{messageMax - text.length}</span>}
@@ -689,13 +763,15 @@ export function SwarmStream(props: Props) {
       <p className="db-swarm-composer-hint">
         {readOnly
           ? "Activity is written by the swarm."
-          : view.kind === "manager"
-            ? props.attachments.length > 0
-              ? "Only the files' text leaves this computer."
-              : "Managers only read. Drafts are never sent."
-            : props.attachments.length > 0
-              ? "Only the files' text leaves this computer."
-              : "Aura sends this to the right manager."}
+          : hasImage
+            ? "Images are read once in the cloud and not kept. Only text reaches managers."
+            : view.kind === "manager"
+              ? props.attachments.length > 0
+                ? "Only the files' text leaves this computer."
+                : "Managers only read. Drafts are never sent."
+              : props.attachments.length > 0
+                ? "Only the files' text leaves this computer."
+                : "Aura sends this to the right manager."}
       </p>
     </section>
   );

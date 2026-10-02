@@ -22,6 +22,7 @@ import {
   SwarmRequestError,
   TERMINAL_SESSION_STATES,
   uploadSwarmDoc,
+  uploadSwarmImage,
   upsertRoutine,
   type SwarmDoc,
   type SwarmMessage,
@@ -35,6 +36,7 @@ import { useDashboardResource } from "../useDashboardResource";
 import { SwarmChannels } from "./swarm/SwarmChannels";
 import { SwarmRoster as SwarmRosterPanel } from "./swarm/SwarmRoster";
 import { DocumentExtractionError, extractDocument } from "../../lib/documentText";
+import { MAX_IMAGE_BYTES, prepareAttachment, resolveMimeType, SUPPORTED_IMAGE_MIME } from "../../lib/chatAttachments";
 import { MAX_ATTACHMENTS, SwarmStream, type ChannelView, type ComposerDoc } from "./swarm/SwarmStream";
 import { hasActionableDraft } from "./swarm/SwarmWork";
 import {
@@ -133,6 +135,17 @@ function clientId(): string {
   return crypto.randomUUID().replace(/-/g, "");
 }
 
+/** A pasted screenshot arrives as "image.png"; give it a name worth reading in the thread. */
+function imageName(file: File): string {
+  if (file.name && !/^image\.\w+$/i.test(file.name)) return file.name;
+  const now = new Date();
+  return `Pasted image ${now.getHours()}.${String(now.getMinutes()).padStart(2, "0")}`;
+}
+
+function revokePreviews(docs: ComposerDoc[]) {
+  for (const d of docs) if (d.previewUrl) URL.revokeObjectURL(d.previewUrl);
+}
+
 /** One line per cause, so a refusal says what actually went wrong. */
 function errorCopy(error: unknown, roster: SwarmRoster): string {
   if (error instanceof AuthRequiredError) return "Your session expired. Sign in again to use Swarm.";
@@ -203,7 +216,17 @@ function attachErrorCopy(error: unknown, roster: SwarmRoster): string {
       case "doc_empty":
         return "There's no text in it.";
       case "doc_kind_unsupported":
-        return "Only PDF, Word (.docx) and text files.";
+        return "Only PDF, Word (.docx), text files and images.";
+      case "image_too_large":
+        return "Image must be under 5 MB.";
+      case "image_kind_unsupported":
+        return "Only JPEG, PNG, WebP or GIF images.";
+      case "image_unreadable":
+        return "Aura couldn't make out this image. Try a clearer one.";
+      case "models_unset":
+        return "Images aren't set up on the server yet.";
+      case "timed_out":
+        return "Reading this image took too long. Try again.";
     }
     if (error.status === 404 && !error.reason) return "Documents aren't available on the server yet.";
   }
@@ -296,6 +319,10 @@ export function SwarmPage() {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<ComposerDoc[]>([]);
   const [docShelf, setDocShelf] = useState<Record<string, SwarmDoc>>({});
+  // Image thumbnails are object URLs that live only while their chip is in the composer.
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
+  useEffect(() => () => revokePreviews(attachmentsRef.current), []);
 
   // The shelf, once: a sent message's file chips show whether it is pinned or gone.
   useEffect(() => {
@@ -547,7 +574,7 @@ export function SwarmPage() {
     setChannel(next);
     setHireHint(false);
     // Files picked for one channel are never sent from another by accident.
-    if (next !== liveChannel) setAttachments([]);
+    if (next !== liveChannel) clearAttachments();
     saveChannel(next);
     setError("");
     setRosterOpen(false);
@@ -626,20 +653,50 @@ export function SwarmPage() {
     if (ok) {
       setText("");
       setHireHint(false);
-      setAttachments([]);
+      clearAttachments();
     }
   };
 
-  /** Each file is read here, then its text goes on the shelf; the chip says which step failed. */
+  const clearAttachments = () => {
+    revokePreviews(attachmentsRef.current);
+    setAttachments([]);
+  };
+
+  const removeAttachment = (key: string) => {
+    revokePreviews(attachmentsRef.current.filter((a) => a.key === key));
+    setAttachments((prev) => prev.filter((a) => a.key !== key));
+  };
+
+  /** Each file is read here, then its text goes on the shelf; the chip says which step failed.
+   * An image is shrunk here and read once by the server instead, since there is no text in it. */
   const attach = (files: File[]) => {
     const room = MAX_ATTACHMENTS - attachments.length;
     for (const file of files.slice(0, Math.max(0, room))) {
       const key = clientId();
-      setAttachments((prev) => [...prev, { key, name: file.name, status: "reading", docId: "", error: "" }]);
+      const image = SUPPORTED_IMAGE_MIME.has(resolveMimeType(file));
+      const name = image ? imageName(file) : file.name;
+      setAttachments((prev) => [...prev, { key, name, status: "reading", docId: "", error: "", image }]);
       const settle = (patch: Partial<ComposerDoc>) =>
         setAttachments((prev) => prev.map((a) => (a.key === key ? { ...a, ...patch } : a)));
       void (async () => {
         try {
+          if (image) {
+            if (file.size > MAX_IMAGE_BYTES) {
+              settle({ status: "failed", error: "Image must be under 5 MB." });
+              return;
+            }
+            const prepared = await prepareAttachment(file);
+            // Removed while it was shrinking: nothing will ever revoke this preview but us.
+            if (!attachmentsRef.current.some((a) => a.key === key)) {
+              if (prepared.previewUrl) URL.revokeObjectURL(prepared.previewUrl);
+              return;
+            }
+            settle({ previewUrl: prepared.previewUrl });
+            const doc = await uploadSwarmImage({ clientDocId: key, name, mediaType: prepared.mimeType, data: prepared.data });
+            setDocShelf((prev) => ({ ...prev, [doc.id]: doc }));
+            settle({ status: "ready", docId: doc.id, error: "" });
+            return;
+          }
           const extracted = await extractDocument(file);
           const doc = await uploadSwarmDoc({
             clientDocId: key,
@@ -822,6 +879,8 @@ export function SwarmPage() {
           onGrant={(managerId, connector) => toggleGrant(managerId, connector, true)}
           onOpenSource={(url) => void openUrl(url)}
           onOpenResearch={(runId) => navigate(`/agents?tab=research&run=${encodeURIComponent(runId)}`)}
+          onOpenPath={(path) => navigate(path)}
+          onHireInstead={(hireText, docIds) => void route({ text: hireText, docIds })}
           text={text}
           onText={setText}
           onSubmit={() => void submit()}
@@ -834,7 +893,7 @@ export function SwarmPage() {
           hireHint={hireHint}
           attachments={attachments}
           onAttach={attach}
-          onRemoveAttachment={(key) => setAttachments((prev) => prev.filter((a) => a.key !== key))}
+          onRemoveAttachment={removeAttachment}
           docShelf={docShelf}
           onPinDoc={(docId, managerId, pinned) => void pinDoc(docId, managerId, pinned)}
           youName={youName}

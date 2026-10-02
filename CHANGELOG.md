@@ -17,6 +17,7 @@ was started and read like commit subjects rather than release notes.
 ## [Unreleased]
 
 ### Added
+- When Aura decides a #group request is not Swarm work, she now says what to do instead: what the built-in feature does for that request and how to start it, with a button that opens it, and a **Hire that instead** button when an ongoing version would fit, which resends your message and its files as a hire. Files attached to a declined request are called out as unused instead of silently dropped.
 - A **Swarm** tab on the Agents page, laid out like a chat app: describe ongoing work in #group and Aura hires a manager for it, gives that manager a team, and brings in a Supervisor once you have two. Your team now lives in your account, not on this computer.
 - Swarm managers do real work. Message one in its DM (or let #group route to it) and it plans, searches the web, reads pages and the accounts you granted it, then posts a report where every finding cites its source. You can watch each step as it happens and press Stop at any time; a stopped or budget-limited run still reports what it found.
 - Per-manager **Can read** switches for Gmail, Google Calendar, Classroom, GitHub, X bookmarks and Notion, all off until you turn one on. Managers only ever read: anything they write for you to send is shown as a draft and never sent.
@@ -25,16 +26,20 @@ was started and read like commit subjects rather than release notes.
 - Ask **#group** something that spans your work and up to three managers work on it at once; the Supervisor then posts one combined answer in #group, with a link to each manager's full report and one notification instead of several.
 - A Swarm draft meant for **X**, **LinkedIn** or **your calendar** now has a **Review** button: edit it, see exactly what will be posted or booked, and press **Approve** to do it once. Calendar holds go on your own calendar with no invitees, and Aura refuses to post publicly from a run that read your private accounts.
 - Attach a **PDF, Word (.docx) or text file** to any Swarm message. Aura reads it on your computer and sends only its text, and the manager the message goes to can then read it, find things in it and quote it in its report. **Pin** a file in a manager's DM and it reads that file on every run, routines included. Unpinned files are cleared after 30 days.
+- Paste a screenshot into any Swarm message (Ctrl+V on Windows, ⌘V on a Mac), drop an image onto the message box, or attach one with the paperclip. Aura reads it once and keeps only a description and the text in it, so the manager can quote what the picture shows. The image itself is never stored.
 - Ask a manager for a document (a tailored resume, a cover letter, a plan, a fixed-up version of a file you attached) and its report carries it ready to edit, with **Save as Word**, **Save as PDF** and **Save as Text**. Files land in Downloads, in an Aura Documents folder, and never overwrite anything, including the file you attached.
 - A one-time button brings a Swarm sandbox team from an earlier build into your account.
 
 ### Changed
+- Insights' time filter is now a dropdown with 7 days, 30 days, 90 days and All time.
+- Page titles and the top bar are gone, so every page starts at the top. Your profile now sits beside the sidebar button, notifications sit beside the window buttons, and light or dark mode is in Settings > System > Appearance.
 - The Swarm tab now shows who you're talking to and their role, lists every manager with its title, shows when a Supervisor will join, and has a **New manager** button. It now matches the rest of the app's theme, with one accent colour instead of a colour per manager. The Reset button, which wiped your whole Swarm in two clicks, is gone.
 - Swarm's send buttons now use the same paper plane icon as the chat window.
 - Dark mode is now matte black: a pure black window with flat near-black panels, without the glossy gradients, highlights, shine sweeps and drop shadows.
 - Opening Agents from the sidebar now folds the sidebar away, giving Swarm the full width. The Swarm tab also says less: shorter starter cards, labels and hints, at the same text size. The Managers status box now only appears while managers are working or something needs attention.
 
 ### Fixed
+- **Manage billing** no longer shows for a plan that wasn't bought through checkout, which has nothing to manage. A short note explains why instead. When billing does fail to open, it now says why rather than asking you to try again.
 - A Swarm report now says why it stopped short (an account not connected, nothing new found, budget used up) instead of just "Partial report", and a run that only hit its own safety rules no longer counts as partial.
 - Interview company research that runs out of room now says the dossier came out too long, instead of claiming the research service was not responding.
 - Signing into a different account no longer deletes your dictation history. Each account's dictations and recordings stay on this computer, visible only to that account, until they reach the 90-day limit.
