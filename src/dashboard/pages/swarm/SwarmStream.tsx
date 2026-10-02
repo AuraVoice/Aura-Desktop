@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
-import type { SwarmDecision, SwarmManager, SwarmRoster, SwarmSessionView } from "../../../lib/swarmApi";
+import type { SwarmDecision, SwarmManager, SwarmRoster, SwarmRoundView, SwarmSessionView } from "../../../lib/swarmApi";
 import { SwarmAvatar } from "./SwarmAvatar";
 import {
   AscentGlyph,
@@ -20,15 +20,17 @@ import {
   TeamGlyph,
   WatchGlyph,
 } from "./SwarmGlyphs";
-import { PlanEmbed, QuestionEmbed, ReportEmbed, StepRow, WorkingEmbed } from "./SwarmWork";
+import { PlanEmbed, QuestionEmbed, ReportEmbed, RoundEmbed, RoundReplyEmbed, StepRow, WorkingEmbed } from "./SwarmWork";
 import {
   CAPABILITY_LABEL,
   DECISION_LABEL,
   dayLabel,
   findManager,
   hueOf,
+  managerChannel,
   timeLabel,
   type Author,
+  type ChannelId,
   type StreamItem,
 } from "./swarmThread";
 
@@ -84,6 +86,9 @@ interface Props {
   sessions: Record<string, SwarmSessionView>;
   stopping: ReadonlySet<string>;
   onStop: (sessionId: string) => void;
+  rounds: Record<string, SwarmRoundView>;
+  onStopRound: (roundId: string) => void;
+  onOpenChannel: (channel: ChannelId) => void;
   onAnswerSession: (sessionId: string, text: string) => void;
   grants: Record<string, string[]>;
   onGrant: (managerId: string, connector: string) => void;
@@ -500,6 +505,22 @@ export function SwarmStream(props: Props) {
                                 onGrant={props.onGrant}
                                 onOpenSource={props.onOpenSource}
                                 onOpenResearch={props.onOpenResearch}
+                              />
+                            )}
+                            {item.kind === "round" && (
+                              <RoundEmbed
+                                message={item.message}
+                                round={props.rounds[item.roundId]}
+                                sessions={props.sessions}
+                                stopping={props.stopping.has(item.roundId)}
+                                onStop={() => props.onStopRound(item.roundId)}
+                                onOpen={(managerId) => props.onOpenChannel(managerChannel(managerId))}
+                              />
+                            )}
+                            {item.kind === "roundReply" && (
+                              <RoundReplyEmbed
+                                message={item.message}
+                                onOpen={(managerId) => props.onOpenChannel(managerChannel(managerId))}
                               />
                             )}
                           </>

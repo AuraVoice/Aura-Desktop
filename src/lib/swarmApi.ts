@@ -124,6 +124,29 @@ export interface SwarmRouteResult {
   usage: SwarmUsage[];
   /** Sessions a route decision started, or why it could not (refused). */
   sessions: { managerId: string; sessionId: string; refused: string }[];
+  /** Set when the message fanned out to several managers at once (a #group round). */
+  round: SwarmRoundView | null;
+}
+
+/** One manager's place in a #group round. `state` is running, ended or skipped; `endState`
+ * is that session's own end (done, partial, failed, cancelled), `reason` why it was skipped. */
+export interface SwarmRoundMember {
+  managerId: string;
+  title: string;
+  sessionId: string;
+  state: string;
+  endState: string;
+  stopReason: string;
+  reason: string;
+}
+
+/** A #group message fanned out to several managers; the Supervisor answers once when every
+ * member has ended. `state` runs starting, open, ready, merging, done. */
+export interface SwarmRoundView {
+  roundId: string;
+  state: string;
+  stateRevision: number;
+  members: SwarmRoundMember[];
 }
 
 export interface SwarmMessageRequest {
@@ -213,6 +236,8 @@ export interface SwarmSessionView {
   decisionsUsed: number;
   maxDecisions: number;
   sources: number;
+  /** The #group round this session answers for, or empty. */
+  roundId: string;
 }
 
 export const TERMINAL_SESSION_STATES: ReadonlySet<string> = new Set(["done", "partial", "failed", "cancelled"]);
@@ -427,6 +452,28 @@ function mapSession(raw: Json): SwarmSessionView {
     decisionsUsed: num(raw.decisions_used),
     maxDecisions: num(raw.max_decisions) || 12,
     sources: num(raw.sources),
+    roundId: str(raw.round_id),
+  };
+}
+
+export function mapRoundMember(raw: Json): SwarmRoundMember {
+  return {
+    managerId: str(raw.manager_id),
+    title: str(raw.title),
+    sessionId: str(raw.session_id),
+    state: str(raw.state),
+    endState: str(raw.end_state),
+    stopReason: str(raw.stop_reason),
+    reason: str(raw.reason),
+  };
+}
+
+function mapRound(raw: Json): SwarmRoundView {
+  return {
+    roundId: str(raw.round_id),
+    state: str(raw.state),
+    stateRevision: num(raw.state_revision),
+    members: list(raw.members).map(mapRoundMember),
   };
 }
 
@@ -484,6 +531,7 @@ export async function sendSwarmMessage(req: SwarmMessageRequest): Promise<SwarmR
     events: strings(body.events),
     usage: list(body.usage).map(mapUsage),
     sessions: list(body.sessions).map((s) => ({ managerId: str(s.manager_id), sessionId: str(s.session_id), refused: str(s.refused) })),
+    round: body.round && typeof body.round === "object" ? mapRound(obj(body.round)) : null,
   };
 }
 
@@ -509,6 +557,18 @@ export async function getSession(sessionId: string, rev?: number, signal?: Abort
 
 export async function cancelSession(sessionId: string): Promise<SwarmSessionView> {
   return mapSession(await call(`/swarm/sessions/${encodeURIComponent(sessionId)}/cancel`, { method: "POST" }));
+}
+
+/** `null` means unchanged since `rev`. */
+export async function getRound(roundId: string, rev?: number, signal?: AbortSignal): Promise<SwarmRoundView | null> {
+  const query = rev === undefined ? "" : `?rev=${rev}`;
+  const body = await call(`/swarm/rounds/${encodeURIComponent(roundId)}${query}`, { signal });
+  return body.unchanged === true ? null : mapRound(body);
+}
+
+/** Stop every manager still working on a round; each ends with what it had found. */
+export async function cancelRound(roundId: string): Promise<SwarmRoundView> {
+  return mapRound(await call(`/swarm/rounds/${encodeURIComponent(roundId)}/cancel`, { method: "POST" }));
 }
 
 export async function answerSession(sessionId: string, text: string): Promise<SwarmSessionView> {

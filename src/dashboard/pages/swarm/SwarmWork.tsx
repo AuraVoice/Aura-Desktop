@@ -1,11 +1,12 @@
 import { useEffect, useState, type ReactNode } from "react";
-import type { SwarmMessage, SwarmSessionView } from "../../../lib/swarmApi";
-import { TERMINAL_SESSION_STATES } from "../../../lib/swarmApi";
+import type { SwarmMessage, SwarmRoundMember, SwarmRoundView, SwarmSessionView } from "../../../lib/swarmApi";
+import { mapRoundMember, TERMINAL_SESSION_STATES } from "../../../lib/swarmApi";
 import {
   BlockGlyph,
   BranchGlyph,
   CellGlyph,
   CourseGlyph,
+  CrownGlyph,
   DartGlyph,
   DayGlyph,
   DeepGlyph,
@@ -17,6 +18,7 @@ import {
   SeekGlyph,
   SignalGlyph,
   SparkGlyph,
+  TeamGlyph,
 } from "./SwarmGlyphs";
 
 /** Everything a manager's session shows in its DM: the live chip, the plan, one row per
@@ -406,6 +408,130 @@ export function ReportEmbed({
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/** Why a manager could not join a #group round (rounds.py _SKIP_COPY codes). */
+const ROUND_SKIP_COPY: Record<string, string> = {
+  manager_busy: "busy with something else",
+  too_many_live: "too many already running",
+  manager_paused: "paused",
+  manager_not_found: "no longer exists",
+  wallet_exhausted: "budget used up today",
+  models_unset: "Swarm is not set up yet",
+  model_unpriced: "Swarm is not set up yet",
+  model_unsupported: "Swarm is not set up yet",
+};
+
+const END_COPY: Record<string, string> = {
+  done: "done",
+  partial: "stopped short",
+  failed: "could not finish",
+  cancelled: "stopped",
+};
+
+function roundMembers(message: SwarmMessage, round: SwarmRoundView | undefined): SwarmRoundMember[] {
+  return round?.members.length ? round.members : list(message.data.members).map(mapRoundMember);
+}
+
+/** The Supervisor's "asked these managers" card in #group. Each member's state is live from
+ * its polled session; Stop ends every one still working. The answer arrives as its own
+ * round_reply message once they have all finished. */
+export function RoundEmbed({
+  message,
+  round,
+  sessions,
+  stopping,
+  onStop,
+  onOpen,
+}: {
+  message: SwarmMessage;
+  round: SwarmRoundView | undefined;
+  sessions: Record<string, SwarmSessionView>;
+  stopping: boolean;
+  onStop: () => void;
+  onOpen: (managerId: string) => void;
+}) {
+  const members = roundMembers(message, round);
+  const ended = (m: SwarmRoundMember) => {
+    const s = sessions[m.sessionId];
+    return m.state !== "running" || (s !== undefined && TERMINAL_SESSION_STATES.has(s.state));
+  };
+  const running = members.filter((m) => !ended(m));
+  const done = round?.state === "done";
+  const label = (m: SwarmRoundMember): string => {
+    if (m.state === "skipped") return ROUND_SKIP_COPY[m.reason] ?? "could not start";
+    const s = sessions[m.sessionId];
+    if (s && !TERMINAL_SESSION_STATES.has(s.state)) return PHASE_COPY[s.state] ?? "Working";
+    return END_COPY[s?.state ?? m.endState] ?? (m.state === "running" ? "Starting" : "done");
+  };
+  return (
+    <div className={`db-swarm-embed is-work${stopping ? " is-stopping" : ""}`} aria-live="polite">
+      <div className="db-swarm-embed-kicker">
+        {running.length > 0 ? <span className="db-swarm-work-dots" aria-hidden="true"><i /><i /><i /></span> : <TeamGlyph size={15} />}
+        {done ? "Team round" : running.length > 0 ? (stopping ? "Stopping after this step" : `${running.length} working`) : "Writing the answer"}
+      </div>
+      {message.text && <p className="db-swarm-muted">{message.text}</p>}
+      <ul className="db-swarm-lanes">
+        {members.map((m) => (
+          <li key={m.managerId} className={m.state === "skipped" ? "is-failed" : ended(m) ? "is-done" : "is-leased"}>
+            <CellGlyph size={14} />
+            <span>
+              <button type="button" className="db-swarm-src is-static" onClick={() => onOpen(m.managerId)} title={`Open ${m.title}'s DM`}>
+                {m.title}
+              </button>
+            </span>
+            <em>{label(m)}</em>
+          </li>
+        ))}
+      </ul>
+      {running.length > 0 && (
+        <div className="db-swarm-work-foot">
+          <span className="db-swarm-muted">The answer lands here when they finish.</span>
+          <button type="button" className="db-swarm-pill-btn is-stop" onClick={onStop} disabled={stopping}>
+            <HaltGlyph size={14} /> Stop all
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The Supervisor's one combined answer to a round: the reply, what needs the user, and a
+ * line per manager that opens its DM for the full report. A plain summary (no Supervisor
+ * model set, or the model failed) is labelled as such rather than passed off as written. */
+export function RoundReplyEmbed({ message, onOpen }: { message: SwarmMessage; onOpen: (managerId: string) => void }) {
+  const members = list(message.data.members);
+  const needs = strings(message.data.needs_you);
+  const reply = str(message.data.reply) || message.text;
+  const short = members.some((m) => str(m.state) === "skipped" || str(m.end_state) !== "done");
+  return (
+    <div className={`db-swarm-embed is-report is-${short ? "partial" : "done"}`}>
+      <div className="db-swarm-embed-kicker">
+        <CrownGlyph size={15} /> Team answer
+        {message.data.fallback === true && <span className="db-swarm-tag">Plain summary</span>}
+      </div>
+      <p className="db-swarm-report-summary">{reply}</p>
+      {needs.length > 0 && (
+        <div className="db-swarm-gaps">
+          <span className="db-swarm-gaps-label">Needs you</span>
+          {needs.map((n, i) => <p key={i} className="db-swarm-note">{n}</p>)}
+        </div>
+      )}
+      <ul className="db-swarm-lanes">
+        {members.map((m) => (
+          <li key={str(m.manager_id)} className={str(m.state) === "skipped" ? "is-failed" : str(m.end_state) === "done" ? "" : "is-failed"}>
+            <CellGlyph size={14} />
+            <span><b>{str(m.title)}:</b> {str(m.line)}</span>
+            {str(m.state) !== "skipped" && (
+              <button type="button" className="db-swarm-pill-btn" onClick={() => onOpen(str(m.manager_id))}>
+                Open report
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }

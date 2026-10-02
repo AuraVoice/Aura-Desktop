@@ -60,7 +60,9 @@ export type StreamItem =
   | { key: string; kind: "plan"; message: SwarmMessage; author: Author; at: number }
   | { key: string; kind: "step"; message: SwarmMessage; author: Author; at: number }
   | { key: string; kind: "question"; message: SwarmMessage; author: Author; at: number }
-  | { key: string; kind: "report"; message: SwarmMessage; author: Author; at: number };
+  | { key: string; kind: "report"; message: SwarmMessage; author: Author; at: number }
+  | { key: string; kind: "round"; roundId: string; message: SwarmMessage; author: Author; at: number }
+  | { key: string; kind: "roundReply"; message: SwarmMessage; author: Author; at: number };
 
 export function hueOf(id: string): number {
   let hash = 0;
@@ -156,6 +158,12 @@ export function channelItems(messages: SwarmMessage[], roster: SwarmRoster): Str
         break;
       case "report":
         items.push({ key, kind: "report", message: m, author: speaker, at: m.at });
+        break;
+      case "round_started":
+        items.push({ key, kind: "round", roundId: typeof m.data.round_id === "string" ? m.data.round_id : "", message: m, author: backer, at: m.at });
+        break;
+      case "round_reply":
+        items.push({ key, kind: "roundReply", message: m, author: backer, at: m.at });
         break;
       default:
         if (m.text) items.push({ key, kind: "say", text: m.text, author: speaker, at: m.at });

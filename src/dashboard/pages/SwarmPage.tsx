@@ -4,8 +4,10 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { AuthRequiredError, TimeoutError } from "../../lib/api";
 import {
   answerSession,
+  cancelRound,
   cancelSession,
   deleteRoutine,
+  getRound,
   getSession,
   getSwarmState,
   importSandbox,
@@ -20,6 +22,7 @@ import {
   upsertRoutine,
   type SwarmMessage,
   type SwarmRoster,
+  type SwarmRoundView,
   type SwarmRoutineInput,
   type SwarmSessionView,
   type SwarmState,
@@ -260,6 +263,7 @@ export function SwarmPage() {
   });
   const [messages, setMessages] = useState<Record<string, SwarmMessage[]>>({});
   const [sessions, setSessions] = useState<Record<string, SwarmSessionView>>({});
+  const [rounds, setRounds] = useState<Record<string, SwarmRoundView>>({});
   const [watched, setWatched] = useState<ReadonlySet<string>>(() => new Set());
   const [stopping, setStopping] = useState<ReadonlySet<string>>(() => new Set());
   const [text, setText] = useState("");
@@ -389,6 +393,55 @@ export function SwarmPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [liveIds.join(","), pollError, pull, reloadState]);
 
+  // #group rounds: the Supervisor's answer lands in #group after the last member ends, a
+  // write nothing else re-fetches #group for. Poll each unfinished round this tab knows of
+  // (from the send, a member's session view, or a round_started card) and pull #group once
+  // it is done.
+  const groupRoundIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const m of messages.group ?? []) {
+      if (m.kind === "round_started" && typeof m.data.round_id === "string") ids.add(m.data.round_id);
+    }
+    return ids;
+  }, [messages.group]);
+  const liveRoundIds = useMemo(() => {
+    const ids = new Set<string>(groupRoundIds);
+    for (const id of Object.keys(rounds)) ids.add(id);
+    for (const view of Object.values(sessions)) if (view.roundId) ids.add(view.roundId);
+    for (const [id, view] of Object.entries(rounds)) if (view.state === "done") ids.delete(id);
+    return [...ids].filter(Boolean);
+  }, [groupRoundIds, rounds, sessions]);
+  useEffect(() => {
+    if (liveRoundIds.length === 0) return;
+    const tick = async () => {
+      if (document.visibilityState !== "visible" || !navigator.onLine) return;
+      let finished = false;
+      for (const id of liveRoundIds) {
+        try {
+          const view = await getRound(id, rounds[id]?.stateRevision);
+          if (!view) continue;
+          setRounds((prev) => ({ ...prev, [id]: view }));
+          if (view.state === "done") finished = true;
+        } catch (err) {
+          // A round that no longer exists (reset, another account) stops being asked about;
+          // anything else is a blip the next tick retries.
+          if (err instanceof SwarmRequestError && err.status === 404) {
+            setRounds((prev) => ({ ...prev, [id]: { roundId: id, state: "done", stateRevision: 0, members: [] } }));
+          }
+        }
+      }
+      if (finished) {
+        await pull("group", true);
+        reloadState();
+      }
+    };
+    const timer = window.setInterval(() => void tick(), POLL_MS);
+    void tick();
+    return () => window.clearInterval(timer);
+    // `rounds` is read for the rev only, as with sessions above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [liveRoundIds.join(","), pull, reloadState]);
+
   const items = useMemo(() => channelItems(messages[liveChannel] ?? [], roster), [messages, liveChannel, roster]);
 
   // A finished session's working message still wants its final state once.
@@ -437,7 +490,12 @@ export function SwarmPage() {
       const result = await sendSwarmMessage({ clientMessageId: clientId(), ...req });
       afterRoster(roster, result.roster);
       result.sessions.forEach((s) => watch(s.sessionId));
-      const refused = result.sessions.find((s) => s.refused);
+      if (result.round) {
+        const round = result.round;
+        setRounds((prev) => ({ ...prev, [round.roundId]: round }));
+      }
+      // A round shows each skipped manager on its own card; a banner would repeat it.
+      const refused = result.round ? undefined : result.sessions.find((s) => s.refused);
       if (refused) setError(errorCopy(new SwarmRequestError(409, refused.refused), roster));
       reloadState();
       await Promise.all([pull("group", true), pull("activity", true)]);
@@ -485,6 +543,17 @@ export function SwarmPage() {
       setSessions((prev) => ({ ...prev, [sessionId]: viewNow }));
       await pull(managerChannel(viewNow.managerId), true);
       if (TERMINAL_SESSION_STATES.has(viewNow.state)) reloadState();
+    } catch (err) {
+      setError(errorCopy(err, roster));
+    }
+  };
+
+  const stopRound = async (roundId: string) => {
+    setStopping((prev) => new Set([...prev, roundId]));
+    try {
+      const viewNow = await cancelRound(roundId);
+      setRounds((prev) => ({ ...prev, [roundId]: viewNow }));
+      viewNow.members.forEach((m) => watch(m.sessionId));
     } catch (err) {
       setError(errorCopy(err, roster));
     }
@@ -626,6 +695,9 @@ export function SwarmPage() {
           sessions={sessions}
           stopping={stopping}
           onStop={(id) => void stop(id)}
+          rounds={rounds}
+          onStopRound={(id) => void stopRound(id)}
+          onOpenChannel={select}
           onAnswerSession={(id, value) => void answerManager(id, value)}
           grants={state.grants}
           onGrant={(managerId, connector) => toggleGrant(managerId, connector, true)}
