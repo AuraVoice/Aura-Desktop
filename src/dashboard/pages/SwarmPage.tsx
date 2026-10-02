@@ -245,7 +245,7 @@ function useFreshSet(): [ReadonlySet<string>, (ids: string[]) => void] {
 }
 
 function channelView(channel: ChannelId, roster: SwarmRoster): ChannelView {
-  if (channel === "activity") return { kind: "activity", name: "activity", topic: "Every hire, handover, routine and skip. Read only." };
+  if (channel === "activity") return { kind: "activity", name: "activity", topic: "Read only" };
   const manager = roster.managers.find((m) => m.id === managerIdOfChannel(channel));
   if (manager) {
     return {
@@ -260,13 +260,7 @@ function channelView(channel: ChannelId, roster: SwarmRoster): ChannelView {
   return {
     kind: "group",
     name: groupChannelName(roster),
-    topic: `Talking to ${backer.name} · ${roleLabel(backer, roster)}. ${
-      supervisorActive(roster)
-        ? "It routes every message here to the manager that owns it."
-        : backer.role === "manager"
-          ? "It answers here until a second manager joins, then a Supervisor takes over."
-          : "Describe something ongoing and Aura decides who should own it."
-    }`,
+    topic: `${backer.name} · ${roleLabel(backer, roster)}`,
   };
 }
 
@@ -771,7 +765,7 @@ export function SwarmPage() {
     ? { text: "Can't reach Swarm", warn: true }
     : state.runtimeProblem
     ? { text: state.runtimeProblem === "wallet_exhausted" ? "Budget used up today" : "Not set up yet", warn: true }
-    : { text: working.size > 0 ? `${working.size} working` : "Ready", warn: false };
+    : { text: working.size > 0 ? `${working.size} working` : "", warn: false };
   const showImport = legacy !== null && resource.data !== null;
   const banner = showImport ? (
           <div className="db-swarm-import" role="status">

@@ -109,9 +109,9 @@ export function roleLabel(author: Author, roster: SwarmRoster): string {
 /** What the front door's current owner does there, for the point-of-contact block. */
 export function contactDuty(roster: SwarmRoster): string {
   const backer = frontDoorAuthor(roster);
-  if (backer.role === "supervisor") return "Routes #group to your managers";
-  if (backer.role === "manager") return "Answers #front-door until a second manager joins";
-  return "Hires a manager for each ongoing job";
+  if (backer.role === "supervisor") return "Routes to your managers";
+  if (backer.role === "manager") return "Answers until 2 managers";
+  return "Hires your managers";
 }
 
 export function groupChannelName(roster: SwarmRoster): string {

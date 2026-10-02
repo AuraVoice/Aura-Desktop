@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import type { SwarmDecision, SwarmDoc, SwarmManager, SwarmRoster, SwarmRoundView, SwarmSessionView } from "../../../lib/swarmApi";
 import { DOCUMENT_ACCEPT } from "../../../lib/documentText";
-import { Paperclip } from "lucide-react";
+import { Paperclip, Send } from "lucide-react";
 import { SwarmAvatar } from "./SwarmAvatar";
 import {
   AscentGlyph,
@@ -10,7 +10,6 @@ import {
   CellGlyph,
   CrownGlyph,
   CycleGlyph,
-  DartGlyph,
   HopGlyph,
   LatticeGlyph,
   PulseGlyph,
@@ -51,16 +50,19 @@ const STARTERS = [
   {
     Icon: AscentGlyph,
     title: "Land a job",
+    blurb: "Find roles, tailor resumes, track applications.",
     text: "I'm looking for a full-time job: find roles every day, tailor my resume to each one, draft outreach and track every application.",
   },
   {
     Icon: BuildGlyph,
     title: "Ship my side project",
+    blurb: "Weekly plan, GitHub issues, release notes.",
     text: "I'm building an app on my own: keep a weekly plan, watch my GitHub issues, draft release notes and remind me what is blocking launch.",
   },
   {
     Icon: StudyGlyph,
     title: "Ace this semester",
+    blurb: "Deadlines, study plans, quizzes.",
     text: "I'm a student this semester: track every deadline from Google Classroom, build study plans before exams and quiz me on weak topics.",
   },
 ];
@@ -225,7 +227,7 @@ function AskEmbed({
           aria-label="Your answer"
         />
         <button type="submit" className="db-swarm-send is-small" disabled={busy || !freeAnswer.trim()} aria-label="Send answer">
-          <DartGlyph size={16} />
+          <Send size={16} aria-hidden="true" />
         </button>
       </form>
     </div>
@@ -282,13 +284,13 @@ function GroupHero({ onStarter }: { onStarter: (text: string) => void }) {
         <i className="db-swarm-hero-sat is-c" />
       </div>
       <h2>Build your swarm</h2>
-      <p>Tell Aura about something ongoing. It hires a manager for it, gives that manager a team, and brings in a Supervisor once you have two.</p>
+      <p>Tell Aura about something ongoing and it hires a manager to own it.</p>
       <div className="db-swarm-starters">
-        {STARTERS.map(({ Icon, title, text }, i) => (
+        {STARTERS.map(({ Icon, title, blurb, text }, i) => (
           <button key={title} type="button" className="db-swarm-starter" style={{ animationDelay: `${120 + i * 70}ms` }} onClick={() => onStarter(text)}>
             <Icon size={22} />
             <strong>{title}</strong>
-            <span>{text}</span>
+            <span>{blurb}</span>
           </button>
         ))}
       </div>
@@ -568,7 +570,7 @@ export function SwarmStream(props: Props) {
     : view.kind === "manager"
       ? `Message ${view.name}`
       : props.hireHint
-        ? "Describe an ongoing job for a new manager, e.g. track my job applications every week"
+        ? "Describe an ongoing job"
         : `Message #${view.name}`;
   const showHero = view.kind === "group" && items.length === 0 && !busyHere;
 
@@ -596,7 +598,7 @@ export function SwarmStream(props: Props) {
       </header>
 
       {props.banner}
-      <div className="db-swarm-scroll" ref={scrollRef}>
+      <div className={`db-swarm-scroll${showHero ? " is-hero" : ""}`} ref={scrollRef}>
         <div key={view.kind === "manager" ? `m-${view.manager?.id}` : view.kind} className="db-swarm-channel-pane">
           {showHero ? (
             <GroupHero onStarter={(starter) => { props.onText(starter); composerRef.current?.focus(); }} />
@@ -681,7 +683,7 @@ export function SwarmStream(props: Props) {
         />
         {!readOnly && text.length > messageMax - 400 && <span className="db-swarm-count">{messageMax - text.length}</span>}
         <button type="submit" className="db-swarm-send" disabled={readOnly || busy || reading || !text.trim() || text.length > messageMax} aria-label="Send">
-          <DartGlyph size={19} />
+          <Send size={19} aria-hidden="true" />
         </button>
       </form>
       <p className="db-swarm-composer-hint">
@@ -689,12 +691,11 @@ export function SwarmStream(props: Props) {
           ? "Activity is written by the swarm."
           : view.kind === "manager"
             ? props.attachments.length > 0
-              ? "The manager reads these files with your brief. Only their text leaves this computer."
-              : "This becomes the manager's brief. It only reads; drafts are never sent."
+              ? "Only the files' text leaves this computer."
+              : "Managers only read. Drafts are never sent."
             : props.attachments.length > 0
-              ? "Only the manager this goes to gets the files. Only their text leaves this computer."
-              : "Aura routes this to the manager that owns it, and that manager starts on it."}
-        <span> Enter to send, Shift+Enter for a new line.</span>
+              ? "Only the files' text leaves this computer."
+              : "Aura sends this to the right manager."}
       </p>
     </section>
   );

@@ -72,7 +72,7 @@ export const dashboardPages: Record<string, ReactElement> = {
   "/help": <HelpPage />,
 };
 
-export function DashboardShell({ user, collapsed }: { user: User | null; collapsed: boolean }) {
+export function DashboardShell({ user, collapsed, onCollapse }: { user: User | null; collapsed: boolean; onCollapse?: () => void }) {
   const generalSettings = useGeneralSettings();
   const updateReady = useUpdateReady();
   const location = useLocation();
@@ -113,7 +113,8 @@ export function DashboardShell({ user, collapsed }: { user: User | null; collaps
       generalSettings.reduceMotion ? " db-reduce-motion" : ""
     }`}>
       <DashboardRouteListener />
-      <Sidebar collapsed={collapsed} />
+      {/* Agents needs the width for its three-pane Swarm, so opening it folds the sidebar. */}
+      <Sidebar collapsed={collapsed} onNavigate={(to) => { if (to === "/agents") onCollapse?.(); }} />
       <div className="db-main">
         <TopBar
           title={location.pathname === "/insights" ? "" : title}
@@ -274,7 +275,7 @@ export function DashboardApp() {
           <ErrorBoundary>
             {showApp ? (
               <HashRouter>
-                <DashboardShell user={user} collapsed={collapsed} />
+                <DashboardShell user={user} collapsed={collapsed} onCollapse={() => setCollapsed(true)} />
               </HashRouter>
             ) : (
               <DashboardOnboarding

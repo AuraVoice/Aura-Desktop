@@ -8986,6 +8986,9 @@
 }
 .db-app .db-swarm-scroll::-webkit-scrollbar { display: block; width: 8px; height: 8px; }
 .db-app .db-swarm-scroll::-webkit-scrollbar-thumb { background: var(--sw-scroll-thumb); border-radius: 8px; }
+/* The empty welcome screen shows no scrollbar; a short window still scrolls it by wheel. */
+.db-swarm-scroll.is-hero { scrollbar-width: none; }
+.db-app .db-swarm-scroll.is-hero::-webkit-scrollbar { display: none; }
 .db-swarm-channel-pane {
   min-height: 100%;
   display: flex;
@@ -9410,7 +9413,7 @@
   gap: 8px;
   margin: 0 16px;
   padding: 7px;
-  border-radius: 16px;
+  border-radius: 24px;
   border: 1px solid var(--sw-field-border);
   background: var(--sw-field);
   transition: border-color 200ms var(--sw-out), box-shadow 260ms var(--sw-out), transform 260ms var(--sw-spring);
@@ -9443,7 +9446,7 @@
   height: 38px;
   flex: none;
   border: 0;
-  border-radius: 12px;
+  border-radius: 24px;
   display: grid;
   place-items: center;
   color: var(--sw-on-accent);
@@ -9458,7 +9461,7 @@
 .db-swarm-send:active:not(:disabled) { transform: scale(0.9); }
 .db-swarm-send:disabled { opacity: 0.4; box-shadow: none; filter: saturate(0.4); cursor: default; }
 .db-swarm-send.is-small { width: 32px; height: 32px; border-radius: 10px; }
-.db-swarm-composer-hint { margin: 6px 20px 12px; font-size: 11.5px; color: var(--sw-mute); }
+.db-swarm-composer-hint { margin: 6px 20px 12px; font-size: 11.5px; color: var(--sw-mute); text-align: center; }
 /* Files: the attach button, the chips waiting above the composer, and the chips on a sent
    message. Tokens only, so the dark sheet needs no twin. */
 .db-swarm-attach {

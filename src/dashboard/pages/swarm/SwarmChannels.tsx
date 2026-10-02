@@ -88,10 +88,10 @@ export function SwarmChannels({ roster, channel, unread, working, status, freshM
         <div className="db-swarm-group-label">
           Managers <span className="db-swarm-group-count">{roster.managers.length}</span>
           <button type="button" className="db-swarm-new-btn" onClick={onNewWorkflow} title="Describe an ongoing job and Aura hires a manager for it">
-            <SpawnGlyph size={14} /> New manager
+            <SpawnGlyph size={14} /> New
           </button>
         </div>
-        {roster.managers.length === 0 && <p className="db-swarm-rail-empty">Your first ongoing request hires one.</p>}
+        {roster.managers.length === 0 && <p className="db-swarm-rail-empty">None yet</p>}
         {roster.managers.map((m) => {
           const id = managerChannel(m.id);
           const active = channel === id;
@@ -121,16 +121,19 @@ export function SwarmChannels({ roster, channel, unread, working, status, freshM
             <span className="db-swarm-ch-avatar"><span className="db-swarm-avatar is-sm is-supervisor"><CrownGlyph size={16} /></span></span>
             <span className="db-swarm-ch-text">
               <span className="db-swarm-ch-name">Supervisor</span>
-              <span className="db-swarm-ch-role">{supervisorArchived ? "Archived · returns at 2 managers" : "Joins when you have 2 managers"}</span>
+              <span className="db-swarm-ch-role">{supervisorArchived ? "Archived" : "Joins at 2 managers"}</span>
             </span>
           </div>
         )}
       </div>
 
-      <div className={`db-swarm-meter${status.warn ? " is-warn" : ""}`}>
-        <span>Managers</span>
-        <strong>{status.text}</strong>
-      </div>
+      {/* Idle says nothing; the box only appears while managers work or something is wrong. */}
+      {status.text && (
+        <div className={`db-swarm-meter${status.warn ? " is-warn" : ""}`}>
+          <span>Managers</span>
+          <strong>{status.text}</strong>
+        </div>
+      )}
     </nav>
   );
 }

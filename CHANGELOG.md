@@ -30,6 +30,8 @@ was started and read like commit subjects rather than release notes.
 
 ### Changed
 - The Swarm tab now shows who you're talking to and their role, lists every manager with its title, shows when a Supervisor will join, and has a **New manager** button. It now matches the rest of the app's theme, with one accent colour instead of a colour per manager. The Reset button, which wiped your whole Swarm in two clicks, is gone.
+- Swarm's send buttons now use the same paper plane icon as the chat window.
+- Opening Agents from the sidebar now folds the sidebar away, giving Swarm the full width. The Swarm tab also says less: shorter starter cards, labels and hints, at the same text size. The Managers status box now only appears while managers are working or something needs attention.
 
 ### Fixed
 - A Swarm report now says why it stopped short (an account not connected, nothing new found, budget used up) instead of just "Partial report", and a run that only hit its own safety rules no longer counts as partial.

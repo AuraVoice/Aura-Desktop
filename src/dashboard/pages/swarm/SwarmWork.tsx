@@ -7,6 +7,7 @@ import {
   type PendingAction,
 } from "../../../lib/pendingActions";
 import { openPath } from "@tauri-apps/plugin-opener";
+import { Send } from "lucide-react";
 import { FORMAT_LABEL, saveDocumentDraft, type DocumentFormat } from "../../../lib/swarmDocumentFile";
 import type { SwarmMessage, SwarmRoundMember, SwarmRoundView, SwarmSessionView } from "../../../lib/swarmApi";
 import { mapRoundMember, proposeDraft, SwarmRequestError, TERMINAL_SESSION_STATES } from "../../../lib/swarmApi";
@@ -16,7 +17,6 @@ import {
   CellGlyph,
   CourseGlyph,
   CrownGlyph,
-  DartGlyph,
   DayGlyph,
   DeepGlyph,
   HaltGlyph,
@@ -266,7 +266,7 @@ export function QuestionEmbed({
               aria-label="Your answer"
             />
             <button type="submit" className="db-swarm-send is-small" disabled={busy || !value.trim()} aria-label="Send answer">
-              <DartGlyph size={16} />
+              <Send size={16} aria-hidden="true" />
             </button>
           </form>
         </div>
