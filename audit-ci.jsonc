@@ -10,6 +10,12 @@
     // 7.12.0-8.2.0 carry this advisory, <=7.11.0 carry 14 OLDER high advisories,
     // and nothing above 8.2.0 exists. 7.18.1 (pinned) is the most secure option.
     // Remove this entry once react-router ships a patched version above 8.2.0.
-    "GHSA-qwww-vcr4-c8h2"
+    "GHSA-qwww-vcr4-c8h2",
+    // @grpc/grpc-js: getAuthContext can report unauthorized client certificates
+    // as authorized (GHSA-m9gg-hp2v-232j). Exempt because it is a gRPC SERVER
+    // mTLS check: Aura never runs a gRPC server, and grpc-js only arrives through
+    // @firebase/firestore's Node build, while the webview uses WebChannel. Remove
+    // once firebase depends on a patched grpc-js.
+    "GHSA-m9gg-hp2v-232j"
   ]
 }

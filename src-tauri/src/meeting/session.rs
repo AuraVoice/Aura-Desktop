@@ -254,7 +254,7 @@ mod platform {
 
         // Sleep and wake come from the workspace center, not the distributed
         // one. Same leak-for-life pattern as the observers above.
-        let workspace_center = unsafe { NSWorkspace::sharedWorkspace().notificationCenter() };
+        let workspace_center = NSWorkspace::sharedWorkspace().notificationCenter();
         let observe_power = |name: &objc2_foundation::NSNotificationName, event: PowerEvent| {
             let block = RcBlock::new(move |_notification: std::ptr::NonNull<NSNotification>| {
                 fire_power(event);
