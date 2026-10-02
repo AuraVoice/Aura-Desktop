@@ -14,7 +14,7 @@ import { Store } from "@tauri-apps/plugin-store";
 import { listen } from "@tauri-apps/api/event";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { Sidebar } from "./Sidebar";
-import { TopBar } from "./TopBar";
+import { AccountMenu, NotificationBell } from "./TopBar";
 import { DashboardTitleBar } from "./DashboardTitleBar";
 import { SettingsDialog, settingsRoutes } from "./SettingsDialog";
 import { HomePage } from "./pages/HomePage";
@@ -43,7 +43,7 @@ import {
 import { useDashboardUser } from "./useDashboardUser";
 import { DashboardResourceScope } from "./useDashboardResource";
 import { useDashboardNotifications } from "./useDashboardNotifications";
-import { legacyAgentRoutes, navSections, navTitles } from "./navConfig";
+import { legacyAgentRoutes, navSections } from "./navConfig";
 import { desktopOnboardingSeenForUidKey, overlayStorePath } from "../lib/copy";
 import { logError } from "../lib/log";
 import { trackPageView } from "../lib/analytics";
@@ -72,7 +72,7 @@ export const dashboardPages: Record<string, ReactElement> = {
   "/help": <HelpPage />,
 };
 
-export function DashboardShell({ user, collapsed, onCollapse }: { user: User | null; collapsed: boolean; onCollapse?: () => void }) {
+export function DashboardShell({ user, collapsed, onToggle, onCollapse }: { user: User | null; collapsed: boolean; onToggle: () => void; onCollapse?: () => void }) {
   const generalSettings = useGeneralSettings();
   const updateReady = useUpdateReady();
   const location = useLocation();
@@ -84,7 +84,6 @@ export function DashboardShell({ user, collapsed, onCollapse }: { user: User | n
     lastMainPathRef.current = location.pathname;
   }
   const mainPath = settingsOpen ? lastMainPathRef.current : location.pathname;
-  const title = navTitles[mainPath] ?? "Home";
   const notifications = useDashboardNotifications(user?.uid ?? null);
 
   // The retired agent routes stay routable so an older notification row or
@@ -113,14 +112,16 @@ export function DashboardShell({ user, collapsed, onCollapse }: { user: User | n
       generalSettings.reduceMotion ? " db-reduce-motion" : ""
     }`}>
       <DashboardRouteListener />
+      <DashboardTitleBar
+        collapsed={collapsed}
+        onToggle={onToggle}
+        left={<AccountMenu user={user} />}
+        right={<NotificationBell notifications={notifications} />}
+      />
+      <div className="db-app-body">
       {/* Agents needs the width for its three-pane Swarm, so opening it folds the sidebar. */}
       <Sidebar collapsed={collapsed} onNavigate={(to) => { if (to === "/agents") onCollapse?.(); }} />
       <div className="db-main">
-        <TopBar
-          title={location.pathname === "/insights" ? "" : title}
-          user={user}
-          notifications={notifications}
-        />
         <UpdateDialog
           version={updateReady.version}
           updatedVersion={updateReady.updatedNotice}
@@ -141,6 +142,7 @@ export function DashboardShell({ user, collapsed, onCollapse }: { user: User | n
             </Routes>
           </DashboardResourceScope>
         </div>
+      </div>
       </div>
       {settingsOpen && <SettingsDialog path={location.pathname} onClose={closeSettings} />}
     </div>
@@ -266,16 +268,13 @@ export function DashboardApp() {
     // needs the same shared entitlement the finished app does.
     <EntitlementProvider signedIn={user !== null} uid={uid}>
     <div className="db-window">
-      <DashboardTitleBar
-        collapsed={collapsed}
-        onToggle={showApp ? () => setCollapsed((current) => !current) : undefined}
-      />
+      {!showApp && <DashboardTitleBar collapsed={collapsed} />}
       <div className="db-window-content">
         {onboarded !== null && (
           <ErrorBoundary>
             {showApp ? (
               <HashRouter>
-                <DashboardShell user={user} collapsed={collapsed} onCollapse={() => setCollapsed(true)} />
+                <DashboardShell user={user} collapsed={collapsed} onToggle={() => setCollapsed((current) => !current)} onCollapse={() => setCollapsed(true)} />
               </HashRouter>
             ) : (
               <DashboardOnboarding

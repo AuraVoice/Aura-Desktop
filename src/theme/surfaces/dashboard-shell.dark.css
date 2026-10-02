@@ -53,6 +53,27 @@
 :root[data-theme="dark"] .db-window-controls button:focus-visible {
   outline-color: rgba(230, 239, 236, 0.7);
 }
+:root[data-theme="dark"] .db-window-titlebar .db-account-btn {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-window-titlebar .db-account-btn:hover,
+:root[data-theme="dark"] .db-window-titlebar .db-account-btn-open {
+  border-color: transparent;
+  background: transparent;
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .db-window-bell {
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .db-window-bell .db-badge-count {
+  color: #000;
+}
+:root[data-theme="dark"] .db-window-bell:hover {
+  filter: brightness(1.15);
+}
+:root[data-theme="dark"] .db-window-bell:focus-visible {
+  outline-color: rgba(230, 239, 236, 0.7);
+}
 
 /* ── Sidebar ── */
 :root[data-theme="dark"] .db-sidebar {
@@ -97,9 +118,6 @@
   border-color: rgba(255, 255, 255, 0.07);
   background: var(--db-content-bg);
   box-shadow: none;
-}
-:root[data-theme="dark"] .db-topbar {
-  background: rgba(13, 13, 14, 0.72);
 }
 :root[data-theme="dark"] .db-badge-count {
   color: #062a24;

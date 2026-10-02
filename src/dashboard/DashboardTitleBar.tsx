@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Minus, PanelLeftClose, Square, X } from "lucide-react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { logError } from "../lib/log";
@@ -15,9 +16,15 @@ function runWindowAction(action: "minimize" | "maximize" | "close") {
 export function DashboardTitleBar({
   collapsed,
   onToggle,
+  left,
+  right,
 }: {
   collapsed: boolean;
   onToggle?: () => void;
+  /** Sits beside the collapse button (the profile). */
+  left?: ReactNode;
+  /** Sits before the minimize button (the bell). */
+  right?: ReactNode;
 }) {
   return (
     <header className="db-window-titlebar">
@@ -33,6 +40,7 @@ export function DashboardTitleBar({
           >
             <PanelLeftClose size={20} className="db-collapse-icon" aria-hidden />
           </button>
+          {left}
         </div>
       )}
       <div
@@ -40,6 +48,7 @@ export function DashboardTitleBar({
         data-tauri-drag-region
         onDoubleClick={() => runWindowAction("maximize")}
       />
+      {right && <div className="db-window-extra">{right}</div>}
       <div className="db-window-controls">
         <button
           type="button"

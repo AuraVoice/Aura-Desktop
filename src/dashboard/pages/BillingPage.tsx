@@ -1,6 +1,7 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useState } from "react";
-import { fetchBillingPortal } from "../../lib/entitlement";
+import { BillingPortalError, fetchBillingPortal } from "../../lib/entitlement";
+import { logError } from "../../lib/log";
 import { useEntitlementState } from "../../state/EntitlementProvider";
 import { type EntitlementState } from "../../state/useEntitlement";
 import { DataView } from "../DataView";
@@ -9,6 +10,23 @@ import {
   SettingsSection,
 } from "../components/SettingsPageLayout";
 import { type AsyncState } from "../useAsyncData";
+
+/** Copy for each reason the billing portal could not open. "Try again" only
+ * where a retry can actually succeed. */
+function portalErrorCopy(error: unknown): string {
+  if (error instanceof BillingPortalError) {
+    if (error.reason === "no_billing_account") {
+      return "Your plan wasn't bought through Aura checkout, so there is no billing to manage here.";
+    }
+    if (error.reason === "billing_not_configured") {
+      return "Billing isn't available on Aura right now. Your plan is unaffected.";
+    }
+    if (error.reason === "portal_failed") {
+      return "The billing provider didn't respond. Try again in a minute.";
+    }
+  }
+  return "Billing could not open just now. Check your connection and try again.";
+}
 
 function statusLabel(entitlement: EntitlementState): string {
   if (entitlement.status === "unknown") return "Unknown";
@@ -31,16 +49,17 @@ export function BillingPage() {
     reload: entitlement.refresh,
   };
   const [portalBusy, setPortalBusy] = useState(false);
-  const [portalError, setPortalError] = useState(false);
+  const [portalError, setPortalError] = useState("");
 
   const openBillingPortal = async () => {
     if (portalBusy) return;
     setPortalBusy(true);
-    setPortalError(false);
+    setPortalError("");
     try {
       await openUrl(await fetchBillingPortal());
-    } catch {
-      setPortalError(true);
+    } catch (err) {
+      logError("BillingPage: open billing portal", err);
+      setPortalError(portalErrorCopy(err));
     } finally {
       setPortalBusy(false);
     }
@@ -97,7 +116,7 @@ export function BillingPage() {
                     Your plan will end at the close of the current billing period.
                   </p>
                 )}
-                {entitlement.tier !== "free" && (
+                {entitlement.tier !== "free" && entitlement.billingManageable !== false && (
                   <button
                     type="button"
                     className="db-primary-btn"
@@ -107,9 +126,14 @@ export function BillingPage() {
                     {portalBusy ? "Opening billing..." : "Manage billing"}
                   </button>
                 )}
+                {entitlement.tier !== "free" && entitlement.billingManageable === false && (
+                  <p className="db-muted db-details-note">
+                    This plan wasn't bought through Aura checkout, so there is no billing to manage.
+                  </p>
+                )}
                 {portalError && (
                   <p className="db-settings-inline-error" role="alert">
-                    Billing could not open just now. Try again.
+                    {portalError}
                   </p>
                 )}
               </div>
