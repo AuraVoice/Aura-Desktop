@@ -261,7 +261,7 @@ function Typing({ author, since }: { author: Author; since: number }) {
   const seconds = Math.max(0, Math.floor((now - since) / 1000));
   return (
     <div className="db-swarm-typing" aria-live="polite">
-      <SwarmOrb id={author.role === "manager" ? author.id : "swarm"} state="planning" tone={author.role === "supervisor" ? "sup" : "accent"} size={28} />
+      {author.role === "manager" ? <SwarmAvatar author={author} size="sm" /> : <SwarmOrb id="swarm" state="planning" tone={author.role === "supervisor" ? "sup" : "accent"} size={28} />}
       <span><strong>{author.name}</strong> is deciding who owns this</span>
       {seconds >= 4 && <span className="db-swarm-typing-time">{seconds}s</span>}
     </div>

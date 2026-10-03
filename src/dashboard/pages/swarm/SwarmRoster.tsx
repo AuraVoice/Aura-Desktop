@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import type { SwarmManager, SwarmRoster as Roster, SwarmRoutine, SwarmRoutineInput } from "../../../lib/swarmApi";
 import { GrantSwitches, RoutineList } from "./SwarmManagerTools";
-import { SwarmAvatar } from "./SwarmAvatar";
-import { CaretGlyph, CellGlyph, CrownGlyph, DismissGlyph, HoldGlyph, Sigil, SignalGlyph, WatchGlyph } from "./SwarmGlyphs";
+import { managerInitial, SwarmAvatar } from "./SwarmAvatar";
+import { CaretGlyph, CellGlyph, CrownGlyph, DismissGlyph, HoldGlyph, SignalGlyph, WatchGlyph } from "./SwarmGlyphs";
 import { hueOf, supervisorActive } from "./swarmThread";
 
 interface Props {
@@ -102,7 +102,7 @@ function Constellation({ roster, freshManagers, supervisorFresh }: Pick<Props, "
         >
           <circle className="db-swarm-node-ring" cx={xOf(i)} cy={rowY} r={19} />
           <circle className="db-swarm-node-core" cx={xOf(i)} cy={rowY} r={14} />
-          <Sigil id={m.id} x={xOf(i) - 9} y={rowY - 9} size={18} className="db-swarm-node-glyph" />
+          <text x={xOf(i)} y={rowY} textAnchor="middle" dominantBaseline="central" fill="currentColor" fontSize={13} fontWeight={700}>{managerInitial(m.title)}</text>
           <title>{m.title}</title>
         </g>
       ))}

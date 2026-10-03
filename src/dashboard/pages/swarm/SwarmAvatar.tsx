@@ -1,8 +1,11 @@
-import { CrownGlyph, Sigil, SwarmMark, YouGlyph } from "./SwarmGlyphs";
+import { CrownGlyph, SwarmMark, YouGlyph } from "./SwarmGlyphs";
 import type { Author } from "./swarmThread";
 
-/** One avatar for every voice in the Swarm tab. Each manager wears its own generated
- * sigil in a stable hue; the Supervisor wears the crown, you the core, Aura the mark. */
+export function managerInitial(name: string): string {
+  return Array.from(name.trim())[0]?.toLocaleUpperCase() || "M";
+}
+
+/** Managers use their initial; the Supervisor keeps its crown. */
 export function SwarmAvatar({ author, size = "md", live = false }: { author: Author; size?: "sm" | "md" | "lg"; live?: boolean }) {
   const tone = author.role === "manager" ? `is-hue-${author.hue}` : `is-${author.role}`;
   const glyph = size === "sm" ? 16 : size === "lg" ? 40 : 24;
@@ -13,7 +16,7 @@ export function SwarmAvatar({ author, size = "md", live = false }: { author: Aut
         ? "The Supervisor's crown: it coordinates every manager"
         : author.role === "aura"
           ? "Aura, before any manager is hired"
-          : `${author.name}'s mark, drawn uniquely for this manager`;
+          : author.name;
   return (
     <span className={`db-swarm-avatar is-${size} ${tone}${live ? " is-live" : ""}`} aria-hidden="true" title={meaning}>
       {author.role === "you" ? (
@@ -23,7 +26,7 @@ export function SwarmAvatar({ author, size = "md", live = false }: { author: Aut
       ) : author.role === "aura" ? (
         <SwarmMark size={glyph} />
       ) : (
-        <Sigil id={author.id} size={glyph} />
+        managerInitial(author.name)
       )}
     </span>
   );

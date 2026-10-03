@@ -12,6 +12,7 @@ import { FORMAT_LABEL, saveDocumentDraft, type DocumentFormat } from "../../../l
 import type { SwarmManager, SwarmMessage, SwarmRoundMember, SwarmRoundView, SwarmSessionView } from "../../../lib/swarmApi";
 import { mapRoundMember, proposeDraft, SwarmRequestError, TERMINAL_SESSION_STATES } from "../../../lib/swarmApi";
 import { SwarmOrb } from "./SwarmOrb";
+import { SwarmAvatar } from "./SwarmAvatar";
 import type { OrbState, OrbTone } from "./swarmOrbRenderer";
 import { thinkingLine, voiceLine, type VoiceBank } from "./swarmThinking";
 import {
@@ -128,6 +129,7 @@ function useSlot(): number {
  * region: the clock and the rotating voice line stay quiet for screen readers. */
 function ThinkingRow({
   id,
+  name,
   state,
   tone,
   activity,
@@ -136,6 +138,7 @@ function ThinkingRow({
   meta,
 }: {
   id: string;
+  name?: string;
   state: OrbState;
   tone: OrbTone;
   activity: string;
@@ -145,7 +148,7 @@ function ThinkingRow({
 }) {
   return (
     <div className="db-swarm-think">
-      <SwarmOrb id={id} state={state} tone={tone} />
+      {name ? <SwarmAvatar author={{ id, name, role: "manager", hue: 0 }} /> : <SwarmOrb id={id} state={state} tone={tone} />}
       <div className="db-swarm-think-text">
         <span className="db-swarm-think-activity" aria-live="polite">{activity}</span>
         <span key={slot} className="db-swarm-think-voice" aria-hidden="true">{voice}</span>
@@ -190,6 +193,7 @@ export function WorkingEmbed({
     <div className={`db-swarm-embed is-work${stopRequested ? " is-stopping" : ""}`}>
       <ThinkingRow
         id={managerId}
+        name={name}
         state={orbState}
         tone={stopRequested ? "warn" : "accent"}
         activity={line.activity}

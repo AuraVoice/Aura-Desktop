@@ -5886,6 +5886,14 @@
   width: 100%;
 }
 
+.db-content:has(.db-swarm) {
+  padding-inline: 6px;
+}
+
+.db-agents-page:has(.db-swarm) {
+  max-width: none;
+}
+
 @media (max-width: 720px) {
   .db-tab-strip {
     display: flex;
