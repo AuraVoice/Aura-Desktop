@@ -8852,10 +8852,11 @@
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 7px 9px;
+  padding: 7px 9px 7px 11px;
   margin: 1px 0;
   border: 0;
-  border-radius: 7px;
+  /* Same corner as the composer, so the selected row and the box read as one family. */
+  border-radius: 24px;
   background: transparent;
   color: var(--sw-dim);
   font: inherit;

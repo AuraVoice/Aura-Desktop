@@ -23,6 +23,7 @@ was started and read like commit subjects rather than release notes.
 
 ### Changed
 - The "Routing details" expander with its confidence percentage is gone from #group; a routed message shows only who took it and why.
+- The selected channel in the Swarm rail now has the same rounded corners as the message box instead of a near-square outline.
 
 ### Fixed
 - A #group message now leaves the box the moment you send it and shows faintly as "Sending" until it lands; before, your words sat in the composer until the router answered.
