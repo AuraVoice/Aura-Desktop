@@ -800,7 +800,7 @@ export function SwarmStream(props: Props) {
                 : "Managers only read. Drafts are never sent."
               : props.attachments.length > 0
                 ? "Only the files' text leaves this computer."
-                : "Aura sends this to the right manager."}
+                : null}
       </p>
     </section>
   );

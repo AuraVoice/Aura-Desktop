@@ -644,9 +644,17 @@ export function OverlayRoot() {
                     : showCallbackCard
                       ? CALLBACK_CARD_HEIGHT
                       : null;
+  // A voice notice or a meeting prompt takes the slot away from an open chat the
+  // same way the approval card does. Both are fixed-height cards drawn with
+  // height: 100%, so leaving the slot at the chat's height stretched a one-line
+  // "Buddy hit a snag" into a 400px block with the message floating in the
+  // middle of empty space (2026-10-03). The chat is unmounted while the notice
+  // is up, which is what the approval card already does, and comes back at its
+  // own measured height when the notice goes.
+  const noticeOverChat = showVoiceNotice || meetingPromptOnScreen;
   const appliedSlotHeight = showApprovalCard
     ? approvalCardHeight
-    : visibleChatOpen ? chatSlotHeight : slotHeight;
+    : visibleChatOpen && !noticeOverChat ? chatSlotHeight : slotHeight;
 
   useEffect(() => {
     let cancelled = false;
@@ -992,7 +1000,7 @@ export function OverlayRoot() {
       {showApprovalCard && (
         <ActionApprovalCard actions={pendingActions} onHeightChange={setApprovalCardHeight} />
       )}
-      {visibleChatOpen && !showApprovalCard && (
+      {visibleChatOpen && !showApprovalCard && !noticeOverChat && (
         <ChatSlot
           messages={chat.messages}
           focusNonce={chatFocusNonce}

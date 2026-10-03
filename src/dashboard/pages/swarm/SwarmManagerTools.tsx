@@ -3,8 +3,8 @@ import type { SwarmManager, SwarmRoutine, SwarmRoutineInput } from "../../../lib
 import { CONNECTOR_LABEL } from "./SwarmWork";
 import { CycleGlyph, DartGlyph, DismissGlyph, SparkGlyph } from "./SwarmGlyphs";
 
-/** A manager's two controls: which connectors it may read (default off, one switch each)
- * and its routines. A routine fires with the laptop closed, so nothing is scheduled until
+/** A manager's two controls: which connectors it may read (on when the account is connected
+ * and the manager asked for it, one switch each) and its routines. A routine fires with the laptop closed, so nothing is scheduled until
  * its switch is on; a shaper suggestion is shown as a one-click "Turn on". */
 
 const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -74,7 +74,7 @@ export function GrantSwitches({
           );
         })}
       </div>
-      <p className="db-swarm-tools-hint">Off by default. The web is always allowed; nothing is ever sent.</p>
+      <p className="db-swarm-tools-hint">Accounts the manager asked for start on when they are already connected. Switch any off here. The web is always allowed; nothing is ever sent.</p>
     </div>
   );
 }
