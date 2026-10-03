@@ -67,11 +67,13 @@ const CONSENT_HEIGHT: f64 = 176.0;
 /// change can re-place the HUD on the right display without the worker having
 /// to thread the target through every publish.
 static LAST_TARGET: AtomicIsize = AtomicIsize::new(0);
-/// True while the current hold is dictating into one of Aura's own windows
-/// (the chat composer, the dashboard). Set once per utterance in `show` from
-/// `is_own_window`, cleared by `show_idle`, and read by `edge_wanted`: a
-/// self-targeted hold must NOT borrow the notch edge, because hiding the Bar
-/// hides the very window the insert needs focused.
+/// True while the current hold is dictating into the overlay window itself
+/// (the chat composer). Set once per utterance in `show` from
+/// `target_is_overlay` and the chat flags, cleared by `show_idle`, and read by
+/// `edge_wanted`: a self-targeted hold must NOT borrow the notch edge, because
+/// hiding the Bar hides the very window the insert needs focused. The
+/// dashboard and every other Aura window are NOT self: hiding the Bar costs
+/// them nothing, so they take the ordinary foreign-target path (issue #28).
 static TARGET_IS_SELF: AtomicBool = AtomicBool::new(false);
 static IDLE_HOVERED: AtomicBool = AtomicBool::new(false);
 
@@ -141,11 +143,11 @@ fn accepts_clicks(phase: HudPhase) -> bool {
 }
 
 /// Whether this phase should borrow the notch edge from the Bar. A hold that
-/// targets Aura's own window keeps the overlay visible (the insert needs its
-/// focus, and the chat card renders its own listening chip), so it never takes
-/// the edge; the consent question is the one exception because it must be seen
-/// and clicked. `Pending` cannot occur for a self target: the focus probe
-/// refuses to judge our own process and `Unknown` types.
+/// targets the overlay window keeps it visible (the insert needs its focus,
+/// and the chat card renders its own chip for error, recovery and pending), so
+/// it never takes the edge; the consent question is the one exception because
+/// it must be seen and clicked. `Pending` cannot occur for a self target: the
+/// focus probe refuses to judge our own process and `Unknown` types.
 fn edge_wanted(phase: HudPhase) -> bool {
     if phase == HudPhase::Idle {
         return false;
@@ -413,23 +415,50 @@ fn target_center(target: isize) -> Option<(f64, f64)> {
     Some(center)
 }
 
-/// True when `target` is one of Aura's own windows (main overlay, dashboard,
-/// or this HUD). Windows compares the target HWND against every webview
-/// window's real top-level handle, which is exact and sidesteps the WebView2
-/// child-process pid trap; on macOS the target token is already a pid (see
-/// `insert::foreground_window`), so it compares against our own.
+/// Which of Aura's own windows `target` is, by label (`main`, `dashboard`,
+/// this HUD...), or `None` for a foreign window. Windows compares the target
+/// HWND against every webview window's real top-level handle, which is exact
+/// and sidesteps the WebView2 child-process pid trap. On macOS the target
+/// token is already a pid (see `insert::foreground_window`), which cannot name
+/// a window, so when the pid is ours the label comes from whichever webview
+/// window reports focus, falling back to the overlay when none does. Called
+/// from the worker thread only: `is_focused` is a blocking runtime getter.
 #[cfg(windows)]
-fn is_own_window(app: &AppHandle, target: isize) -> bool {
-    target != 0
-        && app
-            .webview_windows()
-            .values()
-            .any(|w| w.hwnd().is_ok_and(|h| h.0 as isize == target))
+pub(super) fn own_window_label(app: &AppHandle, target: isize) -> Option<String> {
+    if target == 0 {
+        return None;
+    }
+    app.webview_windows()
+        .iter()
+        .find(|(_, w)| w.hwnd().is_ok_and(|h| h.0 as isize == target))
+        .map(|(label, _)| label.clone())
 }
 
 #[cfg(target_os = "macos")]
-fn is_own_window(_app: &AppHandle, target: isize) -> bool {
-    target != 0 && target == std::process::id() as isize
+pub(super) fn own_window_label(app: &AppHandle, target: isize) -> Option<String> {
+    if target == 0 || target != std::process::id() as isize {
+        return None;
+    }
+    let focused = app
+        .webview_windows()
+        .iter()
+        .find(|(_, w)| w.is_focused().unwrap_or(false))
+        .map(|(label, _)| label.clone());
+    Some(focused.unwrap_or_else(|| overlay::MAIN_WINDOW.to_string()))
+}
+
+/// True when the hold is typing into the overlay window itself (the chat
+/// composer), the one own window the Bar hand-over would hide.
+pub(super) fn target_is_overlay(app: &AppHandle, target: isize) -> bool {
+    own_window_label(app, target).as_deref() == Some(overlay::MAIN_WINDOW)
+}
+
+/// True when the hold is typing into one of Aura's windows that is NOT the
+/// overlay (the dashboard, for one). Such a window has its own text fields and
+/// is never hidden by the edge hand-over, so it is treated like a foreign app:
+/// the HUD takes the edge and an open chat card does not capture the text.
+pub(super) fn target_is_other_own_window(app: &AppHandle, target: isize) -> bool {
+    own_window_label(app, target).is_some_and(|label| label != overlay::MAIN_WINDOW)
 }
 
 fn oriented_size(edge: NotchEdge, side_width: f64, side_height: f64) -> LogicalSize<f64> {
@@ -549,9 +578,10 @@ pub fn show(app: &AppHandle, target: isize) {
     // An open chat slot (or a focused composer) also counts as "our own
     // window": the hold is aimed at the chat box, so the overlay must stay up
     // even though the OS foreground may already have drifted off it (see
-    // `set_composer_focused` / `set_chat_slot_open`).
+    // `set_composer_focused` / `set_chat_slot_open`). Unless the foreground is
+    // another Aura window such as the dashboard, which `chat_sink` rules out.
     TARGET_IS_SELF.store(
-        is_own_window(app, target) || super::composer_focused() || super::chat_slot_open(),
+        target_is_overlay(app, target) || super::chat_sink(app, target),
         Ordering::Relaxed,
     );
     // Take the edge from the notch first: the overlay's hidden branch is what

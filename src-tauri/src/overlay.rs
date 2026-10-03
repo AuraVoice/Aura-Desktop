@@ -14,7 +14,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 
 use crate::win_focus;
 
-const MAIN_WINDOW: &str = "main";
+pub const MAIN_WINDOW: &str = "main";
 const OVERLAY_STORE: &str = "overlay-window.json";
 const CENTER_X_KEY: &str = "overlay_center_x";
 const CENTER_Y_KEY: &str = "overlay_center_y";

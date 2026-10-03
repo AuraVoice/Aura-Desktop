@@ -111,7 +111,7 @@ impl DictationStatus {
 }
 
 pub use platform::{
-    chat_slot_open, composer_focused, held_text_copied, is_holding_text, set_chat_slot_open,
+    chat_sink, held_text_copied, is_holding_text, set_chat_slot_open,
     set_composer_focused, set_online, signal, start, DictationHandle,
 };
 
@@ -386,6 +386,15 @@ mod platform {
 
     pub fn set_chat_slot_open(open: bool) {
         CHAT_SLOT_OPEN.store(open, Ordering::Relaxed);
+    }
+
+    /// The chat composer is this hold's sink: the chat flags say so AND the
+    /// foreground window is not some other Aura window (the dashboard), which
+    /// has its own text fields and must not be hijacked by an open chat card.
+    /// Read by `hud::show`, the command brain gate and the insert step so the
+    /// three never disagree about where a hold is going (issue #28).
+    pub fn chat_sink(app: &AppHandle, target: isize) -> bool {
+        (composer_focused() || chat_slot_open()) && !hud::target_is_other_own_window(app, target)
     }
 
     /// The webview's view of the network (`navigator.onLine`), reported from
@@ -1421,7 +1430,7 @@ mod platform {
         // hold. Inert without a stored credential, and never for a hold aimed
         // at Aura's own chat, which is a conversation with Buddy rather than a
         // desktop instruction. A `None` result means "this is dictation".
-        let command_thread = if !(composer_focused() || chat_slot_open()) {
+        let command_thread = if !chat_sink(app, target) {
             let command_app = app.clone();
             let command_text = corrected.clone();
             let command_key = app_key.clone();
@@ -1517,7 +1526,7 @@ mod platform {
         // keystrokes land rather than after history encodes the clip.
         let insert_started = Instant::now();
         let mut typed_at = Instant::now();
-        let outcome = if composer_focused() || chat_slot_open() {
+        let outcome = if chat_sink(app, target) {
             let _ = app.emit(crate::events::DICTATION_COMPOSER_INSERT, final_text.clone());
             info!(
                 "dictation: phase=insert hold_ms={hold_ms} frames={captured_frames} chars={} \
