@@ -26,7 +26,11 @@ import type { VoiceSessionStatus } from "./useVoiceBar";
 const FINGERPRINT_INTERVAL_MS = 750;
 const HEARTBEAT_INTERVAL_MS = 20_000;
 const RESPONSE_TIMEOUT_MS = 15_000;
-const MODE_ACK_TIMEOUT_MS = 3_000;
+// The request goes out the moment the agent participant joins, but the agent
+// process is still building its session for ~2s after that (job dispatch to
+// "Guide Mode launch" measured at 1.8s on 2026-10-03), so 3s left no room for
+// a slow cold start and disarmed Guide before the agent had read the request.
+const MODE_ACK_TIMEOUT_MS = 5_000;
 const VERIFICATION_TIMEOUT_MS = 30_000;
 const RETAINED_FRAME_GEOMETRY_COUNT = 6;
 const GUIDE_TASK_STORAGE_KEY = "aura.guide.currentTask.v2";
