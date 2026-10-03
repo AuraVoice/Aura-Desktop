@@ -2,7 +2,7 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type C
 import type { SwarmDecision, SwarmDoc, SwarmManager, SwarmMessage, SwarmRoster, SwarmRoundView, SwarmSessionView } from "../../../lib/swarmApi";
 import { DOCUMENT_ACCEPT } from "../../../lib/documentText";
 import { IMAGE_ACCEPT } from "../../../lib/chatAttachments";
-import { Paperclip, Send } from "lucide-react";
+import { ArrowDown, Paperclip, Send } from "lucide-react";
 import { SwarmAvatar } from "./SwarmAvatar";
 import { SwarmOrb } from "./SwarmOrb";
 import {
@@ -165,8 +165,8 @@ function HiredEmbed({ manager }: { manager: SwarmManager }) {
   const hue = hueOf(manager.id);
   return (
     <div className={`db-swarm-embed is-hired is-hue-${hue}`}>
-      <div className="db-swarm-embed-kicker"><BurstGlyph size={16} /> Manager hired</div>
-      <strong className="db-swarm-embed-title">{manager.title}</strong>
+      <details className="db-swarm-hired-details">
+        <summary><BurstGlyph size={16} /><span><strong>{manager.title}</strong><span className="db-swarm-muted">Manager hired</span></span><span className="db-swarm-details-label">Details</span></summary>
       {manager.description && <p>{manager.description}</p>}
       {manager.subagents.length > 0 && (
         <div className="db-swarm-embed-team">
@@ -177,14 +177,19 @@ function HiredEmbed({ manager }: { manager: SwarmManager }) {
           ))}
         </div>
       )}
-      {(manager.connectors.length > 0 || manager.missingCapabilities.length > 0) && (
+      {manager.connectors.length > 0 && (
         <div className="db-swarm-embed-row">
           {manager.connectors.map((c) => <em key={c}>{c}</em>)}
-          {manager.missingCapabilities.map((c) => <em key={c} className="is-warn">needs {c}</em>)}
         </div>
       )}
       {manager.routines.length > 0 && (
         <div className="db-swarm-embed-foot"><SparkGlyph size={14} /> {manager.routines.join(" · ")}</div>
+      )}
+      </details>
+      {manager.missingCapabilities.length > 0 && (
+        <div className="db-swarm-embed-row">
+          {manager.missingCapabilities.map((c) => <em key={c} className="is-warn">needs {c}</em>)}
+        </div>
       )}
     </div>
   );
@@ -354,19 +359,22 @@ function DecisionMessage({
     <>
       <div className="db-swarm-msg-head">
         <strong className={`db-swarm-name is-${item.author.role === "manager" ? `hue-${item.author.hue}` : item.author.role}`}>{item.author.name}</strong>
-        <span className="db-swarm-role">{roleLabel(item.author, roster)}</span>
+        {item.author.name !== roleLabel(item.author, roster) && <span className="db-swarm-role">{roleLabel(item.author, roster)}</span>}
         <span className={`db-swarm-tag is-${d.decision}`}>{DECISION_LABEL[d.decision]}</span>
-        {d.subagentTitle && <span className="db-swarm-muted">via {d.subagentTitle}</span>}
         {capability && <span className="db-swarm-cap">{capability}</span>}
-        <Confidence decision={d} />
         {item.at > 0 && <time>{timeLabel(item.at)}</time>}
       </div>
       {d.reason && <p className="db-swarm-text">{d.reason}</p>}
       {d.note && <p className="db-swarm-note">{d.note}</p>}
-      {d.alternatives.length > 0 && d.decision !== "ask" && (
-        <p className="db-swarm-muted db-swarm-alt">Also considered: {d.alternatives.map((a) => a.why).join("; ")}</p>
-      )}
       {hired && <HiredEmbed manager={hired} />}
+      <details className="db-swarm-route-details">
+        <summary>Routing details</summary>
+        <Confidence decision={d} />
+        {d.subagentTitle && <span className="db-swarm-muted"> via {d.subagentTitle}</span>}
+        {d.alternatives.length > 0 && d.decision !== "ask" && (
+          <p className="db-swarm-muted db-swarm-alt">Also considered: {d.alternatives.map((a) => a.why).join("; ")}</p>
+        )}
+      </details>
       {(feature || ongoing) && (
         <div className="db-swarm-choice-row">
           {feature && (
@@ -415,6 +423,11 @@ function DecisionMessage({
 export function SwarmStream(props: Props) {
   const { view, items, busy, busyHere, error, text, composerRef } = props;
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const channelKey = view.kind === "manager" ? `m-${view.manager?.id}` : view.kind;
+  const scrollPositions = useRef<Record<string, { top: number; following: boolean }>>({});
+  const previousChannel = useRef("");
+  const following = useRef(true);
+  const [showJump, setShowJump] = useState(false);
   const readOnly = view.kind === "activity";
   const messageMax = view.kind === "manager" ? BRIEF_MAX : GROUP_MESSAGE_MAX;
   // Handlers are read at click time, so the list below need not rebuild when only the
@@ -424,11 +437,49 @@ export function SwarmStream(props: Props) {
     live.current = props;
   });
 
-  // Stick to the bottom on new content, the way a chat does.
+  // Follow live content only at the bottom; each channel keeps its reading position.
   useLayoutEffect(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [items.length, busyHere, view.name]);
+    if (!el) return;
+    if (previousChannel.current !== channelKey) {
+      const saved = scrollPositions.current[channelKey];
+      following.current = saved?.following ?? true;
+      el.scrollTop = following.current ? el.scrollHeight : saved?.top ?? 0;
+      previousChannel.current = channelKey;
+    } else if (following.current) {
+      el.scrollTop = el.scrollHeight;
+    }
+    setShowJump(!following.current);
+  }, [items.length, busyHere, channelKey]);
+
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const pane = el?.firstElementChild;
+    if (!el || !pane) return;
+    const observer = new ResizeObserver(() => {
+      if (following.current) el.scrollTop = el.scrollHeight;
+    });
+    observer.observe(pane);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [channelKey]);
+
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    following.current = el.scrollHeight - el.clientHeight - el.scrollTop < 64;
+    scrollPositions.current[channelKey] = { top: el.scrollTop, following: following.current };
+    setShowJump(!following.current);
+  };
+
+  const jumpToLatest = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    following.current = true;
+    el.scrollTop = el.scrollHeight;
+    scrollPositions.current[channelKey] = { top: el.scrollTop, following: true };
+    setShowJump(false);
+  };
 
   // The composer grows with its text up to a cap, then scrolls.
   useLayoutEffect(() => {
@@ -442,7 +493,10 @@ export function SwarmStream(props: Props) {
   const reading = props.attachments.some((a) => a.status === "reading");
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
-    if (!busy && !reading && text.trim() && !readOnly && text.length <= messageMax) props.onSubmit();
+    if (!busy && !reading && text.trim() && !readOnly && text.length <= messageMax) {
+      jumpToLatest();
+      props.onSubmit();
+    }
   };
 
   const canAttach = !readOnly && !busy && props.attachments.length < MAX_ATTACHMENTS;
@@ -485,6 +539,7 @@ export function SwarmStream(props: Props) {
     }
     let lastDay = "";
     let lastAuthorKey = "";
+    let lastAt = 0;
     return items.map((item) => {
       const fresh = props.fresh.has(item.key);
       const day = item.at ? dayLabel(item.at) : "";
@@ -536,14 +591,15 @@ export function SwarmStream(props: Props) {
         );
       }
       const author = item.kind === "user" ? YOU : item.author;
-      const authorKey = item.kind === "user" ? "you" : `${author.id}-${item.key}`;
-      const continued = item.kind === "user" && authorKey === lastAuthorKey && !daySep;
+      const authorKey = `${author.role}:${author.id}`;
+      const continued = item.kind !== "decision" && authorKey === lastAuthorKey && !daySep && item.at > 0 && lastAt > 0 && item.at - lastAt < 300_000;
       lastAuthorKey = authorKey;
+      lastAt = item.at;
       return (
         <Fragment key={item.key}>
           {daySep && <div className="db-swarm-daysep"><span>{daySep}</span></div>}
           <article className={`db-swarm-msg${item.kind === "user" ? " is-you" : ""}${continued ? " is-continued" : ""}${fresh ? " is-fresh" : ""}`}>
-            <div className="db-swarm-msg-gutter">{!continued && <SwarmAvatar author={author} />}</div>
+            <div className="db-swarm-msg-gutter">{!continued ? <SwarmAvatar author={author} /> : item.at > 0 && <time className="db-swarm-continued-time">{timeLabel(item.at)}</time>}</div>
             <div className="db-swarm-msg-body">
               {item.kind === "user" ? (
                 <>
@@ -584,11 +640,11 @@ export function SwarmStream(props: Props) {
                 </>
               ) : item.kind !== "decision" ? (
                 <>
-                  <div className="db-swarm-msg-head">
+                  {!continued && <div className="db-swarm-msg-head">
                     <strong className={`db-swarm-name is-${item.author.role === "manager" ? `hue-${item.author.hue}` : item.author.role}`}>{item.author.name}</strong>
-                    <span className="db-swarm-role">{roleLabel(item.author, props.roster)}</span>
+                    {item.author.name !== roleLabel(item.author, props.roster) && <span className="db-swarm-role">{roleLabel(item.author, props.roster)}</span>}
                     {item.at > 0 && <time>{timeLabel(item.at)}</time>}
-                  </div>
+                  </div>}
                   {item.kind === "say" && <p className="db-swarm-text">{item.text}</p>}
                   {item.kind === "working" && (
                     <WorkingEmbed
@@ -693,8 +749,9 @@ export function SwarmStream(props: Props) {
       </header>
 
       {props.banner}
-      <div className={`db-swarm-scroll${showHero ? " is-hero" : ""}`} ref={scrollRef}>
-        <div key={view.kind === "manager" ? `m-${view.manager?.id}` : view.kind} className="db-swarm-channel-pane">
+      <div className="db-swarm-history">
+      <div className={`db-swarm-scroll${showHero ? " is-hero" : ""}`} ref={scrollRef} onScroll={onScroll}>
+        <div key={channelKey} className="db-swarm-channel-pane">
           {showSkeleton ? (
             <StreamSkeleton />
           ) : showHero ? (
@@ -708,6 +765,8 @@ export function SwarmStream(props: Props) {
           )}
           {busyHere && <Typing author={props.busyAuthor} since={props.busySince} />}
         </div>
+      </div>
+      {showJump && <button type="button" className="db-swarm-jump" onClick={jumpToLatest}><ArrowDown size={14} /> Jump to latest</button>}
       </div>
 
       {props.notice && (view.kind === "manager" || props.noticeEverywhere) && (
@@ -724,6 +783,7 @@ export function SwarmStream(props: Props) {
         </div>
       )}
 
+      <div className={`db-swarm-compose-box${readOnly ? " is-readonly" : ""}${busy ? " is-busy" : ""}`}>
       {!readOnly && props.attachments.length > 0 && (
         <div className="db-swarm-attachments" aria-label="Files for this message">
           {props.attachments.map((a) => (
@@ -789,6 +849,7 @@ export function SwarmStream(props: Props) {
           <Send size={19} aria-hidden="true" />
         </button>
       </form>
+      </div>
       <p className="db-swarm-composer-hint">
         {readOnly
           ? "Activity is written by the swarm."

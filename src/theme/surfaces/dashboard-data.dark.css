@@ -474,13 +474,13 @@
   --sw-panel-border: var(--dk-glass-border);
   --sw-panel-fill: var(--dk-glass-fill);
   --sw-panel-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
-  --sw-rail-fill: var(--dk-glass-fill);
+  --sw-rail-fill: var(--dk-surface-2);
   --sw-divider: var(--dk-divider);
   --sw-hover: var(--dk-hover);
   --sw-active: var(--dk-active);
   --sw-active-ring: var(--dk-border-strong);
   --sw-lift: rgba(0, 0, 0, 0.35);
-  --sw-field: var(--dk-field-bg);
+  --sw-field: var(--dk-surface-2);
   --sw-field-border: var(--dk-field-border);
   --sw-chip: rgba(255, 255, 255, 0.035);
   --sw-chip-border: var(--dk-border);
@@ -493,9 +493,9 @@
   --sw-accent-soft: var(--dk-accent-soft);
   --sw-accent-ring: var(--dk-accent-ring);
   --sw-on-accent: #04231d;
-  --sw-sup: var(--dk-text);
-  --sw-sup-soft: rgba(255, 255, 255, 0.08);
-  --sw-sup-ring: rgba(255, 255, 255, 0.3);
+  --sw-sup: var(--dk-accent-text);
+  --sw-sup-soft: var(--dk-accent-soft);
+  --sw-sup-ring: var(--dk-accent-ring);
   --sw-warn: var(--dk-warning);
   --sw-warn-soft: var(--dk-warning-soft);
   --sw-danger: var(--dk-danger);
@@ -505,18 +505,18 @@
   --sw-aurora-b: transparent;
   --sw-drawer-shadow: -18px 0 44px rgba(0, 0, 0, 0.55);
   --sw-scroll-thumb: var(--dk-scroll-thumb);
-  --sw-h0: var(--dk-text);
-  --sw-h0-soft: rgba(255, 255, 255, 0.07);
-  --sw-h1: var(--dk-text);
-  --sw-h1-soft: rgba(255, 255, 255, 0.07);
-  --sw-h2: var(--dk-text);
-  --sw-h2-soft: rgba(255, 255, 255, 0.07);
-  --sw-h3: var(--dk-text);
-  --sw-h3-soft: rgba(255, 255, 255, 0.07);
-  --sw-h4: var(--dk-text);
-  --sw-h4-soft: rgba(255, 255, 255, 0.07);
-  --sw-h5: var(--dk-text);
-  --sw-h5-soft: rgba(255, 255, 255, 0.07);
+  --sw-h0: color-mix(in srgb, var(--sw-h0-ink) 48%, var(--dk-text));
+  --sw-h0-soft: color-mix(in srgb, var(--sw-h0) 12%, transparent);
+  --sw-h1: color-mix(in srgb, var(--sw-h1-ink) 48%, var(--dk-text));
+  --sw-h1-soft: color-mix(in srgb, var(--sw-h1) 12%, transparent);
+  --sw-h2: color-mix(in srgb, var(--sw-h2-ink) 48%, var(--dk-text));
+  --sw-h2-soft: color-mix(in srgb, var(--sw-h2) 12%, transparent);
+  --sw-h3: color-mix(in srgb, var(--sw-h3-ink) 48%, var(--dk-text));
+  --sw-h3-soft: color-mix(in srgb, var(--sw-h3) 12%, transparent);
+  --sw-h4: color-mix(in srgb, var(--sw-h4-ink) 48%, var(--dk-text));
+  --sw-h4-soft: color-mix(in srgb, var(--sw-h4) 12%, transparent);
+  --sw-h5: color-mix(in srgb, var(--sw-h5-ink) 48%, var(--dk-text));
+  --sw-h5-soft: color-mix(in srgb, var(--sw-h5) 12%, transparent);
 }
 /* The danger pill keeps white text on light; on dark it needs the dark ink. */
 :root[data-theme="dark"] .db-swarm-pill-btn.is-danger,

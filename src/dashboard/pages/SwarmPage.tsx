@@ -48,7 +48,7 @@ import {
   isChannelId,
   managerChannel,
   managerIdOfChannel,
-  roleLabel,
+  contactDuty,
   supervisorActive,
   type ChannelId,
   type ThreadEntry,
@@ -283,7 +283,7 @@ function channelView(channel: ChannelId, roster: SwarmRoster): ChannelView {
   return {
     kind: "group",
     name: groupChannelName(roster),
-    topic: `${backer.name} · ${roleLabel(backer, roster)}`,
+    topic: `${backer.name} · ${contactDuty(roster)}`,
   };
 }
 

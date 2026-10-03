@@ -19,6 +19,10 @@ was started and read like commit subjects rather than release notes.
 ### Added
 - Working managers in Swarm now show a small 3D version of their own mark turning beside a line that says what they are reading right now, with a quieter line in the manager's own voice underneath. Team rounds animate while the Supervisor writes the answer, a working manager's dot in the rail pulses on the same beat, and channels show placeholder rows while they load instead of flashing an empty screen.
 
+### Changed
+- The Swarm message box is 4px shorter with rounded 24px corners, a matching rounded send button, and a softer border and focus outline.
+- Swarm has a connected chat layout, distinct manager colors, compact activity cards, and a refined composer. Reading older messages keeps your place, with a Jump to latest button when you want to catch up.
+
 ### Fixed
 - Holding Ctrl+Win to dictate now works while an Aura window is in front, such as the dashboard's Swarm composer. Windows stops passing key presses to Aura's keyboard listener whenever one of its own windows has focus, so the chord did nothing there; Aura now also reads those keys directly while it is in front.
 - Dictating into a dashboard field now shows the dictation pill while you hold the chord, and the words land in that field even when the chat card is open under the notch. The hold used to run with no feedback, and an open chat swallowed the text.
