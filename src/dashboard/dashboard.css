@@ -9550,13 +9550,37 @@
 .db-swarm-mention-text { display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }
 .db-swarm-mention-text strong { font-size: 13.5px; font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .db-swarm-mention-text span { font-size: 11.5px; color: var(--sw-mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-/* A recognised @Name inside a sent message. */
+/* A recognised @Name, in a sent message or in the composer mirror, in that manager's colour. */
 .db-swarm-mention {
-  padding: 1px 6px;
-  border-radius: 7px;
+  border-radius: 6px;
+  box-shadow: 0 0 0 3px var(--sw-accent-soft);
   background: var(--sw-accent-soft);
   color: var(--sw-accent-strong);
-  font-weight: 600;
+  font-weight: 650;
+}
+.db-swarm-mention.is-supervisor { color: var(--sw-sup); background: var(--sw-sup-soft); box-shadow: 0 0 0 3px var(--sw-sup-soft); }
+.db-swarm-mention.is-hue-0 { color: var(--sw-h0); background: var(--sw-h0-soft); box-shadow: 0 0 0 3px var(--sw-h0-soft); }
+.db-swarm-mention.is-hue-1 { color: var(--sw-h1); background: var(--sw-h1-soft); box-shadow: 0 0 0 3px var(--sw-h1-soft); }
+.db-swarm-mention.is-hue-2 { color: var(--sw-h2); background: var(--sw-h2-soft); box-shadow: 0 0 0 3px var(--sw-h2-soft); }
+.db-swarm-mention.is-hue-3 { color: var(--sw-h3); background: var(--sw-h3-soft); box-shadow: 0 0 0 3px var(--sw-h3-soft); }
+.db-swarm-mention.is-hue-4 { color: var(--sw-h4); background: var(--sw-h4-soft); box-shadow: 0 0 0 3px var(--sw-h4-soft); }
+.db-swarm-mention.is-hue-5 { color: var(--sw-h5); background: var(--sw-h5-soft); box-shadow: 0 0 0 3px var(--sw-h5-soft); }
+/* The composer's mirror: identical metrics to the textarea so every glyph lines up. */
+.db-swarm-composer-field { position: relative; flex: 1; min-width: 0; display: grid; }
+.db-swarm-composer-field textarea { grid-area: 1 / 1; position: relative; z-index: 1; color: transparent; caret-color: var(--sw-text); }
+.db-swarm-composer-field textarea:disabled { color: var(--sw-text); }
+.db-swarm-composer-mirror {
+  grid-area: 1 / 1;
+  overflow: hidden;
+  padding: 6px 0;
+  max-height: 168px;
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--sw-text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  pointer-events: none;
 }
 /* The message just sent, before the server's copy arrives. */
 .db-swarm-msg.is-pending { opacity: 0.55; }

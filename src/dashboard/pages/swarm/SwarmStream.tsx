@@ -35,6 +35,7 @@ import {
   findManager,
   hueOf,
   managerChannel,
+  mentionCandidates,
   roleLabel,
   timeLabel,
   type Author,
@@ -46,18 +47,30 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** The user's text with each "@Name" the server recognised drawn as a chip. A stray "@"
- * in prose stays plain text: only the names in `mentions` are styled. */
-function withMentions(text: string, mentions: { id: string; name: string }[]): ReactNode {
-  const names = mentions.map((m) => m.name).filter(Boolean).sort((a, b) => b.length - a.length);
+/** Text with each "@Name" that names someone on the roster drawn as a chip in that
+ * manager's colour. Used for sent messages and, through a mirror layer, the composer, so
+ * a mention looks the same while it is typed and after it lands. `extra` adds names the
+ * server recognised at the time (a manager since removed). A stray "@" in prose stays
+ * plain text. */
+function withMentions(text: string, roster: SwarmRoster, extra: { id: string; name: string }[] = []): ReactNode {
+  if (!text.includes("@")) return text;
+  const labels = new Map<string, string>();
+  for (const c of mentionCandidates(roster)) {
+    labels.set(c.name.toLowerCase(), c.id);
+    if (c.id !== "supervisor" && c.title !== "Manager") labels.set(c.title.toLowerCase(), c.id);
+  }
+  for (const m of extra) if (m.name && !labels.has(m.name.toLowerCase())) labels.set(m.name.toLowerCase(), m.id);
+  const names = [...labels.keys()].filter(Boolean).sort((a, b) => b.length - a.length);
   if (names.length === 0) return text;
-  const pattern = new RegExp(`@(?:${names.map(escapeRegExp).join("|")})(?![\\p{L}\\p{N}])`, "giu");
+  const pattern = new RegExp(`@(${names.map(escapeRegExp).join("|")})(?![\\p{L}\\p{N}])`, "giu");
   const out: ReactNode[] = [];
   let last = 0;
   for (const match of text.matchAll(pattern)) {
     const at = match.index ?? 0;
+    const id = labels.get(match[1].toLowerCase()) ?? "";
+    const tone = id === "supervisor" ? "is-supervisor" : `is-hue-${hueOf(id)}`;
     if (at > last) out.push(text.slice(last, at));
-    out.push(<span key={at} className="db-swarm-mention">{match[0]}</span>);
+    out.push(<span key={at} className={`db-swarm-mention ${tone}`}>{match[0]}</span>);
     last = at + match[0].length;
   }
   if (last < text.length) out.push(text.slice(last));
@@ -525,6 +538,7 @@ export function SwarmStream(props: Props) {
   };
 
   const mention = useMentionPicker(props.roster, text, props.onText, composerRef);
+  const mirrorRef = useRef<HTMLDivElement | null>(null);
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     // While the @ list is open, Enter picks a name; it must never send the message.
     if (mention.onKeyDown(event)) return;
@@ -636,7 +650,7 @@ export function SwarmStream(props: Props) {
                       {item.at > 0 && <time>{timeLabel(item.at)}</time>}
                     </div>
                   )}
-                  <p className="db-swarm-text">{withMentions(item.text, item.mentions)}</p>
+                  <p className="db-swarm-text">{withMentions(item.text, props.roster, item.mentions)}</p>
                   {item.docs.length > 0 && (
                     <div className="db-swarm-files">
                       {item.docs.map((doc) => {
@@ -797,7 +811,7 @@ export function SwarmStream(props: Props) {
                   <strong className="db-swarm-name is-you">{props.youName || "You"}</strong>
                   <span className="db-swarm-role">Sending</span>
                 </div>
-                <p className="db-swarm-text">{props.pending.text}</p>
+                <p className="db-swarm-text">{withMentions(props.pending.text, props.roster)}</p>
                 {props.pending.docs.length > 0 && (
                   <div className="db-swarm-files">
                     {props.pending.docs.map((doc) => <span key={doc.id} className="db-swarm-file"><SheetGlyph size={15} /><span className="db-swarm-file-name">{doc.name}</span></span>)}
@@ -876,27 +890,38 @@ export function SwarmStream(props: Props) {
           </>
         )}
         <label htmlFor="swarm-message" className="db-swarm-sr">Message</label>
-        <textarea
-          id="swarm-message"
-          ref={composerRef}
-          rows={1}
-          value={readOnly ? "" : text}
-          maxLength={messageMax}
-          disabled={readOnly}
-          onChange={(event) => {
-            props.onText(event.target.value);
-            mention.refresh(event.target.value, event.target.selectionStart);
-          }}
-          onKeyDown={onKeyDown}
-          onKeyUp={(event) => mention.refresh(event.currentTarget.value, event.currentTarget.selectionStart)}
-          onClick={(event) => mention.refresh(event.currentTarget.value, event.currentTarget.selectionStart)}
-          onPaste={onPaste}
-          placeholder={placeholder}
-          aria-autocomplete="list"
-          aria-expanded={mention.open}
-          aria-controls={mention.open ? "swarm-mentions" : undefined}
-          aria-activedescendant={mention.activeId}
-        />
+        <span className="db-swarm-composer-field">
+          {/* A textarea cannot colour its own words, so a mirror with the same metrics sits
+            * under it and draws the text with mention chips; the textarea's text is
+            * transparent and only its caret shows. */}
+          {!readOnly && (
+            <div className="db-swarm-composer-mirror" ref={mirrorRef} aria-hidden="true">
+              {withMentions(text, props.roster)}{"\n"}
+            </div>
+          )}
+          <textarea
+            id="swarm-message"
+            ref={composerRef}
+            rows={1}
+            value={readOnly ? "" : text}
+            maxLength={messageMax}
+            disabled={readOnly}
+            onChange={(event) => {
+              props.onText(event.target.value);
+              mention.refresh(event.target.value, event.target.selectionStart);
+            }}
+            onKeyDown={onKeyDown}
+            onKeyUp={(event) => mention.refresh(event.currentTarget.value, event.currentTarget.selectionStart)}
+            onClick={(event) => mention.refresh(event.currentTarget.value, event.currentTarget.selectionStart)}
+            onScroll={(event) => { if (mirrorRef.current) mirrorRef.current.scrollTop = event.currentTarget.scrollTop; }}
+            onPaste={onPaste}
+            placeholder={placeholder}
+            aria-autocomplete="list"
+            aria-expanded={mention.open}
+            aria-controls={mention.open ? "swarm-mentions" : undefined}
+            aria-activedescendant={mention.activeId}
+          />
+        </span>
         {!readOnly && text.length > messageMax - 400 && <span className="db-swarm-count">{messageMax - text.length}</span>}
         <button type="submit" className="db-swarm-send" disabled={readOnly || busy || reading || !text.trim() || text.length > messageMax} aria-label="Send">
           <Send size={19} aria-hidden="true" />
