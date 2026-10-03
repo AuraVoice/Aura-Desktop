@@ -47,11 +47,10 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/** Text with each "@Name" that names someone on the roster drawn as a chip in that
- * manager's colour. Used for sent messages and, through a mirror layer, the composer, so
- * a mention looks the same while it is typed and after it lands. `extra` adds names the
- * server recognised at the time (a manager since removed). A stray "@" in prose stays
- * plain text. */
+/** Text with each "@Name" that names someone on the roster drawn as an indigo chip. Used
+ * for sent messages and, through a mirror layer, the composer, so a mention looks the same
+ * while it is typed and after it lands. `extra` adds names the server recognised at the
+ * time (a manager since removed). A stray "@" in prose stays plain text. */
 function withMentions(text: string, roster: SwarmRoster, extra: { id: string; name: string }[] = []): ReactNode {
   if (!text.includes("@")) return text;
   const labels = new Map<string, string>();
@@ -67,10 +66,8 @@ function withMentions(text: string, roster: SwarmRoster, extra: { id: string; na
   let last = 0;
   for (const match of text.matchAll(pattern)) {
     const at = match.index ?? 0;
-    const id = labels.get(match[1].toLowerCase()) ?? "";
-    const tone = id === "supervisor" ? "is-supervisor" : `is-hue-${hueOf(id)}`;
     if (at > last) out.push(text.slice(last, at));
-    out.push(<span key={at} className={`db-swarm-mention ${tone}`}>{match[0]}</span>);
+    out.push(<span key={at} className="db-swarm-mention">{match[0]}</span>);
     last = at + match[0].length;
   }
   if (last < text.length) out.push(text.slice(last));

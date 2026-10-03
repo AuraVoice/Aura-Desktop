@@ -18,7 +18,7 @@ was started and read like commit subjects rather than release notes.
 
 ### Added
 - Swarm managers now get a persona name alongside their job title, so the rail, roster and every message read "Snapshot Sam · Langfuse Snapshots" instead of a bare job label.
-- Type "@" in #group to pick a manager or the Supervisor from a list; the mention steers the message to them and is highlighted in that manager's colour, both while you type it and in the thread afterwards.
+- Type "@" in #group to pick a manager or the Supervisor from a list; the mention steers the message to them and is highlighted in indigo, both while you type it and in the thread afterwards.
 - Asking a busy manager how it is getting on gets a status reply from its live session instead of a refusal.
 
 ### Changed

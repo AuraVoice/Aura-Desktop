@@ -501,6 +501,8 @@
   --sw-danger: var(--dk-danger);
   --sw-you: var(--dk-text);
   --sw-you-soft: rgba(255, 255, 255, 0.08);
+  --sw-mention: #a3b1ff;
+  --sw-mention-soft: rgba(143, 160, 255, 0.22);
   --sw-aurora-a: transparent;
   --sw-aurora-b: transparent;
   --sw-drawer-shadow: -18px 0 44px rgba(0, 0, 0, 0.55);
