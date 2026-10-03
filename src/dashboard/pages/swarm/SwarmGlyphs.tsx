@@ -443,21 +443,38 @@ function hash(id: string, salt: number): number {
   return h >>> 0;
 }
 
+/** The numbers behind a manager's mark, in the sigil's 24-unit box. The SVG below and the
+ * 3D orb (swarmOrbRenderer.ts) both read these, so the two always agree. */
+export interface SigilParams {
+  nodes: number;
+  twist: number;
+  star: boolean;
+  radius: number;
+  ring: 0 | 1 | 2;
+}
+
+export function sigilParams(id: string): SigilParams {
+  const nodes = 3 + (hash(id, 1) % 4);
+  return {
+    nodes,
+    twist: (hash(id, 2) % 360) * (Math.PI / 180),
+    star: nodes >= 5 && hash(id, 3) % 2 === 0,
+    radius: 7.6 + (hash(id, 4) % 3) * 0.5,
+    ring: (hash(id, 5) % 3) as 0 | 1 | 2,
+  };
+}
+
 /** A manager's own mark, generated from its id: 3 to 6 nodes on a ring, joined as a
  * polygon or a star, around a core. Two managers practically never share one, and the
  * same manager always gets the same one. */
 export function Sigil({ id, size = 22, className = "", x, y }: { id: string; size?: number; className?: string; x?: number; y?: number }) {
-  const nodes = 3 + (hash(id, 1) % 4);
-  const twist = (hash(id, 2) % 360) * (Math.PI / 180);
-  const star = nodes >= 5 && hash(id, 3) % 2 === 0;
-  const radius = 7.6 + (hash(id, 4) % 3) * 0.5;
+  const { nodes, twist, star, radius, ring } = sigilParams(id);
   const points = Array.from({ length: nodes }, (_, i) => {
     const a = twist + (i / nodes) * Math.PI * 2;
     return [12 + Math.cos(a) * radius, 12 + Math.sin(a) * radius] as const;
   });
   const order = star ? points.map((_, i) => points[(i * 2) % nodes]) : points;
   const d = `${order.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(2)} ${y.toFixed(2)}`).join(" ")}Z`;
-  const ring = hash(id, 5) % 3;
   return (
     <svg viewBox="0 0 24 24" x={x} y={y} width={size} height={size} className={`sw-g sw-sigil ${className}`.trim()} fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
       {ring === 0 && <circle cx="12" cy="12" r={radius + 2.4} strokeWidth={0.9} strokeDasharray="1.2 2" opacity="0.55" />}

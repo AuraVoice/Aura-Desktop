@@ -18,6 +18,8 @@ interface Props {
   unread: Record<string, number>;
   /** Managers currently working, by id. */
   working: ReadonlySet<string>;
+  /** The roster has not loaded yet, so "None yet" would be a lie. */
+  loading: boolean;
   /** One line on whether managers can work right now. */
   status: { text: string; warn: boolean };
   freshManagers: ReadonlySet<string>;
@@ -33,7 +35,7 @@ function Badge({ count }: { count: number }) {
 
 /** Left rail: the two shared channels, then one DM per manager, then whether the
  * managers can work right now. */
-export function SwarmChannels({ roster, channel, unread, working, status, freshManagers, supervisorFresh, onSelect, onNewWorkflow }: Props) {
+export function SwarmChannels({ roster, channel, unread, working, loading, status, freshManagers, supervisorFresh, onSelect, onNewWorkflow }: Props) {
   const hasSupervisor = supervisorActive(roster);
   const contact = frontDoorAuthor(roster);
   const supervisorArchived = roster.supervisor?.status === "archived";
@@ -91,7 +93,20 @@ export function SwarmChannels({ roster, channel, unread, working, status, freshM
             <SpawnGlyph size={14} /> New
           </button>
         </div>
-        {roster.managers.length === 0 && <p className="db-swarm-rail-empty">None yet</p>}
+        {roster.managers.length === 0 && loading && (
+          <div className="db-swarm-skel-list" aria-hidden="true">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="db-swarm-skel is-rail">
+                <span className="db-shimmer db-swarm-skel-av" />
+                <span className="db-swarm-skel-lines">
+                  <span className="db-shimmer db-skel-line is-head" />
+                  <span className="db-shimmer db-skel-line is-body" />
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+        {roster.managers.length === 0 && !loading && <p className="db-swarm-rail-empty">None yet</p>}
         {roster.managers.map((m) => {
           const id = managerChannel(m.id);
           const active = channel === id;

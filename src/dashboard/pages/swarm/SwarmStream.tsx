@@ -1,9 +1,10 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
-import type { SwarmDecision, SwarmDoc, SwarmManager, SwarmRoster, SwarmRoundView, SwarmSessionView } from "../../../lib/swarmApi";
+import type { SwarmDecision, SwarmDoc, SwarmManager, SwarmMessage, SwarmRoster, SwarmRoundView, SwarmSessionView } from "../../../lib/swarmApi";
 import { DOCUMENT_ACCEPT } from "../../../lib/documentText";
 import { IMAGE_ACCEPT } from "../../../lib/chatAttachments";
 import { Paperclip, Send } from "lucide-react";
 import { SwarmAvatar } from "./SwarmAvatar";
+import { SwarmOrb } from "./SwarmOrb";
 import {
   AscentGlyph,
   BuildGlyph,
@@ -97,6 +98,8 @@ interface Props {
   roster: SwarmRoster;
   openDrafts: ReadonlySet<string>;
   fresh: ReadonlySet<string>;
+  /** This channel has nothing to show yet because it is still being fetched. */
+  loading: boolean;
   busy: boolean;
   busyHere: boolean;
   busyAuthor: Author;
@@ -253,9 +256,26 @@ function Typing({ author, since }: { author: Author; since: number }) {
   const seconds = Math.max(0, Math.floor((now - since) / 1000));
   return (
     <div className="db-swarm-typing" aria-live="polite">
-      <span className="db-swarm-typing-dots" aria-hidden="true"><i /><i /><i /></span>
+      <SwarmOrb id={author.role === "manager" ? author.id : "swarm"} state="planning" tone={author.role === "supervisor" ? "sup" : "accent"} size={28} />
       <span><strong>{author.name}</strong> is deciding who owns this</span>
       {seconds >= 4 && <span className="db-swarm-typing-time">{seconds}s</span>}
+    </div>
+  );
+}
+
+/** Three glass rows the real messages replace once the channel has loaded. */
+function StreamSkeleton() {
+  return (
+    <div className="db-swarm-skel-list" aria-hidden="true">
+      {[0, 1, 2].map((i) => (
+        <div key={i} className="db-swarm-skel">
+          <span className="db-shimmer db-swarm-skel-av" />
+          <span className="db-swarm-skel-lines">
+            <span className="db-shimmer db-skel-line is-head" />
+            <span className="db-shimmer db-skel-line is-body" />
+          </span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -456,9 +476,12 @@ export function SwarmStream(props: Props) {
     const latestQuestion: Record<string, string> = {};
     // A session whose report is in the thread needs no fetch to say it finished.
     const reported = new Set<string>();
+    // The newest finished step per session is what its working card says it is reading now.
+    const latestStep: Record<string, SwarmMessage> = {};
     for (const item of items) {
       if (item.kind === "question") latestQuestion[item.message.sessionId] = item.key;
       if (item.kind === "report") reported.add(item.message.sessionId);
+      if (item.kind === "step") latestStep[item.message.sessionId] = item.message;
     }
     let lastDay = "";
     let lastAuthorKey = "";
@@ -570,6 +593,9 @@ export function SwarmStream(props: Props) {
                   {item.kind === "working" && (
                     <WorkingEmbed
                       name={item.author.name}
+                      managerId={item.author.id}
+                      manager={findManager(props.roster, item.author.id)}
+                      latestStep={latestStep[item.sessionId]}
                       session={props.sessions[item.sessionId]}
                       reported={reported.has(item.sessionId)}
                       stopping={props.stopping.has(item.sessionId)}
@@ -640,7 +666,8 @@ export function SwarmStream(props: Props) {
       : props.hireHint
         ? "Describe an ongoing job"
         : `Message #${view.name}`;
-  const showHero = view.kind === "group" && items.length === 0 && !busyHere;
+  const showSkeleton = props.loading && items.length === 0 && !busyHere;
+  const showHero = view.kind === "group" && items.length === 0 && !busyHere && !showSkeleton;
 
   return (
     <section className="db-swarm-stream" aria-label={view.kind === "manager" ? `Direct messages with ${view.name}` : `#${view.name}`}>
@@ -668,7 +695,9 @@ export function SwarmStream(props: Props) {
       {props.banner}
       <div className={`db-swarm-scroll${showHero ? " is-hero" : ""}`} ref={scrollRef}>
         <div key={view.kind === "manager" ? `m-${view.manager?.id}` : view.kind} className="db-swarm-channel-pane">
-          {showHero ? (
+          {showSkeleton ? (
+            <StreamSkeleton />
+          ) : showHero ? (
             <GroupHero onStarter={(starter) => { props.onText(starter); composerRef.current?.focus(); }} />
           ) : (
             <>

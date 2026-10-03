@@ -16,6 +16,9 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+### Added
+- Working managers in Swarm now show a small 3D version of their own mark turning beside a line that says what they are reading right now, with a quieter line in the manager's own voice underneath. Team rounds animate while the Supervisor writes the answer, a working manager's dot in the rail pulses on the same beat, and channels show placeholder rows while they load instead of flashing an empty screen.
+
 ## [0.16.1] - 2026-10-02
 
 ### Changed

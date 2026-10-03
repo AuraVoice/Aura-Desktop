@@ -815,6 +815,8 @@ export function SwarmPage() {
 
   // A failed first load must not read as an empty team that is ready to go.
   const loadFailed = resource.error && !resource.data;
+  // Cold load of the swarm itself, or the first pull of this channel's thread.
+  const channelLoading = resource.loading || (resource.data !== null && messages[liveChannel] === undefined && !loadFailed);
   const notice = loadFailed
     ? "Couldn't load your Swarm. Your team is safe on the server; Aura will retry."
     : runtimeNotice(state.runtimeProblem);
@@ -848,6 +850,7 @@ export function SwarmPage() {
         channel={liveChannel}
         unread={unread}
         working={working}
+        loading={resource.loading}
         status={status}
         freshManagers={freshManagers}
         supervisorFresh={supervisorFresh}
@@ -860,6 +863,7 @@ export function SwarmPage() {
           roster={roster}
           openDrafts={openDrafts}
           fresh={freshItems}
+          loading={channelLoading}
           busy={busy}
           busyHere={busy && busyChannel === liveChannel && liveChannel === "group"}
           busyAuthor={frontDoorAuthor(roster)}

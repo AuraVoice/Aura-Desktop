@@ -9,8 +9,11 @@ import {
 import { openPath } from "@tauri-apps/plugin-opener";
 import { Send } from "lucide-react";
 import { FORMAT_LABEL, saveDocumentDraft, type DocumentFormat } from "../../../lib/swarmDocumentFile";
-import type { SwarmMessage, SwarmRoundMember, SwarmRoundView, SwarmSessionView } from "../../../lib/swarmApi";
+import type { SwarmManager, SwarmMessage, SwarmRoundMember, SwarmRoundView, SwarmSessionView } from "../../../lib/swarmApi";
 import { mapRoundMember, proposeDraft, SwarmRequestError, TERMINAL_SESSION_STATES } from "../../../lib/swarmApi";
+import { SwarmOrb } from "./SwarmOrb";
+import type { OrbState, OrbTone } from "./swarmOrbRenderer";
+import { thinkingLine, voiceLine, type VoiceBank } from "./swarmThinking";
 import {
   BlockGlyph,
   BranchGlyph,
@@ -110,36 +113,97 @@ function Elapsed({ since }: { since: number }) {
   return <span className="db-swarm-work-time">{label}</span>;
 }
 
+/** Ticks every few seconds so the voice line under an orb moves on to its next phrase. */
+const SLOT_MS = 3200;
+function useSlot(): number {
+  const [slot, setSlot] = useState(0);
+  useEffect(() => {
+    const timer = window.setInterval(() => setSlot((n) => n + 1), SLOT_MS);
+    return () => window.clearInterval(timer);
+  }, []);
+  return slot;
+}
+
+/** Orb on the left, what the manager is doing on the right. `activity` is the only live
+ * region: the clock and the rotating voice line stay quiet for screen readers. */
+function ThinkingRow({
+  id,
+  state,
+  tone,
+  activity,
+  voice,
+  slot,
+  meta,
+}: {
+  id: string;
+  state: OrbState;
+  tone: OrbTone;
+  activity: string;
+  voice: string;
+  slot: number;
+  meta?: ReactNode;
+}) {
+  return (
+    <div className="db-swarm-think">
+      <SwarmOrb id={id} state={state} tone={tone} />
+      <div className="db-swarm-think-text">
+        <span className="db-swarm-think-activity" aria-live="polite">{activity}</span>
+        <span key={slot} className="db-swarm-think-voice" aria-hidden="true">{voice}</span>
+      </div>
+      {meta && <span className="db-swarm-think-meta">{meta}</span>}
+    </div>
+  );
+}
+
+const ORB_STATES: ReadonlySet<string> = new Set<OrbState>(["queued", "planning", "acting", "reporting", "verifying", "waiting_user"]);
+
 /** The live chip on a session's "working" message. Once the session ends it folds to one line. */
 export function WorkingEmbed({
   name,
+  managerId,
+  manager,
+  latestStep,
   session,
   reported,
   stopping,
   onStop,
 }: {
   name: string;
+  managerId: string;
+  manager: SwarmManager | undefined;
+  latestStep: SwarmMessage | undefined;
   session: SwarmSessionView | undefined;
   reported: boolean;
   stopping: boolean;
   onStop: () => void;
 }) {
+  const slot = useSlot();
   if (!session && !reported) return <p className="db-swarm-muted">{name} took this on.</p>;
   if (!session || TERMINAL_SESSION_STATES.has(session.state)) {
     return <p className="db-swarm-muted">{name} worked on this. The report is below.</p>;
   }
   const tasks = session.lanes.filter((l) => l.kind === "task");
   const stopRequested = session.cancelRequested || stopping;
+  const line = thinkingLine(stopRequested ? { ...session, cancelRequested: true } : session, latestStep, manager, slot);
+  const orbState: OrbState = stopRequested ? "stopping" : ORB_STATES.has(session.state) ? (session.state as OrbState) : "acting";
   return (
-    <div className={`db-swarm-embed is-work${stopRequested ? " is-stopping" : ""}`} aria-live="polite">
-      <div className="db-swarm-embed-kicker">
-        <span className="db-swarm-work-dots" aria-hidden="true"><i /><i /><i /></span>
-        {stopRequested ? "Stopping after this step" : PHASE_COPY[session.state] ?? "Working"}
-        <Elapsed since={session.createdAt} />
-        <span className="db-swarm-work-budget" title="Model decisions used of this session's limit">
-          {session.decisionsUsed}/{session.maxDecisions} steps
-        </span>
-      </div>
+    <div className={`db-swarm-embed is-work${stopRequested ? " is-stopping" : ""}`}>
+      <ThinkingRow
+        id={managerId}
+        state={orbState}
+        tone={stopRequested ? "warn" : "accent"}
+        activity={line.activity}
+        voice={line.voice}
+        slot={slot}
+        meta={
+          <>
+            <Elapsed since={session.createdAt} />
+            <span className="db-swarm-work-budget" title="Model decisions used of this session's limit">
+              {session.decisionsUsed}/{session.maxDecisions} steps
+            </span>
+          </>
+        }
+      />
       {tasks.length > 0 && (
         <ul className="db-swarm-lanes">
           {tasks.map((lane) => (
@@ -724,6 +788,7 @@ export function RoundEmbed({
   onStop: () => void;
   onOpen: (managerId: string) => void;
 }) {
+  const slot = useSlot();
   const members = roundMembers(message, round);
   const ended = (m: SwarmRoundMember) => {
     const s = sessions[m.sessionId];
@@ -731,6 +796,7 @@ export function RoundEmbed({
   };
   const running = members.filter((m) => !ended(m));
   const done = round?.state === "done";
+  const bank: VoiceBank = stopping ? "stopping" : running.length > 0 ? "round" : "roundWriting";
   const label = (m: SwarmRoundMember): string => {
     if (m.state === "skipped") return ROUND_SKIP_COPY[m.reason] ?? "could not start";
     const s = sessions[m.sessionId];
@@ -738,11 +804,22 @@ export function RoundEmbed({
     return END_COPY[s?.state ?? m.endState] ?? (m.state === "running" ? "Starting" : "done");
   };
   return (
-    <div className={`db-swarm-embed is-work${stopping ? " is-stopping" : ""}`} aria-live="polite">
-      <div className="db-swarm-embed-kicker">
-        {running.length > 0 ? <span className="db-swarm-work-dots" aria-hidden="true"><i /><i /><i /></span> : <TeamGlyph size={15} />}
-        {done ? "Team round" : running.length > 0 ? (stopping ? "Stopping after this step" : `${running.length} working`) : "Writing the answer"}
-      </div>
+    <div className={`db-swarm-embed is-work${stopping ? " is-stopping" : ""}`}>
+      {done ? (
+        <div className="db-swarm-embed-kicker">
+          <TeamGlyph size={15} />
+          Team round
+        </div>
+      ) : (
+        <ThinkingRow
+          id="swarm"
+          state={stopping ? "stopping" : running.length > 0 ? "round" : "reporting"}
+          tone={stopping ? "warn" : "sup"}
+          activity={running.length > 0 ? (stopping ? "Stopping after this step" : `${running.length} working`) : "Writing the answer"}
+          voice={voiceLine(bank, message.sessionId || "swarm", slot)}
+          slot={slot}
+        />
+      )}
       {message.text && <p className="db-swarm-muted">{message.text}</p>}
       <ul className="db-swarm-lanes">
         {members.map((m) => (

@@ -9344,7 +9344,7 @@
 }
 .db-swarm-free-answer input:focus { border-color: var(--sw-accent); box-shadow: 0 0 0 3px var(--sw-accent-soft); }
 
-/* Typing: three dots, and a clock once it takes a while. */
+/* Typing: the front door's orb, and a clock once it takes a while. */
 .db-swarm-typing {
   display: flex;
   align-items: center;
@@ -9355,27 +9355,6 @@
   animation: db-swarm-sys-in 320ms var(--sw-out) both;
 }
 .db-swarm-typing strong { color: var(--sw-text); font-weight: 650; }
-.db-swarm-typing-dots {
-  display: inline-flex;
-  gap: 4px;
-  padding: 8px 10px;
-  border-radius: 999px;
-  background: var(--sw-chip);
-  border: 1px solid var(--sw-chip-border);
-}
-.db-swarm-typing-dots i {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--sw-accent);
-  animation: db-swarm-bounce 1.2s var(--sw-out) infinite;
-}
-.db-swarm-typing-dots i:nth-child(2) { animation-delay: 0.15s; background: color-mix(in srgb, var(--sw-accent) 50%, var(--sw-sup)); }
-.db-swarm-typing-dots i:nth-child(3) { animation-delay: 0.3s; background: var(--sw-sup); }
-@keyframes db-swarm-bounce {
-  0%, 60%, 100% { transform: translateY(0) scale(1); opacity: 0.55; }
-  30% { transform: translateY(-5px) scale(1.15); opacity: 1; }
-}
 .db-swarm-typing-time { font-size: 11px; color: var(--sw-mute); font-variant-numeric: tabular-nums; }
 
 /* Empty front door: an orbiting core and three ways to start. */
@@ -9991,16 +9970,6 @@ button:hover > .sw-g-dismiss { transform: rotate(90deg); }
 .db-swarm-embed.is-work { --sw-av: var(--sw-accent); }
 .db-swarm-embed.is-work.is-stopping { --sw-av: var(--sw-warn); }
 .db-swarm-embed.is-work.is-stopping::before { background: var(--sw-warn); }
-.db-swarm-work-dots { display: inline-flex; gap: 3px; margin-right: 2px; }
-.db-swarm-work-dots i {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: currentColor;
-  animation: db-swarm-bounce 1.2s var(--sw-out) infinite;
-}
-.db-swarm-work-dots i:nth-child(2) { animation-delay: 150ms; }
-.db-swarm-work-dots i:nth-child(3) { animation-delay: 300ms; }
 .db-swarm-work-time,
 .db-swarm-work-budget {
   margin-left: auto;
@@ -10024,6 +9993,75 @@ button:hover > .sw-g-dismiss { transform: rotate(90deg); }
 .db-swarm-lanes li.is-leased .sw-g-cell .sw-core { animation: db-swarm-g-breathe 1.6s ease-in-out infinite; }
 .db-swarm-lanes li.is-done { color: var(--sw-mute); }
 .db-swarm-lanes li.is-failed em { color: var(--sw-warn); }
+
+/* Thinking: the manager's sigil in 3D on the left, what it is doing on the right. The
+   activity line is what the data confirms; the voice line underneath swaps every few
+   seconds and rises in as it does. */
+.db-swarm-think {
+  display: grid;
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+}
+.db-swarm-think-text { display: grid; gap: 2px; min-width: 0; }
+.db-swarm-think-activity {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--sw-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.db-swarm-think-voice {
+  font-size: 12px;
+  color: var(--sw-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  animation: db-swarm-voice-in 420ms var(--sw-out) both;
+}
+@keyframes db-swarm-voice-in {
+  from { opacity: 0; transform: translateY(4px); filter: blur(2px); }
+  to { opacity: 1; transform: none; filter: none; }
+}
+.db-swarm-think-meta { display: inline-flex; align-items: center; gap: 8px; align-self: start; padding-top: 2px; }
+.db-swarm-think-meta .db-swarm-work-time,
+.db-swarm-think-meta .db-swarm-work-budget { margin-left: 0; }
+.db-swarm-embed.is-work.is-stopping .db-swarm-think-activity { color: var(--sw-warn); }
+
+/* The orb: a 2D canvas the shared WebGL renderer fills (SwarmOrb.tsx). Until three.js has
+   loaded, or for good without WebGL, a breathing dot stands in. */
+.db-swarm-orb { position: relative; display: inline-block; flex: none; }
+.db-swarm-orb canvas { display: block; width: 100%; height: 100%; opacity: 0; transition: opacity 240ms var(--sw-out); }
+.db-swarm-orb.is-live canvas { opacity: 1; }
+.db-swarm-orb-dot {
+  position: absolute;
+  inset: 33%;
+  border-radius: 50%;
+  background: var(--sw-av, var(--sw-accent));
+  opacity: 0;
+}
+.db-swarm-orb.is-pending .db-swarm-orb-dot,
+.db-swarm-orb.is-fallback .db-swarm-orb-dot { opacity: 1; animation: db-swarm-g-breathe 1.6s ease-in-out infinite; }
+.db-swarm-orb.is-fallback canvas { display: none; }
+.db-swarm-typing .db-swarm-orb { margin: -4px 0; }
+
+/* Loading a channel: three glass rows the real messages replace. */
+.db-swarm-skel-list { display: grid; gap: 4px; padding-top: 6px; }
+.db-swarm-skel { display: grid; grid-template-columns: 38px minmax(0, 1fr); gap: 12px; padding: 8px 20px; }
+.db-swarm-skel .db-shimmer { background: var(--sw-chip); border: 1px solid var(--sw-chip-border); }
+.db-swarm-skel-av { width: 34px; height: 34px; border-radius: 11px; }
+.db-swarm-skel-lines { display: grid; gap: 8px; padding-top: 5px; }
+.db-swarm-skel .db-skel-line.is-head { width: 32%; height: 11px; }
+.db-swarm-skel .db-skel-line.is-body { width: 78%; }
+.db-swarm-skel:nth-child(2) .db-skel-line.is-body { width: 56%; }
+.db-swarm-skel:nth-child(3) .db-skel-line.is-body { width: 68%; }
+.db-swarm-skel.is-rail { grid-template-columns: 26px minmax(0, 1fr); gap: 10px; padding: 6px 10px; }
+.db-swarm-skel.is-rail .db-swarm-skel-av { width: 26px; height: 26px; border-radius: 8px; }
+.db-swarm-skel.is-rail .db-swarm-skel-lines { gap: 5px; padding-top: 3px; }
+.db-swarm-skel.is-rail .db-skel-line.is-head { width: 55%; height: 9px; }
+.db-swarm-skel.is-rail .db-skel-line.is-body { width: 40%; height: 8px; }
 .db-swarm-work-foot { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
 .db-swarm-work-foot .db-swarm-pill-btn { margin-left: auto; }
 
@@ -10218,7 +10256,25 @@ button:hover > .sw-g-dismiss { transform: rotate(90deg); }
 .db-swarm-import span { flex: 1 1 260px; }
 .db-swarm-import { margin-top: 10px; }
 
-.db-swarm-presence.is-working { background: var(--sw-sup); animation: db-swarm-breathe 1.1s ease-in-out infinite; }
+/* A working manager's dot keeps the orb's 3.2s cadence: core swell plus one ring that
+   expands and fades. Transform and opacity only. */
+.db-swarm-presence.is-working { background: var(--sw-sup); animation: db-swarm-presence-think 3.2s ease-in-out infinite; }
+.db-swarm-presence.is-working::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+  border-radius: 50%;
+  border: 1px solid var(--sw-sup-ring);
+  animation: db-swarm-presence-ring 3.2s var(--sw-out) infinite;
+}
+@keyframes db-swarm-presence-think {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.18); }
+}
+@keyframes db-swarm-presence-ring {
+  0% { transform: scale(0.8); opacity: 0.9; }
+  70%, 100% { transform: scale(1.9); opacity: 0; }
+}
 .db-swarm-meter.is-warn strong { color: var(--sw-warn); }
 
 .db-swarm-grants,
