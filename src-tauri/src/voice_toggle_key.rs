@@ -500,13 +500,19 @@ mod platform {
     use tokio::sync::mpsc as tokio_mpsc;
     use windows::Win32::Foundation::{HINSTANCE, HMODULE, LPARAM, LRESULT, WPARAM};
     use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-    use windows::Win32::System::Threading::GetCurrentThreadId;
+    use windows::Win32::System::Threading::{
+        GetCurrentThread, GetCurrentThreadId, SetThreadInformation, SetThreadPriority,
+        ThreadPowerThrottling, THREAD_POWER_THROTTLING_CURRENT_VERSION,
+        THREAD_POWER_THROTTLING_EXECUTION_SPEED, THREAD_POWER_THROTTLING_STATE,
+        THREAD_PRIORITY_TIME_CRITICAL,
+    };
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         GetAsyncKeyState, VK_ESCAPE, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_RCONTROL,
         VK_RMENU, VK_RSHIFT, VK_RWIN,
     };
     use windows::Win32::UI::WindowsAndMessaging::{
-        CallNextHookEx, DispatchMessageW, GetMessageW, KillTimer, PeekMessageW,
+        CallNextHookEx, DispatchMessageW, GetForegroundWindow, GetMessageW,
+        GetWindowThreadProcessId, KillTimer, PeekMessageW,
         PostThreadMessageW, SetTimer, SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx,
         HC_ACTION, HHOOK, KBDLLHOOKSTRUCT, LLKHF_INJECTED, MSG, PM_NOREMOVE, WH_KEYBOARD_LL,
         WM_APP, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER,
@@ -529,6 +535,9 @@ mod platform {
     // of any key the user is holding. The macOS tap has the same guard in
     // kCGEventTapDisabledByTimeout handling; this is its Windows twin.
     static LAST_HOOK_EVENT_MS: AtomicU64 = AtomicU64::new(0);
+    /// Every callback since launch, so a "stopped delivering" line can say
+    /// whether the hook ever ran at all or only went quiet.
+    static HOOK_EVENTS: AtomicU64 = AtomicU64::new(0);
     /// The hook thread's id, for the resume path to post WM_AURA_REHOOK at.
     static HOOK_THREAD_ID: AtomicU32 = AtomicU32::new(0);
     const HOOK_LIVE: u8 = 0;
@@ -543,6 +552,102 @@ mod platform {
     const PROBE_EVERY_MS: u32 = 750;
     const STALE_AFTER_MS: u64 = 2000;
     const REINSTALL_COOLDOWN: Duration = Duration::from_secs(5);
+    /// Windows stops calling a low-level keyboard hook while a Chromium window
+    /// has focus, and every Aura window is WebView2. So for as long as one of
+    /// OUR windows is in front, the hook thread also reads the chord keys
+    /// straight from GetAsyncKeyState on this interval and feeds the edges into
+    /// the same ChordState machines the callback uses. A press the hook did see
+    /// arrives twice, which is harmless: observe() is a bit mask, so a repeated
+    /// down or up changes nothing. Only while Aura has focus, so the machine
+    /// is not woken 66 times a second for the rest of the day.
+    /// https://github.com/tauri-apps/tauri/issues/13919
+    const FOCUS_POLL_MS: u32 = 15;
+    /// The chord keys of BOTH machines, polled in this fixed order.
+    const POLLED_CHORD_KEYS: [u16; 6] = [
+        VK_LCONTROL.0,
+        VK_RCONTROL.0,
+        VK_LWIN.0,
+        VK_RWIN.0,
+        VK_LMENU.0,
+        VK_RMENU.0,
+    ];
+
+    /// True when the foreground window belongs to this process (dashboard,
+    /// overlay, HUD, any Aura webview).
+    fn own_window_in_front() -> bool {
+        let foreground = unsafe { GetForegroundWindow() };
+        if foreground.0.is_null() {
+            return false;
+        }
+        let mut pid = 0u32;
+        unsafe { GetWindowThreadProcessId(foreground, Some(&mut pid)) };
+        pid == std::process::id()
+    }
+
+    /// One poll: every chord key whose physical state changed since the last
+    /// poll goes through both chord machines exactly as a hook event would,
+    /// minus the injected check (insertion only ever injects Win key-ups after
+    /// the chord is fully released, which reads as no change here).
+    fn poll_chord_keys(previous: &mut u8) {
+        for (index, vk) in POLLED_CHORD_KEYS.iter().enumerate() {
+            let vk = *vk as u32;
+            let mask = 1u8 << index;
+            let down = key_physically_down(vk);
+            if down == (*previous & mask != 0) {
+                continue;
+            }
+            if down {
+                *previous |= mask;
+            } else {
+                *previous &= !mask;
+            }
+            let up = !down;
+            let dictation = CHORD_STATE.with(|state| state.borrow_mut().observe(vk, down, up));
+            if let Some(signal) = dictation.signal {
+                crate::dictation::signal(signal);
+            }
+            let region = REGION_CHORD_STATE.with(|state| state.borrow_mut().observe(vk, down, up));
+            if let Some(signal) = region.signal {
+                crate::region::signal(signal);
+            }
+        }
+    }
+
+    /// A probe tick this far past its 750 ms schedule means the hook thread
+    /// was not being scheduled, which is the same stall that gets the hook
+    /// dropped (300 ms, counted from the keystroke, scheduling delay included).
+    const STALL_WARN_MS: u128 = 250;
+
+    /// The hook callback is trivial, but Windows measures its 300 ms budget
+    /// from the keystroke, so a thread that merely waits its turn on a busy
+    /// machine loses the hook as surely as a slow callback would. Every
+    /// dictation chord then dies until the probe catches it. Time-critical
+    /// priority (base 15 inside a normal-class process, no privilege needed)
+    /// is what AutoHotkey and PowerToys run their hook threads at, and the
+    /// throttling opt-out keeps Windows 11 from parking this thread with the
+    /// rest of a background process on battery. Both failures are logged and
+    /// otherwise ignored: the hook still works, just without the guarantee.
+    fn raise_hook_thread_priority() {
+        let thread = unsafe { GetCurrentThread() };
+        if let Err(err) = unsafe { SetThreadPriority(thread, THREAD_PRIORITY_TIME_CRITICAL) } {
+            warn!("voice_toggle_key: hook thread priority not raised: {err}");
+        }
+        let state = THREAD_POWER_THROTTLING_STATE {
+            Version: THREAD_POWER_THROTTLING_CURRENT_VERSION,
+            ControlMask: THREAD_POWER_THROTTLING_EXECUTION_SPEED,
+            StateMask: 0,
+        };
+        if let Err(err) = unsafe {
+            SetThreadInformation(
+                thread,
+                ThreadPowerThrottling,
+                &state as *const _ as *const std::ffi::c_void,
+                std::mem::size_of::<THREAD_POWER_THROTTLING_STATE>() as u32,
+            )
+        } {
+            warn!("voice_toggle_key: hook thread power throttling opt-out failed: {err}");
+        }
+    }
     /// Every key the hook exists to see. A held one with a stale stamp means
     /// the hook missed a real press.
     const PROBED_KEYS: [u16; 8] = [
@@ -650,6 +755,7 @@ mod platform {
             // Liveness stamp for the probe timer; one relaxed store, nothing
             // else may be added to this callback's hot path (300 ms budget).
             LAST_HOOK_EVENT_MS.store(crate::util::now_ms_u64(), Ordering::Relaxed);
+            HOOK_EVENTS.fetch_add(1, Ordering::Relaxed);
             // KBDLLHOOKSTRUCT is supplied by Windows for this callback and is
             // valid only for the duration of the call. We inspect only the
             // key needed to identify the configured isolated Ctrl tap. No key data
@@ -810,6 +916,7 @@ mod platform {
             .name("aura-voice-toggle-key".to_string())
             .spawn(move || {
                 let thread_id = unsafe { GetCurrentThreadId() };
+                raise_hook_thread_priority();
                 // Create the thread's message queue before publishing its id.
                 // That guarantees Drop can post WM_QUIT even if shutdown races
                 // the first blocking GetMessageW call.
@@ -855,6 +962,12 @@ mod platform {
                     warn!("voice_toggle_key: liveness probe timer unavailable");
                 }
                 let mut last_reinstall: Option<Instant> = None;
+                let mut installed_at = Instant::now();
+                let mut last_tick = Instant::now();
+                // The focus poller (see FOCUS_POLL_MS): a second thread timer
+                // that exists only while an Aura window is in front.
+                let mut poll_timer: usize = 0;
+                let mut polled: u8 = 0;
 
                 let _ = startup_tx.send(Ok(thread_id));
                 let mut message = MaybeUninit::<MSG>::zeroed();
@@ -866,19 +979,73 @@ mod platform {
                     let message = unsafe { message.assume_init_ref() };
                     let thread_message = message.hwnd.0.is_null();
                     if thread_message
+                        && message.message == WM_TIMER
+                        && poll_timer != 0
+                        && message.wParam.0 == poll_timer
+                    {
+                        if own_window_in_front() {
+                            poll_chord_keys(&mut polled);
+                        } else {
+                            let _ = unsafe { KillTimer(None, poll_timer) };
+                            poll_timer = 0;
+                            polled = 0;
+                            info!("voice_toggle_key: Aura window left the front, chord keys back on the hook alone");
+                        }
+                        continue;
+                    }
+                    if thread_message
                         && (message.message == WM_TIMER || message.message == WM_AURA_REHOOK)
                     {
                         let forced = message.message == WM_AURA_REHOOK;
+                        let own_front = own_window_in_front();
+                        if own_front && poll_timer == 0 {
+                            poll_timer = unsafe { SetTimer(None, 0, FOCUS_POLL_MS, None) };
+                            if poll_timer == 0 {
+                                warn!("voice_toggle_key: focus poll timer unavailable");
+                            } else {
+                                info!("voice_toggle_key: Aura window in front, also reading chord keys directly");
+                                // A chord already held when focus arrived arms now
+                                // rather than on the next tick.
+                                poll_chord_keys(&mut polled);
+                            }
+                        }
+                        if !forced {
+                            // The tick itself is the stall detector: it is the
+                            // only thing on this thread with a known schedule.
+                            let late = last_tick
+                                .elapsed()
+                                .as_millis()
+                                .saturating_sub(PROBE_EVERY_MS as u128);
+                            last_tick = Instant::now();
+                            if late >= STALL_WARN_MS {
+                                warn!("voice_toggle_key: hook thread ran {late}ms late on its probe tick");
+                            }
+                        }
                         let cooled = last_reinstall
                             .is_none_or(|at| at.elapsed() >= REINSTALL_COOLDOWN);
-                        if cooled && (forced || hook.is_none() || hook_looks_stale()) {
+                        // While Aura is in front a silent hook is the known
+                        // WebView2 deafness, not a dropped hook, and the poller
+                        // already covers it. Reinstalling there only churns.
+                        if cooled && (forced || hook.is_none() || (!own_front && hook_looks_stale())) {
                             if forced {
                                 info!("voice_toggle_key: reinstalling hook on request");
                             } else if hook.is_some() {
-                                warn!("voice_toggle_key: hook stopped delivering events, reinstalling");
+                                let down: Vec<u16> = PROBED_KEYS
+                                    .iter()
+                                    .copied()
+                                    .filter(|vk| key_physically_down(*vk as u32))
+                                    .collect();
+                                warn!(
+                                    "voice_toggle_key: hook stopped delivering events after {}s, reinstalling (events_total={} last_event_age_ms={} keys_down={:?})",
+                                    installed_at.elapsed().as_secs(),
+                                    HOOK_EVENTS.load(Ordering::Relaxed),
+                                    crate::util::now_ms_u64().saturating_sub(LAST_HOOK_EVENT_MS.load(Ordering::Relaxed)),
+                                    down
+                                );
                             }
                             hook = unsafe { reinstall_hook(hook, module, &hook_app) };
                             last_reinstall = Some(Instant::now());
+                            installed_at = Instant::now();
                         }
                         continue;
                     }
@@ -891,6 +1058,9 @@ mod platform {
                 HOOK_THREAD_ID.store(0, Ordering::Relaxed);
                 if probe_timer != 0 {
                     let _ = unsafe { KillTimer(None, probe_timer) };
+                }
+                if poll_timer != 0 {
+                    let _ = unsafe { KillTimer(None, poll_timer) };
                 }
                 if let Some(hook) = hook {
                     if let Err(err) = unsafe { UnhookWindowsHookEx(hook) } {

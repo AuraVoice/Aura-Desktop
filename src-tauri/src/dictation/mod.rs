@@ -583,6 +583,7 @@ mod platform {
                     capture = None;
                 }
                 Message::Chord(ChordSignal::Arm) => {
+                    info!("dictation: phase=arm");
                     let mut held = None;
                     let shutting_down =
                         handle_arm(&app, &mut capture, &rx, &status, &mut held, &mut failed);
