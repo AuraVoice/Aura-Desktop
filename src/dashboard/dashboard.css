@@ -9215,26 +9215,6 @@
   color: var(--sw-sup);
   background: var(--sw-sup-soft);
 }
-.db-swarm-via { font-size: 11px; color: var(--sw-mute); font-style: italic; }
-.db-swarm-conf {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 11px;
-  font-weight: 650;
-  color: var(--sw-dim);
-  font-variant-numeric: tabular-nums;
-}
-.db-swarm-conf svg { width: 16px; height: 16px; transform: rotate(-90deg); }
-.db-swarm-conf circle { fill: none; stroke-width: 3; }
-.db-swarm-conf-track { stroke: var(--sw-divider); }
-.db-swarm-conf-fill {
-  stroke: var(--sw-accent);
-  stroke-linecap: round;
-  stroke-dashoffset: 0;
-}
-.db-swarm-msg.is-fresh .db-swarm-conf-fill { animation: db-swarm-conf-draw 900ms var(--sw-out) 150ms both; }
-@keyframes db-swarm-conf-draw { from { stroke-dashoffset: 100; } }
 
 /* System lines: hires, handovers, the Supervisor appearing. */
 .db-swarm-sys {
@@ -9367,12 +9347,7 @@
 .db-swarm-hired-details[open] > summary { margin-bottom: 10px; }
 .db-swarm-hired-details[open] .db-swarm-details-label { color: var(--sw-av); }
 .db-swarm-hired-details summary::-webkit-details-marker { display: none; }
-.db-swarm-route-details { margin-top: 6px; max-width: 560px; }
-.db-swarm-route-details summary { width: fit-content; color: var(--sw-mute); font-size: 11px; cursor: pointer; }
-.db-swarm-route-details[open] summary { margin-bottom: 6px; }
-.db-swarm-route-details summary:hover { color: var(--sw-dim); }
-.db-swarm-hired-details summary:focus-visible,
-.db-swarm-route-details summary:focus-visible { outline: 2px solid var(--sw-accent); outline-offset: 2px; border-radius: 3px; }
+.db-swarm-hired-details summary:focus-visible { outline: 2px solid var(--sw-accent); outline-offset: 2px; border-radius: 3px; }
 .db-swarm-choice-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .db-swarm-choice {
   border: 1px solid var(--sw-field-border);

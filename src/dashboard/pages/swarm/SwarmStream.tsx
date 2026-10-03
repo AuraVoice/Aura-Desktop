@@ -175,18 +175,6 @@ interface Props {
   banner?: ReactNode;
 }
 
-function Confidence({ decision }: { decision: SwarmDecision }) {
-  if (decision.via !== "classifier") {
-    return <span className="db-swarm-via">{decision.via === "direct" ? "direct" : "your answer"}</span>;
-  }
-  const pct = Math.round(decision.confidence * 100);
-  return (
-    <span className="db-swarm-conf" title="How sure Aura was about who should own this">
-      {pct}% sure
-    </span>
-  );
-}
-
 function HiredEmbed({ manager }: { manager: SwarmManager }) {
   const hue = hueOf(manager.id);
   return (
@@ -393,14 +381,6 @@ function DecisionMessage({
       {d.reason && <p className="db-swarm-text">{d.reason}</p>}
       {d.note && <p className="db-swarm-note">{d.note}</p>}
       {hired && <HiredEmbed manager={hired} />}
-      <details className="db-swarm-route-details">
-        <summary>Routing details</summary>
-        <Confidence decision={d} />
-        {d.subagentTitle && <span className="db-swarm-muted"> via {d.subagentTitle}</span>}
-        {d.alternatives.length > 0 && d.decision !== "ask" && (
-          <p className="db-swarm-muted db-swarm-alt">Also considered: {d.alternatives.map((a) => a.why).join("; ")}</p>
-        )}
-      </details>
       {(feature || ongoing) && (
         <div className="db-swarm-choice-row">
           {feature && (

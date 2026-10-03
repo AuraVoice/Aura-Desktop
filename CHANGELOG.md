@@ -21,6 +21,9 @@ was started and read like commit subjects rather than release notes.
 - Type "@" in #group to pick a manager or the Supervisor from a list; the mention steers the message to them and shows as a chip.
 - Asking a busy manager how it is getting on gets a status reply from its live session instead of a refusal.
 
+### Changed
+- The "Routing details" expander with its confidence percentage is gone from #group; a routed message shows only who took it and why.
+
 ### Fixed
 - A #group message now leaves the box the moment you send it and shows faintly as "Sending" until it lands; before, your words sat in the composer until the router answered.
 - A message routed to a manager that is still working no longer bounces with an error: it waits in line and starts on its own when the current task ends, in #group and in a DM.
