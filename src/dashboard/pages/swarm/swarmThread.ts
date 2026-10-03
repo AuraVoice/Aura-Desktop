@@ -230,11 +230,14 @@ export function channelItems(messages: SwarmMessage[], roster: SwarmRoster): Str
     }
     switch (m.kind) {
       case "queued":
-      case "dequeued": {
+      case "dequeued":
+      case "answered": {
         // In #group the line names the manager (aura voice); in its DM the brief waits.
+        // "answered" is #group only: the message answered a parked question and the
+        // manager carried on, so it reads as picked up rather than waiting.
         const managerId = typeof m.data.manager_id === "string" ? m.data.manager_id : managerIdOfChannel(m.channelId as ChannelId);
         const author = managerId ? managerAuthor(roster, managerId) : backer;
-        items.push({ key, kind: "queued", text: m.text, author, picked: m.kind === "dequeued", at: m.at });
+        items.push({ key, kind: "queued", text: m.text, author, picked: m.kind !== "queued", at: m.at });
         break;
       }
       case "routing":

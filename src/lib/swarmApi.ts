@@ -111,6 +111,8 @@ export interface SwarmDecision {
   via: "classifier" | "direct" | "answer";
   /** The user asked how a manager is getting on, not for new work. */
   statusCheck: boolean;
+  /** The message answered the question that manager was parked on; it resumed instead of queueing. */
+  answersQuestion: boolean;
 }
 
 export interface SwarmUsage {
@@ -128,9 +130,10 @@ export interface SwarmRouteResult {
   events: string[];
   usage: SwarmUsage[];
   /** Sessions a route decision started, or why it could not (refused). A busy manager
-   * either answered a status question from its live session (`statusSessionId`) or
-   * took the message into its queue (`queued`); neither is a refusal. */
-  sessions: { managerId: string; sessionId: string; refused: string; queued: boolean; statusSessionId: string }[];
+   * either answered a status question from its live session (`statusSessionId`), took the
+   * message as the answer to the question it was parked on (`answeredSessionId`), or took
+   * it into its queue (`queued`); none of these is a refusal. */
+  sessions: { managerId: string; sessionId: string; refused: string; queued: boolean; statusSessionId: string; answeredSessionId: string }[];
   /** Set when the message fanned out to several managers at once (a #group round). */
   round: SwarmRoundView | null;
 }
@@ -385,6 +388,7 @@ export function mapDecision(raw: Json): SwarmDecision {
     note: known ? note : [`Unrecognised decision "${kind}" from the backend.`, note].filter(Boolean).join(" "),
     via: via === "direct" || via === "answer" ? via : "classifier",
     statusCheck: raw.status_check === true,
+    answersQuestion: raw.answers_question === true,
   };
 }
 
@@ -560,6 +564,7 @@ export async function sendSwarmMessage(req: SwarmMessageRequest): Promise<SwarmR
       refused: str(s.refused),
       queued: s.queued === true,
       statusSessionId: str(s.status_session_id),
+      answeredSessionId: str(s.answered_session_id),
     })),
     round: body.round && typeof body.round === "object" ? mapRound(obj(body.round)) : null,
   };
@@ -571,13 +576,20 @@ export async function runManager(
   clientSessionId: string,
   origin: "dm" | "run_now" = "dm",
   docIds: string[] = [],
-): Promise<{ sessionId: string; replayed: boolean; queued: boolean }> {
+): Promise<{ sessionId: string; replayed: boolean; queued: boolean; answered: boolean }> {
   const body = await call(`/swarm/managers/${encodeURIComponent(managerId)}/run`, {
     method: "POST",
     body: JSON.stringify({ brief, client_session_id: clientSessionId, origin, doc_ids: docIds }),
   });
   // `queued`: the manager was busy, so the brief waits in its line and starts on its own.
-  return { sessionId: str(body.session_id), replayed: body.replayed === true, queued: body.queued === true };
+  // `answered`: the manager was parked on a question and this DM answered it; `sessionId`
+  // is the session that resumed.
+  return {
+    sessionId: str(body.session_id),
+    replayed: body.replayed === true,
+    queued: body.queued === true,
+    answered: body.answered === true,
+  };
 }
 
 /** `null` means unchanged since `rev`. */

@@ -16,6 +16,8 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+## [0.16.3] - 2026-10-03
+
 ### Added
 - Swarm managers now get a persona name alongside their job title, so the rail, roster and every message read "Snapshot Sam · Langfuse Snapshots" instead of a bare job label.
 - Type "@" in #group to pick a manager or the Supervisor from a list; the mention steers the message to them and is highlighted in indigo, both while you type it and in the thread afterwards.
@@ -28,6 +30,8 @@ was started and read like commit subjects rather than release notes.
 ### Fixed
 - A #group message now leaves the box the moment you send it and shows faintly as "Sending" until it lands; before, your words sat in the composer until the router answered.
 - A message routed to a manager that is still working no longer bounces with an error: it waits in line and starts on its own when the current task ends, in #group and in a DM.
+- Replying to a manager that asked you a question, in #group or in its channel, now answers it and the manager carries on; before, the reply waited in line behind the very question it answered. A manager that was parked for a while no longer times out the moment you answer.
+- A manager no longer stops to ask you for a documentation link, a repository or a file it can look up itself; it searches instead.
 
 ## [0.16.2] - 2026-10-03
 

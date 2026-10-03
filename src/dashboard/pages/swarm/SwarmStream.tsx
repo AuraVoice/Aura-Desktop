@@ -384,7 +384,7 @@ function DecisionMessage({
       <div className="db-swarm-msg-head">
         <strong className={`db-swarm-name is-${item.author.role === "manager" ? `hue-${item.author.hue}` : item.author.role}`}>{item.author.name}</strong>
         {item.author.name !== roleLabel(item.author, roster) && <span className="db-swarm-role">{roleLabel(item.author, roster)}</span>}
-        <span className={`db-swarm-tag is-${d.decision}`}>{DECISION_LABEL[d.decision]}</span>
+        <span className={`db-swarm-tag is-${d.decision}`}>{d.answersQuestion ? "Answered" : DECISION_LABEL[d.decision]}</span>
         {capability && <span className="db-swarm-cap">{capability}</span>}
         {item.at > 0 && <time>{timeLabel(item.at)}</time>}
       </div>

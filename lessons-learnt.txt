@@ -1944,3 +1944,35 @@ is true here because every refusal that can follow the write is reported in the 
 A refusal code the user cannot act on ("stop it or wait") is a product bug, not an error
 state; the busy path had to do something with the words it had already stored.
 ================================================================================
+
+2026-10-03: a #group reply to a parked Swarm manager queued behind the question it answered
+Problem: Langfuse Snapshots parked on "Can you provide the direct URL to Langfuse Metrics
+API docs and confirm the GitHub repo URL". The user replied twice in #group ("go search
+yourself"). Both replies became "will pick this up after its current task (2 in line)" and
+the manager stayed parked for over two hours; left alone it would have ended as no_answer
+after 24 hours, and only then started the two "briefs".
+Issue: three faults stacked. (1) A parked session still holds live.by_manager, so
+start_session raised manager_busy and persisted.route_message knew only two outcomes for
+busy: status_check or queue. Nothing read state == waiting_user, and the classifier was
+never told a manager was parked, so it had no way to say "this is the answer". Only the
+question card's inline box (POST /sessions/{id}/answer) ever unparked a session. (2)
+runner.answer never touched wall_deadline, fixed at 30 minutes from session start, so even
+the inline box would have resumed into advance()'s timed_out check after half an hour.
+(3) The step prompt forbade asking for a docs page or a repo in so many words and the model
+asked for both; no code sat between the ask_user decision and parking.
+Solution: route_message reads the parked questions (runner.parked_questions) and the
+classifier sees a "Parked on a question" block with an answers_question flag on route,
+validated against that map; the busy branch feeds a flagged route to runner.answer and
+posts "has your answer and is back on it". The DM /run path treats a DM to a parked
+manager as the answer outright. The park branch stamps parked_at and answer() gives back
+the wall time left when it parked (floor 5 min). runner._findable_by_capability turns an
+ask for a URL/docs/repo/file into the existing "proceed on best assumption" path with a
+"find it yourself" fact when web.search (untainted) or the granted github readers are still
+on offer. No Firecrawl or Research wiring was needed: web.search and web.read already ARE
+the Research tab's brave_search and TieredPageReader.
+Justification: a session that is waiting for the user is not busy in any sense the user
+recognises, and a router that cannot name "answer" will file every answer as work. A
+deadline that keeps running while the user holds the turn charges the user's time to the
+manager. And a prompt rule the model can ignore is a wish, not a guard; the counter and
+the capability check have to live in code, where the ask budget already did.
+================================================================================
