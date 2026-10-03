@@ -16,16 +16,25 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+## [0.16.2] - 2026-10-03
+
 ### Added
 - Working managers in Swarm now show a small 3D version of their own mark turning beside a line that says what they are reading right now, with a quieter line in the manager's own voice underneath. Team rounds animate while the Supervisor writes the answer, a working manager's dot in the rail pulses on the same beat, and channels show placeholder rows while they load instead of flashing an empty screen.
 
 ### Changed
 - The Swarm message box is 4px shorter with rounded 24px corners, a matching rounded send button, and a softer border and focus outline.
 - Swarm has a connected chat layout, distinct manager colors, compact activity cards, and a refined composer. Reading older messages keeps your place, with a Jump to latest button when you want to catch up.
+- Swarm managers now use their name's initial instead of generated icons, including while working. The Supervisor keeps its icon.
+- Swarm fills the available width with only a tiny gap at the left and right edges.
+- A Swarm manager can now read the accounts it asked for as soon as they are connected, instead of starting with every account switched off on its Team card. GitHub managers can list your repositories, browse a repo's files and read one file, not just open pull requests. A manager asks you at most one question per task; after that it carries on with a stated assumption instead of asking for things it can look up itself.
 
 ### Fixed
+- Answering a Swarm setup question now goes straight into shaping the manager instead of restarting classification or asking again for missing details.
 - Holding Ctrl+Win to dictate now works while an Aura window is in front, such as the dashboard's Swarm composer. Windows stops passing key presses to Aura's keyboard listener whenever one of its own windows has focus, so the chord did nothing there; Aura now also reads those keys directly while it is in front.
 - Dictating into a dashboard field now shows the dictation pill while you hold the chord, and the words land in that field even when the chat card is open under the notch. The hold used to run with no feedback, and an open chat swallowed the text.
+- Pressing Ctrl+Alt+G on a fresh call no longer turns Guide Mode off again by itself while Buddy is still starting up. If Buddy does not take the handoff in time, the call stays up and you can ask Buddy to turn Guide Mode on.
+- A call no longer drops with "Buddy hit a snag" on a slow turn that Buddy was about to answer anyway. The message now appears only when every retry has failed.
+- The "Buddy couldn't start" notice and the "Record this meeting?" prompt are now the size of their own text and buttons. With the chat open under the notch they used to stretch to the chat's full height, leaving one line of text in a tall empty block.
 
 ## [0.16.1] - 2026-10-02
 
