@@ -3,7 +3,7 @@ import type { SwarmManager, SwarmRoster as Roster, SwarmRoutine, SwarmRoutineInp
 import { GrantSwitches, RoutineList } from "./SwarmManagerTools";
 import { managerInitial, SwarmAvatar } from "./SwarmAvatar";
 import { CaretGlyph, CellGlyph, CrownGlyph, DismissGlyph, HoldGlyph, SignalGlyph, WatchGlyph } from "./SwarmGlyphs";
-import { hueOf, supervisorActive } from "./swarmThread";
+import { displayName, hueOf, supervisorActive } from "./swarmThread";
 
 interface Props {
   roster: Roster;
@@ -102,8 +102,8 @@ function Constellation({ roster, freshManagers, supervisorFresh }: Pick<Props, "
         >
           <circle className="db-swarm-node-ring" cx={xOf(i)} cy={rowY} r={19} />
           <circle className="db-swarm-node-core" cx={xOf(i)} cy={rowY} r={14} />
-          <text x={xOf(i)} y={rowY} textAnchor="middle" dominantBaseline="central" fill="currentColor" fontSize={13} fontWeight={700}>{managerInitial(m.title)}</text>
-          <title>{m.title}</title>
+          <text x={xOf(i)} y={rowY} textAnchor="middle" dominantBaseline="central" fill="currentColor" fontSize={13} fontWeight={700}>{managerInitial(displayName(m))}</text>
+          <title>{m.name ? `${m.name} · ${m.title}` : m.title}</title>
         </g>
       ))}
     </svg>
@@ -141,11 +141,11 @@ function ManagerCard({
   return (
     <li className={`db-swarm-card${expanded ? " is-open" : ""}${paused ? " is-paused" : ""}${fresh ? " is-fresh" : ""}`}>
       <button type="button" className="db-swarm-card-head" onClick={onToggle} aria-expanded={expanded}>
-        <SwarmAvatar author={{ id: manager.id, name: manager.title, role: "manager", hue: hueOf(manager.id) }} live={!paused} />
+        <SwarmAvatar author={{ id: manager.id, name: displayName(manager), role: "manager", hue: hueOf(manager.id) }} live={!paused} />
         <span className="db-swarm-card-title">
-          <strong>{manager.title}</strong>
+          <strong>{displayName(manager)}</strong>
           <span>
-            {paused ? "Paused" : manager.isCoordinator ? "Manager · also coordinates" : "Manager"}
+            {paused ? "Paused" : manager.isCoordinator ? `${manager.name ? manager.title : "Manager"} · also coordinates` : manager.name ? manager.title : "Manager"}
             {" · "}
             {manager.subagents.length === 0 ? "works solo" : `${manager.subagents.length} subagent${manager.subagents.length === 1 ? "" : "s"}`}
           </span>

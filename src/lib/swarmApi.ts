@@ -49,6 +49,8 @@ export interface SwarmSuggestedRoutine {
 export interface SwarmManager {
   id: string;
   title: string;
+  /** The persona the user calls it by ("Snapshot Sam"); "" for managers hired before names. */
+  name: string;
   description: string;
   owns: string[];
   connectors: string[];
@@ -107,6 +109,8 @@ export interface SwarmDecision {
   applied: boolean;
   note: string;
   via: "classifier" | "direct" | "answer";
+  /** The user asked how a manager is getting on, not for new work. */
+  statusCheck: boolean;
 }
 
 export interface SwarmUsage {
@@ -123,8 +127,10 @@ export interface SwarmRouteResult {
   decisions: SwarmDecision[];
   events: string[];
   usage: SwarmUsage[];
-  /** Sessions a route decision started, or why it could not (refused). */
-  sessions: { managerId: string; sessionId: string; refused: string }[];
+  /** Sessions a route decision started, or why it could not (refused). A busy manager
+   * either answered a status question from its live session (`statusSessionId`) or
+   * took the message into its queue (`queued`); neither is a refusal. */
+  sessions: { managerId: string; sessionId: string; refused: string; queued: boolean; statusSessionId: string }[];
   /** Set when the message fanned out to several managers at once (a #group round). */
   round: SwarmRoundView | null;
 }
@@ -158,6 +164,8 @@ export interface SwarmMessageRequest {
   choiceManagerId?: string;
   /** Files from the shelf this message hands to whichever manager it is routed to. */
   docIds?: string[];
+  /** Managers typed as @mentions, a strong hint to the router. */
+  mentionIds?: string[];
 }
 
 export type SwarmAuthorKind = "user" | "manager" | "aura" | "system";
@@ -209,6 +217,8 @@ export interface SwarmState {
   grantable: string[];
   routines: SwarmRoutine[];
   liveSessions: SwarmLiveSession[];
+  /** Messages parked behind a live session, per manager. */
+  waiting: { managerId: string; count: number }[];
   /** Why managers cannot work right now (models_unset, wallet_exhausted, ...), or "". */
   runtimeProblem: string;
 }
@@ -303,6 +313,7 @@ function mapManager(raw: Json): SwarmManager {
   return {
     id: str(raw.id),
     title: str(raw.title),
+    name: str(raw.name),
     description: str(raw.description),
     owns: strings(raw.owns),
     connectors: strings(raw.connectors),
@@ -373,6 +384,7 @@ export function mapDecision(raw: Json): SwarmDecision {
     applied: raw.applied === true,
     note: known ? note : [`Unrecognised decision "${kind}" from the backend.`, note].filter(Boolean).join(" "),
     via: via === "direct" || via === "answer" ? via : "classifier",
+    statusCheck: raw.status_check === true,
   };
 }
 
@@ -503,6 +515,7 @@ export async function getSwarmState(signal?: AbortSignal): Promise<SwarmState> {
       state: str(s.state),
       stateRevision: num(s.state_revision),
     })),
+    waiting: list(body.waiting).map((w) => ({ managerId: str(w.manager_id), count: num(w.count) })),
     runtimeProblem: str(body.runtime_problem),
   };
 }
@@ -529,6 +542,8 @@ export async function sendSwarmMessage(req: SwarmMessageRequest): Promise<SwarmR
         choice_label: req.choiceLabel ?? "",
         choice_manager_id: req.choiceManagerId ?? "",
         doc_ids: req.docIds ?? [],
+        // Left out when empty so a backend without the field still accepts the send.
+        ...(req.mentionIds && req.mentionIds.length > 0 ? { mention_ids: req.mentionIds } : {}),
       }),
     },
     MESSAGE_TIMEOUT_MS,
@@ -539,7 +554,13 @@ export async function sendSwarmMessage(req: SwarmMessageRequest): Promise<SwarmR
     decisions: list(body.decisions).map(mapDecision),
     events: strings(body.events),
     usage: list(body.usage).map(mapUsage),
-    sessions: list(body.sessions).map((s) => ({ managerId: str(s.manager_id), sessionId: str(s.session_id), refused: str(s.refused) })),
+    sessions: list(body.sessions).map((s) => ({
+      managerId: str(s.manager_id),
+      sessionId: str(s.session_id),
+      refused: str(s.refused),
+      queued: s.queued === true,
+      statusSessionId: str(s.status_session_id),
+    })),
     round: body.round && typeof body.round === "object" ? mapRound(obj(body.round)) : null,
   };
 }
@@ -550,12 +571,13 @@ export async function runManager(
   clientSessionId: string,
   origin: "dm" | "run_now" = "dm",
   docIds: string[] = [],
-): Promise<{ sessionId: string; replayed: boolean }> {
+): Promise<{ sessionId: string; replayed: boolean; queued: boolean }> {
   const body = await call(`/swarm/managers/${encodeURIComponent(managerId)}/run`, {
     method: "POST",
     body: JSON.stringify({ brief, client_session_id: clientSessionId, origin, doc_ids: docIds }),
   });
-  return { sessionId: str(body.session_id), replayed: body.replayed === true };
+  // `queued`: the manager was busy, so the brief waits in its line and starts on its own.
+  return { sessionId: str(body.session_id), replayed: body.replayed === true, queued: body.queued === true };
 }
 
 /** `null` means unchanged since `rev`. */

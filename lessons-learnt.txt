@@ -1920,3 +1920,27 @@ protection and destroyed real data. The 90-day age-out stays because sweep only
 runs for the signed-in uid, and without it a dormant account's rows would never
 expire.
 ================================================================================
+
+2026-10-03: #group message to a busy Swarm manager vanished behind a red banner
+Problem: "Hey what's the scene with Langfuse task?" sat in the composer for the whole
+round trip, then the thread showed the router's reason as if it were a reply and a banner
+said "That manager is still working on something". The question never reached anyone.
+Issue: two separate faults that read as one. (1) SwarmPage.submit cleared the textarea only
+after sendSwarmMessage AND two channel pulls resolved; the send waits on the classifier
+model (130 s timeout), so the words stayed in the box long enough to look unsent. (2)
+persisted.route_message persisted the user line and the routing line, then
+runner.start_session refused with manager_busy because live.by_manager already held a
+session for that manager. The refusal rode inside a 200 and the page turned it into a
+banner. Nothing queued the brief and nothing answered the status question, so the only
+"reply" on screen was the classifier's one-line reason.
+Solution: the box empties the moment Enter lands and a faint "Sending" row holds the text
+until the server's copy arrives; words come back only when the send threw, which on this
+endpoint always happens before the write. On the server, the router now flags
+status_check and a busy manager answers from its live session (swarm/status.py, no model
+call); any other brief waits in swarm_state/queue and runner._after starts it under the
+original client id when the live session finalizes. The DM /run path queues the same way.
+Justification: an optimistic clear is safe only when "thrown" means "not persisted", which
+is true here because every refusal that can follow the write is reported in the 200 body.
+A refusal code the user cannot act on ("stop it or wait") is a product bug, not an error
+state; the busy path had to do something with the words it had already stored.
+================================================================================

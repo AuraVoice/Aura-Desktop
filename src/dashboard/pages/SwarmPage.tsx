@@ -48,6 +48,7 @@ import {
   isChannelId,
   managerChannel,
   managerIdOfChannel,
+  mentionsIn,
   contactDuty,
   supervisorActive,
   type ChannelId,
@@ -167,7 +168,10 @@ function errorCopy(error: unknown, roster: SwarmRoster): string {
       case "meter_unavailable":
         return "Aura could not check the Swarm budget, so nothing ran. Try again in a minute.";
       case "manager_busy":
+        // Only an older backend still refuses on busy; a current one queues the message.
         return "That manager is still working on something. Stop it, or wait for its report.";
+      case "queue_full":
+        return "Three messages are already waiting for that manager. Let it finish, or stop it.";
       case "too_many_live":
         return "Four managers are already working. Wait for one to finish, or stop one.";
       case "manager_paused":
@@ -296,6 +300,7 @@ const EMPTY_STATE: SwarmState = {
   grantable: [],
   routines: [],
   liveSessions: [],
+  waiting: [],
   runtimeProblem: "",
 };
 
@@ -318,6 +323,9 @@ export function SwarmPage() {
   const [stopping, setStopping] = useState<ReadonlySet<string>>(() => new Set());
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<ComposerDoc[]>([]);
+  // The message just sent, shown faint at the end of the thread until the server's copy
+  // arrives; the composer is already empty by then.
+  const [sending, setSending] = useState<{ text: string; docs: { id: string; name: string }[]; channel: ChannelId } | null>(null);
   const [docShelf, setDocShelf] = useState<Record<string, SwarmDoc>>({});
   // Image thumbnails are object URLs that live only while their chip is in the composer.
   const attachmentsRef = useRef(attachments);
@@ -429,6 +437,7 @@ export function SwarmPage() {
     for (const id of liveIds) if (sessions[id]) ids.add(sessions[id].managerId);
     return ids;
   }, [state.liveSessions, liveIds, sessions]);
+  const waitingCount = state.waiting.reduce((sum, w) => sum + w.count, 0);
 
   // The Research page's loop: 2.5 s while anything runs, 15 s after an error, nothing
   // while the window is hidden or offline. A changed revision pulls that DM.
@@ -594,7 +603,7 @@ export function SwarmPage() {
   };
 
   /** #group, or the answer to a routing question. */
-  const route = async (req: { text: string; draftId?: string; choiceLabel?: string; choiceManagerId?: string; docIds?: string[] }) => {
+  const route = async (req: { text: string; draftId?: string; choiceLabel?: string; choiceManagerId?: string; docIds?: string[]; mentionIds?: string[] }) => {
     if (busy) return false;
     setBusy(true);
     setBusyChannel("group");
@@ -631,7 +640,9 @@ export function SwarmPage() {
     setError("");
     try {
       const started = await runManager(managerId, brief, clientId(), origin, docIds);
-      watch(started.sessionId);
+      // A queued brief has no session yet; the DM's waiting line says so and the state
+      // poll picks the session up when it starts.
+      if (!started.queued) watch(started.sessionId);
       reloadState();
       await pull(managerChannel(managerId), true);
       return true;
@@ -646,15 +657,33 @@ export function SwarmPage() {
   const submit = async () => {
     const message = text.trim();
     if (!message || attachments.some((a) => a.status === "reading")) return;
-    const docIds = attachments.filter((a) => a.status === "ready").map((a) => a.docId);
+    const held = { text, attachments: attachmentsRef.current };
+    const ready = held.attachments.filter((a) => a.status === "ready");
+    const docIds = ready.map((a) => a.docId);
+    // The box empties the moment Enter lands. Clearing it only after the router had
+    // answered (up to two minutes) made every send look like it never went (2026-10-03).
+    setText("");
+    setHireHint(false);
+    setAttachments([]);
+    setSending({ text: message, docs: ready.map((a) => ({ id: a.docId, name: a.name })), channel: liveChannel });
     const ok = view.kind === "manager" && view.manager
       ? await run(view.manager.id, message, "dm", docIds)
-      : await route({ text: message, docIds });
+      : await route({ text: message, docIds, mentionIds: mentionsIn(message, roster) });
+    setSending(null);
     if (ok) {
-      setText("");
-      setHireHint(false);
-      clearAttachments();
+      revokePreviews(held.attachments);
+      return;
     }
+    // Nothing reached the server (every thrown send fails before the write), so the
+    // words come back, unless the user already started on the next message.
+    setText((current) => current || held.text);
+    setAttachments((current) => {
+      if (current.length > 0) {
+        revokePreviews(held.attachments);
+        return current;
+      }
+      return held.attachments;
+    });
   };
 
   const clearAttachments = () => {
@@ -824,7 +853,7 @@ export function SwarmPage() {
     ? { text: "Can't reach Swarm", warn: true }
     : state.runtimeProblem
     ? { text: state.runtimeProblem === "wallet_exhausted" ? "Budget used up today" : "Not set up yet", warn: true }
-    : { text: working.size > 0 ? `${working.size} working` : "", warn: false };
+    : { text: [working.size > 0 ? `${working.size} working` : "", waitingCount > 0 ? `${waitingCount} waiting` : ""].filter(Boolean).join(" · "), warn: false };
   const showImport = legacy !== null && resource.data !== null;
   const banner = showImport ? (
           <div className="db-swarm-import" role="status">
@@ -868,6 +897,7 @@ export function SwarmPage() {
           busyHere={busy && busyChannel === liveChannel && liveChannel === "group"}
           busyAuthor={frontDoorAuthor(roster)}
           busySince={busySince}
+          pending={sending && sending.channel === liveChannel ? sending : null}
           error={error}
           onDismissError={() => setError("")}
           notice={notice}

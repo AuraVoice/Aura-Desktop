@@ -59,7 +59,9 @@ export interface Author {
 }
 
 export type StreamItem =
-  | { key: string; kind: "user"; text: string; at: number; docs: { id: string; name: string }[] }
+  | { key: string; kind: "user"; text: string; at: number; docs: { id: string; name: string }[]; mentions: { id: string; name: string }[] }
+  /** A brief parked behind a busy manager (queued), or one that just got its turn (dequeued). */
+  | { key: string; kind: "queued"; text: string; author: Author; picked: boolean; at: number }
   | {
       key: string;
       kind: "decision";
@@ -98,13 +100,18 @@ export function isChannelId(value: string | null | undefined): value is ChannelI
   return value === "group" || value === "activity" || (typeof value === "string" && value.startsWith("m:") && value.length > 2);
 }
 
+/** What the user calls a manager: its persona name, or the title for one hired before names. */
+export function displayName(manager: Pick<SwarmManager, "name" | "title">): string {
+  return manager.name || manager.title;
+}
+
 /** Who answers at the front door right now. */
 export function frontDoorAuthor(roster: SwarmRoster): Author {
   if (roster.frontDoorBacking === "supervisor" && roster.supervisor) {
     return { id: "supervisor", name: roster.supervisor.title, role: "supervisor", hue: 0 };
   }
   const solo = roster.frontDoorBacking === "manager" ? roster.managers.find((m) => m.status === "active") : undefined;
-  if (solo) return { id: solo.id, name: solo.title, role: "manager", hue: hueOf(solo.id) };
+  if (solo) return { id: solo.id, name: displayName(solo), role: "manager", hue: hueOf(solo.id) };
   return { id: "aura", name: "Aura", role: "aura", hue: 0 };
 }
 
@@ -118,8 +125,50 @@ export function roleLabel(author: Author, roster: SwarmRoster): string {
   if (author.role === "supervisor") return "Supervisor";
   if (author.role === "aura") return "Hires your managers";
   const manager = roster.managers.find((m) => m.id === author.id);
-  if (manager?.status === "paused") return "Manager · paused";
-  return manager?.isCoordinator ? "Manager · point of contact" : "Manager";
+  // A named manager shows its job as the role ("Snapshot Sam · Langfuse Snapshots").
+  const job = manager?.name ? manager.title : "Manager";
+  if (manager?.status === "paused") return `${job} · paused`;
+  return manager?.isCoordinator ? `${job} · point of contact` : job;
+}
+
+/** Everyone an @ in the composer can name: the Supervisor when it is active, then every
+ * active manager, in roster order. */
+export function mentionCandidates(roster: SwarmRoster): { id: string; name: string; title: string; author: Author }[] {
+  const out: { id: string; name: string; title: string; author: Author }[] = [];
+  if (supervisorActive(roster) && roster.supervisor) {
+    out.push({ id: "supervisor", name: roster.supervisor.title, title: "Routes to your managers", author: { id: "supervisor", name: roster.supervisor.title, role: "supervisor", hue: 0 } });
+  }
+  for (const m of roster.managers) {
+    if (m.status !== "active") continue;
+    out.push({ id: m.id, name: displayName(m), title: m.name ? m.title : "Manager", author: managerAuthor(roster, m.id) });
+  }
+  return out;
+}
+
+/** The managers a typed message names with "@", longest name first so "@Sam Two" never
+ * matches "@Sam". Case does not matter; a name or a title both count. At most four. */
+export function mentionsIn(text: string, roster: SwarmRoster): string[] {
+  const lower = text.toLowerCase();
+  const names = mentionCandidates(roster)
+    .flatMap((c) => [c.name, ...(c.id !== "supervisor" && c.title !== "Manager" ? [c.title] : [])].map((label) => ({ id: c.id, label: label.toLowerCase() })))
+    .filter((c) => c.label)
+    .sort((a, b) => b.label.length - a.label.length);
+  const found: string[] = [];
+  for (const { id, label } of names) {
+    if (found.includes(id)) continue;
+    let from = 0;
+    while (from < lower.length) {
+      const at = lower.indexOf(`@${label}`, from);
+      if (at === -1) break;
+      const after = lower[at + 1 + label.length];
+      if ((at === 0 || /\s/.test(lower[at - 1])) && (after === undefined || !/[\p{L}\p{N}]/u.test(after))) {
+        found.push(id);
+        break;
+      }
+      from = at + 1;
+    }
+  }
+  return found.slice(0, 4);
 }
 
 /** What the front door's current owner does there, for the point-of-contact block. */
@@ -136,13 +185,13 @@ export function groupChannelName(roster: SwarmRoster): string {
 
 export function managerAuthor(roster: SwarmRoster, id: string, fallbackName = "Manager"): Author {
   const manager = roster.managers.find((m) => m.id === id);
-  return { id, name: manager?.title || fallbackName, role: "manager", hue: hueOf(id) };
+  return { id, name: manager ? displayName(manager) : fallbackName, role: "manager", hue: hueOf(id) };
 }
 
 function decisionAuthor(decision: SwarmDecision, roster: SwarmRoster, backer: Author): Author {
   if (!MANAGER_VOICED.has(decision.decision) || !decision.targetManagerId) return backer;
   const manager = roster.managers.find((m) => m.id === decision.targetManagerId);
-  const name = manager?.title || decision.targetTitle;
+  const name = manager ? displayName(manager) : decision.targetTitle;
   if (!name) return backer;
   return { id: decision.targetManagerId, name, role: "manager", hue: hueOf(decision.targetManagerId) };
 }
@@ -168,11 +217,26 @@ export function channelItems(messages: SwarmMessage[], roster: SwarmRoster): Str
             return typeof row.id === "string" && typeof row.name === "string" ? [{ id: row.id, name: row.name }] : [];
           })
         : [];
-      items.push({ key, kind: "user", text: m.text, at: m.at, docs });
+      // Managers the user named with "@" (persisted.py): the stream styles exactly these.
+      const mentions = Array.isArray(m.data.mentions)
+        ? (m.data.mentions as unknown[]).flatMap((d) => {
+            const row = d && typeof d === "object" ? (d as Record<string, unknown>) : {};
+            return typeof row.id === "string" && typeof row.name === "string" ? [{ id: row.id, name: row.name }] : [];
+          })
+        : [];
+      items.push({ key, kind: "user", text: m.text, at: m.at, docs, mentions });
       asked = { text: m.text, docs };
       continue;
     }
     switch (m.kind) {
+      case "queued":
+      case "dequeued": {
+        // In #group the line names the manager (aura voice); in its DM the brief waits.
+        const managerId = typeof m.data.manager_id === "string" ? m.data.manager_id : managerIdOfChannel(m.channelId as ChannelId);
+        const author = managerId ? managerAuthor(roster, managerId) : backer;
+        items.push({ key, kind: "queued", text: m.text, author, picked: m.kind === "dequeued", at: m.at });
+        break;
+      }
       case "routing":
         decisionsOf(m).forEach((decision, i) =>
           items.push({ key: `${key}-d${i}`, kind: "decision", decision, author: decisionAuthor(decision, roster, backer), at: m.at, asked }),

@@ -25,11 +25,13 @@ import {
   WatchGlyph,
 } from "./SwarmGlyphs";
 import { PlanEmbed, QuestionEmbed, ReportEmbed, RoundEmbed, RoundReplyEmbed, StepRow, WorkingEmbed } from "./SwarmWork";
+import { useMentionPicker } from "./SwarmMentionPicker";
 import {
   CAPABILITY_LABEL,
   CAPABILITY_PATH,
   DECISION_LABEL,
   dayLabel,
+  displayName,
   findManager,
   hueOf,
   managerChannel,
@@ -39,6 +41,28 @@ import {
   type ChannelId,
   type StreamItem,
 } from "./swarmThread";
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** The user's text with each "@Name" the server recognised drawn as a chip. A stray "@"
+ * in prose stays plain text: only the names in `mentions` are styled. */
+function withMentions(text: string, mentions: { id: string; name: string }[]): ReactNode {
+  const names = mentions.map((m) => m.name).filter(Boolean).sort((a, b) => b.length - a.length);
+  if (names.length === 0) return text;
+  const pattern = new RegExp(`@(?:${names.map(escapeRegExp).join("|")})(?![\\p{L}\\p{N}])`, "giu");
+  const out: ReactNode[] = [];
+  let last = 0;
+  for (const match of text.matchAll(pattern)) {
+    const at = match.index ?? 0;
+    if (at > last) out.push(text.slice(last, at));
+    out.push(<span key={at} className="db-swarm-mention">{match[0]}</span>);
+    last = at + match[0].length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
 
 /** Equal to juno-backend swarm/runtime_models.py's limits: a #group message's text (4000)
  * and a DM's brief (MAX_BRIEF_CHARS, 2000). A larger value here fails the send with
@@ -104,6 +128,8 @@ interface Props {
   busyHere: boolean;
   busyAuthor: Author;
   busySince: number;
+  /** The message just sent from this channel, until the server's copy arrives. */
+  pending: { text: string; docs: { id: string; name: string }[] } | null;
   error: string;
   onDismissError: () => void;
   /** Why managers cannot work right now, as user copy, or "". */
@@ -166,7 +192,7 @@ function HiredEmbed({ manager }: { manager: SwarmManager }) {
   return (
     <div className={`db-swarm-embed is-hired is-hue-${hue}`}>
       <details className="db-swarm-hired-details">
-        <summary><BurstGlyph size={16} /><span><strong>{manager.title}</strong><span className="db-swarm-muted">Manager hired</span></span><span className="db-swarm-details-label">Details</span></summary>
+        <summary><BurstGlyph size={16} /><span><strong>{displayName(manager)}</strong><span className="db-swarm-muted">{manager.name ? `${manager.title} · hired` : "Manager hired"}</span></span><span className="db-swarm-details-label">Details</span></summary>
       {manager.description && <p>{manager.description}</p>}
       {manager.subagents.length > 0 && (
         <div className="db-swarm-embed-team">
@@ -518,7 +544,10 @@ export function SwarmStream(props: Props) {
     if (canAttach) props.onAttach(files);
   };
 
+  const mention = useMentionPicker(props.roster, text, props.onText, composerRef);
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    // While the @ list is open, Enter picks a name; it must never send the message.
+    if (mention.onKeyDown(event)) return;
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
       submit();
@@ -575,6 +604,23 @@ export function SwarmStream(props: Props) {
           </Fragment>
         );
       }
+      if (item.kind === "queued") {
+        lastAuthorKey = "";
+        return (
+          <Fragment key={item.key}>
+            {daySep && <div className="db-swarm-daysep"><span>{daySep}</span></div>}
+            <div className={`db-swarm-sys is-queued${fresh ? " is-fresh" : ""}`}>
+              <span className="db-swarm-sys-icon">{item.picked ? <HopGlyph size={15} /> : <CycleGlyph size={15} />}</span>
+              <span className="db-swarm-sys-text">
+                {view.kind === "manager"
+                  ? <><b>{item.picked ? "Picked up" : "Waiting"}</b>{item.picked ? ": " : " for the current task to finish: "}{item.text}</>
+                  : item.text}
+              </span>
+              {item.at > 0 && <time>{timeLabel(item.at)}</time>}
+            </div>
+          </Fragment>
+        );
+      }
       if (item.kind === "crosspost") {
         lastAuthorKey = "";
         return (
@@ -610,7 +656,7 @@ export function SwarmStream(props: Props) {
                       {item.at > 0 && <time>{timeLabel(item.at)}</time>}
                     </div>
                   )}
-                  <p className="db-swarm-text">{item.text}</p>
+                  <p className="db-swarm-text">{withMentions(item.text, item.mentions)}</p>
                   {item.docs.length > 0 && (
                     <div className="db-swarm-files">
                       {item.docs.map((doc) => {
@@ -763,6 +809,23 @@ export function SwarmStream(props: Props) {
               {readOnly && items.length === 0 && <p className="db-swarm-empty-line">Nothing has happened yet.</p>}
             </>
           )}
+          {props.pending && (
+            <article className="db-swarm-msg is-you is-pending" aria-live="polite">
+              <div className="db-swarm-msg-gutter"><SwarmAvatar author={YOU} /></div>
+              <div className="db-swarm-msg-body">
+                <div className="db-swarm-msg-head">
+                  <strong className="db-swarm-name is-you">{props.youName || "You"}</strong>
+                  <span className="db-swarm-role">Sending</span>
+                </div>
+                <p className="db-swarm-text">{props.pending.text}</p>
+                {props.pending.docs.length > 0 && (
+                  <div className="db-swarm-files">
+                    {props.pending.docs.map((doc) => <span key={doc.id} className="db-swarm-file"><SheetGlyph size={15} /><span className="db-swarm-file-name">{doc.name}</span></span>)}
+                  </div>
+                )}
+              </div>
+            </article>
+          )}
           {busyHere && <Typing author={props.busyAuthor} since={props.busySince} />}
         </div>
       </div>
@@ -784,6 +847,7 @@ export function SwarmStream(props: Props) {
       )}
 
       <div className={`db-swarm-compose-box${readOnly ? " is-readonly" : ""}${busy ? " is-busy" : ""}`}>
+      {!readOnly && mention.popover}
       {!readOnly && props.attachments.length > 0 && (
         <div className="db-swarm-attachments" aria-label="Files for this message">
           {props.attachments.map((a) => (
@@ -839,10 +903,19 @@ export function SwarmStream(props: Props) {
           value={readOnly ? "" : text}
           maxLength={messageMax}
           disabled={readOnly}
-          onChange={(event) => props.onText(event.target.value)}
+          onChange={(event) => {
+            props.onText(event.target.value);
+            mention.refresh(event.target.value, event.target.selectionStart);
+          }}
           onKeyDown={onKeyDown}
+          onKeyUp={(event) => mention.refresh(event.currentTarget.value, event.currentTarget.selectionStart)}
+          onClick={(event) => mention.refresh(event.currentTarget.value, event.currentTarget.selectionStart)}
           onPaste={onPaste}
           placeholder={placeholder}
+          aria-autocomplete="list"
+          aria-expanded={mention.open}
+          aria-controls={mention.open ? "swarm-mentions" : undefined}
+          aria-activedescendant={mention.activeId}
         />
         {!readOnly && text.length > messageMax - 400 && <span className="db-swarm-count">{messageMax - text.length}</span>}
         <button type="submit" className="db-swarm-send" disabled={readOnly || busy || reading || !text.trim() || text.length > messageMax} aria-label="Send">

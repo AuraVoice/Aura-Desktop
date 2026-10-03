@@ -3,6 +3,7 @@ import { SwarmAvatar } from "./SwarmAvatar";
 import { CrownGlyph, HoldGlyph, LatticeGlyph, PulseGlyph, SpawnGlyph, SwarmMark } from "./SwarmGlyphs";
 import {
   contactDuty,
+  displayName,
   frontDoorAuthor,
   groupChannelName,
   hueOf,
@@ -120,12 +121,12 @@ export function SwarmChannels({ roster, channel, unread, working, loading, statu
               onClick={() => onSelect(id)}
             >
               <span className="db-swarm-ch-avatar">
-                <SwarmAvatar author={{ id: m.id, name: m.title, role: "manager", hue: hueOf(m.id) }} size="sm" />
+                <SwarmAvatar author={{ id: m.id, name: displayName(m), role: "manager", hue: hueOf(m.id) }} size="sm" />
                 <i className={`db-swarm-presence${paused ? " is-paused" : ""}${working.has(m.id) ? " is-working" : ""}`} aria-hidden="true" />
               </span>
               <span className="db-swarm-ch-text">
-                <span className="db-swarm-ch-name">{m.title}</span>
-                <span className="db-swarm-ch-role">{roleLabel({ id: m.id, name: m.title, role: "manager", hue: 0 }, roster)}</span>
+                <span className="db-swarm-ch-name">{displayName(m)}</span>
+                <span className="db-swarm-ch-role">{roleLabel({ id: m.id, name: displayName(m), role: "manager", hue: 0 }, roster)}</span>
               </span>
               {paused ? <span className="db-swarm-ch-paused" title="Paused"><HoldGlyph size={15} /></span> : <Badge count={active ? 0 : unread[id] ?? 0} />}
             </button>
