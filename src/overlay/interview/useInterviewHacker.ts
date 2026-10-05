@@ -9,6 +9,7 @@ import {
 import {
   mintInterviewCredential,
   createInterviewReflection,
+  InterviewReflectionError,
   streamInterviewAnswer,
   type AnswerIntent,
   type InterviewAnswerAction,
@@ -916,10 +917,15 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   // Re-arm whenever one of the three values Start freezes is changed. Someone
   // still picking a round is not someone waiting to begin, and a countdown
   // that expired mid-choice would freeze the wrong round for the session.
+  // The Brief menu and a resume being read hold it outright: the countdown
+  // used to keep running under the file picker and start a session with no
+  // context while the candidate was still choosing the file (2026-10-05).
   useEffect(() => {
     if (phase !== "preflight" || !interviewAutoStart) return;
-    setAutoStartAtMs(Date.now() + ARM_COUNTDOWN_MS);
-  }, [interviewAutoStart, phase, plannedMinutes, roomAudio, roundKind]);
+    setAutoStartAtMs(briefMenuOpen || attachingResume ? null : Date.now() + ARM_COUNTDOWN_MS);
+  }, [
+    attachingResume, briefMenuOpen, interviewAutoStart, phase, plannedMinutes, roomAudio, roundKind,
+  ]);
 
   // Drop the arm the moment preflight is left, by any route (Start, cancel, a
   // session that ended). Without this a stale timestamp survives into the next
@@ -1150,12 +1156,18 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   // a call it recognises (callApp, set by the labelling poll above). Detection
   // only ever makes Start happen SOONER - it can never hold it back, which is
   // the invariant the 2026-09-11 lost interview was about.
+  // The detector shortcut only applies once a brief or resume is attached.
+  // Opening the card while already in the call otherwise started it on the
+  // next tick, so the ten seconds to attach either never existed (2026-10-05).
+  // With nothing attached the countdown alone decides; Start stays live.
+  const hasContext = (brief !== null && brief.reviewedAtMs !== null) || resumeText !== null;
   useEffect(() => {
     if (phase !== "preflight" || autoStartAtMs === null) return;
-    if (callApp === null && armNowMs < autoStartAtMs) return;
+    const callShortcut = callApp !== null && hasContext;
+    if (!callShortcut && armNowMs < autoStartAtMs) return;
     setAutoStartAtMs(null);
     start();
-  }, [armNowMs, autoStartAtMs, callApp, phase, start]);
+  }, [armNowMs, autoStartAtMs, callApp, hasContext, phase, start]);
 
   const pause = useCallback(() => {
     invoke("pause_interview_hacker").catch((error) => {
@@ -2120,7 +2132,11 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       .catch((error) => {
         if (controller.signal.aborted) return;
         logError("Interview Companion: reflection", error);
-        setMessage("Aura could not build the reflection. You can try again while this card is open.");
+        // A rejected body fails identically on every retry, so only a network
+        // or service failure is offered one.
+        setMessage(error instanceof InterviewReflectionError && error.rejected
+          ? "Aura could not send this transcript for a reflection. The interview is saved; open it from the Interview page in the dashboard."
+          : "Aura could not reach its reflection service. You can try again while this card is open, or later from the Interview page.");
         setPhase("ended");
         trackEvent("interview_companion_reflection", { outcome: "failed" });
       })

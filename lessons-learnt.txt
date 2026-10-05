@@ -1976,3 +1976,28 @@ deadline that keeps running while the user holds the turn charges the user's tim
 manager. And a prompt rule the model can ignore is a wish, not a guard; the counter and
 the capability check have to live in code, where the ask budget already did.
 ================================================================================
+
+2026-10-05: Interview Companion started before a brief could be attached, and one long turn broke answers and Reflect
+Problem: during a real interview the card said "I'm listening" the moment it opened, with no
+chance to attach a brief or resume, and a reboot changed nothing. Live answers stopped around
+minute 17, and Reflect failed four times with 422. Varun read it as "it did not record", but
+the session was fully saved locally (89 turns, 11 answers, 22 minutes of sealed audio).
+Issue: (1) the auto-start fires the moment call detection sees a call, which skips the
+10-second arm. Opening the card mid-call means a start in under 250 ms, and the arm also kept
+running under the Brief menu and the file picker. (2) The interviewer read out a problem for
+about 4 minutes: one remote turn of 4,279 characters. juno-backend caps TranscriptTurn.text at
+4,000, and the desktop's wireTurn sent it uncapped. Pydantic rejects the whole body, so every
+/answer carrying that turn in recent_turns failed, and so did every /reflection. A retry
+resends the same body, yet the card said "You can try again".
+Solution: the detection shortcut needs a brief or resume to be attached; otherwise the
+countdown decides, and the Brief menu and a resume being read hold it. Start is never gated.
+wireTurn keeps the last 4,000 characters (the question ends a monologue). Reflection splits a
+long turn into pieces and applies the 120-turn and 40,000-character bounds itself. The backend
+trims over-cap text instead of rejecting it, which fixes installed builds once it deploys.
+Reflect copy now depends on the cause, and the Interview page can reflect on any saved session.
+Justification: a field cap enforced by rejecting the whole request turns one outlier into a
+total failure of every request that carries it. Clamp on the client that knows the
+semantics (keep the tail), and stay lenient on the server for builds already in the field.
+The length was proved from the sealed store without decrypting it: AES-GCM adds a fixed 28
+bytes, and ciphertext 3,013 minus 28 matched the logged 2,985.
+================================================================================

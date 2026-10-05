@@ -189,6 +189,11 @@ export async function mintInterviewCredential(): Promise<InterviewCredential> {
   return { accessToken, openaiAccessToken, expiresInSeconds };
 }
 
+/** juno-backend's `TranscriptTurn.text` cap. An interviewer reading out a
+ *  problem for four minutes is one turn past it, and the backend used to
+ *  reject the whole request for that one field (2026-10-05). */
+export const MAX_TURN_CHARS = 4_000;
+
 function wireTurn(turn: InterviewTranscriptTurn) {
   return {
     session_id: turn.sessionId,
@@ -197,7 +202,8 @@ function wireTurn(turn: InterviewTranscriptTurn) {
     source: turn.source,
     start_ms: turn.startMs,
     end_ms: turn.endMs,
-    text: turn.text,
+    // The tail: the question closes a monologue, it does not open it.
+    text: turn.text.slice(-MAX_TURN_CHARS),
     is_final: turn.isFinal,
     remote_speaker_id: turn.remoteSpeakerId ?? null,
     speaker_overlap: turn.speakerOverlap ?? false,
@@ -1226,6 +1232,31 @@ function stringList(value: unknown): string[] | null {
     : null;
 }
 
+/** `rejected` is a 422: the same body will fail the same way, so the caller
+ *  must not offer a retry. Anything else (network, 5xx) can be retried. */
+export class InterviewReflectionError extends Error {
+  constructor(readonly status: number | null, readonly rejected: boolean) {
+    super(`Interview reflection failed (${status ?? "network"}).`);
+    this.name = "InterviewReflectionError";
+  }
+}
+
+/** The coach should read the whole monologue, so a reflection splits a long
+ *  turn into consecutive pieces rather than keeping only its tail. */
+function splitLongTurn(turn: InterviewTranscriptTurn): InterviewTranscriptTurn[] {
+  if (turn.text.length <= MAX_TURN_CHARS) return [turn];
+  const pieces: InterviewTranscriptTurn[] = [];
+  for (let offset = 0; offset < turn.text.length; offset += MAX_TURN_CHARS) {
+    const index = offset / MAX_TURN_CHARS;
+    pieces.push({
+      ...turn,
+      turnId: index === 0 ? turn.turnId : `${turn.turnId}.${index}`,
+      text: turn.text.slice(offset, offset + MAX_TURN_CHARS),
+    });
+  }
+  return pieces;
+}
+
 export async function createInterviewReflection({
   sessionId,
   startedAtMs,
@@ -1245,6 +1276,17 @@ export async function createInterviewReflection({
   brief: InterviewBriefSlice | null;
   signal?: AbortSignal;
 }): Promise<InterviewReflection> {
+  // The backend's own bounds: at most 120 turns and 40,000 characters in total,
+  // enforced here too so a saved session reflected from the dashboard (which
+  // never went through the live cap) cannot be rejected for its length.
+  const sent = turns
+    .filter((turn) => turn.isFinal && turn.text.trim() !== "")
+    .flatMap(splitLongTurn)
+    .slice(-120);
+  let characters = sent.reduce((total, turn) => total + turn.text.length, 0);
+  while (sent.length > 1 && characters > 40_000) {
+    characters -= sent.shift()?.text.length ?? 0;
+  }
   const response = await authFetch("/interview-companion/reflection", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1253,7 +1295,7 @@ export async function createInterviewReflection({
       session_id: sessionId,
       started_at_ms: startedAtMs,
       ended_at_ms: endedAtMs,
-      turns: turns.filter((turn) => turn.isFinal).slice(-120).map(wireTurn),
+      turns: sent.map(wireTurn),
       exchanges: exchanges
         .filter((item) => item.question.trim() !== "" && item.answer.trim() !== "")
         .slice(-60)
@@ -1265,7 +1307,9 @@ export async function createInterviewReflection({
     }),
     signal,
   });
-  if (!response.ok) throw new Error(`Interview reflection failed (${response.status}).`);
+  if (!response.ok) {
+    throw new InterviewReflectionError(response.status, response.status === 422);
+  }
   const item = asRecord(await response.json());
   const strengths = stringList(item?.strengths);
   const improvements = stringList(item?.improvements);

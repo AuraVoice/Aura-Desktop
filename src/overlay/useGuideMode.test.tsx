@@ -432,8 +432,17 @@ describe("useGuideMode", () => {
       },
     }));
 
+    // Geometry is retained only once the frame has finished streaming, which a
+    // single tick does not guarantee on a slow CI runner. Wait for the send,
+    // as the frame-streaming test above does, then let write/close settle.
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(0);
+      for (let index = 0; index < 20 && room.streamBytes.mock.calls.length < 1; index += 1) {
+        await Promise.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      for (let index = 0; index < 20; index += 1) await Promise.resolve();
+    });
+    await act(async () => {
       room.emit(RoomEvent.DataReceived, point, agent, undefined, "agent_events");
       await Promise.resolve();
     });

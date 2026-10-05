@@ -16,12 +16,18 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
-## [0.16.4] - 2026-10-05
+## [0.16.5] - 2026-10-05
+
+0.16.4 was built but never published, so its changes ship here too.
 
 ### Added
+- Saved interview sessions can now be reflected on from the Interview page, including one whose reflection failed or was never asked for after the card closed.
 - Interview Mode now asks whether you have the job description, your resume, or notes, and opens one card where you can paste text or drop PDF and Word files. The practice questions are built from all of it, including questions about the projects on your resume.
 
 ### Fixed
+- Opening Interview Companion while you are already in the call no longer starts it instantly. It now waits ten seconds so you can attach a brief or resume, and pauses while the Brief menu is open or a resume is being read. Start still works straight away.
+- An interviewer who talks for several minutes without a break no longer stops the live answers or makes Reflect fail every time.
+- When Reflect cannot work for this transcript, it says so instead of asking you to try again.
 - Voice calls made in a conversation you already had going now save to your history. Before, a second call in the same thread was silently dropped.
 - Interview Mode setup no longer quits when you ask it to hurry up, and no longer promises a first question before it has asked its setup questions.
 - Closing the interview card lets setup carry on right away instead of leaving Buddy silent, and a send that fails can be retried from the same card.

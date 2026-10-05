@@ -44,6 +44,8 @@ import {
 } from "../../lib/interviewPolicy";
 import {
   InterviewBriefError,
+  InterviewReflectionError,
+  createInterviewReflection,
   streamInterviewBrief,
   streamInterviewCompanyResearch,
   streamInterviewPrep,
@@ -77,6 +79,7 @@ import {
   loadInterviewSession,
   deleteInterviewSession,
   clearInterviewSessions,
+  saveInterviewReflection,
   type InterviewSessionSummary,
   type InterviewSessionDetail,
   type StoredReflection,
@@ -1438,6 +1441,79 @@ function downloadReflection(reflection: StoredReflection): void {
   }).catch((error) => logError("InterviewPage: download reflection", error));
 }
 
+/** Reflect on a session that is already saved. The card is the only other
+ *  place Reflect exists, and it is gone once closed, so a session whose
+ *  reflection failed (or was never asked for) had no way to get one. */
+function ReflectSessionButton({
+  uid,
+  detail,
+  onReflected,
+}: {
+  uid: string;
+  detail: InterviewSessionDetail;
+  onReflected: (reflection: StoredReflection) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const reflect = () => {
+    setBusy(true);
+    setError(null);
+    createInterviewReflection({
+      sessionId: detail.sessionId,
+      startedAtMs: detail.startedAtMs,
+      endedAtMs: detail.endedAtMs,
+      // Stored turns keep one timestamp on the card's own session clock, which
+      // is all the reflection reads besides source and text.
+      turns: detail.turns.map((turn) => ({
+        sessionId: detail.sessionId,
+        epoch: 1,
+        turnId: String(turn.seq),
+        source: turn.source,
+        startMs: turn.atMs,
+        endMs: turn.atMs,
+        text: turn.text,
+        isFinal: true,
+      })),
+      exchanges: detail.exchanges.map(({ question, answer }) => ({ question, answer })),
+      brief: null,
+    })
+      .then(async (reflection) => {
+        await saveInterviewReflection(uid, detail.sessionId, reflection);
+        onReflected(reflection);
+      })
+      .catch((cause) => {
+        logError("InterviewPage: reflect on session", cause);
+        setError(cause instanceof InterviewReflectionError && cause.rejected
+          ? "Aura could not send this transcript for a reflection."
+          : "Aura could not reach its reflection service. Try again in a moment.");
+      })
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <div className="db-interview-session-block db-interview-reflection">
+      <div className="db-interview-reflection-head">
+        <h4>Reflection</h4>
+        <button
+          type="button"
+          className="db-interview-reflection-download"
+          disabled={busy}
+          onClick={reflect}
+        >
+          {busy
+            ? <Loader2 size={14} className="db-interview-spin" aria-hidden />
+            : <Sparkles size={14} aria-hidden />}
+          {busy ? "Reflecting..." : "Reflect"}
+        </button>
+      </div>
+      {error
+        ? <p role="alert">{error}</p>
+        : <p>What went well, what to sharpen, and what to do next, from this transcript.</p>}
+    </div>
+  );
+}
+
 /** Lazy on purpose. Loading a session's audio decrypts and decodes every chunk
  *  of it, so doing that for each row as the list renders would cost a whole
  *  history's worth of work to show players nobody pressed. The fetch happens on
@@ -1659,6 +1735,21 @@ function InterviewSessionsPanel({ uid }: { uid: string | null }) {
           </div>
         ) : (
           <div className="db-interview-session-detail">
+            {!detail.reflection && detail.turns.length > 0 && uid && (
+              <ReflectSessionButton
+                key={detail.sessionId}
+                uid={uid}
+                detail={detail}
+                onReflected={(reflection) => {
+                  setDetail((current) => current?.sessionId === detail.sessionId
+                    ? { ...current, reflection, reflectionAtMs: Date.now() }
+                    : current);
+                  setSessions((current) => current.map((row) => row.sessionId === detail.sessionId
+                    ? { ...row, hasReflection: true }
+                    : row));
+                }}
+              />
+            )}
             {detail.reflection && (
               <div className="db-interview-session-block db-interview-reflection">
                 <div className="db-interview-reflection-head">
