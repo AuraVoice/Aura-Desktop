@@ -43,7 +43,7 @@ import { DraftCard, INITIAL_DRAFT_SLOT_HEIGHT } from "./DraftCard";
 import { ActionApprovalCard } from "./ActionApprovalCard";
 import { usePendingActions } from "./usePendingActions";
 import { PENDING_ACTION_TOOLS, type PendingActionTool } from "../lib/pendingActions";
-import { useInterviewMaterial } from "./interview/useInterviewMaterial";
+import { useInterviewContext } from "./interview/useInterviewContext";
 import {
   isInterviewCaptureActive,
   useInterviewHacker,
@@ -58,9 +58,9 @@ import {
   INTERVIEW_HACKER_LONG_ANSWER_SLOT_HEIGHT,
 } from "./interview/InterviewHackerCard";
 import {
-  InterviewPasteCard,
-  INITIAL_INTERVIEW_SLOT_HEIGHT,
-} from "./interview/InterviewPasteCard";
+  InterviewContextCard,
+  INITIAL_INTERVIEW_CONTEXT_SLOT_HEIGHT,
+} from "./interview/InterviewContextCard";
 import { CallbackCard } from "./CallbackCard";
 import { ScreenContextConsentCard } from "./ScreenContextConsentCard";
 import { setVoiceScreenContext } from "../lib/generalSettings";
@@ -416,23 +416,24 @@ export function OverlayRoot() {
   const resetDraftCard = draftCard.reset;
   const showDraftCard = user !== null && draftCard.phase !== "idle";
   const [draftCardHeight, setDraftCardHeight] = useState(INITIAL_DRAFT_SLOT_HEIGHT);
-  // Interview Mode's job-description paste box. Driven entirely by the voice
-  // worker: it exists only while a live interview setup is asking for it, and
-  // "sent" drops straight back to idle rather than lingering as a receipt.
-  const interviewMaterial = useInterviewMaterial(voice.room);
-  const resetInterviewMaterial = interviewMaterial.reset;
-  const showInterviewPaste =
+  // Interview Mode's context card (job description, resume, notes). Driven
+  // entirely by the voice worker: it exists only while a live interview setup is
+  // asking for it, and "sent" drops straight back to idle rather than lingering
+  // as a receipt.
+  const interviewContext = useInterviewContext(voice.room);
+  const resetInterviewContext = interviewContext.reset;
+  const showInterviewContext =
     user !== null
-    && (interviewMaterial.phase === "open"
-      || interviewMaterial.phase === "sending"
-      || interviewMaterial.phase === "error");
+    && (interviewContext.phase === "open"
+      || interviewContext.phase === "sending"
+      || interviewContext.phase === "error");
   const [interviewSlotHeight, setInterviewSlotHeight] = useState(
-    INITIAL_INTERVIEW_SLOT_HEIGHT,
+    INITIAL_INTERVIEW_CONTEXT_SLOT_HEIGHT,
   );
 
   useEffect(() => {
-    if (!showInterviewPaste) setInterviewSlotHeight(INITIAL_INTERVIEW_SLOT_HEIGHT);
-  }, [showInterviewPaste]);
+    if (!showInterviewContext) setInterviewSlotHeight(INITIAL_INTERVIEW_CONTEXT_SLOT_HEIGHT);
+  }, [showInterviewContext]);
   // Reported by ChatSlot from its measured transcript, same contract as the
   // draft card: the window is only ever as tall as what is actually rendered.
   const [chatSlotHeight, setChatSlotHeight] = useState(INITIAL_CHAT_SLOT_HEIGHT);
@@ -470,7 +471,7 @@ export function OverlayRoot() {
     user !== null
     && voiceNoticeMessage !== null
     && !showInterviewHacker
-    && !showInterviewPaste;
+    && !showInterviewContext;
   // An approval card outranks chat and every card below it: the user just asked
   // for this post, and it expires if it waits behind anything. It never covers
   // a live Interview Companion or the job-description box that session asked for.
@@ -478,7 +479,7 @@ export function OverlayRoot() {
     user !== null
     && pendingActions.current !== null
     && !showInterviewHacker
-    && !showInterviewPaste;
+    && !showInterviewContext;
   const [approvalCardHeight, setApprovalCardHeight] = useState(INITIAL_DRAFT_SLOT_HEIGHT);
   const lowerCardsHidden = visibleChatOpen || showApprovalCard;
   // The browser task sits under the draft and above the meeting prompt: its
@@ -488,7 +489,7 @@ export function OverlayRoot() {
     user !== null
     && (browserTask.live || browserTask.approval !== null || browserTask.result !== null)
     && !showInterviewHacker
-    && !showInterviewPaste
+    && !showInterviewContext
     && !showVoiceNotice
     && !showDraftCard;
 
@@ -523,7 +524,7 @@ export function OverlayRoot() {
     user !== null
     && meetingPrompt.visible
     && !showInterviewHacker
-    && !showInterviewPaste
+    && !showInterviewContext
     && !showVoiceNotice
     && !showDraftCard
     && !showBrowserTask;
@@ -534,7 +535,7 @@ export function OverlayRoot() {
     showMeetingPrompt
     || (meetingPromptPresence.leaving
       && !showInterviewHacker
-      && !showInterviewPaste
+      && !showInterviewContext
       && !showVoiceNotice
       && !showDraftCard
       && !showBrowserTask);
@@ -545,7 +546,7 @@ export function OverlayRoot() {
     user !== null
     && screenContextRequested
     && !showInterviewHacker
-    && !showInterviewPaste
+    && !showInterviewContext
     && !showVoiceNotice
     && !showDraftCard
     && !showBrowserTask
@@ -558,7 +559,7 @@ export function OverlayRoot() {
     user !== null
     && regionCapture.preview !== null
     && !showInterviewHacker
-    && !showInterviewPaste
+    && !showInterviewContext
     && !showVoiceNotice
     && !showDraftCard
     && !showBrowserTask
@@ -570,7 +571,7 @@ export function OverlayRoot() {
     && !showInterviewHacker
     && !showVoiceNotice
     && !showDraftCard
-    && !showInterviewPaste
+    && !showInterviewContext
     && !showBrowserTask
     && !meetingPromptOnScreen
     && !showScreenContextConsent
@@ -580,7 +581,7 @@ export function OverlayRoot() {
     && (updateReady.version !== null || updateReady.updatedNotice !== null)
     && !callLive
     && !showInterviewHacker
-    && !showInterviewPaste
+    && !showInterviewContext
     && !showVoiceNotice
     && !showDraftCard
     && !showBrowserTask
@@ -592,7 +593,7 @@ export function OverlayRoot() {
     user !== null
     && callbackCard.visible
     && !showInterviewHacker
-    && !showInterviewPaste
+    && !showInterviewContext
     && !showVoiceNotice
     && !showDraftCard
     && !showBrowserTask
@@ -619,7 +620,7 @@ export function OverlayRoot() {
         : INTERVIEW_HACKER_SLOT_HEIGHT;
   const slotHeight = showInterviewHacker
     ? interviewHackerHidden ? 0 : interviewHackerHeight
-    : showInterviewPaste
+    : showInterviewContext
       ? interviewSlotHeight
       : showApprovalCard
         ? approvalCardHeight
@@ -816,9 +817,9 @@ export function OverlayRoot() {
     if (!user) {
       resetDraftCard();
       resetCallbackCard();
-      // Signing out ends the call that armed the paste box, so a box left on
-      // screen would collect a paste with nowhere to send it.
-      resetInterviewMaterial();
+      // Signing out ends the call that armed the context card, so a card left on
+      // screen would collect text with nowhere to send it.
+      resetInterviewContext();
       setChatOpen(false);
       setInboxOpen(false);
       if (guide.armed) guide.stop();
@@ -830,7 +831,7 @@ export function OverlayRoot() {
     user,
     resetDraftCard,
     resetCallbackCard,
-    resetInterviewMaterial,
+    resetInterviewContext,
     guide.armed,
     guide.stop,
   ]);
@@ -1025,9 +1026,9 @@ export function OverlayRoot() {
       {!lowerCardsHidden &&showInterviewHacker && !interviewHackerHidden && (
         <InterviewHackerCard hacker={interviewHacker} />
       )}
-      {!lowerCardsHidden &&!showInterviewHacker && showInterviewPaste && (
-        <InterviewPasteCard
-          card={interviewMaterial}
+      {!lowerCardsHidden &&!showInterviewHacker && showInterviewContext && (
+        <InterviewContextCard
+          card={interviewContext}
           onHeightChange={setInterviewSlotHeight}
           visible={presentation === "bar" || presentation === "companion"}
         />
@@ -1070,7 +1071,7 @@ export function OverlayRoot() {
       )}
       {!lowerCardsHidden
         && !showInterviewHacker
-        && !showInterviewPaste
+        && !showInterviewContext
         && !showVoiceNotice
         && showDraftCard && (
           <DraftCard

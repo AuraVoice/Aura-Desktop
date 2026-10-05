@@ -656,15 +656,20 @@ pub fn session_changed(app: &AppHandle, signed_in: bool, uid: Option<String>) {
     if !transition.changed {
         return;
     }
+    // Every store below is uid-scoped on every read and uid-bound in every AAD,
+    // so none of these hooks deletes another account's rows on a switch or
+    // anything at all on sign-out; each only ages out other accounts' rows past
+    // its cap. Deleting here destroyed data that existed nowhere else (2026-10-05).
     // The local chat transcript is per-account.
     crate::chat_cache::retain_only_for_session(app, session_uid.clone());
-    // Stored interview sessions are per-account for the same reason and get the
-    // same crash-safe boundary: the backend never holds these transcripts, so
-    // this is the only thing that isolates them across accounts.
+    // Stored interview sessions are uid-scoped on every read and uid-bound in
+    // every AAD, so like dictation history below this does not delete the other
+    // account's interviews; it only ages out their rows and clips past 90 days.
+    // The backend never holds these transcripts, so a delete here is permanent.
     crate::interview_store::retain_only_for_session(app, session_uid.clone());
     // Preparations are per-account too, and the reviewed brief has to be in
     // the Rust slot before either window asks for it, so the same boundary
-    // that prunes the other account's rows also hydrates this one's.
+    // that ages out the other account's rows also hydrates this one's.
     crate::interview_prep_store::retain_only_for_session(app, session_uid.clone());
     // Browser task rows (brief, answer, trace) are per-account and exist
     // nowhere else; same boundary, same reason.

@@ -348,14 +348,22 @@ pub fn delete(app: &AppHandle, uid: &str, task_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Account isolation, called from `security::session_changed` on EVERY
-/// transition: rows belonging to any other account are removed.
+/// Called from `security::session_changed` on every transition. Ages out OTHER
+/// accounts' finished tasks past `MAX_AGE_MS` and nothing else; a sign-out
+/// deletes nothing. Isolation already holds: every read filters on uid and every
+/// sealed column binds it in the AAD. It used to delete every other account's
+/// tasks on a switch and all of them on sign-out, and these rows exist nowhere
+/// else (2026-10-05). Open rows are left for their owner's `finalize_orphans`.
 pub fn retain_only_for_session(app: &AppHandle, uid: Option<&str>) {
-    let Ok(conn) = open(app) else { return };
-    let result = match uid {
-        Some(uid) if !uid.is_empty() => conn.execute("DELETE FROM tasks WHERE uid <> ?1", params![uid]),
-        _ => conn.execute("DELETE FROM tasks", []),
+    let Some(uid) = uid.filter(|uid| !uid.is_empty()) else {
+        log::warn!("agent_browser.store: prune skipped, no uid to scope by");
+        return;
     };
+    let Ok(conn) = open(app) else { return };
+    let result = conn.execute(
+        "DELETE FROM tasks WHERE uid <> ?1 AND ended_at_ms <> 0 AND started_at_ms < ?2",
+        params![uid, now_ms() - MAX_AGE_MS],
+    );
     if let Err(e) = result {
         log::warn!("agent_browser.store: retain_only_for_session failed: {e}");
     }

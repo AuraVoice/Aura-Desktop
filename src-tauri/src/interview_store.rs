@@ -760,29 +760,37 @@ fn surviving_session_ids(conn: &Connection) -> Result<Vec<String>, String> {
     Ok(out)
 }
 
-/// Native session-boundary hook, mirroring `chat_cache::retain_only_for_session`.
-/// Keeps only the signed-in account's rows, and nothing at all once signed out.
-/// Fire-and-forget: the session transition must not block on disk IO, and every
-/// read is uid-filtered anyway. This is the isolation mechanism React cannot
-/// provide, since it covers a crash-then-resignin with no sign-out in between.
+/// Native session-boundary hook. Ages out the OTHER accounts' sessions past the
+/// 90-day cap and nothing else: an account switch never deletes another
+/// account's interviews, and signing out deletes nothing at all.
+///
+/// Isolation does not need deletion. Every read is uid-filtered and every sealed
+/// value binds the uid in its AAD, so account B can neither list nor decrypt
+/// account A's rows. This used to delete every other account's rows on each
+/// switch and the whole table on sign-out, and since a transient signed-out
+/// report arrives on launch it erased real interviews between sessions
+/// (2026-10-05; dictation history had the same bug on 2026-10-01). Explicit
+/// erasure goes through `interview_session_delete` / `interview_sessions_clear`.
+/// Fire-and-forget: the session transition must not block on disk IO.
 pub fn retain_only_for_session(app: &AppHandle, uid: Option<String>) {
+    let Some(id) = uid.filter(|id| !id.is_empty()) else {
+        log::warn!("interview_store: session prune skipped, no uid to scope by");
+        return;
+    };
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let result = tauri::async_runtime::spawn_blocking(move || {
             let conn = open(&app)?;
             conn.execute("PRAGMA foreign_keys = ON", []).map_err(|e| e.to_string())?;
-            match uid {
-                Some(id) if !id.is_empty() => conn
-                    .execute("DELETE FROM sessions WHERE uid <> ?1", params![id])
-                    .map_err(|e| e.to_string())?,
-                _ => conn
-                    .execute("DELETE FROM sessions", [])
-                    .map_err(|e| e.to_string())?,
-            };
-            // The audio half of the same isolation. Clip paths carry no uid, so
-            // without this one account's recordings would outlive its rows and
-            // sit on disk while the next account is signed in. Unconditional on
-            // every transition, exactly like the row delete above.
+            // Turns and exchanges cascade via the foreign key.
+            conn.execute(
+                "DELETE FROM sessions WHERE uid <> ?1 AND started_at_ms < ?2",
+                params![id, now_ms() - MAX_AGE_MS],
+            )
+            .map_err(|e| e.to_string())?;
+            // The audio half. Clip directories carry no uid, so this keeps exactly
+            // the clips whose rows survived, for every account, and still enforces
+            // the clips' own age cap.
             crate::interview_audio::sweep(&app, &surviving_session_ids(&conn)?, now_ms());
             Ok::<(), String>(())
         })

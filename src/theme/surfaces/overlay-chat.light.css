@@ -546,34 +546,52 @@
   background: var(--lt-hover);
 }
 
-/* ── Interview paste card ── */
-:root[data-theme="light"] .glass-surface.interview-paste-card {
+/* ── Interview context card ── */
+:root[data-theme="light"] .glass-surface.interview-context-card {
   background:
     linear-gradient(to bottom, var(--glass-sheen), transparent 25%),
     linear-gradient(135deg, rgba(255, 255, 255, 0.95), rgba(238, 247, 244, 0.9));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 10px 30px rgba(63, 86, 78, 0.14);
 }
-:root[data-theme="light"] .interview-paste-title {
+:root[data-theme="light"] .interview-context-title,
+:root[data-theme="light"] .interview-context-chip {
   color: rgba(20, 28, 26, 0.92);
 }
-:root[data-theme="light"] .interview-paste-input {
+:root[data-theme="light"] .interview-context-label,
+:root[data-theme="light"] .interview-context-chip-meta,
+:root[data-theme="light"] .interview-context-empty,
+:root[data-theme="light"] .interview-context-hint {
+  color: rgba(20, 28, 26, 0.6);
+}
+:root[data-theme="light"] .interview-context-section.is-drop {
+  border-color: #149e8b;
+  background: rgba(255, 255, 255, 0.5);
+}
+:root[data-theme="light"] .interview-context-add {
+  color: #0f7f70;
+}
+:root[data-theme="light"] .interview-context-input {
   border-color: rgba(63, 86, 78, 0.16);
   background: rgba(255, 255, 255, 0.72);
   color: rgba(20, 28, 26, 0.92);
 }
-:root[data-theme="light"] .interview-paste-input::placeholder {
+:root[data-theme="light"] .interview-context-input::placeholder {
   color: rgba(20, 28, 26, 0.5);
 }
-:root[data-theme="light"] .interview-paste-input:focus {
+:root[data-theme="light"] .interview-context-input:focus {
   border-color: #149e8b;
 }
-:root[data-theme="light"] .interview-paste-hint {
-  color: rgba(20, 28, 26, 0.6);
+:root[data-theme="light"] .interview-context-chip {
+  border-color: rgba(63, 86, 78, 0.16);
+  background: rgba(255, 255, 255, 0.6);
 }
-:root[data-theme="light"] .interview-paste-hint-error {
+:root[data-theme="light"] .interview-context-chip-remove:hover {
+  background: rgba(63, 86, 78, 0.1);
+}
+:root[data-theme="light"] .interview-context-hint-error {
   color: #c2412d;
 }
-:root[data-theme="light"] .interview-paste-send {
+:root[data-theme="light"] .interview-context-send {
   color: #ffffff;
   background: #0f7f70;
 }

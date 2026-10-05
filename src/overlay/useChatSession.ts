@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AuthRequiredError, routeToDashboardForExpiredSession } from "../lib/api";
 import { isOnline, OfflineError } from "../lib/connectivity";
 import {
-  clearCachedChat,
   loadCachedConversation,
   replaceCachedConversation,
   type CachedChatMessage,
@@ -365,10 +364,9 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
     selectionControllerRef.current = null;
     setConversationLoading(false);
     setConversationError(null);
-    // Local transcript goes with the session. Rust prunes the file at its own
-    // session boundary too, so a crash between here and the next sign-in cannot
-    // leave one account's chat readable by the next.
-    void clearCachedChat(null);
+    // The local cache is NOT cleared here. Every read is uid-scoped and every
+    // row's AAD binds its uid, so the next account cannot see this one's chat,
+    // and clearing cost the instant paint on the way back in (2026-10-05).
   }, [enabled]);
 
   /** Replaces the local transcript with the server's, and says whether the

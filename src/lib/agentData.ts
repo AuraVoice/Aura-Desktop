@@ -76,11 +76,11 @@ export type KnownAgentEventType =
   // split: the desktop shows an explicit consent prompt, and only the user's
   // own click flips the voiceScreenContext setting. Empty payload.
   | "screen_context.request"
-  // Interview Mode: show one job-description paste overlay. The desktop must
-  // echo interview.material.overlay_shown only once the box is genuinely on
-  // screen (see overlay/interview/), because the worker speaks a line to the
-  // user off the back of that ack.
-  | "interview.material.request"
+  // Interview Mode: show one context card (job description, resume, notes).
+  // The desktop must echo interview.context.shown only once the card is
+  // genuinely on screen (see overlay/interview/), because the worker speaks a
+  // line to the user off the back of that ack.
+  | "interview.context.request"
   // A connector write (post to X or LinkedIn, GitHub issue) is waiting for the
   // user's click. Carries only the approval id: usePendingActions reads the
   // preview from the backend with the user's own token, never from here.
@@ -184,7 +184,7 @@ const KNOWN_TYPES: ReadonlySet<string> = new Set([
   "guide.failure",
   "guide.request",
   "screen_context.request",
-  "interview.material.request",
+  "interview.context.request",
   "action.proposed",
   "desktop.run",
   "client.open_settings",

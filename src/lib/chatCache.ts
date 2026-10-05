@@ -75,8 +75,9 @@ export async function loadCachedConversation(
   }
 }
 
-/** Drops one account's cached chat, or every account's when uid is null. The
- * native session boundary does this too; neither path is load-bearing alone. */
+/** Drops one account's cached chat, or every account's when uid is null. An
+ * explicit erase only: sign-out and the native session boundary deliberately
+ * keep the cache, since reads are uid-scoped and rows are AAD-bound to a uid. */
 export async function clearCachedChat(uid: string | null): Promise<void> {
   try {
     await invoke("chat_cache_clear", { uid });

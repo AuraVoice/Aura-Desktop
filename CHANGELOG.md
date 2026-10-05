@@ -16,6 +16,18 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+## [0.16.4] - 2026-10-05
+
+### Added
+- Interview Mode now asks whether you have the job description, your resume, or notes, and opens one card where you can paste text or drop PDF and Word files. The practice questions are built from all of it, including questions about the projects on your resume.
+
+### Fixed
+- Voice calls made in a conversation you already had going now save to your history. Before, a second call in the same thread was silently dropped.
+- Interview Mode setup no longer quits when you ask it to hurry up, and no longer promises a first question before it has asked its setup questions.
+- Closing the interview card lets setup carry on right away instead of leaving Buddy silent, and a send that fails can be retried from the same card.
+- Interview Companion sessions are no longer erased when you sign out or switch accounts.
+- Interview preparations, browser agent task history and your recent chat are no longer erased when you sign out or switch accounts either.
+
 ## [0.16.3] - 2026-10-03
 
 ### Added

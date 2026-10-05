@@ -44,6 +44,8 @@ use tauri::{AppHandle, Manager};
 use crate::meeting::crypto;
 
 const DATABASE_FILE: &str = "chat-cache.sqlite3";
+/// How long another account's cached chat survives a session switch.
+const OTHER_ACCOUNT_MAX_AGE_MS: i64 = 90 * 24 * 60 * 60 * 1000;
 
 /// Whether message text can be sealed. Key wrapping is per-OS (crypto.rs) but
 /// present on every shipping platform, so this stays true; a runtime keystore
@@ -304,28 +306,29 @@ pub async fn chat_cache_clear(app: AppHandle, uid: Option<String>) -> Result<(),
     .map_err(|e| e.to_string())?
 }
 
-/// Native session boundary hook: keeps only the signed-in account's rows, and
-/// keeps nothing at all once signed out.
+/// Native session boundary hook: ages out OTHER accounts' messages older than
+/// `OTHER_ACCOUNT_MAX_AGE_MS` and nothing else; a sign-out deletes nothing.
 ///
-/// Signing in must NOT wipe the current account's cache (that is exactly what
-/// the overlay paints from on launch), so this prunes other accounts rather
-/// than clearing outright. It also covers the case React cannot: a crash while
-/// signed in as one account, then a fresh sign-in as another with no sign-out
-/// in between. Fire-and-forget, since the session transition must not block on
-/// disk IO and every read is uid-filtered anyway.
+/// Isolation never needed deletion: every read is uid-filtered and every row's
+/// AAD binds its uid, so one account cannot list or decrypt another's cache.
+/// Wiping on every transition only cost the instant paint the overlay draws
+/// from on launch, and a transient signed-out report arrives on every launch.
+/// Fire-and-forget, since the session transition must not block on disk IO.
 pub fn retain_only_for_session(app: &AppHandle, uid: Option<String>) {
+    let Some(id) = uid.filter(|id| !id.is_empty()) else {
+        log::warn!("chat_cache: session prune skipped, no uid to scope by");
+        return;
+    };
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let result = tauri::async_runtime::spawn_blocking(move || {
             let conn = open(&app)?;
-            match uid {
-                Some(id) if !id.is_empty() => conn
-                    .execute("DELETE FROM messages WHERE uid <> ?1", params![id])
-                    .map_err(|e| e.to_string())?,
-                _ => conn
-                    .execute("DELETE FROM messages", [])
-                    .map_err(|e| e.to_string())?,
-            };
+            let cutoff = crate::util::now_ms() - OTHER_ACCOUNT_MAX_AGE_MS;
+            conn.execute(
+                "DELETE FROM messages WHERE uid <> ?1 AND created_at_ms < ?2",
+                params![id, cutoff],
+            )
+            .map_err(|e| e.to_string())?;
             Ok::<(), String>(())
         })
         .await;

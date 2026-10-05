@@ -27,10 +27,10 @@
 //! Identical to `interview_store.rs`: sealed under the shared per-install key,
 //! AAD bound to one account and one interview. Every query filters on `uid`.
 //! `security::session_changed` calls `retain_only_for_session` on every real
-//! transition; unlike the transcript store it keeps rows across a plain
-//! sign-out (uid None), because a preparation is deliberate work the user made
-//! ahead of time and signing out and back in to the same account must not cost
-//! it. Signing in as a DIFFERENT account still drops the other account's rows.
+//! transition. It keeps every row across a sign-out (uid None), and signing in
+//! as a DIFFERENT account only ages out the other account's preparations left
+//! untouched for 90 days. A preparation is deliberate work that exists nowhere
+//! else, and isolation already holds through the uid filter and the AAD.
 
 use std::path::PathBuf;
 
@@ -46,6 +46,9 @@ const DATABASE_FILE: &str = "interview-preparations.sqlite3";
 /// Bounded: the most recently updated preparations per account. No age expiry,
 /// a preparation is made ahead of time on purpose.
 const MAX_PREPARATIONS: i64 = 30;
+/// Applies only to OTHER accounts at a session switch: an account nobody has
+/// signed into for 90 days loses preparations it has not touched in that time.
+const OTHER_ACCOUNT_MAX_AGE_MS: i64 = 90 * 24 * 60 * 60 * 1000;
 /// A record carries the resume text (20k chars), the research dossier and the
 /// brief; a quarter megabyte covers the largest preparation seen with room.
 const MAX_BODY_BYTES: usize = 512_000;
@@ -299,21 +302,33 @@ pub async fn interview_prep_set_meta(
     .map_err(|e| e.to_string())?
 }
 
-/// Native session-boundary hook. Drops every OTHER account's preparations when
-/// an account signs in; keeps everything across a plain sign-out (see the
-/// module doc for why that differs from the transcript store). Fire-and-forget.
+/// Native session-boundary hook. Ages out OTHER accounts' preparations untouched
+/// for 90 days and nothing else; keeps everything across a sign-out. It used to
+/// drop every other account's preparations on each switch, which destroyed
+/// interview prep that existed nowhere else (2026-10-05). Fire-and-forget.
 pub fn retain_only_for_session(app: &AppHandle, uid: Option<String>) {
     let Some(id) = uid.filter(|id| !id.is_empty()) else {
+        log::warn!("interview_prep_store: prune skipped, no uid to scope by");
         return;
     };
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         let result = tauri::async_runtime::spawn_blocking(move || {
             let conn = open(&app)?;
-            conn.execute("DELETE FROM preparations WHERE uid <> ?1", params![id])
-                .map_err(|e| e.to_string())?;
-            conn.execute("DELETE FROM workspace_meta WHERE uid <> ?1", params![id])
-                .map_err(|e| e.to_string())?;
+            let cutoff = crate::util::now_ms() - OTHER_ACCOUNT_MAX_AGE_MS;
+            conn.execute(
+                "DELETE FROM preparations WHERE uid <> ?1 AND updated_at_ms < ?2",
+                params![id, cutoff],
+            )
+            .map_err(|e| e.to_string())?;
+            // Meta has no timestamp of its own: it goes once its account has
+            // no preparations left to point at.
+            conn.execute(
+                "DELETE FROM workspace_meta
+                 WHERE uid <> ?1 AND uid NOT IN (SELECT uid FROM preparations)",
+                params![id],
+            )
+            .map_err(|e| e.to_string())?;
             Ok::<(), String>(())
         })
         .await;
