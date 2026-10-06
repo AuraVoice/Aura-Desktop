@@ -8940,26 +8940,29 @@
 .db-swarm-ch-role { font-size: 11.5px; font-weight: 450; color: var(--sw-mute); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .db-swarm-ch.is-ghost { opacity: 0.55; cursor: default; }
 .db-swarm-ch.is-ghost:hover { background: transparent; color: var(--sw-dim); transform: none; }
+/* Not hired yet: the Supervisor's tile is only an outline. */
+.db-swarm-ch.is-ghost .db-swarm-avatar { background: transparent; color: var(--sw-mute); box-shadow: none; outline: 1px dashed var(--sw-field-border); outline-offset: 0; }
+.db-swarm-ch-role.is-working { color: var(--sw-accent-strong); font-weight: 600; }
 .db-swarm-contact {
   width: 100%;
   display: flex;
   align-items: center;
   gap: 9px;
-  padding: 9px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
+  padding: 10px;
+  border: 1px solid var(--sw-chip-border);
+  border-radius: 14px;
+  background: var(--sw-chip);
   color: var(--sw-text);
   font: inherit;
-  font-size: 13.5px;
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 650;
   text-align: left;
   cursor: pointer;
   transition: background 180ms var(--sw-out);
 }
 .db-swarm-contact:hover { background: var(--sw-hover); }
 .db-swarm-contact:focus-visible { outline: 2px solid var(--sw-accent-ring); outline-offset: 2px; }
-.db-swarm-contact .db-swarm-ch-role { white-space: normal; }
+.db-swarm-contact .db-swarm-ch-role { white-space: normal; font-size: 12px; }
 .db-swarm-new-btn {
   margin-left: auto;
   display: inline-flex;
@@ -9586,6 +9589,9 @@
 }
 .db-swarm-compose-box { position: relative; }
 .db-swarm-compose-box:focus-within { border-color: var(--sw-accent-ring); box-shadow: 0 0 0 1px var(--sw-accent-soft); }
+/* Who will answer, named before you send. */
+.db-swarm-to { display: flex; align-items: center; gap: 7px; padding: 9px 16px 0; font-size: 12px; color: var(--sw-mute); }
+.db-swarm-to strong { font-weight: 650; color: var(--sw-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 /* The @ list rises from the composer; every colour is an --sw-* token, so dark needs no twin. */
 .db-swarm-mentions {
   position: absolute;
@@ -9876,6 +9882,7 @@
 .db-swarm-card-title { flex: 1; min-width: 0; line-height: 1.25; }
 .db-swarm-card-title strong { display: block; font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .db-swarm-card-title span { font-size: 11.5px; color: var(--sw-mute); }
+.db-swarm-status-chip { flex: none; padding: 1px 8px; border-radius: 999px; font-size: 10.5px; font-weight: 650; color: var(--sw-accent-strong); background: var(--sw-accent-soft); }
 .db-swarm-card-chev { color: var(--sw-mute); flex: none; transition: transform 320ms var(--sw-spring); }
 .db-swarm-card.is-open .db-swarm-card-chev { transform: rotate(90deg); }
 .db-swarm-card-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 380ms var(--sw-out); }

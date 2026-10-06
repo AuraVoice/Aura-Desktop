@@ -540,6 +540,7 @@
   --sw-av-fill: var(--sw-boss-tile);
   color: var(--sw-boss-on);
 }
+:root[data-theme="dark"] .db-swarm-ch.is-ghost .db-swarm-avatar { background: transparent; color: var(--sw-mute); box-shadow: none; }
 :root[data-theme="dark"] .db-swarm-node { --sw-node-fill: color-mix(in srgb, var(--sw-av-ink, var(--sw-accent)) 34%, var(--dk-surface)); --sw-node-on: var(--sw-av); }
 :root[data-theme="dark"] .db-swarm-node.is-supervisor { --sw-node-fill: var(--sw-boss-tile); --sw-node-on: var(--sw-boss-on); }
 :root[data-theme="dark"] .db-swarm-node-core { stroke: color-mix(in srgb, var(--sw-av, var(--sw-accent)) 24%, transparent); }

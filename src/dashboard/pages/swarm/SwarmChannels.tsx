@@ -58,7 +58,7 @@ export function SwarmChannels({ roster, channel, unread, working, loading, statu
           onClick={() => onSelect("group")}
           title={`${contact.name} answers everything you send to #${groupChannelName(roster)}`}
         >
-          <SwarmAvatar author={contact} size="sm" />
+          <SwarmAvatar author={contact} />
           <span className="db-swarm-ch-text">
             <span className="db-swarm-ch-name">{contact.name}</span>
             <span className="db-swarm-ch-role">{contactDuty(roster)}</span>
@@ -126,8 +126,8 @@ export function SwarmChannels({ roster, channel, unread, working, loading, statu
                 <i className={`db-swarm-presence${paused ? " is-paused" : ""}${working.has(m.id) ? " is-working" : ""}`} aria-hidden="true" />
               </span>
               <span className="db-swarm-ch-text">
-                <span className="db-swarm-ch-name">{displayName(m)}{paused ? <span className="db-swarm-sr">, paused</span> : busy ? <span className="db-swarm-sr">, working</span> : null}</span>
-                <span className="db-swarm-ch-role">{roleLabel({ id: m.id, name: displayName(m), role: "manager", hue: 0 }, roster)}</span>
+                <span className="db-swarm-ch-name">{displayName(m)}{paused && <span className="db-swarm-sr">, paused</span>}</span>
+                <span className={`db-swarm-ch-role${busy ? " is-working" : ""}`}>{busy ? "Working" : roleLabel({ id: m.id, name: displayName(m), role: "manager", hue: 0 }, roster)}</span>
               </span>
               {paused ? <span className="db-swarm-ch-paused" title="Paused"><HoldGlyph size={15} /></span> : <Badge count={active ? 0 : unread[id] ?? 0} />}
             </button>

@@ -20,6 +20,7 @@ was started and read like commit subjects rather than release notes.
 - Swarm avatars are redesigned. Your messages show your Google photo, each manager's initial sits on a solid tile in its own colour, and the Supervisor has a new hub icon in its own graphite colour, so it no longer looks like Aura.
 - Swarm is calm at rest. Only a manager that is actually working shows a pulsing ring, and a paused manager's dot is now a hollow ring, so you can tell it apart without relying on colour.
 - Your Swarm messages now sit on the right in a bubble, and the agents' replies keep the full width on the left, so you can see what you asked and what came back at a glance. Agent names read in plain ink with their role beside them, and days are marked with a small label.
+- The Swarm composer now shows who will answer before you send. Manager rows in the rail say "Working" while they are on a task, and the Team panel shows each manager's connectors and routines, a Working chip, and separate Supervisor and Managers sections.
 
 ### Fixed
 - A Swarm manager's direct message header now uses the same name as the rail.

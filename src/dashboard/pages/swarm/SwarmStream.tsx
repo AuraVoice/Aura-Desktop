@@ -447,6 +447,8 @@ export function SwarmStream(props: Props) {
   const following = useRef(true);
   const [showJump, setShowJump] = useState(false);
   const readOnly = view.kind === "activity";
+  // Who answers what you send: the manager in its DM, the point of contact in #group.
+  const recipient = readOnly ? null : view.kind === "manager" ? view.author ?? null : props.busyAuthor;
   const messageMax = view.kind === "manager" ? BRIEF_MAX : GROUP_MESSAGE_MAX;
   // Handlers are read at click time, so the list below need not rebuild when only the
   // composer's text (or a fresh inline arrow from the page) changed.
@@ -842,6 +844,13 @@ export function SwarmStream(props: Props) {
 
       <div className={`db-swarm-compose-box${readOnly ? " is-readonly" : ""}${busy ? " is-busy" : ""}`}>
       {!readOnly && mention.popover}
+      {recipient && (
+        <div className="db-swarm-to">
+          <span>To</span>
+          <SwarmAvatar author={recipient} size="xs" />
+          <strong>{recipient.name}</strong>
+        </div>
+      )}
       {!readOnly && props.attachments.length > 0 && (
         <div className="db-swarm-attachments" aria-label="Files for this message">
           {props.attachments.map((a) => (

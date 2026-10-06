@@ -142,6 +142,7 @@ function ManagerCard({
   tools: ManagerTools;
 }) {
   const paused = manager.status === "paused";
+  const routines = tools.routines.filter((r) => r.managerId === manager.id).length;
   return (
     <li className={`db-swarm-card${expanded ? " is-open" : ""}${paused ? " is-paused" : ""}${fresh ? " is-fresh" : ""}`}>
       <button type="button" className="db-swarm-card-head" onClick={onToggle} aria-expanded={expanded}>
@@ -152,8 +153,11 @@ function ManagerCard({
             {paused ? "Paused" : manager.isCoordinator ? `${manager.name ? manager.title : "Manager"} · also coordinates` : manager.name ? manager.title : "Manager"}
             {" · "}
             {manager.subagents.length === 0 ? "works solo" : `${manager.subagents.length} subagent${manager.subagents.length === 1 ? "" : "s"}`}
+            {manager.connectors.length > 0 && ` · ${manager.connectors.length} connector${manager.connectors.length === 1 ? "" : "s"}`}
+            {routines > 0 && ` · ${routines} routine${routines === 1 ? "" : "s"}`}
           </span>
         </span>
+        {working && !paused && <span className="db-swarm-status-chip">Working</span>}
         {paused ? <HoldGlyph size={16} className="db-swarm-card-chev" /> : <CaretGlyph size={16} className="db-swarm-card-chev" />}
       </button>
       <div className="db-swarm-card-body">
@@ -221,7 +225,7 @@ export function SwarmRoster({ roster, focusedManagerId, working, freshManagers, 
   return (
     <aside className={`db-swarm-roster${open ? " is-open" : ""}`} aria-label="Roster">
       <div className="db-swarm-roster-head">
-        <span className="db-swarm-group-label">Team</span>
+        <span className="db-swarm-group-label">Team <span className="db-swarm-group-count">{roster.managers.length + (sup ? 1 : 0)}</span></span>
         <button type="button" className="db-swarm-icon-btn db-swarm-roster-close" onClick={onClose} aria-label="Close team panel">
           <DismissGlyph size={16} />
         </button>
@@ -231,6 +235,7 @@ export function SwarmRoster({ roster, focusedManagerId, working, freshManagers, 
           <Constellation roster={roster} working={working} freshManagers={freshManagers} supervisorFresh={supervisorFresh} />
         </div>
 
+        {sup && <div className="db-swarm-group-label">Supervisor</div>}
         {sup && (
           <section className={`db-swarm-card is-supervisor is-open${sup.status === "archived" ? " is-paused" : ""}${supervisorFresh ? " is-fresh" : ""}`}>
             <div className="db-swarm-card-head is-static">
@@ -253,6 +258,7 @@ export function SwarmRoster({ roster, focusedManagerId, working, freshManagers, 
           </section>
         )}
 
+        {roster.managers.length > 0 && <div className="db-swarm-group-label">Managers</div>}
         {roster.managers.length > 0 && (
           <ul className="db-swarm-cards">
             {roster.managers.map((m) => (
