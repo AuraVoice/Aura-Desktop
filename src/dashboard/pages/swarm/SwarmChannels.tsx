@@ -1,6 +1,6 @@
 import type { SwarmRoster } from "../../../lib/swarmApi";
 import { SwarmAvatar } from "./SwarmAvatar";
-import { HoldGlyph, LatticeGlyph, PulseGlyph, SpawnGlyph, SwarmMark } from "./SwarmGlyphs";
+import { CaretGlyph, HoldGlyph, LatticeGlyph, PulseGlyph, SpawnGlyph, SwarmMark } from "./SwarmGlyphs";
 import {
   contactDuty,
   displayName,
@@ -27,6 +27,9 @@ interface Props {
   supervisorFresh: boolean;
   onSelect: (channel: ChannelId) => void;
   onNewWorkflow: () => void;
+  /** Folded to a strip of icons, so the conversation gets the width. */
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
 }
 
 function Badge({ count }: { count: number }) {
@@ -36,7 +39,9 @@ function Badge({ count }: { count: number }) {
 
 /** Left rail: the two shared channels, then one DM per manager, then whether the
  * managers can work right now. */
-export function SwarmChannels({ roster, channel, unread, working, loading, status, freshManagers, supervisorFresh, onSelect, onNewWorkflow }: Props) {
+export function SwarmChannels({ roster, channel, unread, working, loading, status, freshManagers, supervisorFresh, onSelect, onNewWorkflow, collapsed, onToggleCollapsed }: Props) {
+  // Folded, the names are visually hidden but still read out; the tooltip names each row.
+  const tip = (label: string) => (collapsed ? label : undefined);
   const hasSupervisor = supervisorActive(roster);
   const contact = frontDoorAuthor(roster);
   const supervisorArchived = roster.supervisor?.status === "archived";
@@ -48,6 +53,16 @@ export function SwarmChannels({ roster, channel, unread, working, loading, statu
         <div className="db-swarm-rail-title">
           <strong>Swarm</strong>
         </div>
+        <button
+          type="button"
+          className="db-swarm-rail-collapse"
+          onClick={onToggleCollapsed}
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? "Expand channels" : "Collapse channels"}
+          title={collapsed ? "Expand channels" : "Collapse channels"}
+        >
+          <CaretGlyph size={16} />
+        </button>
       </div>
 
       <div className="db-swarm-rail-scroll">
@@ -70,6 +85,7 @@ export function SwarmChannels({ roster, channel, unread, working, loading, statu
           type="button"
           className={`db-swarm-ch${channel === "group" ? " is-active" : ""}`}
           aria-current={channel === "group" ? "page" : undefined}
+          title={tip(`#${groupChannelName(roster)}`)}
           onClick={() => onSelect("group")}
         >
           <span className="db-swarm-ch-hash"><LatticeGlyph size={17} /></span>
@@ -81,6 +97,7 @@ export function SwarmChannels({ roster, channel, unread, working, loading, statu
           type="button"
           className={`db-swarm-ch${channel === "activity" ? " is-active" : ""}`}
           aria-current={channel === "activity" ? "page" : undefined}
+          title={tip("#activity")}
           onClick={() => onSelect("activity")}
         >
           <span className="db-swarm-ch-hash"><PulseGlyph size={17} /></span>
@@ -119,6 +136,7 @@ export function SwarmChannels({ roster, channel, unread, working, loading, statu
               type="button"
               className={`db-swarm-ch is-manager${active ? " is-active" : ""}${paused ? " is-paused" : ""}${freshManagers.has(m.id) ? " is-fresh" : ""}${working.has(m.id) ? " is-working" : ""}`}
               aria-current={active ? "page" : undefined}
+              title={tip(displayName(m))}
               onClick={() => onSelect(id)}
             >
               <span className="db-swarm-ch-avatar">

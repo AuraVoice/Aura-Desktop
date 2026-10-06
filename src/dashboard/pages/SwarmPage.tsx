@@ -67,6 +67,7 @@ import {
 const LEGACY_KEY = "aura.swarm-sandbox.v1";
 const CHANNEL_KEY = "aura.swarm-sandbox.channel";
 const SEEN_KEY = "aura.swarm.seen";
+const RAIL_KEY = "aura.swarm.rail-collapsed";
 const POLL_MS = 2_500;
 const POLL_BACKOFF_MS = 15_000;
 // How long a new message, manager or Supervisor counts as "just arrived" for motion.
@@ -106,6 +107,22 @@ function loadChannel(): ChannelId {
     // Storage can be unavailable; the front door is fine.
   }
   return "group";
+}
+
+function loadRailCollapsed(): boolean {
+  try {
+    return globalThis.localStorage?.getItem(RAIL_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function saveRailCollapsed(collapsed: boolean) {
+  try {
+    globalThis.localStorage?.setItem(RAIL_KEY, collapsed ? "1" : "0");
+  } catch {
+    // Best effort only.
+  }
 }
 
 function saveChannel(channel: ChannelId) {
@@ -348,6 +365,12 @@ export function SwarmPage() {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [rosterOpen, setRosterOpen] = useState(false);
+  const [railCollapsed, setRailCollapsed] = useState(loadRailCollapsed);
+  const toggleRail = () =>
+    setRailCollapsed((collapsed) => {
+      saveRailCollapsed(!collapsed);
+      return !collapsed;
+    });
   const [legacy, setLegacy] = useState<Legacy | null>(readLegacy);
   const [seen, setSeen] = useState<Record<string, number>>(loadSeen);
   const [freshItems, markItems] = useFreshSet();
@@ -874,7 +897,7 @@ export function SwarmPage() {
         ) : null;
 
   return (
-    <div className={`db-swarm${rosterOpen ? " is-roster-open" : ""}`}>
+    <div className={`db-swarm${rosterOpen ? " is-roster-open" : ""}${railCollapsed ? " is-rail-collapsed" : ""}`}>
       <SwarmChannels
         roster={roster}
         channel={liveChannel}
@@ -886,6 +909,8 @@ export function SwarmPage() {
         supervisorFresh={supervisorFresh}
         onSelect={select}
         onNewWorkflow={newWorkflow}
+        collapsed={railCollapsed}
+        onToggleCollapsed={toggleRail}
       />
         <SwarmStream
           view={view}

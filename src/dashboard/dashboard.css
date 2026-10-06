@@ -8599,7 +8599,7 @@
   --sw-panel-border: rgba(255, 255, 255, 0.82);
   --sw-panel-fill: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
   --sw-panel-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
-  --sw-rail-fill: rgba(232, 244, 241, 0.5);
+  --sw-rail-fill: rgba(32, 35, 42, 0.025);
   --sw-divider: rgba(63, 86, 78, 0.1);
   --sw-hover: rgba(255, 255, 255, 0.55);
   --sw-active: rgba(255, 255, 255, 0.92);
@@ -8887,6 +8887,24 @@
 .db-swarm-rail-title { flex: 1; min-width: 0; line-height: 1.2; }
 .db-swarm-rail-title strong { display: block; font-family: var(--font-title, inherit); font-size: 15px; }
 .db-swarm-rail-title span { font-size: 11.5px; color: var(--sw-mute); font-variant-numeric: tabular-nums; }
+/* The "<" that folds the rail; it turns to ">" once folded. */
+.db-swarm-rail-collapse {
+  width: 28px;
+  height: 28px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--sw-mute);
+  cursor: pointer;
+  transition: background 160ms var(--sw-out), color 160ms var(--sw-out);
+}
+.db-swarm-rail-collapse .sw-g { transform: rotate(180deg); transition: transform 280ms var(--sw-spring); }
+.db-swarm-rail-collapse:hover { background: var(--sw-hover); color: var(--sw-text); }
+.db-swarm-rail-collapse:focus-visible { outline: 2px solid var(--sw-accent-ring); outline-offset: 2px; }
+.db-swarm.is-rail-collapsed .db-swarm-rail-collapse .sw-g { transform: none; }
 .db-swarm-rail-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 2px 8px 10px; }
 .db-swarm-rail-empty { margin: 4px 10px; font-size: 12px; color: var(--sw-mute); }
 .db-swarm-ch {
@@ -9948,6 +9966,35 @@
 }
 .db-swarm.is-roster-open .db-swarm-roster { transform: none; opacity: 1; pointer-events: auto; }
 
+/* ── Folded rail: a strip of icons. Names stay in the accessibility tree (clipped, not
+   removed) and each row carries a tooltip. Only above the chip-strip breakpoint. ── */
+@media (min-width: 861px) {
+  .db-swarm { transition: grid-template-columns 240ms var(--sw-out); }
+  .db-swarm.is-rail-collapsed { grid-template-columns: 64px minmax(0, 1fr); }
+  .is-rail-collapsed .db-swarm-rail-head { flex-direction: column; justify-content: center; gap: 6px; padding: 10px 0; }
+  .is-rail-collapsed .db-swarm-rail-title,
+  .is-rail-collapsed .db-swarm-ch-text,
+  .is-rail-collapsed .db-swarm-ch > .db-swarm-ch-name {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  .is-rail-collapsed .db-swarm-group-label,
+  .is-rail-collapsed .db-swarm-admin,
+  .is-rail-collapsed .db-swarm-ch-paused,
+  .is-rail-collapsed .db-swarm-meter,
+  .is-rail-collapsed .db-swarm-rail-empty { display: none; }
+  .is-rail-collapsed .db-swarm-rail-scroll { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 10px 6px; }
+  .is-rail-collapsed .db-swarm-contact { width: 48px; justify-content: center; padding: 6px; margin-bottom: 8px; }
+  .is-rail-collapsed .db-swarm-ch { width: 48px; justify-content: center; padding: 7px 0; }
+  .is-rail-collapsed .db-swarm-ch-hash { width: auto; }
+  /* An unread count becomes a dot on the icon's corner. */
+  .is-rail-collapsed .db-swarm-unread { position: absolute; top: 3px; right: 6px; min-width: 9px; height: 9px; padding: 0; font-size: 0; }
+}
+
 /* ── Narrow windows: a slimmer rail, then a chip strip. ── */
 @media (max-width: 1180px) {
   .db-swarm { grid-template-columns: 220px minmax(0, 1fr); }
@@ -9957,6 +10004,7 @@
   .db-swarm-rail { flex-direction: row; align-items: center; border-right: 0; border-bottom: 1px solid var(--sw-divider); }
   .db-swarm-rail-head { border-bottom: 0; border-right: 1px solid var(--sw-divider); }
   .db-swarm-rail-title,
+  .db-swarm-rail-collapse,
   .db-swarm-meter,
   .db-swarm-group-label,
   .db-swarm-rail-empty { display: none; }
