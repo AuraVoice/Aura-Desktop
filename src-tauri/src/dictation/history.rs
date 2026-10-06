@@ -374,7 +374,40 @@ const ADDED_TRANSCRIPT_COLUMNS: &[(&str, &str)] = &[
     // `insert_outcome`; the pragma check above makes that a no-op.
     ("app_stem", "app_stem TEXT"),
     ("insert_outcome", "insert_outcome TEXT"),
+    // The hold's wall clock; `duration_ms` is the audio length the clip holds,
+    // which is what the backend checks the FLAC against. Plaintext: a number.
+    ("hold_ms", "hold_ms INTEGER"),
+    // The V4 metric objects (`audio`, `recognition`, `insertion`, `ext`) as one
+    // JSON document. Sealed, because `recognition.words[]` is the transcript
+    // again, token by token.
+    ("metrics", "metrics BLOB"),
+    // Why the observer stopped watching (`observation_end::*`) and how long
+    // after the keystrokes the first edit was seen. Plaintext: an enumeration
+    // and a number. Wispr keeps the same two facts as
+    // contentObservationEndReason and a per-word edit timeline; without them a
+    // watch that found the span and one that lost it look alike in the corpus.
+    ("observation_end", "observation_end TEXT"),
+    ("first_edit_ms", "first_edit_ms INTEGER"),
 ];
+
+/// `observation_end` vocabulary. Spelled once here; `observer.rs` picks,
+/// `share.rs` sends it as `ext.observeEnd`.
+pub mod observation_end {
+    /// The scheduled watch ran out (last reading, or the hard expiry).
+    pub const WINDOW_ELAPSED: &str = "window_elapsed";
+    /// The next hold started and took the final reading early.
+    pub const NEXT_HOLD: &str = "next_hold";
+    /// The surrounding text survived and the dictated words were deleted.
+    pub const SPAN_REMOVED: &str = "span_removed";
+    /// The field could not be re-found or re-read.
+    pub const ANCHOR_LOST: &str = "anchor_lost";
+    /// No anchor could be established after the insert.
+    pub const NOT_ANCHORED: &str = "not_anchored";
+    /// Settled early to make room for a newer watch.
+    pub const EVICTED: &str = "evicted";
+    /// The observer thread was shutting down.
+    pub const SHUTDOWN: &str = "shutdown";
+}
 
 /// `insert_outcome` vocabulary. Snake case so the page can match on it
 /// without knowing the Rust enum's spelling.
@@ -433,6 +466,17 @@ fn add_missing_transcript_columns(conn: &Connection) -> Result<(), String> {
         if existing.contains(*name) {
             continue;
         }
+        if *name == "hold_ms" {
+            // Rows from before this column stored the hold's wall clock as
+            // their duration, which the backend's FLAC check refuses. They are
+            // retired from the share queue here, once, as the column arrives:
+            // the user keeps them in history, and the pump never sees them.
+            conn.execute(
+                "UPDATE transcripts SET share_state = 0 WHERE share_state = 1",
+                [],
+            )
+            .map_err(|e| e.to_string())?;
+        }
         conn.execute(
             &format!("ALTER TABLE transcripts ADD COLUMN {declaration}"),
             [],
@@ -444,7 +488,7 @@ fn add_missing_transcript_columns(conn: &Connection) -> Result<(), String> {
 
 /// A 16-character random hex id. Random rather than sequential so a clip's
 /// filename says nothing about when it was made or how many exist.
-fn new_id() -> Result<String, String> {
+pub(super) fn new_id() -> Result<String, String> {
     crate::util::random_hex(8)
 }
 
@@ -584,11 +628,13 @@ pub fn record_later(
     raw_text: Option<String>,
     samples: Vec<f32>,
     duration_ms: i64,
+    hold_ms: i64,
     words: u64,
     shareable: bool,
     context: Option<String>,
     app_stem: Option<String>,
     insert_outcome: &'static str,
+    metrics: Option<String>,
 ) -> Option<String> {
     if !ENCRYPTION_AVAILABLE || text.trim().is_empty() || !is_enabled(app) {
         return None;
@@ -615,11 +661,13 @@ pub fn record_later(
             raw_text.as_deref(),
             &samples,
             duration_ms,
+            hold_ms,
             words,
             shareable,
             context.as_deref(),
             app_stem.as_deref(),
             insert_outcome,
+            metrics.as_deref(),
         ) {
             warn!("dictation.history: record or retention failed ({error})");
         }
@@ -635,6 +683,8 @@ pub fn record_observation(
     uid: &str,
     id: &str,
     verdict: ObservationVerdict,
+    end: &'static str,
+    first_edit_ms: Option<i64>,
 ) -> Result<(), String> {
     if !ENCRYPTION_AVAILABLE {
         return Ok(());
@@ -644,9 +694,10 @@ pub fn record_observation(
         ObservationVerdict::Unobserved => {
             conn.execute(
                 "UPDATE transcripts
-                    SET label_source = ?1, observed_at_ms = ?2
-                  WHERE uid = ?3 AND id = ?4 AND observed_at_ms IS NULL",
-                params![LABEL_SOURCE_INSERTED_ONLY, now_ms(), uid, id],
+                    SET label_source = ?1, observed_at_ms = ?2,
+                        observation_end = ?3, first_edit_ms = ?4
+                  WHERE uid = ?5 AND id = ?6 AND observed_at_ms IS NULL",
+                params![LABEL_SOURCE_INSERTED_ONLY, now_ms(), end, first_edit_ms, uid, id],
             )
             .map_err(|e| e.to_string())?;
         }
@@ -663,8 +714,9 @@ pub fn record_observation(
             conn.execute(
                 "UPDATE transcripts
                     SET final_text = ?1, training_text = ?2, edits = ?3,
-                        label_source = ?4, label_quality = ?5, observed_at_ms = ?6
-                  WHERE uid = ?7 AND id = ?8",
+                        label_source = ?4, label_quality = ?5, observed_at_ms = ?6,
+                        observation_end = ?7, first_edit_ms = ?8
+                  WHERE uid = ?9 AND id = ?10",
                 params![
                     sealed_final,
                     sealed_training,
@@ -672,6 +724,8 @@ pub fn record_observation(
                     LABEL_SOURCE_OBSERVED,
                     label_quality,
                     now_ms(),
+                    end,
+                    first_edit_ms,
                     uid,
                     id,
                 ],
@@ -691,14 +745,20 @@ fn record(
     raw_text: Option<&str>,
     samples: &[f32],
     duration_ms: i64,
+    hold_ms: i64,
     words: u64,
     shareable: bool,
     context: Option<&str>,
     app_stem: Option<&str>,
     insert_outcome: &str,
+    metrics: Option<&str>,
 ) -> Result<(), String> {
     let key = load_or_create_key(app)?;
     let sealed_text = seal(&key, text, &row_aad(uid, id, "text"))?;
+    let sealed_metrics = match metrics {
+        Some(metrics) => Some(seal(&key, metrics, &row_aad(uid, id, "metrics"))?),
+        None => None,
+    };
     let sealed_raw = match raw_text {
         Some(raw) => Some(seal(&key, raw, &row_aad(uid, id, "raw"))?),
         None => None,
@@ -729,8 +789,8 @@ fn record(
         "INSERT INTO transcripts (
             uid, id, recorded_at_ms, word_count, duration_ms, text,
             flagged, audio_path, audio_bytes, raw_text, shareable, audio_sha256,
-            context, app_stem, insert_outcome
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            context, app_stem, insert_outcome, hold_ms, metrics
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
             uid,
             id,
@@ -746,6 +806,8 @@ fn record(
             sealed_context,
             app_stem,
             insert_outcome,
+            hold_ms,
+            sealed_metrics,
         ],
     )
     .map_err(|e| e.to_string())?;

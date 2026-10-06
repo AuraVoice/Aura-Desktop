@@ -35,7 +35,7 @@
 
 use std::collections::BTreeSet;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use futures_util::{SinkExt, StreamExt};
@@ -47,8 +47,9 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::Connector;
 
 use super::{
-    AsrError, AsrEvent, AsrProvider, AsrSession, ContinuousAsrEvent,
-    ContinuousAsrSession, ContinuousSessionConfig, SessionConfig, TranscriptAccumulator,
+    AsrError, AsrEvent, AsrProvider, AsrSession, ContinuousAsrEvent, ContinuousAsrSession,
+    ContinuousSessionConfig, RecognitionMetrics, SessionConfig, TranscriptAccumulator,
+    WordTiming, MAX_WORDS,
 };
 
 const ENDPOINT: &str = "wss://api.deepgram.com/v1/listen";
@@ -91,11 +92,23 @@ impl AsrProvider for DeepgramProvider {
 
         let (command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel::<Command>();
         let (event_tx, event_rx) = std::sync::mpsc::channel::<AsrEvent>();
+        let recognition = Arc::new(Mutex::new(None));
+        let socket_recognition = Arc::clone(&recognition);
+        let connected_at = Arc::new(Mutex::new(None));
+        let socket_connected_at = Arc::clone(&connected_at);
 
         // tauri owns a process-wide runtime, so this is reachable from the
         // blocking dictation worker thread without it having to own one.
         tauri::async_runtime::spawn(async move {
-            run_socket(url, credential, command_rx, event_tx).await;
+            run_socket(
+                url,
+                credential,
+                command_rx,
+                event_tx,
+                socket_recognition,
+                socket_connected_at,
+            )
+            .await;
         });
 
         Ok(Box::new(DeepgramSession {
@@ -103,6 +116,8 @@ impl AsrProvider for DeepgramProvider {
             events: event_rx,
             terminal: None,
             finalize_sent: false,
+            recognition,
+            connected_at,
         }))
     }
 
@@ -225,6 +240,12 @@ struct DeepgramSession {
     /// available to `await_final` after the chord comes up.
     terminal: Option<Result<String, AsrError>>,
     finalize_sent: bool,
+    /// Written by the socket task just before it sends the Final, read by the
+    /// worker after `await_final`. Shared rather than carried on the event so
+    /// `AsrEvent::Final(String)` keeps its shape for every other consumer.
+    recognition: Arc<Mutex<Option<RecognitionMetrics>>>,
+    /// Set by the socket task the moment the handshake completes.
+    connected_at: Arc<Mutex<Option<Instant>>>,
 }
 
 impl DeepgramSession {
@@ -250,6 +271,14 @@ impl DeepgramSession {
 }
 
 impl AsrSession for DeepgramSession {
+    fn recognition(&mut self) -> Option<RecognitionMetrics> {
+        self.recognition.lock().ok().and_then(|guard| guard.clone())
+    }
+
+    fn connected_at(&self) -> Option<Instant> {
+        self.connected_at.lock().ok().and_then(|guard| *guard)
+    }
+
     fn send_pcm(&mut self, samples: &[i16]) -> Result<(), AsrError> {
         if samples.is_empty() {
             return Ok(());
@@ -427,6 +456,8 @@ async fn run_socket(
     credential: String,
     mut commands: UnboundedReceiver<Command>,
     events: Sender<AsrEvent>,
+    recognition: Arc<Mutex<Option<RecognitionMetrics>>>,
+    connected_at: Arc<Mutex<Option<Instant>>>,
 ) {
     let started_at = Instant::now();
 
@@ -466,6 +497,9 @@ async fn run_socket(
 
     let socket = match connected {
         Ok(Ok((socket, response))) => {
+            if let Ok(mut slot) = connected_at.lock() {
+                *slot = Some(Instant::now());
+            }
             info!(
                 "dictation.asr: provider=deepgram model={MODEL} phase=connect state=ready connect_ms={} status={}",
                 started_at.elapsed().as_millis(),
@@ -492,8 +526,16 @@ async fn run_socket(
 
     let (mut sink, mut stream) = socket.split();
     let mut accumulator = TranscriptAccumulator::new();
+    let mut metrics = RecognitionAccumulator::default();
     let mut finalize_requested = false;
     let mut bytes_sent = 0usize;
+    // The metrics are published the moment the utterance is final, BEFORE the
+    // Final event, so the worker can never observe the event without them.
+    let publish_metrics = |metrics: &RecognitionAccumulator| {
+        if let Ok(mut slot) = recognition.lock() {
+            *slot = Some(metrics.snapshot());
+        }
+    };
 
     loop {
         tokio::select! {
@@ -529,11 +571,12 @@ async fn run_socket(
             incoming = stream.next() => {
                 match incoming {
                     Some(Ok(Message::Text(payload))) => {
-                        match interpret(&payload, &mut accumulator) {
+                        match interpret_frame(&payload, &mut accumulator, Some(&mut metrics)) {
                             Interpretation::Partial => {
                                 let _ = events.send(AsrEvent::Partial(accumulator.displayed()));
                             }
                             Interpretation::Final => {
+                                publish_metrics(&metrics);
                                 let _ = events.send(AsrEvent::Final(accumulator.finalized()));
                                 let _ = sink
                                     .send(Message::Text(r#"{"type":"CloseStream"}"#.into()))
@@ -552,6 +595,7 @@ async fn run_socket(
                         // the settled segments ARE the utterance. A close before
                         // it is a dropped connection and must type nothing.
                         if finalize_requested {
+                            publish_metrics(&metrics);
                             let _ = events.send(AsrEvent::Final(accumulator.finalized()));
                         } else {
                             let _ = events.send(AsrEvent::Failed(AsrError::Network));
@@ -570,9 +614,70 @@ async fn run_socket(
 
     // Byte counts and durations only, never text.
     info!(
-        "dictation.asr: provider=deepgram phase=close audio_bytes={bytes_sent} session_ms={} finalized={finalize_requested}",
-        started_at.elapsed().as_millis()
+        "dictation.asr: provider=deepgram phase=close audio_bytes={bytes_sent} session_ms={} finalized={finalize_requested} interims={} words={}",
+        started_at.elapsed().as_millis(),
+        metrics.interim_count,
+        metrics.words.len()
     );
+}
+
+/// Per-token timings, per-result confidence and the provider request id,
+/// gathered from the settled frames of one utterance. Only frames the
+/// transcript accumulator KEPT contribute, so the word list and the text
+/// describe the same audio.
+#[derive(Default)]
+struct RecognitionAccumulator {
+    words: Vec<WordTiming>,
+    confidence_sum: f64,
+    confidence_count: u32,
+    alternatives_max: u32,
+    interim_count: u32,
+    request_id: Option<String>,
+}
+
+impl RecognitionAccumulator {
+    fn include(&mut self, alternative: &Alternative, alternatives: usize) {
+        if let Some(confidence) = alternative.confidence {
+            self.confidence_sum += confidence.clamp(0.0, 1.0);
+            self.confidence_count += 1;
+        }
+        self.alternatives_max = self.alternatives_max.max(alternatives as u32);
+        for word in &alternative.words {
+            if self.words.len() >= MAX_WORDS {
+                return;
+            }
+            // `punctuated_word` is what smart_format put in the transcript;
+            // prefer it so the list reads like the text it describes.
+            let text = word
+                .punctuated_word
+                .as_deref()
+                .filter(|w| !w.trim().is_empty())
+                .unwrap_or(word.word.as_str())
+                .trim();
+            if text.is_empty() {
+                continue;
+            }
+            let start_ms = (word.start.unwrap_or(0.0).max(0.0) * 1000.0) as u64;
+            let end_ms = ((word.end.unwrap_or(0.0).max(0.0) * 1000.0) as u64).max(start_ms);
+            self.words.push(WordTiming {
+                word: text.chars().take(256).collect(),
+                start_ms,
+                end_ms,
+                confidence: word.confidence.map(|c| c.clamp(0.0, 1.0)),
+            });
+        }
+    }
+
+    fn snapshot(&self) -> RecognitionMetrics {
+        RecognitionMetrics {
+            provider_request_id: self.request_id.clone(),
+            utterance_confidence: (self.confidence_count > 0)
+                .then(|| self.confidence_sum / f64::from(self.confidence_count)),
+            alternatives_count: (self.alternatives_max > 0).then_some(self.alternatives_max),
+            words: self.words.clone(),
+            interim_count: self.interim_count,
+        }
+    }
 }
 
 async fn run_continuous_socket(
@@ -790,13 +895,23 @@ struct Alternative {
     #[serde(default)]
     transcript: String,
     #[serde(default)]
+    confidence: Option<f64>,
+    #[serde(default)]
     words: Vec<Word>,
 }
 
 #[derive(serde::Deserialize)]
 struct Word {
     #[serde(default)]
+    word: String,
+    #[serde(default)]
+    punctuated_word: Option<String>,
+    #[serde(default)]
+    start: Option<f64>,
+    #[serde(default)]
     end: Option<f64>,
+    #[serde(default)]
+    confidence: Option<f64>,
     #[serde(default)]
     speaker: Option<u32>,
 }
@@ -823,9 +938,24 @@ struct ServerFrame {
     /// Dictation ignores it; the continuous interview path consumes it.
     #[serde(default)]
     speech_final: bool,
+    /// On the Metadata frame: the provider's own handle for this stream.
+    #[serde(default)]
+    request_id: Option<String>,
 }
 
+/// The test-suite entry point: the production socket always feeds metrics.
+#[cfg(test)]
 fn interpret(payload: &str, accumulator: &mut TranscriptAccumulator) -> Interpretation {
+    interpret_frame(payload, accumulator, None)
+}
+
+/// `interpret`, additionally feeding the recognizer's own numbers into
+/// `metrics` when a caller wants them. One parse serves both.
+fn interpret_frame(
+    payload: &str,
+    accumulator: &mut TranscriptAccumulator,
+    metrics: Option<&mut RecognitionAccumulator>,
+) -> Interpretation {
     let Ok(frame) = serde_json::from_str::<ServerFrame>(payload) else {
         // An unparseable frame is not fatal on its own; the utterance is still
         // ended by Finalize or by the socket closing.
@@ -833,22 +963,40 @@ fn interpret(payload: &str, accumulator: &mut TranscriptAccumulator) -> Interpre
     };
     match frame.kind.as_str() {
         "Results" => {
-            let transcript = frame
+            let alternatives = frame
                 .channel
                 .as_ref()
-                .and_then(|channel| channel.alternatives.first())
+                .map(|channel| channel.alternatives.as_slice())
+                .unwrap_or(&[]);
+            let alternative = alternatives.first();
+            let transcript = alternative
                 .map(|alternative| alternative.transcript.as_str())
                 .unwrap_or("");
             if frame.is_final {
+                // Mirrors push_settled's rule: a blank final contributes no
+                // text, so it must contribute no words either.
+                let kept = !transcript.trim().is_empty();
                 accumulator.push_settled(transcript);
+                if let (Some(metrics), Some(alternative), true) = (metrics, alternative, kept) {
+                    metrics.include(alternative, alternatives.len());
+                }
             } else {
                 accumulator.push_interim(transcript);
+                if let Some(metrics) = metrics {
+                    metrics.interim_count += 1;
+                }
             }
             if frame.from_finalize {
                 Interpretation::Final
             } else {
                 Interpretation::Partial
             }
+        }
+        "Metadata" => {
+            if let (Some(metrics), Some(id)) = (metrics, frame.request_id) {
+                metrics.request_id = Some(id.chars().take(128).collect());
+            }
+            Interpretation::Ignored
         }
         "Error" => Interpretation::Failed,
         _ => Interpretation::Ignored,
@@ -1159,6 +1307,8 @@ mod tests {
                 events: event_rx,
                 terminal: None,
                 finalize_sent: false,
+                recognition: Arc::new(Mutex::new(None)),
+                connected_at: Arc::new(Mutex::new(None)),
             },
             command_rx,
             event_tx,

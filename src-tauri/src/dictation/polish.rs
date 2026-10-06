@@ -351,14 +351,25 @@ fn validate(input: &str, output: &str) -> Option<String> {
 /// Formats the transcript, or returns None and the caller types the raw text.
 /// Blocks the worker for at most `WAIT_BUDGET`. Logs outcome, duration and
 /// character counts only.
-pub fn format_transcript(
+/// What polish produced and, when it produced nothing, why. `outcome` is the
+/// backend's `POLISH_OUTCOMES` vocabulary so the trace can store it as is.
+pub struct PolishResult {
+    pub text: Option<String>,
+    pub outcome: &'static str,
+}
+
+pub fn polish_transcript(
     app: &AppHandle,
     text: &str,
     app_name: Option<&str>,
     context: &PolishContext,
-) -> Option<String> {
-    let polish_handle = handle(app)?;
-    let token = polish_handle.usable()?;
+) -> PolishResult {
+    let Some(polish_handle) = handle(app) else {
+        return PolishResult { text: None, outcome: "skipped" };
+    };
+    let Some(token) = polish_handle.usable() else {
+        return PolishResult { text: None, outcome: "auth" };
+    };
     let started = Instant::now();
     let (tx, rx) = std::sync::mpsc::channel();
     let owned_text = text.to_string();
@@ -385,14 +396,14 @@ pub fn format_transcript(
                      chars_in={chars_in} chars_out={}",
                     cleaned.chars().count()
                 );
-                Some(cleaned)
+                PolishResult { text: Some(cleaned), outcome: "ok" }
             }
             None => {
                 info!(
                     "dictation: phase=polish outcome=invalid formatting_ms={formatting_ms} \
                      chars_in={chars_in}"
                 );
-                None
+                PolishResult { text: None, outcome: "rejected" }
             }
         },
         Err(error) => {
@@ -406,7 +417,15 @@ pub fn format_transcript(
                 // refresh pump replaces it rather than it being retried.
                 polish_handle.clear_token();
             }
-            None
+            PolishResult {
+                text: None,
+                outcome: match error {
+                    PolishError::Timeout => "timeout",
+                    PolishError::Auth => "auth",
+                    PolishError::Invalid => "rejected",
+                    PolishError::Unavailable | PolishError::Http => "unavailable",
+                },
+            }
         }
     }
 }

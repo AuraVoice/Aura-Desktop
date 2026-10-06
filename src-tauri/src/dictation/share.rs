@@ -127,6 +127,17 @@ pub struct TraceUploadLease {
     pub cleanup_undone: bool,
     /// The hold context (`polish::PolishContext`) or JSON null.
     pub context: serde_json::Value,
+    // V4. The objects are omitted, never zeroed, when the hold could not
+    // measure them: the backend reads an absent field as "not measured".
+    pub hold_ms: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audio: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub recognition: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub insertion: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ext: Option<serde_json::Value>,
 }
 
 /// Whether sharing consent is currently on, as React last reported it. The
@@ -466,6 +477,10 @@ fn claim_one(
         sealed_context: Option<Vec<u8>>,
         label_source: Option<String>,
         label_quality: Option<String>,
+        hold_ms: i64,
+        sealed_metrics: Option<Vec<u8>>,
+        observation_end: Option<String>,
+        first_edit_ms: Option<i64>,
     }
     let row: Option<ClaimRow> = conn
         .query_row(
@@ -473,10 +488,11 @@ fn claim_one(
             // the persisted digest rather than recomputing it, which is what
             // used to force a full read and decrypt of the clip on every claim.
             "SELECT id, recorded_at_ms, duration_ms, text, raw_text, audio_path, audio_sha256,
-                    final_text, training_text, edits, context, label_source, label_quality
+                    final_text, training_text, edits, context, label_source, label_quality,
+                    hold_ms, metrics, observation_end, first_edit_ms
                FROM transcripts
               WHERE uid = ?1 AND share_state = 1 AND share_next_attempt_ms <= ?2
-                AND audio_path IS NOT NULL
+                AND audio_path IS NOT NULL AND hold_ms IS NOT NULL
                 AND (?3 = 0 OR share_attempts > 0)
                 AND (observed_at_ms IS NOT NULL OR recorded_at_ms <= ?4)
               ORDER BY recorded_at_ms ASC
@@ -497,6 +513,10 @@ fn claim_one(
                     sealed_context: row.get(10)?,
                     label_source: row.get(11)?,
                     label_quality: row.get(12)?,
+                    hold_ms: row.get(13)?,
+                    sealed_metrics: row.get(14)?,
+                    observation_end: row.get(15)?,
+                    first_edit_ms: row.get(16)?,
                 })
             },
         )
@@ -516,6 +536,10 @@ fn claim_one(
         sealed_context,
         label_source,
         label_quality,
+        hold_ms,
+        sealed_metrics,
+        observation_end,
+        first_edit_ms,
     }) = row
     else {
         return Ok(ClaimStep::Empty);
@@ -616,6 +640,34 @@ fn claim_one(
         .filter(|tag| !tag.is_empty())
         .unwrap_or(LANGUAGE_TAG)
         .to_string();
+    // The V4 objects, each taken only when the stored document has it; a
+    // metrics document that will not unseal uploads with all of them omitted,
+    // which the backend reads as "not measured".
+    let mut metrics: serde_json::Value = unseal_slot(sealed_metrics, "metrics")
+        .and_then(|json| serde_json::from_str(&json).ok())
+        .unwrap_or(serde_json::Value::Null);
+    let mut take_metric = |key: &str| -> Option<serde_json::Value> {
+        metrics
+            .as_object_mut()
+            .and_then(|object| object.remove(key))
+            .filter(|value| value.is_object())
+    };
+    let audio = take_metric("audio");
+    let recognition = take_metric("recognition");
+    let insertion = take_metric("insertion");
+    // What the observer learned rides in `ext` beside the hold's own keys.
+    let mut ext = take_metric("ext");
+    if observation_end.is_some() || first_edit_ms.is_some() {
+        let bag = ext.get_or_insert_with(|| serde_json::json!({}));
+        if let Some(object) = bag.as_object_mut() {
+            if let Some(end) = observation_end.as_deref() {
+                object.insert("observeEnd".to_string(), end.into());
+            }
+            if let Some(ms) = first_edit_ms.filter(|ms| *ms >= 0) {
+                object.insert("firstEditMs".to_string(), ms.into());
+            }
+        }
+    }
 
     let observed = label_source.as_deref() == Some(history::LABEL_SOURCE_OBSERVED)
         && observed_final.is_some();
@@ -665,7 +717,7 @@ fn claim_one(
 
     Ok(ClaimStep::Ready(Box::new(TraceUploadLease {
         trace_id,
-        schema_version: 3,
+        schema_version: 4,
         platform: "desktop".to_string(),
         recorded_at_ms,
         duration_ms,
@@ -686,6 +738,11 @@ fn claim_one(
         consent_version,
         cleanup_undone: false,
         context,
+        hold_ms: hold_ms.max(0),
+        audio,
+        recognition,
+        insertion,
+        ext,
     })))
 }
 

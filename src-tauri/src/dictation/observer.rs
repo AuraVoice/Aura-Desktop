@@ -34,6 +34,7 @@ use tauri::{AppHandle, Manager};
 
 use crate::uia::{self, AnchorId, SpanOutcome};
 
+use super::history::observation_end;
 use super::{edits, history};
 
 /// When a watched field is re-read, measured from the moment the text was
@@ -99,6 +100,27 @@ struct Watch {
     /// The most recent located text, so a watch that later loses its anchor
     /// still settles on what was actually seen rather than on nothing.
     last_seen: Option<String>,
+    /// When the keystrokes landed, so the first edit can be placed in time.
+    typed_at: Instant,
+    /// The first reading whose text differed from what was typed. Time is
+    /// never ground truth for WHAT changed, but it is a fact about WHEN, and
+    /// an edit two seconds in on the last word is a different thing from one
+    /// twenty seconds in across three sentences.
+    first_edit_at: Option<Instant>,
+}
+
+impl Watch {
+    /// Notes the first reading that differs from the inserted text.
+    fn note_reading(&mut self, text: &str) {
+        if self.first_edit_at.is_none() && text != self.inserted_text {
+            self.first_edit_at = Some(Instant::now());
+        }
+    }
+
+    fn first_edit_ms(&self) -> Option<i64> {
+        self.first_edit_at
+            .map(|at| i64::try_from(at.saturating_duration_since(self.typed_at).as_millis()).unwrap_or(i64::MAX))
+    }
 }
 
 /// Managed as Tauri state. Absent only if the thread failed to start.
@@ -195,7 +217,7 @@ fn worker_thread(app: AppHandle, receiver: Receiver<Message>) {
                 if let Some(watch) = capture(&app, *observation) {
                     if watches.len() >= MAX_WATCHES {
                         let oldest = watches.remove(0);
-                        settle(&app, &oldest, oldest.last_seen.clone());
+                        settle(&app, &oldest, oldest.last_seen.clone(), observation_end::EVICTED);
                         if !watches.iter().any(|w| w.anchor_id == oldest.anchor_id) {
                             retire.push(oldest.anchor_id);
                         }
@@ -210,7 +232,7 @@ fn worker_thread(app: AppHandle, receiver: Receiver<Message>) {
     // Shutting down: settle what was seen so far rather than leaving rows
     // unlabelled for the 30 s fallback to pick up blind.
     for watch in watches.drain(..) {
-        settle(&app, &watch, watch.last_seen.clone());
+        settle(&app, &watch, watch.last_seen.clone(), observation_end::SHUTDOWN);
         retire.push(watch.anchor_id);
     }
     if !retire.is_empty() {
@@ -235,6 +257,8 @@ fn capture(app: &AppHandle, observation: Observation) -> Option<Watch> {
                 expires_at: observation.typed_at + MAX_WATCH_DURATION,
                 force_final: false,
                 last_seen: None,
+                typed_at: observation.typed_at,
+                first_edit_at: None,
             })
         }
         None => {
@@ -242,7 +266,15 @@ fn capture(app: &AppHandle, observation: Observation) -> Option<Watch> {
                 "dictation.observer: not anchored refusal={}",
                 anchor.refusal.unwrap_or("unknown")
             );
-            record(app, &observation.uid, &observation.row_id, &observation.inserted_text, None);
+            record(
+                app,
+                &observation.uid,
+                &observation.row_id,
+                &observation.inserted_text,
+                None,
+                observation_end::NOT_ANCHORED,
+                None,
+            );
             None
         }
     }
@@ -260,7 +292,7 @@ fn observe_due(app: &AppHandle, watches: &mut Vec<Watch>, retire: &mut Vec<Ancho
             continue;
         }
         let expired = watches.remove(index);
-        settle(app, &expired, expired.last_seen.clone());
+        settle(app, &expired, expired.last_seen.clone(), observation_end::WINDOW_ELAPSED);
         if !watches.iter().any(|watch| watch.anchor_id == expired.anchor_id) {
             retire.push(expired.anchor_id);
         }
@@ -308,15 +340,22 @@ fn observe_due(app: &AppHandle, watches: &mut Vec<Watch>, retire: &mut Vec<Ancho
         match observation.outcome {
             SpanOutcome::Located { text, exact } => {
                 if last_step {
-                    let watch = watches.remove(index);
+                    let mut watch = watches.remove(index);
+                    watch.note_reading(&text);
                     info!(
                         "dictation.observer: final reading exact={exact} step={}",
                         watch.step + 1
                     );
-                    settle(app, &watch, Some(text));
+                    let end = if watch.force_final {
+                        observation_end::NEXT_HOLD
+                    } else {
+                        observation_end::WINDOW_ELAPSED
+                    };
+                    settle(app, &watch, Some(text), end);
                     finished.push(watch.anchor_id);
                 } else {
                     let watch = &mut watches[index];
+                    watch.note_reading(&text);
                     watch.last_seen = Some(text);
                     watch.step += 1;
                     watch.due_at = Instant::now() + step_gap(watch.step);
@@ -328,7 +367,7 @@ fn observe_due(app: &AppHandle, watches: &mut Vec<Watch>, retire: &mut Vec<Ancho
             SpanOutcome::Removed => {
                 let watch = watches.remove(index);
                 info!("dictation.observer: span removed by the user");
-                settle(app, &watch, None);
+                settle(app, &watch, None, observation_end::SPAN_REMOVED);
                 finished.push(watch.anchor_id);
             }
             // The field could not be re-found. Whatever was seen before stands;
@@ -336,7 +375,7 @@ fn observe_due(app: &AppHandle, watches: &mut Vec<Watch>, retire: &mut Vec<Ancho
             SpanOutcome::Lost => {
                 let watch = watches.remove(index);
                 info!("dictation.observer: anchor lost seen_before={}", watch.last_seen.is_some());
-                settle(app, &watch, watch.last_seen.clone());
+                settle(app, &watch, watch.last_seen.clone(), observation_end::ANCHOR_LOST);
                 finished.push(watch.anchor_id);
             }
         }
@@ -348,7 +387,7 @@ fn observe_due(app: &AppHandle, watches: &mut Vec<Watch>, retire: &mut Vec<Ancho
     while index < watches.len() {
         if due_rows.contains(&watches[index].row_id) && watches[index].due_at <= now {
             let watch = watches.remove(index);
-            settle(app, &watch, watch.last_seen.clone());
+            settle(app, &watch, watch.last_seen.clone(), observation_end::ANCHOR_LOST);
             finished.push(watch.anchor_id);
             continue;
         }
@@ -374,14 +413,31 @@ fn step_gap(step: usize) -> Duration {
         .unwrap_or(BACKOFF)
 }
 
-fn settle(app: &AppHandle, watch: &Watch, observed: Option<String>) {
-    record(app, &watch.uid, &watch.row_id, &watch.inserted_text, observed);
+fn settle(app: &AppHandle, watch: &Watch, observed: Option<String>, end: &'static str) {
+    record(
+        app,
+        &watch.uid,
+        &watch.row_id,
+        &watch.inserted_text,
+        observed,
+        end,
+        watch.first_edit_ms(),
+    );
 }
 
 /// Writes the verdict onto the history row. `observed` is the text the field
 /// held where Aura's words were; `None` means the field was never read
-/// successfully and the row keeps the honest `inserted_only` label.
-fn record(app: &AppHandle, uid: &str, row_id: &str, inserted: &str, observed: Option<String>) {
+/// successfully and the row keeps the honest `inserted_only` label. `end` says
+/// why the watch stopped and `first_edit_ms` when a change was first seen.
+fn record(
+    app: &AppHandle,
+    uid: &str,
+    row_id: &str,
+    inserted: &str,
+    observed: Option<String>,
+    end: &'static str,
+    first_edit_ms: Option<i64>,
+) {
     let verdict = match observed {
         None => history::ObservationVerdict::Unobserved,
         Some(text) => {
@@ -404,7 +460,7 @@ fn record(app: &AppHandle, uid: &str, row_id: &str, inserted: &str, observed: Op
                 }
             };
             info!(
-                "dictation.observer: settled quality={quality} edits={}",
+                "dictation.observer: settled quality={quality} edits={} end={end} first_edit_ms={first_edit_ms:?}",
                 comparison.edits.len()
             );
             history::ObservationVerdict::Observed {
@@ -415,7 +471,7 @@ fn record(app: &AppHandle, uid: &str, row_id: &str, inserted: &str, observed: Op
             }
         }
     };
-    if let Err(error) = history::record_observation(app, uid, row_id, verdict) {
+    if let Err(error) = history::record_observation(app, uid, row_id, verdict, end, first_edit_ms) {
         warn!("dictation.observer: observation could not be stored ({error})");
     }
 }

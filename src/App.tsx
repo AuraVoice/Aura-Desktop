@@ -31,6 +31,16 @@ interface DictationHoldCompleted {
   hold_ms: number;
   word_bucket: string;
   polished?: boolean;
+  // One id per hold, shared with the history row and the polish request.
+  run_id?: string;
+  // Captured audio length; hold_ms is the wall clock including the tail.
+  audio_ms?: number;
+  // Key-down timings in ms from the chord press, on every hold including
+  // failed ones; each is absent until its phase was reached.
+  context_ms?: number;
+  capture_ready_ms?: number;
+  first_audio_ms?: number;
+  asr_connect_ms?: number;
   error_category?: string | null;
   // Keyup-path timings in ms, on holds that reached insert or a command.
   finalization_ms?: number;

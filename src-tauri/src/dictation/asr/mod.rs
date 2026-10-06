@@ -192,9 +192,60 @@ pub struct ContinuousSessionConfig {
 }
 
 /// One live utterance. Dropping it without `finish` cancels and closes.
+/// One recognizer token with its position in the audio and its confidence.
+/// The backend's V4 `recognition.words[]` shape; the word itself is sealed
+/// server-side with the transcript, the numbers beside it stay clear.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WordTiming {
+    pub word: String,
+    pub start_ms: u64,
+    pub end_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f64>,
+}
+
+/// What the recognizer said about its own output, for the trace. Before this
+/// existed every field here arrived on the socket and was discarded, so a
+/// trace could say WHAT was heard and never HOW SURELY.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecognitionMetrics {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_request_id: Option<String>,
+    /// Mean of the settled segments' alternative confidence: Deepgram reports
+    /// one per result, never one per utterance.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub utterance_confidence: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub alternatives_count: Option<u32>,
+    pub words: Vec<WordTiming>,
+    /// Interim results seen before the final: revision churn, which is not
+    /// part of the trace object but rides the hold event.
+    #[serde(skip)]
+    pub interim_count: u32,
+}
+
+/// Backend `MAX_WORDS`: the trace validator refuses a longer list.
+pub const MAX_WORDS: usize = 4_096;
+
 pub trait AsrSession: Send {
     /// Hands over freshly captured audio. Never blocks.
     fn send_pcm(&mut self, samples: &[i16]) -> Result<(), AsrError>;
+
+    /// The recognizer's own account of the final it produced, once `await_final`
+    /// has returned it. Providers that expose nothing return None, which the
+    /// trace records as "not measured".
+    fn recognition(&mut self) -> Option<RecognitionMetrics> {
+        None
+    }
+
+    /// When the provider socket finished its handshake, if it has. Read by
+    /// the capture loop so "chord press to recognizer ready" can be measured
+    /// on the thread that owns the hold; the handshake itself runs elsewhere.
+    fn connected_at(&self) -> Option<Instant> {
+        None
+    }
 
     /// Non-blocking. `None` means "nothing new since last time", which is the
     /// common case on most iterations of the capture loop.

@@ -256,6 +256,62 @@ pub fn is_silence(samples: &[f32]) -> bool {
     rms(samples) < 0.003
 }
 
+/// Level statistics of one utterance, in the units the backend's V4
+/// `AudioMetrics` expects: dBFS, a sample count, a fraction of 20 ms frames.
+/// Computed from the samples the clip is encoded from, so it describes exactly
+/// the audio the trace carries.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Levels {
+    pub peak_dbfs: f64,
+    pub rms_dbfs: f64,
+    pub clipped_samples: u64,
+    pub silence_ratio: f64,
+}
+
+/// 20 ms at 16 kHz: the frame the silence ratio is measured over.
+const LEVEL_FRAME: usize = 16_000 / 50;
+
+pub fn levels(samples: &[f32]) -> Levels {
+    let mut peak = 0.0f64;
+    let mut clipped = 0u64;
+    for sample in samples {
+        let magnitude = f64::from(sample.abs());
+        if magnitude > peak {
+            peak = magnitude;
+        }
+        // `to_i16` saturates at full scale, so anything at or past it in the
+        // float domain is a sample the recognizer heard as a flat top.
+        if magnitude >= 0.999 {
+            clipped += 1;
+        }
+    }
+    let frames = samples.chunks(LEVEL_FRAME).filter(|frame| !frame.is_empty());
+    let (mut total, mut silent) = (0u64, 0u64);
+    for frame in frames {
+        total += 1;
+        if is_silence(frame) {
+            silent += 1;
+        }
+    }
+    Levels {
+        peak_dbfs: dbfs(peak),
+        rms_dbfs: dbfs(rms(samples)),
+        clipped_samples: clipped,
+        silence_ratio: if total == 0 { 0.0 } else { silent as f64 / total as f64 },
+    }
+}
+
+/// dBFS from a 0..1 amplitude, floored at the backend's -200 bound so digital
+/// silence serialises as a number rather than -inf.
+fn dbfs(amplitude: f64) -> f64 {
+    if amplitude <= 0.0 {
+        -200.0
+    } else {
+        (20.0 * amplitude.log10()).clamp(-200.0, 0.0)
+    }
+}
+
 /// How much of a hold must be above the `is_silence` floor before it counts
 /// as speech at all: 150 ms at 16 kHz. One drain that crossed the floor used
 /// to be enough, so a key click or a bumped desk on an otherwise silent tap

@@ -647,12 +647,77 @@ mod platform {
         hold_ms: u64,
         word_bucket: &'static str,
         polished: bool,
+        /// The hold's id, shared with the history row's metrics, the polish
+        /// request and every `phase=` log line of the hold, so one dictation
+        /// can be followed across all three.
+        run_id: String,
+        /// The captured audio's length, distinct from the hold's wall clock.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        audio_ms: Option<u64>,
         #[serde(skip_serializing_if = "Option::is_none")]
         error_category: Option<&'static str>,
+        /// Key-down timings, on every hold including failed ones.
+        #[serde(flatten)]
+        keydown: KeydownTimings,
         /// Keyup-path timings, present on holds that reached insert or a
         /// command. Durations only, so the event stays text-free.
         #[serde(flatten)]
         timings: Option<KeyupTimings>,
+    }
+
+    /// Where the time between the chord press and the first usable audio
+    /// went. Each field is milliseconds from the press, and each is absent
+    /// until its phase was reached, so a failed hold reports exactly how far
+    /// it got. Perceived latency starts at the press, not at release: a
+    /// recognizer that connects 400 ms after the chord drops the first word
+    /// however fast the keyup path is.
+    #[derive(Clone, Copy, Default, serde::Serialize)]
+    struct KeydownTimings {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        context_ms: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        capture_ready_ms: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        first_audio_ms: Option<u64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        asr_connect_ms: Option<u64>,
+    }
+
+    /// The clock of the hold the worker thread is running: the press, and the
+    /// key-down phases reached so far. Thread-local for the same reason the
+    /// run id is: a failure can happen before the capture loop owns anything,
+    /// and it must still report where the hold stood.
+    struct HoldClock {
+        pressed_at: Instant,
+        timings: KeydownTimings,
+    }
+
+    thread_local! {
+        static HOLD_CLOCK: std::cell::RefCell<Option<HoldClock>> = const { std::cell::RefCell::new(None) };
+    }
+
+    fn mark_keydown(update: impl FnOnce(&mut KeydownTimings, u64)) {
+        HOLD_CLOCK.with(|clock| {
+            if let Some(clock) = clock.borrow_mut().as_mut() {
+                let elapsed = clock.pressed_at.elapsed().as_millis() as u64;
+                update(&mut clock.timings, elapsed);
+            }
+        });
+    }
+
+    fn keydown_timings() -> KeydownTimings {
+        HOLD_CLOCK.with(|clock| clock.borrow().as_ref().map(|clock| clock.timings).unwrap_or_default())
+    }
+
+    /// Milliseconds since the chord press of the current hold.
+    fn hold_elapsed_ms() -> u64 {
+        HOLD_CLOCK.with(|clock| {
+            clock
+                .borrow()
+                .as_ref()
+                .map(|clock| clock.pressed_at.elapsed().as_millis() as u64)
+                .unwrap_or(0)
+        })
     }
 
     /// Where the time between key release and text on screen went. Each
@@ -673,6 +738,11 @@ mod platform {
             self
         }
 
+        fn with_audio_ms(mut self, audio_ms: u64) -> Self {
+            self.audio_ms = Some(audio_ms);
+            self
+        }
+
         fn from_outcome(outcome: &InsertOutcome, hold_ms: u64, words: u64, polished: bool) -> Self {
             let outcome = match outcome {
                 InsertOutcome::Inserted => "inserted",
@@ -689,16 +759,32 @@ mod platform {
                 21..=60 => "21-60",
                 _ => "60+",
             };
-            Self { outcome, hold_ms, word_bucket, polished, error_category: None, timings: None }
+            Self {
+                outcome,
+                hold_ms,
+                word_bucket,
+                polished,
+                run_id: current_run_id(),
+                audio_ms: None,
+                error_category: None,
+                keydown: keydown_timings(),
+                timings: None,
+            }
         }
 
+        /// A failed hold still reports how long it ran and how far the
+        /// key-down phases got; `hold_ms` used to be 0 here and the timings
+        /// absent, which made every failure look instantaneous.
         fn failed(category: &'static str) -> Self {
             Self {
                 outcome: "failed",
-                hold_ms: 0,
+                hold_ms: hold_elapsed_ms(),
                 word_bucket: "0",
                 polished: false,
+                run_id: current_run_id(),
+                audio_ms: None,
                 error_category: Some(category),
+                keydown: keydown_timings(),
                 timings: None,
             }
         }
@@ -718,10 +804,101 @@ mod platform {
                 hold_ms,
                 word_bucket,
                 polished,
+                run_id: current_run_id(),
+                audio_ms: None,
                 error_category: None,
+                keydown: keydown_timings(),
                 timings: None,
             }
         }
+    }
+
+    thread_local! {
+        /// The id of the hold the worker thread is currently running. Set
+        /// when a hold starts; read by every log line and event the hold emits,
+        /// including failures that happen before the capture loop has a row.
+        static CURRENT_RUN: std::cell::RefCell<String> = const { std::cell::RefCell::new(String::new()) };
+    }
+
+    fn begin_run() -> String {
+        let run_id = history::new_id().unwrap_or_default();
+        CURRENT_RUN.with(|current| *current.borrow_mut() = run_id.clone());
+        HOLD_CLOCK.with(|clock| {
+            *clock.borrow_mut() = Some(HoldClock {
+                pressed_at: Instant::now(),
+                timings: KeydownTimings::default(),
+            })
+        });
+        run_id
+    }
+
+    fn current_run_id() -> String {
+        CURRENT_RUN.with(|current| current.borrow().clone())
+    }
+
+    /// The V4 trace objects for one hold, as the JSON the history row seals and
+    /// `share.rs` later splits into the upload. Numbers, enumerations and the
+    /// recognizer's token list; the id makes the row, the hold event and the
+    /// polish request one dictation.
+    #[allow(clippy::too_many_arguments)]
+    fn trace_metrics(
+        run_id: &str,
+        levels: audio::Levels,
+        recognition: Option<&asr::RecognitionMetrics>,
+        sink: &'static str,
+        focus_verdict: Option<crate::uia::FocusVerdict>,
+        insert_outcome: &'static str,
+        polish_outcome: &'static str,
+        baseline_parked: bool,
+        timings: Option<&KeyupTimings>,
+    ) -> String {
+        let focus_verdict = focus_verdict.map(|verdict| match verdict {
+            crate::uia::FocusVerdict::Typable => "typable",
+            crate::uia::FocusVerdict::NotTypable => "not_typable",
+            crate::uia::FocusVerdict::Password => "password",
+            crate::uia::FocusVerdict::Unknown => "unknown",
+        });
+        let mut ext = serde_json::json!({ "runId": run_id });
+        let keydown = keydown_timings();
+        if let Some(ms) = keydown.context_ms {
+            ext["contextMs"] = ms.into();
+        }
+        if let Some(ms) = keydown.capture_ready_ms {
+            ext["captureReadyMs"] = ms.into();
+        }
+        if let Some(ms) = keydown.first_audio_ms {
+            ext["firstAudioMs"] = ms.into();
+        }
+        if let Some(ms) = keydown.asr_connect_ms {
+            ext["asrConnectMs"] = ms.into();
+        }
+        if let Some(timings) = timings {
+            ext["finalizationMs"] = timings.finalization_ms.into();
+            ext["polishMs"] = timings.polish_ms.into();
+            ext["insertMs"] = timings.insert_ms.into();
+            ext["keyupToTextMs"] = timings.keyup_to_text_ms.into();
+        }
+        if let Some(recognition) = recognition {
+            ext["interimCount"] = recognition.interim_count.into();
+        }
+        let mut insertion = serde_json::json!({
+            "sink": sink,
+            "outcome": insert_outcome,
+            "polishOutcome": polish_outcome,
+            "baselineParked": baseline_parked,
+        });
+        if let Some(verdict) = focus_verdict {
+            insertion["focusVerdict"] = verdict.into();
+        }
+        let mut document = serde_json::json!({
+            "audio": levels,
+            "insertion": insertion,
+            "ext": ext,
+        });
+        if let Some(recognition) = recognition {
+            document["recognition"] = serde_json::to_value(recognition).unwrap_or(serde_json::Value::Null);
+        }
+        document.to_string()
     }
 
     fn emit_hold_completed(app: &AppHandle, payload: HoldCompleted) {
@@ -738,7 +915,8 @@ mod platform {
         message: &'static str,
     ) {
         warn!(
-            "dictation: phase=failure failure={category} frames={}",
+            "dictation: run={} phase=failure failure={category} frames={}",
+            current_run_id(),
             samples.len()
         );
         emit_hold_completed(app, HoldCompleted::failed(category));
@@ -932,6 +1110,9 @@ mod platform {
         // module does can change what "the app the user was in" means.
         let target = insert::foreground_window();
         let app_key = crate::system_control::process_stem_for_window(target);
+        // One id for the whole hold: every phase line below, the hold event,
+        // the polish request and the history row's metrics carry it.
+        let run_id = begin_run();
 
         // Preflight 0 (macOS): the Accessibility grant. Without it CGEvent
         // cannot post keystrokes and the focus probe reads nothing, so the
@@ -1048,9 +1229,10 @@ mod platform {
             prefix_text: hold_context.prefix.clone(),
             language: Some(DICTATION_LANGUAGE_TAG.to_string()),
         };
+        mark_keydown(|timings, elapsed| timings.context_ms = Some(elapsed));
         // Presence and timing only, never the values.
         info!(
-            "dictation: phase=context ms={} role={} title={} prefix={} baseline={}",
+            "dictation: run={run_id} phase=context ms={} role={} title={} prefix={} baseline={}",
             context_started.elapsed().as_millis(),
             polish_context.control_role.is_some(),
             polish_context.window_title_stem.is_some(),
@@ -1097,7 +1279,11 @@ mod platform {
         };
         // Drop whatever WASAPI had already buffered when the device opened, so
         // the utterance starts at the chord and not before it.
-        if active_capture.discard_pending().is_err() {
+        let capture_ready = active_capture.discard_pending().is_ok();
+        if capture_ready {
+            mark_keydown(|timings, elapsed| timings.capture_ready_ms = Some(elapsed));
+        }
+        if !capture_ready {
             let shutting_down = drain_until_release(rx);
             hold_failure(
                 app,
@@ -1159,7 +1345,7 @@ mod platform {
         super::command_brain::prepare(app);
 
         let started_at = Instant::now();
-        info!("dictation: phase=capture");
+        info!("dictation: run={run_id} phase=capture");
         let mut last_level = Instant::now();
         let mut captured_frames = 0usize;
         let mut voiced_frames = 0usize;
@@ -1186,8 +1372,27 @@ mod platform {
                 Signal::None => {}
             }
 
+            // The recognizer's handshake finishes on the async runtime; note
+            // it from here, once, so a hold that fails before release still
+            // says whether the socket was ever up.
+            if keydown_timings().asr_connect_ms.is_none() {
+                if let Some(connected_at) = session.connected_at() {
+                    HOLD_CLOCK.with(|clock| {
+                        if let Some(clock) = clock.borrow_mut().as_mut() {
+                            clock.timings.asr_connect_ms = Some(
+                                connected_at.saturating_duration_since(clock.pressed_at).as_millis() as u64,
+                            );
+                        }
+                    });
+                }
+            }
             let samples = match active_capture.drain() {
-                Ok(samples) => samples,
+                Ok(samples) => {
+                    if !samples.is_empty() && keydown_timings().first_audio_ms.is_none() {
+                        mark_keydown(|timings, elapsed| timings.first_audio_ms = Some(elapsed));
+                    }
+                    samples
+                }
                 Err(_) => {
                     // A headset pulled or a default device switched mid-hold
                     // reads as an error on the next drain. Open whatever is
@@ -1384,15 +1589,30 @@ mod platform {
                 return shutting_down;
             }
         };
+        // The recognizer's own account of the final, read before the socket
+        // goes: it lives on the session.
+        let recognition = session.recognition();
         // Closes the socket immediately. An open stream is billed, and this one
         // has nothing left to say.
         drop(session);
 
         let hold_ms = started_at.elapsed().as_millis();
         let audio_ms = captured_frames as f64 * 1000.0 / asr::SAMPLE_RATE as f64;
+        // What the clip actually holds, for the row's `duration_ms`. The hold's
+        // wall clock used to go there, and since the backend checks the FLAC
+        // against durationMs that 409'd every audio upload from this surface.
+        let audio_ms_i64 = audio_ms.round().max(1.0) as i64;
+        let levels = audio::levels(&utterance);
         let finalization_ms = finalization_started_at.elapsed().as_millis();
         info!(
-            "dictation: phase=finalize audio_ms={audio_ms:.0} finalization_ms={finalization_ms} hold_ms={hold_ms}"
+            "dictation: run={run_id} phase=finalize audio_ms={audio_ms:.0} finalization_ms={finalization_ms} hold_ms={hold_ms} \
+             peak_dbfs={:.1} rms_dbfs={:.1} silence_ratio={:.2} clipped={} words={} interims={}",
+            levels.peak_dbfs,
+            levels.rms_dbfs,
+            levels.silence_ratio,
+            levels.clipped_samples,
+            recognition.as_ref().map(|r| r.words.len()).unwrap_or(0),
+            recognition.as_ref().map(|r| r.interim_count).unwrap_or(0)
         );
         if finalization_ms > 1200 {
             warn!(
@@ -1454,11 +1674,13 @@ mod platform {
         // utterance or lose words. Runs before the focus probe so the pending
         // path below inherits the result.
         let polish_started = Instant::now();
-        let polish_result = if polish::wants(app) {
-            polish::format_transcript(app, &corrected, app_key.as_deref(), &polish_context)
+        let polish = if polish::wants(app) {
+            polish::polish_transcript(app, &corrected, app_key.as_deref(), &polish_context)
         } else {
-            None
+            polish::PolishResult { text: None, outcome: "skipped" }
         };
+        let polish_outcome = polish.outcome;
+        let polish_result = polish.text;
         let polish_ms = polish_started.elapsed().as_millis() as u64;
         // Kept only when polish actually changed the text, so history can show
         // "original speech" next to what was typed; otherwise it would just
@@ -1498,21 +1720,35 @@ mod platform {
                     usage::word_count(&final_text),
                     raw_for_history.is_some(),
                 )
+                .with_audio_ms(audio_ms_i64 as u64)
                 .with_timings(timings),
             );
             // Archived like any dictation so nothing said is ever lost,
             // but never shareable: there is no field to read back.
+            let metrics = trace_metrics(
+                &run_id,
+                levels,
+                recognition.as_ref(),
+                "keystroke",
+                None,
+                history::OUTCOME_COMMAND,
+                polish_outcome,
+                false,
+                Some(&timings),
+            );
             let _ = history::record_later(
                 app,
                 final_text.clone(),
                 raw_for_history,
                 std::mem::take(&mut utterance),
+                audio_ms_i64,
                 hold_ms as i64,
                 usage::word_count(&final_text),
                 false,
                 polish_context.to_json(),
                 app_key.clone(),
                 history::OUTCOME_COMMAND,
+                Some(metrics),
             );
             finish_with(
                 app,
@@ -1527,19 +1763,23 @@ mod platform {
         // keystrokes land rather than after history encodes the clip.
         let insert_started = Instant::now();
         let mut typed_at = Instant::now();
+        let mut sink: &'static str = "composer";
+        let mut focus_verdict: Option<crate::uia::FocusVerdict> = None;
         let outcome = if chat_sink(app, target) {
             let _ = app.emit(crate::events::DICTATION_COMPOSER_INSERT, final_text.clone());
             info!(
-                "dictation: phase=insert hold_ms={hold_ms} frames={captured_frames} chars={} \
+                "dictation: run={run_id} phase=insert hold_ms={hold_ms} frames={captured_frames} chars={} \
                  sink=composer outcome=Inserted",
                 final_text.chars().count()
             );
             InsertOutcome::Inserted
         } else {
+            sink = "keystroke";
             // Asked here, at the last possible moment, because this is the only
             // point at which "where would these keystrokes go" has its final
             // answer. Bounded and fails open; see uia/focus.rs.
             let probe = crate::uia::probe_focus(app);
+            focus_verdict = Some(probe.verdict);
             let outcome = insert::insert_text(&final_text, target, probe.verdict);
             typed_at = Instant::now();
             // The app is the one field that says WHERE a lost hold was aimed.
@@ -1555,7 +1795,7 @@ mod platform {
                 String::new()
             };
             info!(
-                "dictation: phase=insert hold_ms={hold_ms} frames={captured_frames} chars={} \
+                "dictation: run={run_id} phase=insert hold_ms={hold_ms} frames={captured_frames} chars={} \
                  role={} verdict={:?} outcome={outcome:?} app={}{foreground_note}",
                 final_text.chars().count(),
                 probe.role,
@@ -1570,7 +1810,7 @@ mod platform {
         timings.insert_ms = insert_started.elapsed().as_millis() as u64;
         timings.keyup_to_text_ms = finalization_started_at.elapsed().as_millis() as u64;
         info!(
-            "dictation: phase=keyup_to_text ms={} finalization_ms={} polish_ms={} \
+            "dictation: run={run_id} phase=keyup_to_text ms={} finalization_ms={} polish_ms={} \
              command_wait_ms={} insert_ms={}",
             timings.keyup_to_text_ms,
             timings.finalization_ms,
@@ -1586,6 +1826,7 @@ mod platform {
                 usage::word_count(&final_text),
                 raw_for_history.is_some(),
             )
+            .with_audio_ms(audio_ms_i64 as u64)
             .with_timings(timings),
         );
 
@@ -1604,17 +1845,30 @@ mod platform {
             // there is no field for the observer to read back, so it could
             // only ever be mislabelled.
             let shareable = matches!(outcome, InsertOutcome::Inserted);
+            let metrics = trace_metrics(
+                &run_id,
+                levels,
+                recognition.as_ref(),
+                sink,
+                focus_verdict,
+                history::outcome_label(&outcome),
+                polish_outcome,
+                hold_context.baseline_parked,
+                Some(&timings),
+            );
             let row_id = history::record_later(
                 app,
                 final_text.clone(),
                 raw_for_history,
                 std::mem::take(&mut utterance),
+                audio_ms_i64,
                 hold_ms as i64,
                 usage::word_count(&final_text),
                 shareable,
                 polish_context.to_json(),
                 app_key.clone(),
                 history::outcome_label(&outcome),
+                Some(metrics),
             );
             // The read-back. Only for text that actually reached a field, only
             // while sharing consent is on (the baseline was parked under the
