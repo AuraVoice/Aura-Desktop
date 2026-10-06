@@ -8635,6 +8635,8 @@
   --sw-danger: #c2410c;
   --sw-you: #20232a;
   --sw-you-soft: rgba(32, 35, 42, 0.08);
+  --sw-you-bubble: rgba(255, 255, 255, 0.92);
+  --sw-you-bubble-border: rgba(63, 86, 78, 0.1);
   /* @mention chips: an indigo no manager hue or accent uses. */
   --sw-mention: #4a5ce6;
   --sw-mention-soft: rgba(74, 92, 230, 0.14);
@@ -9194,16 +9196,17 @@
 }
 .db-swarm-daysep::before,
 .db-swarm-daysep::after { content: ""; flex: 1; height: 1px; background: var(--sw-divider); }
+.db-swarm-daysep span { padding: 2px 10px; border-radius: 999px; background: var(--sw-chip); border: 1px solid var(--sw-chip-border); }
 
 .db-swarm-msg {
   display: grid;
   grid-template-columns: 36px minmax(0, 1fr);
   gap: 12px;
-  padding: 10px 24px 6px;
+  padding: 14px 24px 6px;
   contain: layout paint;
   transition: background 160ms var(--sw-out);
 }
-.db-swarm-msg:hover { background: var(--sw-hover); }
+.db-swarm-msg:hover { background: color-mix(in srgb, var(--sw-hover) 60%, transparent); }
 .db-swarm-msg.is-continued { padding-top: 0; padding-bottom: 3px; }
 .db-swarm-msg.is-fresh { animation: db-swarm-msg-in 180ms var(--sw-out) both; }
 @keyframes db-swarm-msg-in {
@@ -9217,15 +9220,45 @@
 .db-swarm-msg-body { min-width: 0; }
 .db-swarm-msg-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; line-height: 1.35; }
 .db-swarm-msg-head time { font-size: 11px; color: var(--sw-mute); font-variant-numeric: tabular-nums; }
-.db-swarm-name { font-weight: 650; font-size: 14.5px; }
+.db-swarm-name { font-weight: 650; font-size: 14px; color: var(--sw-text); }
 .db-swarm-name.is-supervisor { color: var(--sw-boss); }
 .db-swarm-name.is-aura { color: var(--sw-accent); }
-.db-swarm-name.is-hue-0 { color: var(--sw-h0); }
-.db-swarm-name.is-hue-1 { color: var(--sw-h1); }
-.db-swarm-name.is-hue-2 { color: var(--sw-h2); }
-.db-swarm-name.is-hue-3 { color: var(--sw-h3); }
-.db-swarm-name.is-hue-4 { color: var(--sw-h4); }
-.db-swarm-name.is-hue-5 { color: var(--sw-h5); }
+.db-swarm-msg-head .db-swarm-role { font-size: 12px; color: var(--sw-dim); }
+.db-swarm-msg-head .db-swarm-role::before,
+.db-swarm-msg-head time::before { content: "\00b7"; margin-right: 8px; color: var(--sw-mute); }
+.db-swarm-msg-head .db-swarm-role.is-supervisor {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 650;
+  color: var(--sw-boss);
+  background: var(--sw-boss-soft);
+}
+.db-swarm-msg-head .db-swarm-role.is-supervisor::before { content: none; }
+
+/* Your messages: you are the one human here, so what you asked sits on the right in a
+   bubble and what the agents produced keeps the full width on the left. */
+.db-swarm-msg.is-you { grid-template-columns: minmax(0, 1fr) 26px; }
+.db-swarm-msg.is-you:hover { background: transparent; }
+.db-swarm-msg.is-you .db-swarm-msg-gutter { grid-column: 2; grid-row: 1; }
+.db-swarm-msg.is-you .db-swarm-msg-body { grid-column: 1; grid-row: 1; display: flex; flex-direction: column; align-items: flex-end; }
+.db-swarm-msg .db-swarm-bubble {
+  margin: 0;
+  max-width: min(68ch, 78%);
+  padding: 9px 14px;
+  border-radius: 18px 14px 18px 18px;
+  line-height: 1.5;
+  color: var(--sw-text);
+  background: var(--sw-you-bubble);
+  border: 1px solid var(--sw-you-bubble-border);
+  box-shadow: 0 1px 2px var(--sw-lift);
+}
+.db-swarm-msg.is-continued .db-swarm-bubble { border-top-right-radius: 6px; }
+.db-swarm-msg.is-you .db-swarm-files { justify-content: flex-end; }
+.db-swarm-you-time { margin-top: 4px; font-size: 11px; color: var(--sw-mute); font-variant-numeric: tabular-nums; }
+.db-swarm-msg.is-you.is-continued .db-swarm-you-time { opacity: 0; transition: opacity 160ms var(--sw-out); }
+.db-swarm-msg.is-you.is-continued:hover .db-swarm-you-time,
+.db-swarm-msg.is-you.is-continued:focus-within .db-swarm-you-time { opacity: 1; }
 .db-swarm-text { margin: 3px 0 0; font-size: 15px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 .db-swarm-note { margin: 6px 0 0; font-size: 12.5px; color: var(--sw-warn); }
 .db-swarm-muted { color: var(--sw-mute); font-size: 12px; }

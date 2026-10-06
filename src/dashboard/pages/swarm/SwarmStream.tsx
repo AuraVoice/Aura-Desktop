@@ -385,7 +385,7 @@ function DecisionMessage({
     <>
       <div className="db-swarm-msg-head">
         <strong className={`db-swarm-name is-${item.author.role === "manager" ? `hue-${item.author.hue}` : item.author.role}`}>{item.author.name}</strong>
-        {item.author.name !== roleLabel(item.author, roster) && <span className="db-swarm-role">{roleLabel(item.author, roster)}</span>}
+        {item.author.name !== roleLabel(item.author, roster) && <span className={`db-swarm-role is-${item.author.role}`}>{roleLabel(item.author, roster)}</span>}
         <span className={`db-swarm-tag is-${d.decision}`}>{d.answersQuestion ? "Answered" : DECISION_LABEL[d.decision]}</span>
         {capability && <span className="db-swarm-cap">{capability}</span>}
         {item.at > 0 && <time>{timeLabel(item.at)}</time>}
@@ -638,18 +638,16 @@ export function SwarmStream(props: Props) {
         <Fragment key={item.key}>
           {daySep && <div className="db-swarm-daysep"><span>{daySep}</span></div>}
           <article className={`db-swarm-msg${item.kind === "user" ? " is-you" : ""}${continued ? " is-continued" : ""}${fresh ? " is-fresh" : ""}`}>
-            <div className="db-swarm-msg-gutter">{!continued ? <SwarmAvatar author={author} /> : item.at > 0 && <time className="db-swarm-continued-time">{timeLabel(item.at)}</time>}</div>
+            <div className="db-swarm-msg-gutter">
+              {item.kind === "user"
+                ? !continued && <SwarmAvatar author={author} size="sm" />
+                : !continued ? <SwarmAvatar author={author} /> : item.at > 0 && <time className="db-swarm-continued-time">{timeLabel(item.at)}</time>}
+            </div>
             <div className="db-swarm-msg-body">
               {item.kind === "user" ? (
                 <>
-                  {!continued && (
-                    <div className="db-swarm-msg-head">
-                      <strong className="db-swarm-name is-you">{props.youName || "You"}</strong>
-                      {props.youName && <span className="db-swarm-role">You</span>}
-                      {item.at > 0 && <time>{timeLabel(item.at)}</time>}
-                    </div>
-                  )}
-                  <p className="db-swarm-text">{withMentions(item.text, props.roster, item.mentions)}</p>
+                  <span className="db-swarm-sr">{props.youName || "You"}: </span>
+                  <p className="db-swarm-text db-swarm-bubble">{withMentions(item.text, props.roster, item.mentions)}</p>
                   {item.docs.length > 0 && (
                     <div className="db-swarm-files">
                       {item.docs.map((doc) => {
@@ -676,12 +674,13 @@ export function SwarmStream(props: Props) {
                       })}
                     </div>
                   )}
+                  {item.at > 0 && <time className="db-swarm-you-time">{timeLabel(item.at)}</time>}
                 </>
               ) : item.kind !== "decision" ? (
                 <>
                   {!continued && <div className="db-swarm-msg-head">
                     <strong className={`db-swarm-name is-${item.author.role === "manager" ? `hue-${item.author.hue}` : item.author.role}`}>{item.author.name}</strong>
-                    {item.author.name !== roleLabel(item.author, props.roster) && <span className="db-swarm-role">{roleLabel(item.author, props.roster)}</span>}
+                    {item.author.name !== roleLabel(item.author, props.roster) && <span className={`db-swarm-role is-${item.author.role}`}>{roleLabel(item.author, props.roster)}</span>}
                     {item.at > 0 && <time>{timeLabel(item.at)}</time>}
                   </div>}
                   {item.kind === "say" && <p className="db-swarm-text">{item.text}</p>}
@@ -808,18 +807,16 @@ export function SwarmStream(props: Props) {
           )}
           {props.pending && (
             <article className="db-swarm-msg is-you is-pending" aria-live="polite">
-              <div className="db-swarm-msg-gutter"><SwarmAvatar author={YOU} /></div>
+              <div className="db-swarm-msg-gutter"><SwarmAvatar author={YOU} size="sm" /></div>
               <div className="db-swarm-msg-body">
-                <div className="db-swarm-msg-head">
-                  <strong className="db-swarm-name is-you">{props.youName || "You"}</strong>
-                  <span className="db-swarm-role">Sending</span>
-                </div>
-                <p className="db-swarm-text">{withMentions(props.pending.text, props.roster)}</p>
+                <span className="db-swarm-sr">{props.youName || "You"}: </span>
+                <p className="db-swarm-text db-swarm-bubble">{withMentions(props.pending.text, props.roster)}</p>
                 {props.pending.docs.length > 0 && (
                   <div className="db-swarm-files">
                     {props.pending.docs.map((doc) => <span key={doc.id} className="db-swarm-file"><SheetGlyph size={15} /><span className="db-swarm-file-name">{doc.name}</span></span>)}
                   </div>
                 )}
+                <span className="db-swarm-you-time">Sending</span>
               </div>
             </article>
           )}

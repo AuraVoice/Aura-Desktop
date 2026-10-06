@@ -506,6 +506,8 @@
   --sw-danger: var(--dk-danger);
   --sw-you: var(--dk-text);
   --sw-you-soft: rgba(255, 255, 255, 0.08);
+  --sw-you-bubble: var(--dk-surface-2);
+  --sw-you-bubble-border: var(--dk-border);
   --sw-mention: #a3b1ff;
   --sw-mention-soft: rgba(143, 160, 255, 0.22);
   --sw-aurora-a: transparent;
