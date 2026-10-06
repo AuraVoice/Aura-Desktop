@@ -150,7 +150,7 @@
 .db-window-bell .db-badge-count {
   top: -6px;
   right: -9px;
-  color: #000;
+  color: #fff;
   font-weight: 900;
 }
 .db-window-titlebar .db-notif-panel {
@@ -631,7 +631,7 @@
   width: 7px;
   height: 7px;
   border-radius: 50%;
-  background: var(--db-teal);
+  background: var(--db-text);
   border: 1.5px solid var(--db-content-bg);
 }
 .db-badge-count {
@@ -5783,12 +5783,8 @@
   transform: translateX(var(--tab-x, 4px));
   border: 0;
   border-radius: 999px;
-  background: linear-gradient(
-    135deg,
-    color-mix(in srgb, var(--db-teal) 26%, var(--db-surface)),
-    color-mix(in srgb, var(--db-teal) 15%, var(--db-surface))
-  );
-  box-shadow: 0 4px 12px rgba(31, 111, 96, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.62);
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 1px 2px rgba(18, 28, 27, 0.08), 0 4px 12px rgba(18, 28, 27, 0.07), inset 0 1px 0 rgba(255, 255, 255, 0.9);
   transition: transform 320ms var(--db-ease), width 320ms var(--db-ease);
 }
 
@@ -5817,7 +5813,7 @@
 }
 
 .db-tab-strip > button.is-active > span {
-  background: color-mix(in srgb, var(--db-teal-deep-a) 18%, transparent);
+  background: color-mix(in srgb, var(--db-text) 12%, transparent);
   color: var(--db-text);
 }
 
@@ -5833,7 +5829,7 @@
 }
 
 .db-tab-strip > button:focus-visible {
-  outline: 2px solid var(--db-teal);
+  outline: 2px solid color-mix(in srgb, var(--db-text) 45%, transparent);
   outline-offset: 2px;
 }
 
@@ -9141,12 +9137,13 @@
   left: 50%;
   bottom: 12px;
   transform: translateX(-50%);
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 7px 12px;
+  display: inline-grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
   border: 1px solid var(--sw-field-border);
-  border-radius: 8px;
+  border-radius: 28px;
   background: var(--sw-field);
   color: var(--sw-text);
   box-shadow: 0 3px 12px var(--sw-lift);

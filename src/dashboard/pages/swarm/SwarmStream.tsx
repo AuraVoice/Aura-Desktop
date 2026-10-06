@@ -825,7 +825,7 @@ export function SwarmStream(props: Props) {
           {busyHere && <Typing author={props.busyAuthor} since={props.busySince} />}
         </div>
       </div>
-      {showJump && <button type="button" className="db-swarm-jump" onClick={jumpToLatest}><ArrowDown size={14} /> Jump to latest</button>}
+      {showJump && <button type="button" className="db-swarm-jump" onClick={jumpToLatest} aria-label="Jump to latest" title="Jump to latest"><ArrowDown size={18} /></button>}
       </div>
 
       {props.notice && (view.kind === "manager" || props.noticeEverywhere) && (

@@ -66,7 +66,7 @@
   color: var(--dk-text);
 }
 :root[data-theme="dark"] .db-window-bell .db-badge-count {
-  color: #000;
+  color: #0b0b0c;
 }
 :root[data-theme="dark"] .db-window-bell:hover {
   filter: brightness(1.15);
@@ -120,7 +120,7 @@
   box-shadow: none;
 }
 :root[data-theme="dark"] .db-badge-count {
-  color: #062a24;
+  color: #0b0b0c;
 }
 
 /* ── Notifications panel ── */
@@ -258,8 +258,8 @@
   box-shadow: none;
 }
 :root[data-theme="dark"] .db-tab-strip::before {
-  background: rgba(46, 224, 196, 0.16);
-  box-shadow: 0 0 0 1px rgba(46, 224, 196, 0.16);
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
 }
 
 /* ── Settings dialog ── */
