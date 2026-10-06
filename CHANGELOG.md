@@ -24,6 +24,9 @@ was started and read like commit subjects rather than release notes.
 - The Swarm composer now shows who will answer before you send. Manager rows in the rail say "Working" while they are on a task, and the Team panel shows each manager's connectors and routines, a Working chip, and separate Supervisor and Managers sections.
 
 ### Fixed
+- Swarm no longer pushes the Computer, Research and Swarm tabs half off the top of a smaller window; it now fits the space it has.
+- The Swarm message list shows a slim scrollbar instead of the Windows one with arrow buttons.
+- Swarm is no longer tinted green. Controls, highlights and report cards are neutral, and colour is kept for what each manager is and for anything that needs your attention.
 - A Swarm manager's direct message header now uses the same name as the rail.
 - Working cards in Swarm no longer show every manager in blue.
 

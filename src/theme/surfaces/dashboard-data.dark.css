@@ -488,14 +488,14 @@
   --sw-text: var(--dk-text);
   --sw-dim: var(--dk-text-dim);
   --sw-mute: var(--dk-text-mute);
-  --sw-accent: var(--dk-accent);
-  --sw-accent-strong: var(--dk-accent-text);
-  --sw-accent-soft: var(--dk-accent-soft);
-  --sw-accent-ring: var(--dk-accent-ring);
-  --sw-on-accent: #04231d;
-  --sw-sup: var(--dk-accent-text);
-  --sw-sup-soft: var(--dk-accent-soft);
-  --sw-sup-ring: var(--dk-accent-ring);
+  --sw-accent: var(--dk-text);
+  --sw-accent-strong: var(--dk-text);
+  --sw-accent-soft: rgba(255, 255, 255, 0.08);
+  --sw-accent-ring: rgba(255, 255, 255, 0.22);
+  --sw-on-accent: #0b0b0c;
+  --sw-sup: var(--dk-text);
+  --sw-sup-soft: rgba(255, 255, 255, 0.08);
+  --sw-sup-ring: rgba(255, 255, 255, 0.22);
   --sw-boss: #e4e6ec;
   --sw-boss-tile: #2a2c33;
   --sw-boss-on: #f5f5f5;
@@ -539,8 +539,10 @@
 :root[data-theme="dark"] .db-swarm-avatar.is-supervisor {
   --sw-av-fill: var(--sw-boss-tile);
   color: var(--sw-boss-on);
+  outline: 1.5px solid var(--sw-boss-ring);
+  outline-offset: 1.5px;
 }
-:root[data-theme="dark"] .db-swarm-ch.is-ghost .db-swarm-avatar { background: transparent; color: var(--sw-mute); box-shadow: none; }
+:root[data-theme="dark"] .db-swarm-ch.is-ghost .db-swarm-avatar { background: transparent; color: var(--sw-mute); box-shadow: none; outline: 1px dashed var(--sw-field-border); outline-offset: 0; }
 :root[data-theme="dark"] .db-swarm-node { --sw-node-fill: color-mix(in srgb, var(--sw-av-ink, var(--sw-accent)) 34%, var(--dk-surface)); --sw-node-on: var(--sw-av); }
 :root[data-theme="dark"] .db-swarm-node.is-supervisor { --sw-node-fill: var(--sw-boss-tile); --sw-node-on: var(--sw-boss-on); }
 :root[data-theme="dark"] .db-swarm-node-core { stroke: color-mix(in srgb, var(--sw-av, var(--sw-accent)) 24%, transparent); }
