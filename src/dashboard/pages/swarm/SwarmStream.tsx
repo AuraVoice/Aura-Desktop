@@ -10,7 +10,7 @@ import {
   BuildGlyph,
   BurstGlyph,
   CellGlyph,
-  CrownGlyph,
+  HubGlyph,
   CycleGlyph,
   HopGlyph,
   LatticeGlyph,
@@ -137,6 +137,8 @@ interface Props {
   busy: boolean;
   busyHere: boolean;
   busyAuthor: Author;
+  /** Managers with a live session right now; only these avatars move. */
+  working: ReadonlySet<string>;
   busySince: number;
   /** The message just sent from this channel, until the server's copy arrives. */
   pending: { text: string; docs: { id: string; name: string }[] } | null;
@@ -285,7 +287,7 @@ function Typing({ author, since }: { author: Author; since: number }) {
   const seconds = Math.max(0, Math.floor((now - since) / 1000));
   return (
     <div className="db-swarm-typing" aria-live="polite">
-      {author.role === "manager" ? <SwarmAvatar author={author} size="sm" /> : <SwarmOrb id="swarm" state="planning" tone={author.role === "supervisor" ? "sup" : "accent"} size={28} />}
+      {author.role === "manager" ? <SwarmAvatar author={author} size="sm" state="working" /> : <SwarmOrb id="swarm" state="planning" tone={author.role === "supervisor" ? "sup" : "accent"} size={28} />}
       <span><strong>{author.name}</strong> is deciding who owns this</span>
       {seconds >= 4 && <span className="db-swarm-typing-time">{seconds}s</span>}
     </div>
@@ -571,7 +573,7 @@ export function SwarmStream(props: Props) {
             {daySep && <div className="db-swarm-daysep"><span>{daySep}</span></div>}
             <div className={`db-swarm-sys${item.tone === "supervisor" ? " is-supervisor" : ""}${fresh ? " is-fresh" : ""}`}>
               <span className="db-swarm-sys-icon">
-                {item.tone === "supervisor" ? <CrownGlyph size={15} /> : item.tone === "routine" ? <CycleGlyph size={15} /> : <SparkGlyph size={15} />}
+                {item.tone === "supervisor" ? <HubGlyph size={15} /> : item.tone === "routine" ? <CycleGlyph size={15} /> : <SparkGlyph size={15} />}
               </span>
               <span className="db-swarm-sys-text">{item.text}</span>
               {item.at > 0 && <time>{timeLabel(item.at)}</time>}
@@ -766,7 +768,11 @@ export function SwarmStream(props: Props) {
     <section className="db-swarm-stream" aria-label={view.kind === "manager" ? `Direct messages with ${view.name}` : `#${view.name}`}>
       <header className="db-swarm-stream-head">
         {view.kind === "manager" && view.author ? (
-          <SwarmAvatar author={view.author} size="sm" live={view.manager?.status === "active"} />
+          <SwarmAvatar
+            author={view.author}
+            size="sm"
+            state={view.manager?.status === "paused" ? "paused" : props.working.has(view.author.id) ? "working" : "idle"}
+          />
         ) : (
           <span className="db-swarm-head-hash">{view.kind === "activity" ? <PulseGlyph size={20} /> : <LatticeGlyph size={20} />}</span>
         )}

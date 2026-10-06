@@ -1,6 +1,6 @@
 import type { SwarmRoster } from "../../../lib/swarmApi";
 import { SwarmAvatar } from "./SwarmAvatar";
-import { CrownGlyph, HoldGlyph, LatticeGlyph, PulseGlyph, SpawnGlyph, SwarmMark } from "./SwarmGlyphs";
+import { HoldGlyph, LatticeGlyph, PulseGlyph, SpawnGlyph, SwarmMark } from "./SwarmGlyphs";
 import {
   contactDuty,
   displayName,
@@ -112,6 +112,7 @@ export function SwarmChannels({ roster, channel, unread, working, loading, statu
           const id = managerChannel(m.id);
           const active = channel === id;
           const paused = m.status === "paused";
+          const busy = !paused && working.has(m.id);
           return (
             <button
               key={m.id}
@@ -121,11 +122,11 @@ export function SwarmChannels({ roster, channel, unread, working, loading, statu
               onClick={() => onSelect(id)}
             >
               <span className="db-swarm-ch-avatar">
-                <SwarmAvatar author={{ id: m.id, name: displayName(m), role: "manager", hue: hueOf(m.id) }} size="sm" />
+                <SwarmAvatar author={{ id: m.id, name: displayName(m), role: "manager", hue: hueOf(m.id) }} size="sm" state={paused ? "paused" : busy ? "working" : "idle"} />
                 <i className={`db-swarm-presence${paused ? " is-paused" : ""}${working.has(m.id) ? " is-working" : ""}`} aria-hidden="true" />
               </span>
               <span className="db-swarm-ch-text">
-                <span className="db-swarm-ch-name">{displayName(m)}</span>
+                <span className="db-swarm-ch-name">{displayName(m)}{paused ? <span className="db-swarm-sr">, paused</span> : busy ? <span className="db-swarm-sr">, working</span> : null}</span>
                 <span className="db-swarm-ch-role">{roleLabel({ id: m.id, name: displayName(m), role: "manager", hue: 0 }, roster)}</span>
               </span>
               {paused ? <span className="db-swarm-ch-paused" title="Paused"><HoldGlyph size={15} /></span> : <Badge count={active ? 0 : unread[id] ?? 0} />}
@@ -134,7 +135,7 @@ export function SwarmChannels({ roster, channel, unread, working, loading, statu
         })}
         {!hasSupervisor && (
           <div className="db-swarm-ch is-manager is-ghost" title="Aura adds a Supervisor automatically when you have two active managers">
-            <span className="db-swarm-ch-avatar"><span className="db-swarm-avatar is-sm is-supervisor"><CrownGlyph size={16} /></span></span>
+            <span className="db-swarm-ch-avatar"><SwarmAvatar author={{ id: "supervisor", name: "Supervisor", role: "supervisor", hue: 0 }} size="sm" /></span>
             <span className="db-swarm-ch-text">
               <span className="db-swarm-ch-name">Supervisor</span>
               <span className="db-swarm-ch-role">{supervisorArchived ? "Archived" : "Joins at 2 managers"}</span>

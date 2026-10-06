@@ -41,6 +41,7 @@ import { MAX_ATTACHMENTS, SwarmStream, type ChannelView, type ComposerDoc } from
 import { hasActionableDraft } from "./swarm/SwarmWork";
 import {
   channelItems,
+  displayName,
   frontDoorAuthor,
   groupChannelName,
   hueOf,
@@ -277,10 +278,10 @@ function channelView(channel: ChannelId, roster: SwarmRoster): ChannelView {
   if (manager) {
     return {
       kind: "manager",
-      name: manager.title,
-      topic: manager.description || "Manager",
+      name: displayName(manager),
+      topic: manager.description || (manager.name ? manager.title : "Manager"),
       manager,
-      author: { id: manager.id, name: manager.title, role: "manager", hue: hueOf(manager.id) },
+      author: { id: manager.id, name: displayName(manager), role: "manager", hue: hueOf(manager.id) },
     };
   }
   const backer = frontDoorAuthor(roster);
@@ -896,6 +897,7 @@ export function SwarmPage() {
           busy={busy}
           busyHere={busy && busyChannel === liveChannel && liveChannel === "group"}
           busyAuthor={frontDoorAuthor(roster)}
+          working={working}
           busySince={busySince}
           pending={sending && sending.channel === liveChannel ? sending : null}
           error={error}
@@ -936,6 +938,7 @@ export function SwarmPage() {
       <SwarmRosterPanel
         roster={roster}
         focusedManagerId={managerIdOfChannel(liveChannel)}
+        working={working}
         freshManagers={freshManagers}
         supervisorFresh={supervisorFresh}
         open={rosterOpen}

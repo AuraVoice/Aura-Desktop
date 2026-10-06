@@ -16,6 +16,14 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+### Changed
+- Swarm avatars are redesigned. Your messages show your Google photo, each manager's initial sits on a solid tile in its own colour, and the Supervisor has a new hub icon in its own graphite colour, so it no longer looks like Aura.
+- Swarm is calm at rest. Only a manager that is actually working shows a pulsing ring, and a paused manager's dot is now a hollow ring, so you can tell it apart without relying on colour.
+
+### Fixed
+- A Swarm manager's direct message header now uses the same name as the rail.
+- Working cards in Swarm no longer show every manager in blue.
+
 ## [0.16.5] - 2026-10-05
 
 0.16.4 was built but never published, so its changes ship here too.

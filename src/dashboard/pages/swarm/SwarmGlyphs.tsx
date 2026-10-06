@@ -211,15 +211,18 @@ export function SparkGlyph(p: GlyphProps) {
   );
 }
 
-/** The Supervisor: three nodes crowning an arc. */
-export function CrownGlyph(p: GlyphProps) {
+/** The Supervisor: one core wired to every manager. While it works, the outer nodes
+ * light in turn, like a relay going round the team. */
+export function HubGlyph(p: GlyphProps) {
   return (
-    <Glyph name="crown" {...p}>
-      <path d="M4.5 16.5 6.6 9l5.4 4.4L17.4 9l2.1 7.5" strokeWidth={1.6} />
-      <path d="M5 20c4.4-1.6 9.6-1.6 14 0" strokeWidth={1.6} />
-      <circle className="sw-c1" cx="6.6" cy="7.6" r="1.7" fill="currentColor" stroke="none" />
-      <circle className="sw-c2" cx="12" cy="5.2" r="2.1" fill="currentColor" stroke="none" />
-      <circle className="sw-c3" cx="17.4" cy="7.6" r="1.7" fill="currentColor" stroke="none" />
+    <Glyph name="hub" {...p}>
+      <path d="M12 12 12 4M12 12 19.61 9.53M12 12 16.7 18.47M12 12 7.3 18.47M12 12 4.39 9.53" strokeWidth={1.5} opacity="0.75" />
+      <circle className="sw-hub-n1" cx="12" cy="4" r="1.9" fill="currentColor" stroke="none" />
+      <circle className="sw-hub-n2" cx="19.61" cy="9.53" r="1.9" fill="currentColor" stroke="none" />
+      <circle className="sw-hub-n3" cx="16.7" cy="18.47" r="1.9" fill="currentColor" stroke="none" />
+      <circle className="sw-hub-n4" cx="7.3" cy="18.47" r="1.9" fill="currentColor" stroke="none" />
+      <circle className="sw-hub-n5" cx="4.39" cy="9.53" r="1.9" fill="currentColor" stroke="none" />
+      <circle className="sw-core" cx="12" cy="12" r="3.4" fill="currentColor" stroke="none" />
     </Glyph>
   );
 }
@@ -420,16 +423,6 @@ export function StudyGlyph(p: GlyphProps) {
       <path d="M12 19.5c-2.6-1.8-5.6-2.3-9-1.8V7.4c3.4-.5 6.4 0 9 1.8 2.6-1.8 5.6-2.3 9-1.8v10.3c-3.4-.5-6.4 0-9 1.8Z" strokeWidth={1.5} />
       <path d="M12 9.2v10.3" strokeWidth={1.2} opacity="0.6" />
       <path className="sw-rise" d="M17 1.6c.3 1.6.9 2.2 2.5 2.5-1.6.3-2.2.9-2.5 2.5-.3-1.6-.9-2.2-2.5-2.5 1.6-.3 2.2-.9 2.5-2.5Z" fill="currentColor" strokeWidth={0.8} />
-    </Glyph>
-  );
-}
-
-/** You: a bright core inside a turning ring. */
-export function YouGlyph(p: GlyphProps) {
-  return (
-    <Glyph name="you" {...p}>
-      <circle cx="12" cy="12" r="8" strokeDasharray="3 2.4" strokeWidth={1.3} className="sw-ring" />
-      <circle cx="12" cy="12" r="4" fill="currentColor" stroke="none" className="sw-core" />
     </Glyph>
   );
 }

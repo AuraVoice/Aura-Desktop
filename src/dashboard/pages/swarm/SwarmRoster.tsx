@@ -2,12 +2,14 @@ import { useEffect, useState } from "react";
 import type { SwarmManager, SwarmRoster as Roster, SwarmRoutine, SwarmRoutineInput } from "../../../lib/swarmApi";
 import { GrantSwitches, RoutineList } from "./SwarmManagerTools";
 import { managerInitial, SwarmAvatar } from "./SwarmAvatar";
-import { CaretGlyph, CellGlyph, CrownGlyph, DismissGlyph, HoldGlyph, SignalGlyph, WatchGlyph } from "./SwarmGlyphs";
-import { displayName, hueOf, supervisorActive } from "./swarmThread";
+import { CaretGlyph, CellGlyph, HubGlyph, DismissGlyph, HoldGlyph, SignalGlyph, WatchGlyph } from "./SwarmGlyphs";
+import { displayName, hueOf } from "./swarmThread";
 
 interface Props {
   roster: Roster;
   focusedManagerId: string;
+  /** Managers with a live session right now. */
+  working: ReadonlySet<string>;
   freshManagers: ReadonlySet<string>;
   supervisorFresh: boolean;
   open: boolean;
@@ -29,7 +31,7 @@ const H = 156;
 
 /** The org as a small live graph: Supervisor on top when there is one, managers in a
  * row, their subagents as satellites. Edges draw themselves in when the shape changes. */
-function Constellation({ roster, freshManagers, supervisorFresh }: Pick<Props, "roster" | "freshManagers" | "supervisorFresh">) {
+function Constellation({ roster, working, freshManagers, supervisorFresh }: Pick<Props, "roster" | "working" | "freshManagers" | "supervisorFresh">) {
   const managers = roster.managers;
   const sup = roster.supervisor;
   const hasTop = sup !== null;
@@ -88,21 +90,21 @@ function Constellation({ roster, freshManagers, supervisorFresh }: Pick<Props, "
       )}
       {hasTop && sup && (
         <g className={`db-swarm-node is-supervisor${sup.status === "archived" ? " is-dim" : ""}${supervisorFresh ? " is-fresh" : ""}`} style={{ transformOrigin: `${W / 2}px 24px` }}>
-          <circle className="db-swarm-node-ring" cx={W / 2} cy={24} r={20} />
-          <circle className="db-swarm-node-core" cx={W / 2} cy={24} r={15} />
-          <CrownGlyph x={W / 2 - 9} y={15} size={18} className="db-swarm-node-glyph" />
+          <rect className="db-swarm-node-ring" x={W / 2 - 21} y={3} width={42} height={42} rx={13} />
+          <rect className="db-swarm-node-core" x={W / 2 - 16} y={8} width={32} height={32} rx={10} />
+          <HubGlyph x={W / 2 - 11} y={13} size={22} className="db-swarm-node-glyph" />
           <title>{sup.title}</title>
         </g>
       )}
       {managers.map((m, i) => (
         <g
           key={`n-${m.id}`}
-          className={`db-swarm-node is-hue-${hueOf(m.id)}${m.status === "paused" ? " is-dim" : ""}${freshManagers.has(m.id) ? " is-fresh" : ""}`}
+          className={`db-swarm-node is-hue-${hueOf(m.id)}${m.status === "paused" ? " is-dim" : working.has(m.id) ? " is-working" : ""}${freshManagers.has(m.id) ? " is-fresh" : ""}`}
           style={{ transformOrigin: `${xOf(i)}px ${rowY}px`, animationDelay: `${60 + i * 70}ms` }}
         >
-          <circle className="db-swarm-node-ring" cx={xOf(i)} cy={rowY} r={19} />
-          <circle className="db-swarm-node-core" cx={xOf(i)} cy={rowY} r={14} />
-          <text x={xOf(i)} y={rowY} textAnchor="middle" dominantBaseline="central" fill="currentColor" fontSize={13} fontWeight={700}>{managerInitial(displayName(m))}</text>
+          <rect className="db-swarm-node-ring" x={xOf(i) - 19} y={rowY - 19} width={38} height={38} rx={12} />
+          <rect className="db-swarm-node-core" x={xOf(i) - 14} y={rowY - 14} width={28} height={28} rx={8} />
+          <text className="db-swarm-node-glyph" x={xOf(i)} y={rowY} textAnchor="middle" dominantBaseline="central" fill="currentColor" fontSize={13} fontWeight={700}>{managerInitial(displayName(m))}</text>
           <title>{m.name ? `${m.name} · ${m.title}` : m.title}</title>
         </g>
       ))}
@@ -128,12 +130,14 @@ function ManagerCard({
   manager,
   expanded,
   fresh,
+  working,
   onToggle,
   tools,
 }: {
   manager: SwarmManager;
   expanded: boolean;
   fresh: boolean;
+  working: boolean;
   onToggle: () => void;
   tools: ManagerTools;
 }) {
@@ -141,7 +145,7 @@ function ManagerCard({
   return (
     <li className={`db-swarm-card${expanded ? " is-open" : ""}${paused ? " is-paused" : ""}${fresh ? " is-fresh" : ""}`}>
       <button type="button" className="db-swarm-card-head" onClick={onToggle} aria-expanded={expanded}>
-        <SwarmAvatar author={{ id: manager.id, name: displayName(manager), role: "manager", hue: hueOf(manager.id) }} live={!paused} />
+        <SwarmAvatar author={{ id: manager.id, name: displayName(manager), role: "manager", hue: hueOf(manager.id) }} state={paused ? "paused" : working ? "working" : "idle"} />
         <span className="db-swarm-card-title">
           <strong>{displayName(manager)}</strong>
           <span>
@@ -194,7 +198,7 @@ function ManagerCard({
 }
 
 /** Right panel: who is on the team, at a glance and in detail. */
-export function SwarmRoster({ roster, focusedManagerId, freshManagers, supervisorFresh, open, onClose, ...tools }: Props) {
+export function SwarmRoster({ roster, focusedManagerId, working, freshManagers, supervisorFresh, open, onClose, ...tools }: Props) {
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set(focusedManagerId ? [focusedManagerId] : []));
 
   // Opening a manager's DM, or hiring one, unfolds its card.
@@ -224,13 +228,13 @@ export function SwarmRoster({ roster, focusedManagerId, freshManagers, superviso
       </div>
       <div className="db-swarm-roster-scroll">
         <div className="db-swarm-constellation-wrap">
-          <Constellation roster={roster} freshManagers={freshManagers} supervisorFresh={supervisorFresh} />
+          <Constellation roster={roster} working={working} freshManagers={freshManagers} supervisorFresh={supervisorFresh} />
         </div>
 
         {sup && (
           <section className={`db-swarm-card is-supervisor is-open${sup.status === "archived" ? " is-paused" : ""}${supervisorFresh ? " is-fresh" : ""}`}>
             <div className="db-swarm-card-head is-static">
-              <SwarmAvatar author={{ id: "supervisor", name: sup.title, role: "supervisor", hue: 0 }} live={supervisorActive(roster)} />
+              <SwarmAvatar author={{ id: "supervisor", name: sup.title, role: "supervisor", hue: 0 }} />
               <span className="db-swarm-card-title">
                 <strong>{sup.title}</strong>
                 <span>{sup.status === "archived" ? "Archived, one manager left" : `Coordinates ${roster.managers.length} managers`}</span>
@@ -252,7 +256,7 @@ export function SwarmRoster({ roster, focusedManagerId, freshManagers, superviso
         {roster.managers.length > 0 && (
           <ul className="db-swarm-cards">
             {roster.managers.map((m) => (
-              <ManagerCard key={m.id} manager={m} expanded={expanded.has(m.id)} fresh={freshManagers.has(m.id)} onToggle={() => toggle(m.id)} tools={tools} />
+              <ManagerCard key={m.id} manager={m} expanded={expanded.has(m.id)} fresh={freshManagers.has(m.id)} working={working.has(m.id)} onToggle={() => toggle(m.id)} tools={tools} />
             ))}
           </ul>
         )}

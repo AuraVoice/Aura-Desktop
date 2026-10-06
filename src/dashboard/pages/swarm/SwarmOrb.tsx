@@ -48,5 +48,5 @@ export function SwarmOrb({ id, state, tone = "accent", size = 36, className = ""
 function readPalette(el: HTMLElement, dark: boolean) {
   const cs = getComputedStyle(el);
   const read = (name: string) => cs.getPropertyValue(name).trim();
-  setOrbPalette({ accent: read("--sw-accent"), sup: read("--sw-sup"), warn: read("--sw-warn"), dark });
+  setOrbPalette({ accent: read("--sw-accent"), sup: read("--sw-boss"), warn: read("--sw-warn"), dark });
 }

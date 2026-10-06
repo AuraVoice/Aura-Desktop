@@ -62,7 +62,7 @@ const FRAME_MS = 1000 / 30;
 const TILT = (28 * Math.PI) / 180;
 const PRECESS = (Math.PI * 2) / 40;
 const TEARDOWN_MS = 500;
-const DEFAULT_PALETTE: OrbPalette = { accent: "#0f9f8a", sup: "#20232a", warn: "#b45309", dark: false };
+const DEFAULT_PALETTE: OrbPalette = { accent: "#0f9f8a", sup: "#2a2f3b", warn: "#b45309", dark: false };
 
 interface Motion {
   spin: number;

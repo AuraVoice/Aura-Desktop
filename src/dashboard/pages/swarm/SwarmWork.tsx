@@ -13,6 +13,7 @@ import type { SwarmManager, SwarmMessage, SwarmRoundMember, SwarmRoundView, Swar
 import { mapRoundMember, proposeDraft, SwarmRequestError, TERMINAL_SESSION_STATES } from "../../../lib/swarmApi";
 import { SwarmOrb } from "./SwarmOrb";
 import { SwarmAvatar } from "./SwarmAvatar";
+import { hueOf } from "./swarmThread";
 import type { OrbState, OrbTone } from "./swarmOrbRenderer";
 import { thinkingLine, voiceLine, type VoiceBank } from "./swarmThinking";
 import {
@@ -20,7 +21,7 @@ import {
   BranchGlyph,
   CellGlyph,
   CourseGlyph,
-  CrownGlyph,
+  HubGlyph,
   DayGlyph,
   DeepGlyph,
   HaltGlyph,
@@ -148,7 +149,7 @@ function ThinkingRow({
 }) {
   return (
     <div className="db-swarm-think">
-      {name ? <SwarmAvatar author={{ id, name, role: "manager", hue: 0 }} /> : <SwarmOrb id={id} state={state} tone={tone} />}
+      {name ? <SwarmAvatar author={{ id, name, role: "manager", hue: hueOf(id) }} state="working" /> : <SwarmOrb id={id} state={state} tone={tone} />}
       <div className="db-swarm-think-text">
         <span className="db-swarm-think-activity" aria-live="polite">{activity}</span>
         <span key={slot} className="db-swarm-think-voice" aria-hidden="true">{voice}</span>
@@ -861,7 +862,7 @@ export function RoundReplyEmbed({ message, onOpen }: { message: SwarmMessage; on
   return (
     <div className={`db-swarm-embed is-report is-${short ? "partial" : "done"}`}>
       <div className="db-swarm-embed-kicker">
-        <CrownGlyph size={15} /> Team answer
+        <HubGlyph size={15} /> Team answer
         {message.data.fallback === true && <span className="db-swarm-tag">Plain summary</span>}
       </div>
       <p className="db-swarm-report-summary">{reply}</p>

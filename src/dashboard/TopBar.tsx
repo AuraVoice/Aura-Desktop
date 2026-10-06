@@ -8,6 +8,7 @@ import { NOTIFICATION_TOAST_ACTIVATED } from "../lib/ipcEvents";
 import { logError } from "../lib/log";
 import { signOutSession } from "../lib/signOutSession";
 import { NotificationsPanel } from "./NotificationsPanel";
+import { UserPhoto } from "./components/UserPhoto";
 import { agentsPath } from "./pages/AgentsPage";
 import type { DashboardNotificationsState } from "./useDashboardNotifications";
 import type { StoredNotification } from "../lib/desktopNotifications";
@@ -32,34 +33,12 @@ function swarmDestination(resourceId: string | null | undefined): string {
   return agentsPath("swarm", resourceId);
 }
 
-function initialsFor(user: FirebaseUser | null): string {
-  const source = user?.displayName || user?.email || "";
-  const parts = source.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "A";
-  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-}
-
 /** Avatar that falls back to initials when there is no photo, or when a
- * provider photo URL fails to load (Google avatars are frequently rate-limited
- * inside the desktop webview, which otherwise leaves a broken-image glyph). */
+ * provider photo URL fails to load (see UserPhoto). */
 function Avatar({ user, size }: { user: FirebaseUser | null; size: "sm" | "lg" }) {
-  const [failed, setFailed] = useState(false);
-  const photo = user?.photoURL;
-  const showPhoto = photo && !failed;
   return (
     <span className={`db-avatar db-avatar-${size}`}>
-      {showPhoto ? (
-        <img
-          src={photo}
-          alt=""
-          className="db-avatar-img"
-          referrerPolicy="no-referrer"
-          onError={() => setFailed(true)}
-        />
-      ) : (
-        <span className="db-avatar-initials">{initialsFor(user)}</span>
-      )}
+      <UserPhoto user={user} />
     </span>
   );
 }

@@ -8622,6 +8622,14 @@
   --sw-sup: var(--sw-accent-strong);
   --sw-sup-soft: var(--sw-accent-soft);
   --sw-sup-ring: var(--sw-accent-ring);
+  /* The Supervisor's own identity: graphite, the one ink no manager, accent, mention or
+     warning already uses. Only its avatar, name and cards read these; --sw-sup stays
+     the accent family for verifiers, caps and busy borders. */
+  --sw-boss: #2a2f3b;
+  --sw-boss-tile: #3a4050;
+  --sw-boss-on: #ffffff;
+  --sw-boss-soft: rgba(42, 47, 59, 0.08);
+  --sw-boss-ring: rgba(42, 47, 59, 0.34);
   --sw-warn: #b45309;
   --sw-warn-soft: rgba(217, 119, 6, 0.12);
   --sw-danger: #c2410c;
@@ -8768,10 +8776,14 @@
   color: var(--sw-dim);
 }
 
-/* ── Avatars ── */
+/* ── Avatars ──
+   You are the one human here, so you get your photo in a circle. Agents get solid
+   tiles in their own ink: managers their initial, the Supervisor its hub, Aura its
+   mark. Nothing moves at rest; only a working agent wears the pulsing ring. */
 .db-swarm-avatar {
   --sw-av: var(--sw-dim);
-  --sw-av-soft: var(--sw-chip);
+  --sw-av-ink: var(--sw-dim);
+  --sw-av-fill: var(--sw-av-ink);
   position: relative;
   width: 36px;
   height: 36px;
@@ -8781,39 +8793,68 @@
   place-items: center;
   font-family: var(--font-title, inherit);
   font-weight: 700;
-  font-size: 13px;
-  letter-spacing: 0.02em;
-  color: var(--sw-av);
-  background: var(--sw-av-soft);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sw-av) 18%, transparent);
-  transition: transform 260ms var(--sw-spring);
+  font-size: 15px;
+  letter-spacing: 0.01em;
+  color: var(--sw-av-on, #ffffff);
+  background: linear-gradient(150deg, var(--sw-av-fill), color-mix(in srgb, var(--sw-av-fill) 78%, #000000));
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.18), 0 1px 2px rgba(24, 29, 35, 0.12);
+  transition: transform 260ms var(--sw-spring), filter 260ms ease;
 }
-.db-swarm-avatar.is-sm { width: 26px; height: 26px; border-radius: 8px; font-size: 10.5px; }
-.db-swarm-avatar.is-lg { width: 68px; height: 68px; border-radius: 20px; font-size: 22px; }
-.db-swarm-avatar.is-you { --sw-av: var(--sw-you); --sw-av-soft: var(--sw-you-soft); }
-.db-swarm-avatar.is-supervisor { --sw-av: var(--sw-sup); --sw-av-soft: var(--sw-sup-soft); }
-.db-swarm-avatar.is-aura { --sw-av: var(--sw-accent); --sw-av-soft: var(--sw-accent-soft); }
-.db-swarm .is-hue-0 { --sw-av: var(--sw-h0); --sw-av-soft: var(--sw-h0-soft); }
-.db-swarm .is-hue-1 { --sw-av: var(--sw-h1); --sw-av-soft: var(--sw-h1-soft); }
-.db-swarm .is-hue-2 { --sw-av: var(--sw-h2); --sw-av-soft: var(--sw-h2-soft); }
-.db-swarm .is-hue-3 { --sw-av: var(--sw-h3); --sw-av-soft: var(--sw-h3-soft); }
-.db-swarm .is-hue-4 { --sw-av: var(--sw-h4); --sw-av-soft: var(--sw-h4-soft); }
-.db-swarm .is-hue-5 { --sw-av: var(--sw-h5); --sw-av-soft: var(--sw-h5-soft); }
-/* A live agent wears a slowly turning ring. */
-.db-swarm-avatar.is-live::after {
+.db-swarm-avatar.is-xs { width: 20px; height: 20px; border-radius: 6px; font-size: 10px; }
+.db-swarm-avatar.is-sm { width: 26px; height: 26px; border-radius: 8px; font-size: 12px; }
+.db-swarm-avatar.is-lg { width: 68px; height: 68px; border-radius: 20px; font-size: 28px; }
+.db-swarm-avatar.is-you {
+  border-radius: 50%;
+  overflow: hidden;
+  font-size: 12.5px;
+  color: var(--sw-you);
+  background: var(--sw-you-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sw-you) 14%, transparent);
+}
+.db-swarm-avatar.is-you.is-xs { font-size: 8px; }
+.db-swarm-avatar.is-you.is-sm { font-size: 10px; }
+.db-swarm-avatar.is-you.is-lg { font-size: 22px; }
+.db-swarm-avatar.is-you .db-avatar-initials { font-size: inherit; font-weight: inherit; }
+.db-swarm-avatar.is-you .db-avatar-img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.db-swarm-avatar.is-supervisor {
+  --sw-av: var(--sw-boss);
+  --sw-av-ink: var(--sw-boss-tile);
+  --sw-av-on: var(--sw-boss-on);
+  outline: 1.5px solid var(--sw-boss-ring);
+  outline-offset: 2px;
+}
+.db-swarm-avatar.is-supervisor.is-sm,
+.db-swarm-avatar.is-supervisor.is-xs { outline-offset: 1.5px; }
+.db-swarm-avatar.is-aura { --sw-av: var(--sw-accent); --sw-av-ink: var(--sw-accent-strong); --sw-av-on: var(--sw-on-accent); }
+.db-swarm .is-hue-0 { --sw-av: var(--sw-h0); --sw-av-soft: var(--sw-h0-soft); --sw-av-ink: var(--sw-h0-ink); }
+.db-swarm .is-hue-1 { --sw-av: var(--sw-h1); --sw-av-soft: var(--sw-h1-soft); --sw-av-ink: var(--sw-h1-ink); }
+.db-swarm .is-hue-2 { --sw-av: var(--sw-h2); --sw-av-soft: var(--sw-h2-soft); --sw-av-ink: var(--sw-h2-ink); }
+.db-swarm .is-hue-3 { --sw-av: var(--sw-h3); --sw-av-soft: var(--sw-h3-soft); --sw-av-ink: var(--sw-h3-ink); }
+.db-swarm .is-hue-4 { --sw-av: var(--sw-h4); --sw-av-soft: var(--sw-h4-soft); --sw-av-ink: var(--sw-h4-ink); }
+.db-swarm .is-hue-5 { --sw-av: var(--sw-h5); --sw-av-soft: var(--sw-h5-soft); --sw-av-ink: var(--sw-h5-ink); }
+/* Working: a steady ring that survives reduce motion, plus one ring that swells and
+   fades on the orb's 3.2s beat. */
+.db-swarm-avatar.is-working::before,
+.db-swarm-avatar.is-working::after {
   content: "";
   position: absolute;
-  inset: -3px;
-  border-radius: 14px;
-  padding: 1.5px;
-  background: conic-gradient(from 0deg, transparent 0 55%, var(--sw-av) 80%, transparent 100%);
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  opacity: 0.75;
-  animation: db-swarm-spin 6s linear infinite;
+  inset: -4px;
+  border-radius: 13px;
+  border: 1.5px solid var(--sw-av);
+  pointer-events: none;
 }
-.db-swarm-avatar.is-sm.is-live::after { border-radius: 10px; }
+.db-swarm-avatar.is-working::after { animation: db-swarm-av-pulse 3.2s var(--sw-out) infinite; }
+.db-swarm-avatar.is-sm.is-working::before,
+.db-swarm-avatar.is-sm.is-working::after { inset: -3px; border-radius: 10px; }
+.db-swarm-avatar.is-xs.is-working::before,
+.db-swarm-avatar.is-xs.is-working::after { inset: -3px; border-radius: 8px; }
+.db-swarm-avatar.is-lg.is-working::before,
+.db-swarm-avatar.is-lg.is-working::after { inset: -5px; border-radius: 24px; }
+@keyframes db-swarm-av-pulse {
+  0% { transform: scale(0.96); opacity: 0.7; }
+  100% { transform: scale(1.24); opacity: 0; }
+}
+.db-swarm-avatar.is-paused { filter: saturate(0.15); }
 @keyframes db-swarm-spin { to { transform: rotate(1turn); } }
 
 /* ── Left rail ── */
@@ -8949,13 +8990,9 @@
   border-radius: 50%;
   background: var(--sw-accent);
   border: 2px solid var(--sw-active);
-  animation: db-swarm-breathe 2.6s ease-in-out infinite;
 }
-.db-swarm-presence.is-paused { background: var(--sw-mute); animation: none; }
-@keyframes db-swarm-breathe {
-  0%, 100% { box-shadow: 0 0 0 0 var(--sw-accent-ring); }
-  50% { box-shadow: 0 0 0 4px transparent; }
-}
+/* Paused reads by shape, not only colour: a hollow ring. */
+.db-swarm-presence.is-paused { background: var(--sw-active); box-shadow: inset 0 0 0 1.5px var(--sw-mute); }
 .db-swarm-ch-paused { color: var(--sw-mute); flex: none; }
 .db-swarm-admin {
   font-size: 9.5px;
@@ -8964,8 +9001,8 @@
   text-transform: uppercase;
   padding: 1px 6px;
   border-radius: 999px;
-  color: var(--sw-sup);
-  background: var(--sw-sup-soft);
+  color: var(--sw-boss);
+  background: var(--sw-boss-soft);
 }
 .db-swarm-unread {
   min-width: 18px;
@@ -9005,14 +9042,14 @@
   from { opacity: 0.9; transform: scale(0.8); }
   to { opacity: 0; transform: scale(1.7); }
 }
-/* A Supervisor appearing sweeps a violet light down the rail, once. */
+/* A Supervisor appearing sweeps a light down the rail, once. */
 .db-swarm-rail.is-supervisor-fresh { position: relative; }
 .db-swarm-rail.is-supervisor-fresh::after {
   content: "";
   position: absolute;
   inset: 0;
   pointer-events: none;
-  background: linear-gradient(180deg, transparent 0%, var(--sw-sup-soft) 42%, var(--sw-sup-ring) 50%, var(--sw-sup-soft) 58%, transparent 100%);
+  background: linear-gradient(180deg, transparent 0%, var(--sw-boss-soft) 42%, var(--sw-boss-ring) 50%, var(--sw-boss-soft) 58%, transparent 100%);
   background-size: 100% 260%;
   animation: db-swarm-sweep 1.4s var(--sw-out) both;
 }
@@ -9181,7 +9218,7 @@
 .db-swarm-msg-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; line-height: 1.35; }
 .db-swarm-msg-head time { font-size: 11px; color: var(--sw-mute); font-variant-numeric: tabular-nums; }
 .db-swarm-name { font-weight: 650; font-size: 14.5px; }
-.db-swarm-name.is-supervisor { color: var(--sw-sup); }
+.db-swarm-name.is-supervisor { color: var(--sw-boss); }
 .db-swarm-name.is-aura { color: var(--sw-accent); }
 .db-swarm-name.is-hue-0 { color: var(--sw-h0); }
 .db-swarm-name.is-hue-1 { color: var(--sw-h1); }
@@ -9236,8 +9273,8 @@
 .db-swarm-sys-text { min-width: 0; }
 .db-swarm-sys-text b { font-weight: 650; color: var(--sw-text); }
 .db-swarm-sys-origin { font-size: 10.5px; color: var(--sw-mute); white-space: nowrap; }
-.db-swarm-sys.is-supervisor { color: var(--sw-sup); background: var(--sw-sup-soft); }
-.db-swarm-sys.is-supervisor .db-swarm-sys-icon { color: var(--sw-sup); }
+.db-swarm-sys.is-supervisor { color: var(--sw-boss); background: var(--sw-boss-soft); }
+.db-swarm-sys.is-supervisor .db-swarm-sys-icon { color: var(--sw-boss); }
 .db-swarm-sys.is-crosspost { margin-left: 20px; background: var(--sw-chip); border: 1px solid var(--sw-chip-border); }
 .db-swarm-sys.is-fresh { animation: db-swarm-sys-in 520ms var(--sw-spring) 160ms both; }
 .db-swarm-sys.is-supervisor.is-fresh { animation: db-swarm-sys-in 520ms var(--sw-spring) 160ms both, db-swarm-glow 1.6s var(--sw-out) 400ms both; }
@@ -9246,7 +9283,7 @@
   to { opacity: 1; transform: none; }
 }
 @keyframes db-swarm-glow {
-  0% { box-shadow: 0 0 0 0 var(--sw-sup-ring); }
+  0% { box-shadow: 0 0 0 0 var(--sw-boss-ring); }
   100% { box-shadow: 0 0 0 10px transparent; }
 }
 .db-swarm-usage {
@@ -9742,13 +9779,14 @@
 .db-swarm-edge.is-dim { stroke-dasharray: 0.04 0.04; stroke-dashoffset: 0; animation: none; opacity: 0.6; }
 @keyframes db-swarm-draw { to { stroke-dashoffset: 0; } }
 .db-swarm-node { animation: db-swarm-node-in 640ms var(--sw-spring) both; }
-.db-swarm-node-core { fill: var(--sw-av-soft, var(--sw-accent-soft)); stroke: var(--sw-av, var(--sw-accent)); stroke-width: 1.4; }
+.db-swarm-node-core { fill: var(--sw-node-fill, var(--sw-av-ink, var(--sw-accent-strong))); stroke: rgba(255, 255, 255, 0.18); stroke-width: 1; }
 .db-swarm-node-ring { fill: none; stroke: var(--sw-av, var(--sw-accent)); stroke-width: 1; opacity: 0.25; }
 .db-swarm-node { color: var(--sw-av, var(--sw-accent)); }
-.db-swarm-node.is-supervisor { --sw-av: var(--sw-sup); --sw-av-soft: var(--sw-sup-soft); }
+.db-swarm-node .db-swarm-node-glyph { color: var(--sw-node-on, #ffffff); }
+.db-swarm-node.is-supervisor { --sw-av: var(--sw-boss); --sw-av-ink: var(--sw-boss-tile); --sw-node-on: var(--sw-boss-on); }
 .db-swarm-node.is-dim { opacity: 0.45; }
-.db-swarm-node.is-dim .db-swarm-node-core { stroke-dasharray: 3 3; }
-.db-swarm-node .db-swarm-node-ring { transform-box: fill-box; transform-origin: center; animation: db-swarm-halo 3.2s ease-in-out infinite; }
+.db-swarm-node.is-dim .db-swarm-node-ring { stroke-dasharray: 3 3; }
+.db-swarm-node.is-working .db-swarm-node-ring { transform-box: fill-box; transform-origin: center; animation: db-swarm-halo 3.2s ease-in-out infinite; }
 .db-swarm-node.is-fresh .db-swarm-node-ring { animation: db-swarm-burst 1.1s var(--sw-out) 200ms both; }
 @keyframes db-swarm-node-in {
   from { opacity: 0; transform: scale(0.3); }
@@ -9786,7 +9824,7 @@
 .db-swarm-card:hover { border-color: var(--sw-field-border); box-shadow: 0 8px 20px var(--sw-lift); }
 .db-swarm-card.is-open { background: var(--sw-active); }
 .db-swarm-card.is-paused { opacity: 0.6; }
-.db-swarm-card.is-supervisor { margin-bottom: 8px; border-color: var(--sw-sup-ring); background: linear-gradient(160deg, var(--sw-sup-soft), var(--sw-chip) 70%); }
+.db-swarm-card.is-supervisor { margin-bottom: 8px; border-color: var(--sw-boss-ring); background: linear-gradient(160deg, var(--sw-boss-soft), var(--sw-chip) 70%); }
 .db-swarm-card.is-fresh { animation: db-swarm-hire 700ms var(--sw-spring) both; }
 .db-swarm-card-head {
   width: 100%;
@@ -10023,16 +10061,20 @@ button:hover > .sw-g-dismiss { transform: rotate(90deg); }
   to { transform: scale(1); }
 }
 
-/* Crown: the three nodes rise in turn while the Supervisor is live, and on arrival. */
-.db-swarm-avatar.is-live .sw-g-crown .sw-c1,
-.db-swarm-sys.is-fresh .sw-g-crown .sw-c1 { animation: db-swarm-g-rise 3.2s ease-in-out infinite; }
-.db-swarm-avatar.is-live .sw-g-crown .sw-c2,
-.db-swarm-sys.is-fresh .sw-g-crown .sw-c2 { animation: db-swarm-g-rise 3.2s ease-in-out 0.25s infinite; }
-.db-swarm-avatar.is-live .sw-g-crown .sw-c3,
-.db-swarm-sys.is-fresh .sw-g-crown .sw-c3 { animation: db-swarm-g-rise 3.2s ease-in-out 0.5s infinite; }
-@keyframes db-swarm-g-rise {
-  0%, 70%, 100% { transform: translateY(0); }
-  35% { transform: translateY(-1.6px); }
+/* Hub: the outer nodes light in turn while the Supervisor works, and on arrival. */
+.db-swarm-avatar.is-working .sw-g-hub [class^="sw-hub-n"],
+.db-swarm-sys.is-fresh .sw-g-hub [class^="sw-hub-n"] { animation: db-swarm-g-relay 3.2s ease-in-out infinite; }
+.db-swarm-avatar.is-working .sw-g-hub .sw-hub-n2,
+.db-swarm-sys.is-fresh .sw-g-hub .sw-hub-n2 { animation-delay: 0.32s; }
+.db-swarm-avatar.is-working .sw-g-hub .sw-hub-n3,
+.db-swarm-sys.is-fresh .sw-g-hub .sw-hub-n3 { animation-delay: 0.64s; }
+.db-swarm-avatar.is-working .sw-g-hub .sw-hub-n4,
+.db-swarm-sys.is-fresh .sw-g-hub .sw-hub-n4 { animation-delay: 0.96s; }
+.db-swarm-avatar.is-working .sw-g-hub .sw-hub-n5,
+.db-swarm-sys.is-fresh .sw-g-hub .sw-hub-n5 { animation-delay: 1.28s; }
+@keyframes db-swarm-g-relay {
+  0%, 60%, 100% { opacity: 0.45; }
+  20% { opacity: 1; }
 }
 
 /* Burst: the rays turn slowly around a breathing core; on arrival they flare open. */
@@ -10074,9 +10116,6 @@ button:hover > .sw-g-dismiss { transform: rotate(90deg); }
   0%, 100% { transform: translateY(0) rotate(0deg); opacity: 0.85; }
   50% { transform: translateY(-1.8px) rotate(20deg); opacity: 1; }
 }
-
-/* You: a ring turns around your core. */
-.sw-g-you .sw-ring { transform-box: view-box; transform-origin: 50% 50%; animation: db-swarm-g-orbit 12s linear infinite; }
 
 /* Sigils: a live manager's mark turns slowly and its core breathes; hover spins it. */
 .sw-sigil .sw-sigil-body { transform-box: view-box; transform-origin: 50% 50%; transition: transform 700ms var(--sw-spring); }

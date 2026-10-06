@@ -496,6 +496,11 @@
   --sw-sup: var(--dk-accent-text);
   --sw-sup-soft: var(--dk-accent-soft);
   --sw-sup-ring: var(--dk-accent-ring);
+  --sw-boss: #e4e6ec;
+  --sw-boss-tile: #2a2c33;
+  --sw-boss-on: #f5f5f5;
+  --sw-boss-soft: rgba(255, 255, 255, 0.07);
+  --sw-boss-ring: rgba(255, 255, 255, 0.28);
   --sw-warn: var(--dk-warning);
   --sw-warn-soft: var(--dk-warning-soft);
   --sw-danger: var(--dk-danger);
@@ -520,6 +525,22 @@
   --sw-h5: color-mix(in srgb, var(--sw-h5-ink) 48%, var(--dk-text));
   --sw-h5-soft: color-mix(in srgb, var(--sw-h5) 12%, transparent);
 }
+/* Agent tiles go matte: a flat step of their ink over the surface, the mark in the
+   lifted ink. Your photo circle keeps its own fill. The Supervisor's ring is what
+   lifts its near-black tile off the page. */
+:root[data-theme="dark"] .db-swarm-avatar:not(.is-you) {
+  --sw-av-fill: color-mix(in srgb, var(--sw-av-ink) 34%, var(--dk-surface));
+  background: var(--sw-av-fill);
+  color: var(--sw-av);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sw-av) 24%, transparent);
+}
+:root[data-theme="dark"] .db-swarm-avatar.is-supervisor {
+  --sw-av-fill: var(--sw-boss-tile);
+  color: var(--sw-boss-on);
+}
+:root[data-theme="dark"] .db-swarm-node { --sw-node-fill: color-mix(in srgb, var(--sw-av-ink, var(--sw-accent)) 34%, var(--dk-surface)); --sw-node-on: var(--sw-av); }
+:root[data-theme="dark"] .db-swarm-node.is-supervisor { --sw-node-fill: var(--sw-boss-tile); --sw-node-on: var(--sw-boss-on); }
+:root[data-theme="dark"] .db-swarm-node-core { stroke: color-mix(in srgb, var(--sw-av, var(--sw-accent)) 24%, transparent); }
 /* The danger pill keeps white text on light; on dark it needs the dark ink. */
 :root[data-theme="dark"] .db-swarm-pill-btn.is-danger,
 :root[data-theme="dark"] .db-swarm-pill-btn.is-danger:hover {
