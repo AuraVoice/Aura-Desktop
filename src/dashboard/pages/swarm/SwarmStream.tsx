@@ -25,7 +25,7 @@ import {
   TackGlyph,
   WatchGlyph,
 } from "./SwarmGlyphs";
-import { PlanEmbed, QuestionEmbed, ReportEmbed, RoundEmbed, RoundReplyEmbed, StepRow, WorkingEmbed } from "./SwarmWork";
+import { CONNECTOR_LABEL, PlanEmbed, QuestionEmbed, ReportEmbed, RoundEmbed, RoundReplyEmbed, StepRow, WorkingEmbed } from "./SwarmWork";
 import { useMentionPicker } from "./SwarmMentionPicker";
 import { ComposerGrants } from "./SwarmComposerGrants";
 import {
@@ -213,7 +213,7 @@ function HiredEmbed({ manager }: { manager: SwarmManager }) {
       )}
       {manager.connectors.length > 0 && (
         <div className="db-swarm-embed-row">
-          {manager.connectors.map((c) => <em key={c}>{c}</em>)}
+          {manager.connectors.map((c) => <em key={c}>{CONNECTOR_LABEL[c] ?? c}</em>)}
         </div>
       )}
       {manager.routines.length > 0 && (
@@ -305,7 +305,7 @@ function Typing({ author, since }: { author: Author; since: number }) {
       ) : (
         <SwarmOrb id="swarm" state="planning" tone={author.role === "supervisor" ? "sup" : "accent"} size={28} />
       )}
-      <span><strong>{author.name}</strong> is deciding who owns this</span>
+      <span><strong>{author.name}</strong> is typing</span>
       {seconds >= 4 && <span className="db-swarm-typing-time">{seconds}s</span>}
     </div>
   );
@@ -403,7 +403,9 @@ function DecisionMessage({
       <div className="db-swarm-msg-head">
         <strong className={`db-swarm-name is-${item.author.role === "manager" ? `hue-${item.author.hue}` : item.author.role}`}>{item.author.name}</strong>
         {item.author.name !== roleLabel(item.author, roster) && <span className={`db-swarm-role is-${item.author.role}`}>{roleLabel(item.author, roster)}</span>}
-        <span className={`db-swarm-tag is-${d.decision}`}>{d.answersQuestion ? "Answered" : DECISION_LABEL[d.decision]}</span>
+        {/* A manager speaking for itself needs no badge, the way a Slack reply has none. Only
+            an ask and a decline keep one, since those change what the user does next. */}
+        {(d.decision === "ask" || d.decision === "not_swarm") && <span className={`db-swarm-tag is-${d.decision}`}>{DECISION_LABEL[d.decision]}</span>}
         {capability && <span className="db-swarm-cap">{capability}</span>}
         {item.at > 0 && <time>{timeLabel(item.at)}</time>}
       </div>

@@ -233,9 +233,14 @@ export function channelItems(messages: SwarmMessage[], roster: SwarmRoster): Str
         break;
       }
       case "routing":
-        decisionsOf(m).forEach((decision, i) =>
-          items.push({ key: `${key}-d${i}`, kind: "decision", decision, author: decisionAuthor(decision, roster, backer), at: m.at, asked }),
-        );
+        decisionsOf(m).forEach((decision, i) => {
+          const author = decisionAuthor(decision, roster, backer);
+          // A hire reads like someone joining the channel, then saying hello.
+          if (decision.decision === "new_manager" && decision.applied && author.role === "manager") {
+            items.push({ key: `${key}-j${i}`, kind: "system", text: `${author.name} joined #${groupChannelName(roster)}`, tone: "plain", at: m.at });
+          }
+          items.push({ key: `${key}-d${i}`, kind: "decision", decision, author, at: m.at, asked });
+        });
         break;
       case "activity":
         items.push({ key, kind: "system", text: m.text, tone: /supervisor/i.test(m.text) ? "supervisor" : "plain", at: m.at });

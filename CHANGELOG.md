@@ -16,6 +16,9 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+### Changed
+- Swarm reads like a team chat now. Managers and the Supervisor talk to you in first person, like teammates in Slack, instead of narrating how each message was routed. A new manager joins #group and introduces itself, it asks its own setup questions, and replies drop the "Answered" and "New manager" badges.
+
 ## [0.16.6] - 2026-10-06
 
 ### Added
