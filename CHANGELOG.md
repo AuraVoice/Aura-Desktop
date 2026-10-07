@@ -16,6 +16,20 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+## [0.16.8] - 2026-10-07
+
+### Added
+- While the Interview Companion card is open, Ctrl+Alt with an arrow key (Control+Option on a Mac) moves it a step in that direction, and holding the keys glides it, so you can clear a video tile or your code without reaching for the mouse. The keys go back to your other apps as soon as the card closes.
+- More Interview Companion keys, all with Ctrl+Alt held (Control+Option on a Mac) while the card is open: H queues a screenshot so a problem taller than one screen goes out as one question with your next send, Enter is Answer now, B hides or shows the card, and Shift+Up/Down scrolls a long answer, held or tapped. A gear beside Stop lists every key and says if another app has taken one.
+- Formulas and derivations in a typed answer are now typeset as math. Prices, code and ordinary text are left alone.
+
+### Changed
+- The Interview Companion's Screen switch now starts on, so every question you send carries a fresh look at your screen. While the card is on screen, Ctrl+Alt+S (Control+Option+S on a Mac) works like the Send button, even if you moved Screen Sight to another shortcut: it sends what you typed together with your screen, or just the screen if the box is empty, in which case Aura now solves what it shows instead of describing it back to you. With the card closed it is Screen Sight as before. A screen send now reads the monitor the card is on, not the one your mouse happens to be on.
+
+- Clicking a button on the notch or one of its cards no longer leaves Aura holding the keyboard. On Windows the app you were working in gets its focus back as soon as the click is handled, so your caret and typing carry on where they were. Text fields, open menus and the Interview Companion card keep focus as before, and the setup screen is unchanged. macOS already behaved this way.
+
+- Swarm managers no longer stop at a small per-session limit when reading repo files, issues, emails or attached documents, and a file already read this session is served from memory instead of fetched again. A step served that way says "already read this session". A manager can start up to three Research runs per brief instead of one, and a limit that is hit now names what ran out.
+
 ## [0.16.7] - 2026-10-07
 
 ### Added
