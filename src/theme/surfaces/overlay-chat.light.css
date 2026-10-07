@@ -625,3 +625,50 @@
   background: rgba(236, 246, 243, 1);
   color: rgba(20, 28, 26, 0.94);
 }
+
+/* ── Interview keyboard shortcuts, queue chip ── */
+:root[data-theme="light"] .interview-hacker-keys-button {
+  border-color: rgba(63, 86, 78, 0.16);
+  color: rgba(20, 28, 26, 0.9);
+  background: var(--lt-hover);
+}
+:root[data-theme="light"] .interview-hacker-keys-button:hover,
+:root[data-theme="light"] .interview-hacker-keys-button[aria-expanded="true"] {
+  background: var(--lt-press);
+}
+:root[data-theme="light"] .interview-hacker-keys-button:focus-visible {
+  outline-color: rgba(20, 158, 139, 0.7);
+}
+:root[data-theme="light"] .interview-hacker-keys-menu-label,
+:root[data-theme="light"] .interview-hacker-keys-menu-note {
+  color: rgba(20, 28, 26, 0.6);
+}
+:root[data-theme="light"] .interview-hacker-keys-menu-list li {
+  border-top-color: rgba(63, 86, 78, 0.1);
+}
+:root[data-theme="light"] .interview-hacker-keys-menu-list li:first-child {
+  border-top: 0;
+}
+:root[data-theme="light"] .interview-hacker-keys-caps kbd {
+  border-color: rgba(63, 86, 78, 0.18);
+  background: rgba(20, 40, 34, 0.04);
+  color: rgba(20, 28, 26, 0.88);
+}
+:root[data-theme="light"] .interview-hacker-keys-text {
+  color: rgba(20, 28, 26, 0.9);
+}
+:root[data-theme="light"] .interview-hacker-keys-text em {
+  color: #9a6700;
+}
+:root[data-theme="light"] .interview-hacker-queue {
+  border-color: rgba(20, 158, 139, 0.3);
+  background: rgba(20, 158, 139, 0.07);
+  color: rgba(20, 28, 26, 0.9);
+}
+:root[data-theme="light"] .interview-hacker-queue button {
+  border-color: rgba(63, 86, 78, 0.16);
+  background: var(--lt-hover);
+}
+:root[data-theme="light"] .interview-hacker-queue button:hover {
+  background: var(--lt-press);
+}

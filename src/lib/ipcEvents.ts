@@ -54,6 +54,7 @@ export const INTERVIEW_HACKER_STATUS = "interview-hacker-status";
 export const INTERVIEW_HACKER_TRANSCRIPT = "interview-hacker-transcript";
 /** Ctrl+Alt+S while an interview is live. See events.rs. */
 export const INTERVIEW_SCREEN_SIGHT_REQUESTED = "interview-screen-sight-requested";
+export const INTERVIEW_CARD_KEY = "interview-card-key";
 export const INTERVIEW_BRIEF_UPDATED = "interview-brief-updated";
 export const INTERVIEW_RESUME_UPDATED = "interview-resume-updated";
 

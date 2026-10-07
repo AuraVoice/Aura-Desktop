@@ -536,6 +536,7 @@ pub fn run() {
             voice_toggle_key::voice_toggle_key_permission,
             voice_toggle_key::voice_toggle_key_request_permission,
             hotkeys::hotkey_bindings,
+            hotkeys::interview_card_hotkeys,
             hotkeys::set_hotkey_binding,
             hotkeys::reset_hotkey_bindings,
             hotkeys::begin_hotkey_test,

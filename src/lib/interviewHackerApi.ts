@@ -303,6 +303,7 @@ export async function streamInterviewAnswer({
   action = "automatic",
   currentAnswer = "",
   screenSight = null,
+  queuedScreens = [],
   screenNotes = [],
   steer = "",
   channel = "voice",
@@ -327,6 +328,9 @@ export async function streamInterviewAnswer({
   steer?: string;
   currentAnswer?: string;
   screenSight?: InterviewScreenSightFrame | null;
+  /** Shots queued with Ctrl+Alt+H before this send, oldest first. Only sent
+   *  beside `screenSight`; the backend caps them at two. */
+  queuedScreens?: InterviewScreenSightFrame[];
   /** Captions of screens shown earlier this round, so a later question about
    *  "that" still resolves. Bounded by the backend at three. */
   screenNotes?: string[];
@@ -397,6 +401,7 @@ export async function streamInterviewAnswer({
       current_answer: currentAnswer,
       screen_notes: screenNotes.slice(-3),
       screen_sight: screenSight ? wireFrame(screenSight) : null,
+      queued_screens: screenSight ? queuedScreens.slice(-2).map(wireFrame) : [],
       channel,
       thread: chat
         ? thread.slice(-8).map((item) => ({

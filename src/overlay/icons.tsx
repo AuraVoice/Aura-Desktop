@@ -136,6 +136,17 @@ export function StopSquareIcon() {
   );
 }
 
+/** The Interview Companion's keyboard-shortcut menu: an eight-tooth cog drawn
+ * on the same 24-unit grid as StopSquareIcon beside it. */
+export function GearIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinejoin="round">
+      <path d="M18.88 9.87 L21.26 10.41 L21.26 13.59 L18.88 14.13 L18.37 15.36 L19.68 17.43 L17.43 19.68 L15.36 18.37 L14.13 18.88 L13.59 21.26 L10.41 21.26 L9.87 18.88 L8.64 18.37 L6.57 19.68 L4.32 17.43 L5.63 15.36 L5.12 14.13 L2.74 13.59 L2.74 10.41 L5.12 9.87 L5.63 8.64 L4.32 6.57 L6.57 4.32 L8.64 5.63 L9.87 5.12 L10.41 2.74 L13.59 2.74 L14.13 5.12 L15.36 5.63 L17.43 4.32 L19.68 6.57 L18.37 8.64 Z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
 /** Per-meeting "take notes" toggle in the agenda card: a note sheet with
  * lines. Armed state is conveyed by BarIconButton's active styling. */
 export function NotesIcon() {

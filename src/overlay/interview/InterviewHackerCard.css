@@ -1,7 +1,7 @@
 .glass-surface.interview-hacker-control-bar {
   /* Must agree with INTERVIEW_CONTROL_WIDTH/HEIGHT in overlay.rs: Rust sizes
      the native window to exactly this footprint. */
-  width: 280px;
+  width: 324px;
   height: 52px;
   justify-self: center;
   border-radius: 999px;
@@ -15,7 +15,7 @@
 
 .interview-hacker-control-inner {
   display: grid;
-  grid-template-columns: 96px 1fr 40px;
+  grid-template-columns: 96px 1fr 38px 40px;
   align-items: center;
   gap: 7px;
   width: 100%;
@@ -1259,4 +1259,175 @@
   100% {
     opacity: 0.25;
   }
+}
+
+/* ── Keyboard shortcuts: the gear beside Stop and the menu it opens ── */
+.interview-hacker-keys-button {
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 50%;
+  color: rgba(255, 255, 255, 0.92);
+  background: rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+}
+.interview-hacker-keys-button svg {
+  width: 18px;
+  height: 18px;
+}
+.interview-hacker-keys-button:hover,
+.interview-hacker-keys-button[aria-expanded="true"] {
+  background: rgba(255, 255, 255, 0.14);
+}
+.interview-hacker-keys-button:focus-visible {
+  outline: 2px solid rgba(126, 216, 255, 0.9);
+  outline-offset: 2px;
+}
+
+/* Hangs under the control bar (52px row + 8px gap), over the card when it is
+   open. OverlayRoot grows the slot to INTERVIEW_HOTKEY_MENU_SLOT_HEIGHT while
+   it shows, so the native window always has room for it. */
+.notch-column-with-draft.notch-column-interview {
+  position: relative;
+}
+.interview-hacker-keys-menu {
+  position: absolute;
+  top: 60px;
+  left: 50%;
+  z-index: 30;
+  width: 320px;
+  transform: translateX(-50%);
+}
+/* The edge layouts in NotchBar.css give every non-notch child the card's cell
+   (`> :not(.notch-shell)`), and for an absolutely positioned grid child that
+   cell is the containing block: top: 60px then started 60px INSIDE the card and
+   ran off the window. Spanning the whole grid anchors it to the column, just
+   under the control bar, over the top of the card. The extra class outranks
+   those 0,3,0 rules whichever stylesheet loads last. */
+.notch-column.notch-column-with-draft.notch-column-interview > .interview-hacker-keys-menu {
+  grid-area: 1 / 1 / -1 / -1;
+}
+/* A safety net, never the normal case: INTERVIEW_HOTKEY_MENU_SLOT_HEIGHT gives
+   the window room for the whole list, but a long translation must scroll, not
+   clip. Doubled up with .glass-surface, whose overflow: hidden ties otherwise. */
+.glass-surface.interview-hacker-keys-menu-surface {
+  max-height: calc(100vh - 68px);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
+}
+.interview-hacker-keys-menu-surface {
+  width: 100%;
+  border-radius: 18px;
+}
+.interview-hacker-keys-menu-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px 14px;
+  box-sizing: border-box;
+}
+.interview-hacker-keys-menu-label {
+  color: var(--text-muted, rgba(255, 255, 255, 0.52));
+  font-size: 12.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.interview-hacker-keys-menu-note {
+  margin: 0;
+  color: var(--text-muted, rgba(255, 255, 255, 0.52));
+  font-size: 13px;
+}
+.interview-hacker-keys-menu-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.interview-hacker-keys-menu-list li {
+  display: grid;
+  grid-template-columns: 132px 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.interview-hacker-keys-menu-list li:first-child {
+  border-top: 0;
+}
+.interview-hacker-keys-caps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+}
+.interview-hacker-keys-caps kbd {
+  padding: 2px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.07);
+  color: rgba(255, 255, 255, 0.92);
+  font-family: inherit;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+}
+.interview-hacker-keys-text {
+  display: flex;
+  flex-direction: column;
+  color: var(--text-primary, rgba(255, 255, 255, 0.9));
+  font-size: 13px;
+  line-height: 1.3;
+}
+.interview-hacker-keys-text em {
+  color: #f5c46b;
+  font-size: 11.5px;
+  font-style: normal;
+}
+.interview-hacker-keys-menu-list li[aria-disabled="true"] kbd {
+  opacity: 0.5;
+}
+
+/* ── Screenshot queue (Ctrl+Alt+H) ── */
+.interview-hacker-queue {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid rgba(126, 216, 255, 0.32);
+  border-radius: 10px;
+  background: rgba(126, 216, 255, 0.08);
+  color: var(--text-primary, rgba(255, 255, 255, 0.9));
+  font-size: 12.5px;
+}
+.interview-hacker-queue button {
+  padding: 2px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.interview-hacker-queue button:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+/* ── Math (KaTeX) inside an answer ── */
+.interview-hacker-math,
+.interview-hacker-math-block {
+  white-space: normal;
+}
+.interview-hacker-math-block {
+  display: block;
+  margin: 6px 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
 }

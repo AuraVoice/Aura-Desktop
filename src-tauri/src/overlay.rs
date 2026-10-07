@@ -46,7 +46,7 @@ const CARD_CROSS: f64 = 380.0;
 const INTERVIEW_HACKER_WIDTH: f64 = 720.0;
 // Must agree with InterviewHackerCard.css (.interview-hacker-control-bar
 // width/height) and NotchBar.css's 52px interview grid rows + 8px row-gap.
-const INTERVIEW_CONTROL_WIDTH: f64 = 280.0;
+const INTERVIEW_CONTROL_WIDTH: f64 = 324.0;
 const INTERVIEW_CONTROL_HEIGHT: f64 = 52.0;
 const INTERVIEW_CONTROL_GAP: f64 = 8.0;
 // Gap between the notch and an open card (matches the CSS grid gap).
@@ -1499,7 +1499,7 @@ pub fn set_slot_height(app: &AppHandle, height: Option<f64>, centered: bool) {
         centered_slot = state.centered_slot;
     }
     apply(app);
-    crate::hotkeys::set_interview_nudge(app, centered_slot);
+    crate::hotkeys::set_card_keys(app, centered_slot);
 }
 
 /// Whether the Interview Companion card (expanded or collapsed) is the Bar's
@@ -1512,7 +1512,7 @@ pub fn interview_card_showing(app: &AppHandle) -> bool {
 }
 
 /// One Ctrl+Alt+Arrow step for the Interview Companion card (hotkeys.rs
-/// NUDGE_KEYS). Starts from the real window position, so a drag in between is
+/// CARD_KEYS). Starts from the real window position, so a drag in between is
 /// respected, and stays inside the work area of the monitor the card is on;
 /// crossing monitors is still a drag. Moves the window directly because a
 /// position change is not part of the `applied` cache, so apply() would no-op.

@@ -80,6 +80,9 @@ pub const INTERVIEW_HACKER_TRANSCRIPT: &str = "interview-hacker-transcript";
 /// silent AI interview has no speech to arm anything for, and reaching the
 /// overlay with the mouse can blur the interview window.
 pub const INTERVIEW_SCREEN_SIGHT_REQUESTED: &str = "interview-screen-sight-requested";
+/// The other Interview Companion card keys (hotkeys.rs CARD_KEYS):
+/// `{ action: "queue" | "answerNow" | "toggleHide" | "scroll", dy }`.
+pub const INTERVIEW_CARD_KEY: &str = "interview-card-key";
 pub const INTERVIEW_BRIEF_UPDATED: &str = "interview-brief-updated";
 pub const INTERVIEW_RESUME_UPDATED: &str = "interview-resume-updated";
 

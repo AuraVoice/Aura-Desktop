@@ -1,9 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import katex from "katex";
+import "katex/dist/katex.min.css";
 import { logError } from "../../lib/log";
 import { openDashboardWindow } from "../../lib/dashboardWindow";
 import { GlassSurface } from "../GlassSurface";
-import { ChevronDownIcon, DocumentIcon, DownArrowIcon, MicIcon, MicOffIcon, SendPlaneIcon, StopSquareIcon, UploadArrowIcon } from "../icons";
+import { ChevronDownIcon, DocumentIcon, DownArrowIcon, GearIcon, MicIcon, MicOffIcon, SendPlaneIcon, StopSquareIcon, UploadArrowIcon } from "../icons";
 import { callVisual } from "./callIcons";
 import { useMicPreflightLevel } from "./useMicPreflightLevel";
 import { RESUME_ACCEPT } from "../../lib/resumeText";
@@ -136,10 +139,62 @@ function CodeBlock({ code }: { code: string }) {
   );
 }
 
+/**
+ * Spans the model clearly meant as math: $$..$$, \[..\], \(..\), and $..$ with
+ * no space just inside the dollars and no digit right after the closing one.
+ * An inline $..$ also has to read as TeX (a command, ^ or _), so "$5 and $10",
+ * a shell "$PATH" and ordinary prose stay text.
+ */
+const MATH_SOURCE = String.raw`\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$([^\s$](?:[^$\n]*?[^\s$])?)\$(?!\d)`;
+
+function renderTex(source: string, displayMode: boolean): string | null {
+  try {
+    // throwOnError so a span KaTeX cannot parse stays the model's own text
+    // rather than a red error; trust off so no \href or \includegraphics.
+    return katex.renderToString(source, { displayMode, throwOnError: true, trust: false, strict: "ignore", output: "html" });
+  } catch {
+    return null;
+  }
+}
+
+/** Prose with any math rendered by KaTeX. Code never reaches here: answerSegments
+ *  splits fences out first. Text without a math delimiter takes the fast path
+ *  and renders exactly as before. */
+function MathText({ text }: { text: string }) {
+  const parts = useMemo(() => {
+    if (!text.includes("$") && !text.includes("\\(") && !text.includes("\\[")) return null;
+    const out: ReactNode[] = [];
+    const pattern = new RegExp(MATH_SOURCE, "g");
+    let last = 0;
+    for (let match = pattern.exec(text); match; match = pattern.exec(text)) {
+      const display = match[1] ?? match[2];
+      const source = display ?? match[3] ?? match[4];
+      if (match[4] !== undefined && !/\\[a-zA-Z]+|[\^_]/.test(match[4])) continue;
+      const html = renderTex(source.trim(), display !== undefined);
+      if (html === null) continue;
+      if (match.index > last) out.push(text.slice(last, match.index));
+      out.push(
+        <span
+          key={match.index}
+          className={display !== undefined ? "interview-hacker-math-block" : "interview-hacker-math"}
+          // KaTeX's own output for a span with trust off: escaped, no links,
+          // no raw HTML from the model.
+          dangerouslySetInnerHTML={{ __html: html }}
+        />,
+      );
+      last = match.index + match[0].length;
+    }
+    if (out.length === 0) return null;
+    if (last < text.length) out.push(text.slice(last));
+    return out;
+  }, [text]);
+  return <>{parts ?? text}</>;
+}
+
 function AnswerBody({ answer }: { answer: string }) {
   const segments = answerSegments(answer);
   if (segments.length === 1 && !segments[0].code) {
-    return <div className="interview-hacker-answer-text">{answer}</div>;
+    return <div className="interview-hacker-answer-text"><MathText text={answer} /></div>;
   }
   return (
     <>
@@ -147,7 +202,7 @@ function AnswerBody({ answer }: { answer: string }) {
         ? <CodeBlock key={index} code={segment.text} />
         : (
           <div key={index} className="interview-hacker-answer-text">
-            {segment.text.trim()}
+            <MathText text={segment.text.trim()} />
           </div>
         )))}
     </>
@@ -466,18 +521,128 @@ function LiveIndicator({
   );
 }
 
+/** Room the hotkey menu needs below the control bar, in px. OverlayRoot grows
+ *  the slot to at least this while the menu is open, so a collapsed card's
+ *  52px window never clips it. Must fit .interview-hacker-keys-menu. */
+export const INTERVIEW_HOTKEY_MENU_SLOT_HEIGHT = 420;
+
+type CardHotkey = { keys: string[]; label: string; registered: boolean };
+
+const KEY_GLYPHS: Record<string, string> = {
+  ArrowUp: "↑",
+  ArrowDown: "↓",
+  ArrowLeft: "←",
+  ArrowRight: "→",
+};
+
+/** Every key the companion card answers to, read from Rust (hotkeys.rs
+ *  CARD_KEYS) so the list can never drift from what is registered, including
+ *  a key another app already took. Rows sharing a label (the four arrows)
+ *  collapse into one. */
+export function InterviewHotkeyMenu({ onClose }: { onClose: () => void }) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [rows, setRows] = useState<CardHotkey[] | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    invoke<CardHotkey[]>("interview_card_hotkeys")
+      .then((result) => {
+        if (!cancelled) setRows(result);
+      })
+      .catch((error: unknown) => {
+        logError("InterviewHotkeyMenu: load", error);
+        if (!cancelled) setFailed(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    function onPointerDown(event: MouseEvent) {
+      const target = event.target as Element | null;
+      // The gear toggles the menu itself; counting it as outside would close
+      // and immediately reopen.
+      if (target?.closest(".interview-hacker-keys-button")) return;
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) onClose();
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    return () => document.removeEventListener("mousedown", onPointerDown);
+  }, [onClose]);
+
+  const grouped = useMemo(() => {
+    const out: { label: string; caps: string[]; registered: boolean }[] = [];
+    for (const row of rows ?? []) {
+      const final = KEY_GLYPHS[row.keys[row.keys.length - 1]] ?? row.keys[row.keys.length - 1];
+      const previous = out[out.length - 1];
+      if (previous && previous.label === row.label) {
+        previous.caps[previous.caps.length - 1] += ` ${final}`;
+        previous.registered = previous.registered && row.registered;
+      } else {
+        out.push({ label: row.label, caps: [...row.keys.slice(0, -1), final], registered: row.registered });
+      }
+    }
+    return out;
+  }, [rows]);
+
+  return (
+    <div
+      ref={containerRef}
+      className="interview-hacker-keys-menu"
+      role="menu"
+      aria-label="Interview Companion keyboard shortcuts"
+      onKeyDown={(event) => {
+        // Kept here so the overlay's Escape handler, which dismisses the whole
+        // card, never sees it.
+        if (event.key === "Escape") {
+          event.stopPropagation();
+          onClose();
+        }
+      }}
+    >
+      <GlassSurface className="interview-hacker-keys-menu-surface" draggable={false}>
+        <div className="interview-hacker-keys-menu-inner">
+          <span className="interview-hacker-keys-menu-label">Shortcuts while this card is open</span>
+          {failed ? (
+            <p className="interview-hacker-keys-menu-note">Aura could not read the shortcut list.</p>
+          ) : (
+            <ul className="interview-hacker-keys-menu-list">
+              {grouped.map((row) => (
+                <li key={row.label} role="menuitem" aria-disabled={!row.registered}>
+                  <span className="interview-hacker-keys-caps">
+                    {row.caps.map((cap) => <kbd key={cap}>{cap}</kbd>)}
+                  </span>
+                  <span className="interview-hacker-keys-text">
+                    {row.label}
+                    {!row.registered && <em>Taken by another app</em>}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </GlassSurface>
+    </div>
+  );
+}
+
 export function InterviewHackerControlBar({
   expanded,
   onToggle,
   onStop,
   answerMode,
   onAnswerModeChange,
+  keysMenuOpen,
+  onKeysMenuToggle,
 }: {
   expanded: boolean;
   onToggle: () => void;
   onStop: () => void;
   answerMode: AnswerMode;
   onAnswerModeChange: (mode: AnswerMode) => void;
+  keysMenuOpen: boolean;
+  onKeysMenuToggle: () => void;
 }) {
   const manual = answerMode === "manual";
   return (
@@ -507,6 +672,17 @@ export function InterviewHackerControlBar({
             <path d={expanded ? "M5 7.5 10 12.5 15 7.5" : "M5 12.5 10 7.5 15 12.5"} />
           </svg>
           {expanded ? "Hide" : "Unhide"}
+        </button>
+        <button
+          type="button"
+          className="interview-hacker-keys-button"
+          onClick={onKeysMenuToggle}
+          aria-haspopup="menu"
+          aria-expanded={keysMenuOpen}
+          aria-label="Keyboard shortcuts"
+          title="Keyboard shortcuts"
+        >
+          <GearIcon />
         </button>
         <button
           type="button"
@@ -610,7 +786,9 @@ export function InterviewHackerCard({
   const sendComposer = () => {
     if (hacker.capturingScreen || hacker.phase !== "listening") return;
     const text = askText.trim();
-    if (withScreen) {
+    // A queue forces a screen send: with Screen off the queued shots would
+    // otherwise be dropped without a word.
+    if (withScreen || hacker.queuedCount > 0) {
       hacker.screenSight(text);
     } else {
       if (!text) return;
@@ -625,6 +803,23 @@ export function InterviewHackerCard({
   useEffect(() => () => {
     composerSendRef.current = null;
   }, [composerSendRef]);
+  // Ctrl+Alt+Shift+Up/Down. Scrolling up stops the auto-follow at once rather
+  // than on the next scroll event, or a streaming answer would pull it back.
+  const scrollAnswerRef = hacker.scrollAnswerRef;
+  useEffect(() => {
+    scrollAnswerRef.current = (dy) => {
+      const thread = threadRef.current;
+      if (!thread) return;
+      if (dy < 0) {
+        followingRef.current = false;
+        setDetached(true);
+      }
+      thread.scrollBy({ top: dy, behavior: "smooth" });
+    };
+    return () => {
+      scrollAnswerRef.current = null;
+    };
+  }, [scrollAnswerRef]);
   useEffect(() => {
     if (!active) return;
     let cancelled = false;
@@ -964,6 +1159,17 @@ export function InterviewHackerCard({
 
             No autoFocus: it is mounted for the length of the interview, and
             reaching for the overlay must never blur the interview window. */}
+        {active && hacker.phase !== "starting" && hacker.queuedCount > 0 && (
+          <div className="interview-hacker-queue" role="status">
+            <span>
+              {hacker.queuedCount === 1
+                ? "1 screenshot queued for your next send"
+                : `${hacker.queuedCount} screenshots queued for your next send`}
+            </span>
+            <button type="button" onClick={hacker.clearQueue}>Clear</button>
+          </div>
+        )}
+
         {active && hacker.phase !== "starting" && (
           <form
             className="interview-hacker-ask"

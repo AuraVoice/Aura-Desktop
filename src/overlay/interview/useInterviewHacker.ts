@@ -4,6 +4,7 @@ import { listen } from "@tauri-apps/api/event";
 import {
   INTERVIEW_HACKER_STATUS,
   INTERVIEW_SCREEN_SIGHT_REQUESTED,
+  INTERVIEW_CARD_KEY,
   INTERVIEW_HACKER_TRANSCRIPT,
 } from "../../lib/ipcEvents";
 import {
@@ -215,6 +216,9 @@ const MAX_HISTORY_EXCHANGES = 40;
  *  their screenshot. The backend caps the thread at 10 and the images at 2. */
 const CHAT_THREAD_EXCHANGES = 8;
 const CHAT_THREAD_SCREENS = 2;
+/** Queued shots per send; with the send's fresh frame that is three, matching
+ *  the backend's queued_screens cap of two. */
+const QUEUED_SCREENS_MAX = 2;
 
 function reflectionMarkdown(reflection: InterviewReflection): string {
   const section = (title: string, items: string[]) =>
@@ -395,6 +399,12 @@ export interface InterviewHackerState {
   /** The card's own Send while its composer is mounted, so Ctrl+Alt+S sends
    *  what is typed in the box. Null while the card is collapsed. */
   composerSendRef: { current: (() => void) | null };
+  /** The card's answer scroller, so Ctrl+Alt+Shift+Up/Down can scroll it
+   *  without focus. Null while the card is collapsed. */
+  scrollAnswerRef: { current: ((dy: number) => void) | null };
+  /** Screenshots queued with Ctrl+Alt+H for the next send (0 to 2). */
+  queuedCount: number;
+  clearQueue: () => void;
   questionSource: QuestionSource;
   /** Ask: the candidate types the question themselves. Works with no audio
    *  and no screenshot, which is the only input a silent interview has. */
@@ -563,6 +573,12 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   // Memory only and bounded to CHAT_THREAD_SCREENS: never written to disk,
   // cleared with the session like the captions above.
   const chatScreensRef = useRef(new Map<string, InterviewScreenSightFrame>());
+  // Shots queued with Ctrl+Alt+H, oldest first. The next screen send carries
+  // them beside its fresh frame and empties this; memory only, like every
+  // other frame here.
+  const queuedScreensRef = useRef<InterviewScreenSightFrame[]>([]);
+  const [queuedCount, setQueuedCount] = useState(0);
+  const queueInFlightRef = useRef(false);
   const savingReflectionRef = useRef(false);
   const savingReflectionSequenceRef = useRef(0);
   const activeAnswerTurnRef = useRef<InterviewTranscriptTurn | null>(null);
@@ -646,6 +662,8 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     reflectionTurnsRef.current = [];
     screenNotesRef.current = [];
     chatScreensRef.current.clear();
+    queuedScreensRef.current = [];
+    setQueuedCount(0);
     setScreenNote(null);
     setFollowups([]);
     lastRemoteTurnRef.current = null;
@@ -1593,6 +1611,13 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       .map((recent) => recent.text)
       .join(" ");
     const focus = retrieveFocus(briefRef.current, turn.text, recentRemote);
+    // Taken here rather than passed in, so every screen send (the composer,
+    // Ctrl+Alt+S, the collapsed-card fallback) carries the queue.
+    const queued = screenSight ? queuedScreensRef.current : [];
+    if (queued.length > 0) {
+      queuedScreensRef.current = [];
+      setQueuedCount(0);
+    }
     const sequence = ++requestSequenceRef.current;
     const controller = new AbortController();
     evaluationsRef.current.add(controller);
@@ -1689,10 +1714,13 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
       // manual mode: only a re-roll of the SAME question is a re-roll.
       currentAnswer: action === "suggest" && !sameTurn ? "" : previousAnswer,
       screenSight,
+      queuedScreens: queued,
       screenNotes: screenNotesRef.current,
       steer,
       channel,
-      thread,
+      // The queue IS the problem, and the backend gives the queue and the
+      // thread one image budget, so a queued send drops the thread's screens.
+      thread: queued.length > 0 ? thread.map((exchange) => ({ ...exchange, screen: null })) : thread,
       signal: controller.signal,
       onFrame: (frame) => {
         if (controller.signal.aborted) return;
@@ -2576,6 +2604,94 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     evaluate(synthetic, recentTurns, "suggest");
   }, [evaluate, rememberReflectionTurn, runManualAction]);
 
+  /** Ctrl+Alt+H: capture the card's display into the queue without sending.
+   *  For a problem taller than one screen; the oldest shot drops past two. */
+  const queueScreen = useCallback(() => {
+    const identity = identityRef.current;
+    if (!identity) return;
+    if (phase !== "listening") {
+      setMessage("Screenshots can be queued once the session is listening.");
+      return;
+    }
+    if (queueInFlightRef.current) return;
+    queueInFlightRef.current = true;
+    const sequence = screenCaptureSequenceRef.current;
+    invoke("capture_interview_screen_with_geometry")
+      .then((raw) => parseCapturedFrame(asArrayBuffer(raw)))
+      .then(async (frame) => ({
+        mimeType: "image/jpeg" as const,
+        data: await toBase64(frame.bytes),
+        widthPx: frame.geometry.jpegWidthPx,
+        heightPx: frame.geometry.jpegHeightPx,
+        capturedAtMs: Date.now(),
+      }))
+      .then((frame) => {
+        if (
+          sequence !== screenCaptureSequenceRef.current
+          || identityRef.current?.sessionId !== identity.sessionId
+          || identityRef.current.epoch !== identity.epoch
+        ) return;
+        const queue = [...queuedScreensRef.current, frame].slice(-QUEUED_SCREENS_MAX);
+        queuedScreensRef.current = queue;
+        setQueuedCount(queue.length);
+        setMessage(queue.length === 1
+          ? "Screenshot queued. It goes with your next send."
+          : `${queue.length} screenshots queued. They go with your next send.`);
+        trackEvent("interview_companion_screen_sight", { outcome: "queued", queued: queue.length });
+      })
+      .catch((error) => {
+        logError("Interview Companion: queue screenshot", error);
+        setMessage("Aura could not capture this screen. Keep it visible and try again.");
+      })
+      .finally(() => {
+        queueInFlightRef.current = false;
+      });
+  }, [phase]);
+
+  const clearQueue = useCallback(() => {
+    queuedScreensRef.current = [];
+    setQueuedCount(0);
+  }, []);
+
+  /** Ctrl+Alt+Enter. Says why when there is nothing to answer, rather than
+   *  failing silently the way a disabled button can afford to. */
+  const answerNowFromKey = useCallback(() => {
+    if (phase !== "listening") {
+      setMessage("Answer now needs the session to be listening.");
+      return;
+    }
+    if (!questionPending && !canSuggest) {
+      setMessage("Nothing has been asked yet. Type the question, or send your screen.");
+      return;
+    }
+    sendNow();
+  }, [canSuggest, phase, questionPending, sendNow]);
+
+  // The card's own keys (hotkeys.rs CARD_KEYS) other than Send, which keeps
+  // INTERVIEW_SCREEN_SIGHT_REQUESTED. Hide is OverlayRoot's: it owns that state.
+  const scrollAnswerRef = useRef<((dy: number) => void) | null>(null);
+  const cardKeyActionsRef = useRef({ queueScreen, answerNowFromKey });
+  cardKeyActionsRef.current = { queueScreen, answerNowFromKey };
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen<{ action: string; dy: number }>(INTERVIEW_CARD_KEY, (event) => {
+      const { action, dy } = event.payload;
+      if (action === "queue") cardKeyActionsRef.current.queueScreen();
+      else if (action === "answerNow") cardKeyActionsRef.current.answerNowFromKey();
+      else if (action === "scroll") scrollAnswerRef.current?.(dy);
+    })
+      .then((stop) => {
+        if (disposed) stop();
+        else unlisten = stop;
+      })
+      .catch((error) => logError("Interview Companion: card keys", error));
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, []);
+
   return {
     phase,
     callName,
@@ -2643,6 +2759,9 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     shorter: () => runManualAction("shorter"),
     screenSight,
     composerSendRef,
+    scrollAnswerRef,
+    queuedCount,
+    clearQueue,
     askTyped,
     questionSource,
     answerMode,

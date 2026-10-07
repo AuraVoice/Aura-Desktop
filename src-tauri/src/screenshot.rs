@@ -158,12 +158,46 @@ async fn captured_under(
     op: crate::security::Operation,
     ticket: &crate::security::Ticket,
 ) -> Result<CapturedFrame, String> {
-    let (cursor_x, cursor_y) = cursor_point(app)?;
-    let frame = tauri::async_runtime::spawn_blocking(move || capture_frame(cursor_x, cursor_y))
+    let point = cursor_point(app)?;
+    captured_at(app, op, ticket, point).await
+}
+
+/// `captured_under` for an explicit point: the monitor containing it is the
+/// one captured.
+async fn captured_at(
+    app: &AppHandle,
+    op: crate::security::Operation,
+    ticket: &crate::security::Ticket,
+    (x, y): (i32, i32),
+) -> Result<CapturedFrame, String> {
+    let frame = tauri::async_runtime::spawn_blocking(move || capture_frame(x, y))
         .await
         .map_err(|e| e.to_string())??;
     crate::security::recheck(app, op, ticket)?;
     Ok(frame)
+}
+
+/// The centre of the overlay window, in the same space `cursor_point` uses on
+/// each platform (physical px on Windows, CoreGraphics points on macOS). The
+/// Interview Companion captures the display its card sits on: the card is
+/// placed beside the interview, and the cursor is often on another monitor
+/// entirely, which sent the model a screen without the problem on it.
+fn card_point(app: &AppHandle) -> Result<(i32, i32), String> {
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| "main window not found".to_string())?;
+    let position = window.outer_position().map_err(|e| e.to_string())?;
+    let size = window.outer_size().map_err(|e| e.to_string())?;
+    let (x, y) = (
+        position.x as f64 + size.width as f64 / 2.0,
+        position.y as f64 + size.height as f64 / 2.0,
+    );
+    if cfg!(target_os = "macos") {
+        let scale = window.scale_factor().map_err(|e| e.to_string())?;
+        Ok(((x / scale) as i32, (y / scale) as i32))
+    } else {
+        Ok((x as i32, y as i32))
+    }
 }
 
 /// Captures the monitor the main window (or, once pointing lands, the cursor)
@@ -217,10 +251,14 @@ pub async fn capture_interview_screen_with_geometry(
     if !crate::interview::is_active(&app) {
         return Err("Interview Companion is not active.".to_string());
     }
-    let frame = captured_under(
+    // The card's display, not the cursor's; the cursor only if the window
+    // cannot be read.
+    let point = card_point(&app).or_else(|_| cursor_point(&app))?;
+    let frame = captured_at(
         &app,
         crate::security::Operation::CaptureInterviewScreen,
         &ticket,
+        point,
     )
     .await?;
     if !crate::interview::is_active(&app) {

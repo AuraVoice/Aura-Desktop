@@ -9,6 +9,7 @@ import {
   CHAT_REQUESTED,
   CHAT_TOGGLE_REQUESTED,
   END_VOICE_SESSION,
+  INTERVIEW_CARD_KEY,
   OPEN_INTERVIEW_HACKER_REQUESTED,
   OPEN_NOTIFICATIONS_REQUESTED,
   OVERLAY_CHANGED,
@@ -52,6 +53,8 @@ import {
 import {
   InterviewHackerCard,
   InterviewHackerControlBar,
+  InterviewHotkeyMenu,
+  INTERVIEW_HOTKEY_MENU_SLOT_HEIGHT,
   INTERVIEW_HACKER_SLOT_HEIGHT,
   INTERVIEW_HACKER_PITCH_SLOT_HEIGHT,
   INTERVIEW_HACKER_PREFLIGHT_SLOT_HEIGHT,
@@ -140,9 +143,21 @@ export function OverlayRoot() {
   const [interviewHackerHidden, setInterviewHackerHidden] = useState(false);
   const interviewHackerPhase = interviewHacker.phase;
   const dismissInterviewHacker = interviewHacker.dismiss;
+  const [interviewKeysMenuOpen, setInterviewKeysMenuOpen] = useState(false);
+  const closeInterviewKeysMenu = useCallback(() => setInterviewKeysMenuOpen(false), []);
   useEffect(() => {
-    if (!showInterviewHacker) setInterviewHackerHidden(false);
+    if (!showInterviewHacker) {
+      setInterviewHackerHidden(false);
+      setInterviewKeysMenuOpen(false);
+    }
   }, [showInterviewHacker]);
+  // Ctrl+Alt+B: the same toggle as the control bar's Hide button. The other
+  // card keys are the hook's; this state lives here.
+  useTauriEvent<{ action: string }>(INTERVIEW_CARD_KEY, ({ action }) => {
+    if (action !== "toggleHide") return;
+    setInterviewHackerHidden((hidden) => !hidden);
+    setInterviewKeysMenuOpen(false);
+  }, "OverlayRoot: interview card key");
   useScreenSight(voice.room, voice.status);
   // Ctrl+Alt+M. Mounted here rather than inside useVoiceBar because the mode
   // outlives any one call: it persists, and it rides the next token.
@@ -622,8 +637,11 @@ export function OverlayRoot() {
       : interviewHacker.phase === "preflight"
         ? INTERVIEW_HACKER_PREFLIGHT_SLOT_HEIGHT
         : INTERVIEW_HACKER_SLOT_HEIGHT;
+  // The hotkey menu hangs below the control bar, so while it is open the slot
+  // is at least its height, collapsed card included.
+  const interviewKeysMenuHeight = interviewKeysMenuOpen ? INTERVIEW_HOTKEY_MENU_SLOT_HEIGHT : 0;
   const slotHeight = showInterviewHacker
-    ? interviewHackerHidden ? 0 : interviewHackerHeight
+    ? interviewHackerHidden ? interviewKeysMenuHeight : Math.max(interviewHackerHeight, interviewKeysMenuHeight)
     : showInterviewContext
       ? interviewSlotHeight
       : showApprovalCard
@@ -1153,11 +1171,14 @@ export function OverlayRoot() {
       )}
       {!lowerCardsHidden &&showCallbackCard && <CallbackCard card={callbackCard} />}
       {showInterviewHacker ? (
+        <>
         <InterviewHackerControlBar
           expanded={!interviewHackerHidden}
           onToggle={() => setInterviewHackerHidden((hidden) => !hidden)}
           answerMode={interviewHacker.answerMode}
           onAnswerModeChange={interviewHacker.setAnswerMode}
+          keysMenuOpen={interviewKeysMenuOpen}
+          onKeysMenuToggle={() => setInterviewKeysMenuOpen((open) => !open)}
           onStop={
             isInterviewCaptureActive(interviewHacker.phase) || interviewHacker.phase === "error"
               ? interviewHacker.stop
@@ -1166,6 +1187,8 @@ export function OverlayRoot() {
                 : interviewHacker.dismiss
           }
         />
+        {interviewKeysMenuOpen && <InterviewHotkeyMenu onClose={closeInterviewKeysMenu} />}
+        </>
       ) : (
         <NotchBar
           key={presentation}
