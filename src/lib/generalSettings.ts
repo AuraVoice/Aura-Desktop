@@ -44,6 +44,10 @@ export interface GeneralSettings {
   /** Buddy's face in chat. Off shows the plain thinking dots instead. */
   showCompanionAvatar: boolean;
   companionAvatar: CompanionAvatarId;
+  /** Bolt stands in a corner of the screen and the dictation HUD renders
+   * through him. Read by Rust (dictation/hud.rs) at every placement, so the
+   * key name is shared. Means nothing while showCompanionAvatar is off. */
+  companionOnDesktop: boolean;
 }
 
 // Launch-at-login is deliberately absent: autostart.rs owns it in a different
@@ -92,6 +96,10 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   improvementConsentVersion: 0,
   showCompanionAvatar: true,
   companionAvatar: "bolt",
+  // Off until asked for. A robot appearing in the corner after an update is
+  // the kind of thing a user has to choose, and mergeSettings folds the new
+  // key into an existing store without a migration.
+  companionOnDesktop: false,
 };
 
 function mergeSettings(saved: GeneralSettings | null | undefined): GeneralSettings {

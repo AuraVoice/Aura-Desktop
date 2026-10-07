@@ -1,12 +1,22 @@
-import { useEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+  type ReactNode,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useTauriEvent } from "../lib/useTauriEvent";
-import { DICTATION_UPDATE } from "../lib/ipcEvents";
+import { DICTATION_LEVEL, DICTATION_UPDATE } from "../lib/ipcEvents";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { GlassSurface } from "../overlay/GlassSurface";
+import { BuddyAvatar, type BuddyMove } from "../components/BuddyAvatar";
 import { dictationConsent } from "../lib/copy";
+import { subscribeGeneralSettings } from "../lib/generalSettings";
 import { logError, logInfo } from "../lib/log";
 import type { NotchEdge } from "../overlay/notchEdge";
+import { isRightCorner, type CompanionCorner } from "./companionCorner";
 import { useDictationLevels } from "./useDictationLevels";
 import { useDictationSounds } from "./useDictationSounds";
 // This window renders DictationHud, not App, so it loads none of App's CSS.
@@ -38,6 +48,11 @@ interface DictationUpdate {
   /// The edge Rust docked this window to. Geometry is Rust's; this only stamps
   /// the matching dock class.
   edge: NotchEdge;
+  /// True when Rust sized this window for Bolt in a corner rather than the
+  /// pill at the edge. Stamped from the same read that sized the window, so
+  /// the tree below never lays out for a mode Rust did not size for.
+  companion: boolean;
+  corner: CompanionCorner;
 }
 
 interface DictationLauncherProps {
@@ -50,7 +65,193 @@ const IDLE: DictationUpdate = {
   text: "",
   chordLabel: "",
   edge: "top",
+  companion: false,
+  corner: "bottomLeft",
 };
+
+const COMPANION_SIZE = 64;
+
+/// Bolt at rest and through a hold: idle in his corner, listening to the live
+/// level, thinking while the words are typed, one cheer when they land. The
+/// same component instance carries all four phases so his springs never reset
+/// mid-hold. Hover is only meaningful at rest (every live phase is
+/// click-through), and reports to Rust so the window widens for the hint.
+function CompanionRest({
+  phase,
+  hotkey,
+  corner,
+  levelRef,
+  cheerCount,
+}: {
+  phase: DictationPhase;
+  hotkey: string;
+  corner: CompanionCorner;
+  levelRef: { current: number };
+  cheerCount: number;
+}) {
+  const [hovered, setHovered] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  // One wave when he first appears. BuddyAvatar plays a one-shot on a CHANGE
+  // of the count, so it has to go 0 -> 1 after mount rather than start at 1.
+  const [waveCount, setWaveCount] = useState(0);
+  useEffect(() => {
+    setWaveCount(1);
+  }, []);
+  // Rust closes the menu on any phase change (publish clears its flag); keep
+  // the local state in step so it does not reopen stale on the way back.
+  useEffect(() => {
+    if (phase !== "idle") setMenuOpen(false);
+  }, [phase]);
+
+  const updateHover = (next: boolean) => {
+    if (phase !== "idle") return;
+    setHovered(next);
+    if (menuOpen) {
+      // The menu lives in this window, so the pointer leaving the window is
+      // the "click elsewhere" that closes it.
+      if (!next) toggleMenu(false);
+      return;
+    }
+    void invoke("dictation_set_hud_hovered", { hovered: next }).catch(() => {
+      setHovered(!next);
+    });
+  };
+
+  const toggleMenu = (open: boolean) => {
+    setMenuOpen(open);
+    void invoke("dictation_companion_menu", { open }).catch((error) =>
+      logError("DictationHud: companion menu", error),
+    );
+  };
+
+  // Press and move drags him; press and release clicks him. The OS owns the
+  // drag once startDragging runs and usually swallows the pointer-up, so Rust
+  // watches the window's own move events and snaps him to the nearest corner
+  // when they stop. Starting the drag only after real movement is what leaves
+  // a plain click free to open the menu.
+  const pressRef = useRef<{ x: number; y: number } | null>(null);
+  const DRAG_THRESHOLD = 4;
+  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (phase !== "idle" || event.button !== 0 || menuOpen) return;
+    if ((event.target as HTMLElement).closest(".dictation-companion-menu")) return;
+    pressRef.current = { x: event.clientX, y: event.clientY };
+  };
+  const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const press = pressRef.current;
+    if (!press) return;
+    if (
+      Math.abs(event.clientX - press.x) < DRAG_THRESHOLD &&
+      Math.abs(event.clientY - press.y) < DRAG_THRESHOLD
+    ) {
+      return;
+    }
+    pressRef.current = null;
+    void invoke("dictation_companion_drag_begin")
+      .then(() => getCurrentWindow().startDragging())
+      .catch((error) => logError("DictationHud: drag Bolt", error));
+  };
+  const onPointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (pressRef.current) {
+      pressRef.current = null;
+      if ((event.target as HTMLElement).closest(".dictation-companion-menu")) return;
+      toggleMenu(!menuOpen);
+      return;
+    }
+    if (phase !== "idle") return;
+    void invoke("dictation_companion_drag_end").catch((error) =>
+      logError("DictationHud: drop Bolt", error),
+    );
+  };
+
+  const snooze = (kind: "hour" | "tomorrow") => {
+    const until = new Date();
+    if (kind === "hour") {
+      until.setTime(until.getTime() + 60 * 60 * 1000);
+    } else {
+      // Tomorrow morning in the user's own clock, which only this side knows.
+      until.setHours(8, 0, 0, 0);
+      if (until.getTime() <= Date.now()) until.setDate(until.getDate() + 1);
+    }
+    setMenuOpen(false);
+    void invoke("dictation_companion_snooze", { untilMs: until.getTime() }).catch((error) =>
+      logError("DictationHud: snooze Bolt", error),
+    );
+  };
+
+  // "rest", not "idle": idle hops and glances every few seconds, which is
+  // charming in a chat row and a distraction in the corner of someone's
+  // screen all day. Rest only breathes and blinks; the eyes stay put.
+  const move: BuddyMove =
+    phase === "listening" ? "listening" : phase === "transcribing" ? "thinking" : "rest";
+  const label =
+    phase === "listening"
+      ? "Dictation listening"
+      : phase === "transcribing"
+        ? "Dictation processing"
+        : hotkey
+          ? `Dictate with ${hotkey}`
+          : "Dictate";
+  return (
+    <div
+      className={`dictation-companion${isRightCorner(corner) ? " is-right" : ""}`}
+      onPointerEnter={() => updateHover(true)}
+      onPointerLeave={() => updateHover(false)}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+      role="status"
+      aria-label={label}
+    >
+      <BuddyAvatar
+        move={move}
+        size={COMPANION_SIZE}
+        tone="light"
+        levelRef={levelRef}
+        waveCount={waveCount}
+        cheerCount={cheerCount}
+        className="dictation-companion__bolt"
+      />
+      {menuOpen ? (
+        <div className="dictation-companion-menu" role="menu" aria-label="Bolt">
+          <button type="button" role="menuitem" onClick={() => snooze("hour")}>
+            Hide for an hour
+          </button>
+          <button type="button" role="menuitem" onClick={() => snooze("tomorrow")}>
+            Hide until tomorrow
+          </button>
+          <button type="button" role="menuitem" onClick={() => toggleMenu(false)}>
+            Never mind
+          </button>
+        </div>
+      ) : (
+        hovered &&
+        phase === "idle" && (
+          <span className="dictation-companion__hint">
+            Hold {hotkey ? <strong>{hotkey}</strong> : "the chord"} to dictate
+          </span>
+        )
+      )}
+    </div>
+  );
+}
+
+/// A card phase with the companion on: the card keeps its own size and sits
+/// on top, and Bolt stands under it with both arms up, holding it. He is
+/// aligned to the corner's side so the card reads as held from the edge.
+function CompanionCarry({
+  corner,
+  children,
+}: {
+  corner: CompanionCorner;
+  children: ReactNode;
+}) {
+  return (
+    <div className={`dictation-carry${isRightCorner(corner) ? " is-right" : ""}`}>
+      <div className="dictation-carry__card">{children}</div>
+      <BuddyAvatar move="hold" size={COMPANION_SIZE} tone="light" className="dictation-carry__bolt" />
+    </div>
+  );
+}
 
 function DictationLauncher({ hotkey, edge }: DictationLauncherProps) {
   const [hovered, setHovered] = useState(false);
@@ -233,6 +434,53 @@ export function DictationHud() {
 
   useTauriEvent<DictationUpdate>(DICTATION_UPDATE, setUpdate);
 
+  // Bolt's ears and pupils follow the same level the waveform draws from. A
+  // ref, never state: it arrives twenty times a second and nothing here needs
+  // a re-render for it.
+  const levelRef = useRef(0);
+  useTauriEvent<number>(DICTATION_LEVEL, (level) => {
+    levelRef.current = level;
+  });
+
+  // One cheer per insert. Counted rather than derived from the phase so a
+  // second insert right after the first still plays.
+  const [cheerCount, setCheerCount] = useState(0);
+  useEffect(() => {
+    if (update.phase === "inserted") setCheerCount((count) => count + 1);
+  }, [update.phase]);
+
+  // The companion switches live in the dashboard's settings store, which Rust
+  // reads at every placement. Rust is not told when they change, so this
+  // window asks for a re-placement on every settings write; the stamped
+  // `companion` in the next update is what flips the tree below.
+  useEffect(() => {
+    let active = true;
+    let unlisten: (() => void) | undefined;
+    subscribeGeneralSettings(() => {
+      void invoke("dictation_refresh_hud").catch((error) =>
+        logError("DictationHud: refresh after settings change", error),
+      );
+    })
+      .then((fn) => {
+        if (active) unlisten = fn;
+        else fn();
+      })
+      .catch((error) => logError("DictationHud: subscribe settings", error));
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, []);
+
+  // Nothing in this window is a web page: a right click on Bolt's canvas was
+  // offering WebView2's "Save image / Copy image / Inspect", which is both
+  // baffling and a way to pull focus into a window that must never take it.
+  useEffect(() => {
+    const block = (event: Event) => event.preventDefault();
+    document.addEventListener("contextmenu", block);
+    return () => document.removeEventListener("contextmenu", block);
+  }, []);
+
   useEffect(() => {
     let live = true;
     // Pull the current state once so startup does not depend on winning a race
@@ -254,12 +502,36 @@ export function DictationHud() {
     };
   }, []);
 
+  // Companion mode: Rust has sized this window for Bolt, so the pill and the
+  // waveform never render here. The card phases keep their cards and he
+  // holds them up; every other phase is him alone.
+  const { companion, corner } = update;
+  if (
+    companion &&
+    (update.phase === "idle" ||
+      update.phase === "listening" ||
+      update.phase === "transcribing" ||
+      update.phase === "inserted")
+  ) {
+    return (
+      <CompanionRest
+        phase={update.phase}
+        hotkey={update.chordLabel}
+        corner={corner}
+        levelRef={levelRef}
+        cheerCount={cheerCount}
+      />
+    );
+  }
+  const carry = (card: ReactNode) =>
+    companion ? <CompanionCarry corner={corner}>{card}</CompanionCarry> : card;
+
   if (update.phase === "idle") {
     return <DictationLauncher hotkey={update.chordLabel} edge={update.edge} />;
   }
 
   if (update.phase === "consent") {
-    return <DictationConsent />;
+    return carry(<DictationConsent />);
   }
 
   // Held text: the transcript is shown because the user has to know both that
@@ -267,33 +539,33 @@ export function DictationHud() {
   // frame rather than only after the wait expires. Rust has already resized
   // the window to the card for this phase.
   if (update.phase === "pending") {
-    return <DictationPending text={update.text} message={update.message} />;
+    return carry(<DictationPending text={update.text} message={update.message} />);
   }
 
   if (update.phase === "recovery") {
-    return <DictationRecovery text={update.text} message={update.message} />;
+    return carry(<DictationRecovery text={update.text} message={update.message} />);
   }
 
   // A voice command was carried out instead of typing: one line naming what
   // happened, in the same caption card as an error but never styled as one.
   if (update.phase === "action") {
-    return (
+    return carry(
       <GlassSurface className="dictation-message is-action" draggable={false}>
         <span className="dictation-message__dot" aria-hidden="true" />
         <p className="dictation-message__text">{update.message ?? "Done."}</p>
-      </GlassSurface>
+      </GlassSurface>,
     );
   }
 
   // A failure is the only other thing worth words here.
   if (update.phase === "error") {
-    return (
+    return carry(
       <GlassSurface className="dictation-message" draggable={false}>
         <span className="dictation-message__dot" aria-hidden="true" />
         <p className="dictation-message__text">
           {update.message ?? "Nothing was typed."}
         </p>
-      </GlassSurface>
+      </GlassSurface>,
     );
   }
 

@@ -4,7 +4,15 @@
 // the page's globals folded into one BoltRig so two Bolts never share springs.
 // When this file and the reference disagree, the reference wins.
 
-export type BoltMove = "idle" | "wave" | "listening" | "thinking" | "speaking" | "cheer";
+export type BoltMove =
+  | "idle"
+  | "rest"
+  | "wave"
+  | "listening"
+  | "thinking"
+  | "speaking"
+  | "cheer"
+  | "hold";
 
 /** Shell colour. "light" is the reference's white metal, for dark surfaces;
  * "dark" is a graphite shell that reads against the light theme. */
@@ -226,6 +234,18 @@ export class BoltRig {
       o.upper = shut ? 0.62 : 0; o.lower = shut ? 0.42 : 0; o.pupil = shut ? 0.5 : 0.85;
       o.smile = 1.1; o.mouth = shut ? 0 : 0.6; o.brow = 1.2; o.glow = 0.9; o.bulb = 1;
       o.tilt = 0.1 * Math.sin(t * 9) * motion;
+    } else if (m === "hold") {
+      // Both arms straight up, holding a card over his head. Sustained, so no
+      // hop: the card must not bob while someone reads it.
+      o.armL = 2.95; o.armR = 2.95;
+      o.tilt = 0.03 * Math.sin(t * 1.4) * motion; o.lean = 1.2 * Math.sin(t * 1.4) * motion;
+      o.upper = 0.02; o.brow = 0.6; o.smile = 0.8; o.glow = 0.4; o.bulb = 0.5;
+    } else if (m === "rest") {
+      // Idle for a corner of the desktop: he is in the user's peripheral
+      // vision all day, so nothing hops, sways or wanders. Breathing is
+      // halved, the arms hang still, and only the eyes follow the pointer.
+      o.squash = 0.03 * Math.sin((t * Math.PI * 2) / 2.4) * motion;
+      o.armL = 0.25; o.armR = 0.25;
     }
     return o;
   }
@@ -249,6 +269,12 @@ export class BoltRig {
         }
         gaze.next = now + 0.45 + Math.random() * 1.2;
       }
+    } else if (m === "rest") {
+      // Eyes straight ahead, always. Even following the pointer reads as
+      // eye-rolling from the corner of the screen, and a glance in the corner
+      // of the eye is what pulls a reader off their page.
+      gaze.tx = 0;
+      gaze.ty = 0;
     } else if (m === "wave") {
       gaze.tx = 0;
       gaze.ty = 0;
@@ -431,8 +457,9 @@ export class BoltRig {
   private drawHead(ctx: CanvasRenderingContext2D, withDots: boolean) {
     const now = this.now;
     const motion = this.motion;
-    // Antenna
-    const wob = Math.sin(now * 5) * 1.5 * motion;
+    // Antenna. Still at rest: a constant twitch is the one thing that never
+    // stops moving, and a corner of the desktop is no place for it.
+    const wob = this.move === "rest" ? 0 : Math.sin(now * 5) * 1.5 * motion;
     ctx.beginPath();
     ctx.moveTo(60, 20);
     ctx.lineTo(60 + wob, 9);

@@ -2299,6 +2299,60 @@ pub fn dictation_set_hud_hovered(app: tauri::AppHandle, hovered: bool) {
     hud::set_hovered(&app, hovered);
 }
 
+/// Which corner Bolt stands in while "Sit on the desktop" is on. One mutex
+/// read behind a store load the first time, so it stays non-async.
+#[tauri::command]
+pub fn dictation_companion_corner(app: tauri::AppHandle) -> &'static str {
+    hud::companion_corner(&app).as_stored()
+}
+
+/// Moves Bolt to another corner and remembers it. Rejects an unknown name
+/// rather than silently defaulting, so a typo in a caller never looks like a
+/// successful move.
+#[tauri::command]
+pub async fn dictation_set_companion_corner(
+    app: tauri::AppHandle,
+    corner: String,
+) -> Result<(), String> {
+    let corner = hud::CompanionCorner::from_stored(&corner)
+        .ok_or_else(|| format!("unknown companion corner: {corner}"))?;
+    hud::set_companion_corner(&app, corner);
+    Ok(())
+}
+
+/// The pointer went down on Bolt; React starts the OS window drag right after.
+#[tauri::command]
+pub fn dictation_companion_drag_begin() {
+    hud::begin_drag();
+}
+
+/// The pointer came back up on Bolt (a click, or a drag the OS let through).
+#[tauri::command]
+pub fn dictation_companion_drag_end(app: tauri::AppHandle) {
+    hud::end_drag(&app);
+}
+
+/// Opens or closes the click menu beside Bolt at rest.
+#[tauri::command]
+pub fn dictation_companion_menu(app: tauri::AppHandle, open: bool) {
+    hud::set_menu_open(&app, open);
+}
+
+/// Puts Bolt away until the given unix time in milliseconds. The webview
+/// computes it so "until tomorrow" lands in the user's local morning.
+#[tauri::command]
+pub async fn dictation_companion_snooze(app: tauri::AppHandle, until_ms: u64) {
+    hud::snooze_until(&app, until_ms);
+}
+
+/// Re-sizes and re-places the HUD from the settings store. The dictation
+/// window calls this whenever general settings change, so turning the
+/// companion on or off takes effect without a restart.
+#[tauri::command]
+pub async fn dictation_refresh_hud(app: tauri::AppHandle) {
+    hud::refresh_placement(&app);
+}
+
 /// The HUD copied held text to the clipboard, so the wait for a text box is
 /// over. Without this the paste would land in a field the next probe judges
 /// typable and the words would be typed a second time behind it.

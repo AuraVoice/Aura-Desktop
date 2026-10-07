@@ -25,6 +25,7 @@ use std::sync::Mutex;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager};
+use tauri_plugin_store::StoreExt;
 
 use crate::overlay::{self, NotchEdge};
 
@@ -63,6 +64,22 @@ const RECOVERY_HEIGHT: f64 = 112.0;
 const CONSENT_WIDTH: f64 = 396.0;
 const CONSENT_HEIGHT: f64 = 176.0;
 
+/// Companion mode: Bolt stands in a corner of the work area instead of the
+/// pill docking to the notch edge. The resting window fits his 64 px canvas
+/// plus a hop and his shadow; the hovered one adds the chord hint beside him.
+/// Must agree with `.dictation-companion` in DictationHud.css.
+const COMPANION_REST_WIDTH: f64 = 84.0;
+const COMPANION_REST_HEIGHT: f64 = 92.0;
+const COMPANION_HOVER_WIDTH: f64 = 220.0;
+/// The click menu beside him. Must agree with `.dictation-companion-menu`.
+const COMPANION_MENU_WIDTH: f64 = 256.0;
+const COMPANION_MENU_HEIGHT: f64 = 124.0;
+/// Extra height a card phase needs so Bolt can stand under the card holding
+/// it up: his 64 px minus the 8 px where his hands sit under the card's edge.
+const COMPANION_CARRY: f64 = 56.0;
+/// Gap between Bolt and the two screen edges that meet at his corner.
+const COMPANION_INSET: f64 = 12.0;
+
 /// The window the current hold is typing into, remembered so a later phase
 /// change can re-place the HUD on the right display without the worker having
 /// to thread the target through every publish.
@@ -100,6 +117,274 @@ static TARGET_CENTER: Mutex<Option<CachedCenter>> = Mutex::new(None);
 /// visible" a guarantee rather than two toggles that merely happen to be
 /// called together.
 static SUPPRESSED_BY_OVERLAY: AtomicBool = AtomicBool::new(false);
+
+/// Which corner of the work area Bolt stands in while companion mode is on.
+/// Geometry is Rust's, so this is persisted under its own key in the overlay
+/// store the way `notch_edge` is, not inside the dashboard's settings object.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum CompanionCorner {
+    #[default]
+    BottomLeft,
+    BottomRight,
+    TopLeft,
+    TopRight,
+}
+
+impl CompanionCorner {
+    pub fn from_stored(value: &str) -> Option<Self> {
+        match value {
+            "bottomLeft" => Some(Self::BottomLeft),
+            "bottomRight" => Some(Self::BottomRight),
+            "topLeft" => Some(Self::TopLeft),
+            "topRight" => Some(Self::TopRight),
+            _ => None,
+        }
+    }
+
+    pub fn as_stored(self) -> &'static str {
+        match self {
+            Self::BottomLeft => "bottomLeft",
+            Self::BottomRight => "bottomRight",
+            Self::TopLeft => "topLeft",
+            Self::TopRight => "topRight",
+        }
+    }
+
+    fn is_right(self) -> bool {
+        matches!(self, Self::BottomRight | Self::TopRight)
+    }
+
+    fn is_top(self) -> bool {
+        matches!(self, Self::TopLeft | Self::TopRight)
+    }
+}
+
+const OVERLAY_STORE: &str = "overlay-window.json";
+const COMPANION_CORNER_KEY: &str = "companion_corner";
+/// The dashboard's settings object, written by src/lib/generalSettings.ts.
+const GENERAL_SETTINGS_KEY: &str = "dashboard_general_settings";
+
+/// `None` until the first read, which loads the persisted corner once; the
+/// default is bottom left, clear of the toast stacks on both platforms.
+static COMPANION_CORNER: Mutex<Option<CompanionCorner>> = Mutex::new(None);
+
+pub fn companion_corner(app: &AppHandle) -> CompanionCorner {
+    let mut slot = COMPANION_CORNER.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(corner) = *slot {
+        return corner;
+    }
+    let corner = app
+        .store(OVERLAY_STORE)
+        .ok()
+        .and_then(|store| store.get(COMPANION_CORNER_KEY))
+        .and_then(|value| value.as_str().and_then(CompanionCorner::from_stored))
+        .unwrap_or_default();
+    *slot = Some(corner);
+    corner
+}
+
+/// Persists the corner and re-places the HUD. A store that cannot be opened
+/// still moves him for this session; the failure is logged, never fatal.
+pub fn set_companion_corner(app: &AppHandle, corner: CompanionCorner) {
+    *COMPANION_CORNER.lock().unwrap_or_else(|e| e.into_inner()) = Some(corner);
+    match app.store(OVERLAY_STORE) {
+        Ok(store) => store.set(COMPANION_CORNER_KEY, serde_json::json!(corner.as_stored())),
+        Err(e) => log::error!("dictation.hud: failed to persist companion corner: {e}"),
+    }
+    refresh_placement(app);
+}
+
+/// Whether Bolt stands on the desktop. Read from the dashboard's settings
+/// store at every placement, the way dashboard.rs reads `showInTaskbar`, so
+/// the switch takes effect without a restart. Both switches must be on, and
+/// any read failure means off: a missing robot is the harmless outcome.
+pub fn companion_mode(app: &AppHandle) -> bool {
+    let Ok(store) = app.store(OVERLAY_STORE) else {
+        return false;
+    };
+    store
+        .get(GENERAL_SETTINGS_KEY)
+        .map(|settings| {
+            let flag = |key: &str| {
+                settings
+                    .get(key)
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(false)
+            };
+            flag("showCompanionAvatar") && flag("companionOnDesktop")
+        })
+        .unwrap_or(false)
+        && !snoozed(app)
+}
+
+/// True while the click menu is open beside Bolt. The one time the resting
+/// window may activate: its buttons need WebView2 to own input (see
+/// `needs_activation`), and the user asked for it by clicking him.
+static MENU_OPEN: AtomicBool = AtomicBool::new(false);
+const COMPANION_SNOOZE_KEY: &str = "companion_snoozed_until";
+/// Unix milliseconds until which the companion stays off the desktop. `None`
+/// until first read, which loads the persisted value so a snooze survives a
+/// relaunch. While it is in the future `companion_mode` is false and the HUD
+/// falls back to the plain pill: dictation keeps working, only he is away.
+static SNOOZED_UNTIL: Mutex<Option<u64>> = Mutex::new(None);
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn snoozed(app: &AppHandle) -> bool {
+    let mut slot = SNOOZED_UNTIL.lock().unwrap_or_else(|e| e.into_inner());
+    let until = match *slot {
+        Some(until) => until,
+        None => {
+            let stored = app
+                .store(OVERLAY_STORE)
+                .ok()
+                .and_then(|store| store.get(COMPANION_SNOOZE_KEY))
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0);
+            *slot = Some(stored);
+            stored
+        }
+    };
+    until > now_ms()
+}
+
+/// Puts Bolt away until `until_ms` (unix milliseconds, computed by the
+/// webview so "tomorrow morning" is in the user's local time) and brings him
+/// back on his own when it passes. The thread is the wake-up for THIS process;
+/// after a relaunch the persisted value is simply read until it has expired.
+pub fn snooze_until(app: &AppHandle, until_ms: u64) {
+    *SNOOZED_UNTIL.lock().unwrap_or_else(|e| e.into_inner()) = Some(until_ms);
+    match app.store(OVERLAY_STORE) {
+        Ok(store) => store.set(COMPANION_SNOOZE_KEY, serde_json::json!(until_ms)),
+        Err(e) => log::error!("dictation.hud: failed to persist companion snooze: {e}"),
+    }
+    MENU_OPEN.store(false, Ordering::Relaxed);
+    refresh_placement(app);
+    let wake = until_ms.saturating_sub(now_ms());
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(wake + 50));
+        // A later, longer snooze supersedes this one: only wake if nothing
+        // extended it.
+        let current = SNOOZED_UNTIL.lock().unwrap_or_else(|e| e.into_inner()).unwrap_or(0);
+        if current <= now_ms() {
+            refresh_placement(&handle);
+        }
+    });
+}
+
+/// Opens or closes the click menu. Only meaningful at rest; a phase change
+/// closes it implicitly because `publish` clears the flag.
+pub fn set_menu_open(app: &AppHandle, open: bool) {
+    if last_update().phase != HudPhase::Idle {
+        MENU_OPEN.store(false, Ordering::Relaxed);
+        return;
+    }
+    MENU_OPEN.store(open, Ordering::Relaxed);
+    if open {
+        IDLE_HOVERED.store(false, Ordering::Relaxed);
+    }
+    refresh_placement(app);
+}
+
+/// True from the pointer going down on Bolt until the drop is settled. While
+/// it is set, the window's own `Moved` events are the drag in progress; at any
+/// other time they are this module's own `set_position` calls and are ignored,
+/// which is what keeps a programmatic placement from ever counting as a drop.
+static DRAGGING: AtomicBool = AtomicBool::new(false);
+/// Whether the window actually moved during the current drag. A click that
+/// never moves ends with nothing to settle.
+static DRAG_MOVED: AtomicBool = AtomicBool::new(false);
+/// Bumped on every `Moved` event during a drag. The drop is settled once no
+/// further move has arrived for `DRAG_SETTLE`, because the OS move loop gives
+/// no end-of-drag event the webview can see.
+static DRAG_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+const DRAG_SETTLE: std::time::Duration = std::time::Duration::from_millis(160);
+/// Centre of the window, in physical pixels, where Bolt was last dropped. At
+/// rest he stays on that display; a hold still takes him to the target's.
+static REST_POINT: Mutex<Option<(f64, f64)>> = Mutex::new(None);
+
+/// The pointer went down on Bolt and React is about to start the OS drag.
+pub fn begin_drag() {
+    DRAGGING.store(true, Ordering::Relaxed);
+    DRAG_MOVED.store(false, Ordering::Relaxed);
+}
+
+/// The pointer came back up in the webview. After a real drag the OS move
+/// loop usually swallows that event, so the settle timer below is the normal
+/// path; when it does arrive it settles the drop at once rather than clearing
+/// the flag under the timer's feet. A click that never moved just ends.
+pub fn end_drag(app: &AppHandle) {
+    if !DRAGGING.load(Ordering::Relaxed) {
+        return;
+    }
+    if DRAG_MOVED.load(Ordering::Relaxed) {
+        companion_dropped(app);
+    } else {
+        DRAGGING.store(false, Ordering::Relaxed);
+    }
+}
+
+/// `WindowEvent::Moved` on the HUD window. Only a drag in progress is of
+/// interest; every other move is one of this module's own placements.
+fn drag_moved(app: &AppHandle) {
+    if !DRAGGING.load(Ordering::Relaxed) {
+        return;
+    }
+    DRAG_MOVED.store(true, Ordering::Relaxed);
+    let generation = DRAG_GENERATION.fetch_add(1, Ordering::Relaxed) + 1;
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(DRAG_SETTLE);
+        if DRAG_GENERATION.load(Ordering::Relaxed) != generation
+            || !DRAGGING.load(Ordering::Relaxed)
+        {
+            return;
+        }
+        let on_main = handle.clone();
+        let _ = handle.run_on_main_thread(move || companion_dropped(&on_main));
+    });
+}
+
+/// Settles a drop: whichever quadrant of the work area the window's centre
+/// landed in is the new corner, on the display it landed on. Persisting the
+/// corner re-places the window, which is the snap.
+fn companion_dropped(app: &AppHandle) {
+    DRAGGING.store(false, Ordering::Relaxed);
+    let Some(window) = app.get_webview_window(DICTATION_WINDOW) else {
+        return;
+    };
+    let (Ok(position), Ok(size)) = (window.outer_position(), window.outer_size()) else {
+        return;
+    };
+    let centre = (
+        position.x as f64 + size.width as f64 / 2.0,
+        position.y as f64 + size.height as f64 / 2.0,
+    );
+    let Ok(Some(monitor)) = window.monitor_from_point(centre.0, centre.1) else {
+        return;
+    };
+    let scale = monitor.scale_factor();
+    let full_size = monitor.size().to_logical::<f64>(scale);
+    let full_pos = monitor.position().to_logical::<f64>(scale);
+    let (work_pos, work_size) = overlay::work_area_within(full_pos, full_size, scale);
+    let logical = tauri::PhysicalPosition::new(centre.0, centre.1).to_logical::<f64>(scale);
+    let right = logical.x > work_pos.x + work_size.width / 2.0;
+    let top = logical.y < work_pos.y + work_size.height / 2.0;
+    let corner = match (top, right) {
+        (true, true) => CompanionCorner::TopRight,
+        (true, false) => CompanionCorner::TopLeft,
+        (false, true) => CompanionCorner::BottomRight,
+        (false, false) => CompanionCorner::BottomLeft,
+    };
+    *REST_POINT.lock().unwrap_or_else(|e| e.into_inner()) = Some(centre);
+    set_companion_corner(app, corner);
+}
 
 /// What the HUD is currently telling the user. Every caption is derived from
 /// one of these; the chord itself is always rendered from
@@ -197,6 +482,12 @@ pub struct HudUpdate {
     /// stays suppressed behind the visible overlay. Stamped by `publish` like
     /// `edge`.
     pub own_target: bool,
+    /// True when Bolt stands in a corner instead of the pill docking to the
+    /// edge. Stamped by `publish` like `edge`, from the same read that sized
+    /// the window, so React never lays out for a mode Rust did not size for.
+    pub companion: bool,
+    /// Which corner, so React mirrors Bolt to the matching side of a card.
+    pub corner: &'static str,
 }
 
 /// The last update published, so a webview that was created moments ago can ask
@@ -223,7 +514,18 @@ impl HudUpdate {
             chord_label: super::chord::DICTATION_CHORD.label(),
             edge: NotchEdge::default().as_stored(),
             own_target: false,
+            companion: false,
+            corner: CompanionCorner::default().as_stored(),
         }
+    }
+
+    /// Stamps the live edge, companion mode and corner. Every path that
+    /// records or emits an update goes through here so the three never
+    /// disagree with the geometry `place_window` is about to apply.
+    fn stamp_placement(&mut self, app: &AppHandle) {
+        self.edge = overlay::snapshot(app).notch_edge.as_stored();
+        self.companion = companion_mode(app);
+        self.corner = companion_corner(app).as_stored();
     }
 
     pub fn with_text(mut self, text: impl Into<String>) -> Self {
@@ -246,14 +548,25 @@ fn build_window(app: &AppHandle) -> Result<(), String> {
     // shared builder (the `AuraAccessoryPanel` class on macOS), keeps it from
     // taking focus, and the surface has no click action. Active dictation
     // switches back to click-through.
-    crate::window_util::build_accessory_window(
+    let fresh = app.get_webview_window(DICTATION_WINDOW).is_none();
+    let window = crate::window_util::build_accessory_window(
         app,
         DICTATION_WINDOW,
         "Aura Dictation",
         LogicalSize::new(RESTING_WIDTH, RESTING_HEIGHT),
         false,
-    )
-    .map(|_| ())
+    )?;
+    // Once per window: the builder returns the existing one on every later
+    // call, and a second handler would settle every drop twice.
+    if fresh {
+        let moved_handle = app.clone();
+        window.on_window_event(move |event| {
+            if let tauri::WindowEvent::Moved(_) = event {
+                drag_moved(&moved_handle);
+            }
+        });
+    }
+    Ok(())
 }
 
 /// Whether this phase needs the window to be activatable.
@@ -271,6 +584,7 @@ fn build_window(app: &AppHandle) -> Result<(), String> {
 /// `prepare_activation`.
 fn needs_activation(phase: HudPhase) -> bool {
     matches!(phase, HudPhase::Pending | HudPhase::Recovery | HudPhase::Consent)
+        || (phase == HudPhase::Idle && MENU_OPEN.load(Ordering::Relaxed))
 }
 
 /// The half of activation that has to run BEFORE `window.show()`. On macOS
@@ -475,7 +789,15 @@ fn resting_size(edge: NotchEdge) -> LogicalSize<f64> {
 /// The HUD's footprint for one phase. Idle is the compact persistent pill;
 /// active phases enlarge it while keeping the same edge-aligned silhouette.
 ///
-fn surface_size(edge: NotchEdge, phase: HudPhase, _has_caption: bool) -> LogicalSize<f64> {
+fn surface_size(
+    edge: NotchEdge,
+    phase: HudPhase,
+    _has_caption: bool,
+    companion: bool,
+) -> LogicalSize<f64> {
+    if companion {
+        return companion_size(phase);
+    }
     match phase {
         HudPhase::Idle if IDLE_HOVERED.load(Ordering::Relaxed) => match edge {
             NotchEdge::Top | NotchEdge::Bottom => {
@@ -493,6 +815,52 @@ fn surface_size(edge: NotchEdge, phase: HudPhase, _has_caption: bool) -> Logical
         HudPhase::Consent => LogicalSize::new(CONSENT_WIDTH, CONSENT_HEIGHT),
         _ => oriented_size(edge, ACTIVE_WIDTH, ACTIVE_HEIGHT),
     }
+}
+
+/// The companion footprint for one phase. Bolt alone for the resting and live
+/// phases (the hovered rest adds the chord hint beside him); every card phase
+/// keeps its card exactly as wide and tall as before and grows downward by the
+/// height Bolt needs to stand under it holding it up.
+fn companion_size(phase: HudPhase) -> LogicalSize<f64> {
+    match phase {
+        HudPhase::Idle if MENU_OPEN.load(Ordering::Relaxed) => {
+            LogicalSize::new(COMPANION_MENU_WIDTH, COMPANION_MENU_HEIGHT)
+        }
+        HudPhase::Idle if IDLE_HOVERED.load(Ordering::Relaxed) => {
+            LogicalSize::new(COMPANION_HOVER_WIDTH, COMPANION_REST_HEIGHT)
+        }
+        HudPhase::Idle | HudPhase::Listening | HudPhase::Transcribing | HudPhase::Inserted => {
+            LogicalSize::new(COMPANION_REST_WIDTH, COMPANION_REST_HEIGHT)
+        }
+        HudPhase::Action | HudPhase::Error => {
+            LogicalSize::new(MESSAGE_WIDTH, MESSAGE_HEIGHT + COMPANION_CARRY)
+        }
+        HudPhase::Recovery => LogicalSize::new(MESSAGE_WIDTH, RECOVERY_HEIGHT + COMPANION_CARRY),
+        HudPhase::Pending => LogicalSize::new(MESSAGE_WIDTH, PENDING_HEIGHT + COMPANION_CARRY),
+        HudPhase::Consent => LogicalSize::new(CONSENT_WIDTH, CONSENT_HEIGHT + COMPANION_CARRY),
+    }
+}
+
+/// Where the companion window sits: inset from the two work-area edges that
+/// meet at the chosen corner. The work area already excludes the taskbar and
+/// the Dock, so a bottom corner lands above them rather than behind them.
+fn companion_position(
+    corner: CompanionCorner,
+    work_pos: LogicalPosition<f64>,
+    work_size: LogicalSize<f64>,
+    size: LogicalSize<f64>,
+) -> LogicalPosition<f64> {
+    let x = if corner.is_right() {
+        work_pos.x + work_size.width - size.width - COMPANION_INSET
+    } else {
+        work_pos.x + COMPANION_INSET
+    };
+    let y = if corner.is_top() {
+        work_pos.y + COMPANION_INSET
+    } else {
+        work_pos.y + work_size.height - size.height - COMPANION_INSET
+    };
+    LogicalPosition::new(x, y)
 }
 
 /// True when the voice bar is currently docked to this same edge ON THIS SAME
@@ -534,8 +902,17 @@ fn voice_notch_shares_display(
 /// sibling app's overlay (see CLAUDE.md).
 fn place_window(app: &AppHandle, window: &tauri::WebviewWindow, target: isize, phase: HudPhase, has_caption: bool) {
     let edge = overlay::snapshot(app).notch_edge;
-    let size = surface_size(edge, phase, has_caption);
-    let monitor = target_center(target)
+    let companion = companion_mode(app);
+    let size = surface_size(edge, phase, has_caption, companion);
+    // At rest the companion stays on the display he was last dropped on; a
+    // hold still takes him to the display of the window it is typing into.
+    let rest_point = if companion && phase == HudPhase::Idle {
+        *REST_POINT.lock().unwrap_or_else(|e| e.into_inner())
+    } else {
+        None
+    };
+    let monitor = rest_point
+        .or_else(|| target_center(target))
         .and_then(|(x, y)| window.monitor_from_point(x, y).ok().flatten())
         .or_else(|| window.primary_monitor().ok().flatten());
     let Some(monitor) = monitor else {
@@ -545,6 +922,18 @@ fn place_window(app: &AppHandle, window: &tauri::WebviewWindow, target: isize, p
     let full_size = monitor.size().to_logical::<f64>(scale);
     let full_pos = monitor.position().to_logical::<f64>(scale);
     let (work_pos, work_size) = overlay::work_area_within(full_pos, full_size, scale);
+    if companion {
+        // A corner is not the notch edge, so the step-aside below does not
+        // apply: the bar is centred along its edge and never reaches a corner.
+        let _ = window.set_size(size);
+        let _ = window.set_position(companion_position(
+            companion_corner(app),
+            work_pos,
+            work_size,
+            size,
+        ));
+        return;
+    }
     let mut position = overlay::bar_position(edge, work_pos, work_size, size);
 
     if voice_notch_shares_display(app, full_pos, full_size, scale) {
@@ -612,11 +1001,12 @@ pub fn show(app: &AppHandle, target: isize) {
 /// of Arm.
 pub fn show_idle(app: &AppHandle) {
     IDLE_HOVERED.store(false, Ordering::Relaxed);
+    MENU_OPEN.store(false, Ordering::Relaxed);
     // The resting pill targets nothing.
     TARGET_IS_SELF.store(false, Ordering::Relaxed);
     overlay::set_dictation_hold(app, false);
     let mut update = HudUpdate::new(HudPhase::Idle);
-    update.edge = overlay::snapshot(app).notch_edge.as_stored();
+    update.stamp_placement(app);
     *LAST_UPDATE.lock().unwrap_or_else(|e| e.into_inner()) = Some(update.clone());
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
@@ -659,7 +1049,7 @@ pub fn set_hovered(app: &AppHandle, hovered: bool) {
 pub fn refresh_placement(app: &AppHandle) {
     let handle = app.clone();
     let mut update = last_update();
-    update.edge = overlay::snapshot(app).notch_edge.as_stored();
+    update.stamp_placement(app);
     let phase = update.phase;
     let has_caption = !update.text.is_empty();
     *LAST_UPDATE.lock().unwrap_or_else(|e| e.into_inner()) = Some(update.clone());
@@ -668,7 +1058,12 @@ pub fn refresh_placement(app: &AppHandle) {
         if let Some(window) = handle.get_webview_window(DICTATION_WINDOW) {
             place_window(&handle, &window, target, phase, has_caption);
             let _ = window.set_ignore_cursor_events(!accepts_clicks(phase));
+            // The click menu is the one resting-state change that flips
+            // activation, and it arrives through here rather than `publish`;
+            // the same two halves, in the same order, as every other show site.
+            prepare_activation(&window, phase);
             let _ = window.emit(crate::events::DICTATION_UPDATE, update);
+            sync_activation(&window, phase);
         }
     });
 }
@@ -688,7 +1083,8 @@ pub fn hide(app: &AppHandle) {
 /// finished registering its listener can still pull the current state.
 pub fn publish(app: &AppHandle, mut update: HudUpdate) {
     IDLE_HOVERED.store(false, Ordering::Relaxed);
-    update.edge = overlay::snapshot(app).notch_edge.as_stored();
+    MENU_OPEN.store(false, Ordering::Relaxed);
+    update.stamp_placement(app);
     update.own_target =
         update.phase != HudPhase::Idle && TARGET_IS_SELF.load(Ordering::Relaxed);
     let phase = update.phase;
