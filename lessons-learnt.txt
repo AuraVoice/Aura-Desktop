@@ -2399,3 +2399,44 @@ overflow it. To see the real pixels, capture the window with PrintWindow and
 PW_RENDERFULLCONTENT (flag 2) from a DPI-aware process; plain GDI CopyFromScreen cannot read
 the WebView2 surface.
 ================================================================================
+
+2026-10-07: a 20-minute voice call saved no transcript, and no mode gave coding hints
+Problem: Varun's first interview-practice call (sess_346bd9dc, 201 turns) left nothing in
+Firestore. The log read "post-session pipeline started", then 33 seconds of silence, then
+"VoiceSession: closed" with no "complete" and no error. In the same call he said "enter the
+interview mode ... you don't reveal answers, you can give me hints", Buddy replied "Got it,
+I'll act as your interviewer" with no tool call, and then gave the merge-intervals algorithm
+away nine times.
+Issue: two separate faults. (1) run_post_session_pipeline awaited the summary model call,
+aura extraction and reflection BEFORE writing raw_turns, and livekit-agents 1.8.3 cancels the
+entrypoint 15 seconds after the room closes; CancelledError is a BaseException, so the
+`except Exception` around the pipeline logged nothing. A 44-turn call finished in 20 seconds
+and survived; long calls, which every practice call is, lost everything. (2) No voice mode
+matched the ask: Interview Mode asks a fixed verbal plan and "never coaches", Guide Mode's
+tool docstring never mentioned interview practice, and the unbacked-claim regex knew "I'll
+start the interview" but not "I'll act as your interviewer", whose trailing "if you request
+them" also tripped the negation guard because claims were judged per sentence, not per clause.
+Solution (juno-backend): the session doc and the transcript reconciliation now run first, as
+plain Firestore writes with an empty summary, and step B rewrites the same doc with the real
+one; a CancelledError around the pipeline is logged before it propagates. Guide Mode gained a
+"practice" policy carried on the start claim beside the goal (set_guide_mode policy and
+time_limit_minutes), with one appended prompt block for every interview format (coding, design,
+behavioural, case, own-work walkthrough; the subject is read from the screen and the words,
+never hardcoded), written from the leaked turns, nudge-only hints, and a monotonic clock that speaks "five minutes left" and "time"; the claim detector
+splits at colons and knows the "act as your interviewer / be the judge / interview you"
+family; the product-knowledge entry names the phrasing for both key legends. Gemini Live has
+no fallback leg, so a Guide model error used to end the whole call: the recorder's error
+handler now asks the coordinator to fail closed instead, and both failure points (five-second
+activation timeout, unrecoverable mid-call error) hand the rehearsal to Buddy's cascade with
+the same prompt block, a cascade note that asks for "okay" on thinking-aloud turns, the
+interviewer's endpointing, the remaining clock, and one spoken line.
+Justification: the transcript is the one artefact a practice call exists to produce, so it
+cannot sit behind a model call inside a 15-second shutdown budget. The hint-only interviewer
+is one Guide policy for the whole class of interviews rather than a coding feature or a
+fourth agent because Guide already owns "sit beside them and
+stay quiet", already receives the screen stream, and is armed natively by the desktop; a prose
+promise from the model is not state and decayed after one turn in the transcript, which is
+exactly why the modes that hold are separate agents with their own prompts. Desktop forensics
+start from the LiveKit Cloud session recording when Firestore is empty; nothing on the
+desktop keeps voice captions.
+================================================================================
