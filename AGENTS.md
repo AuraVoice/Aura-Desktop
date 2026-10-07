@@ -61,3 +61,11 @@ Its role is limited to planning, modifying local code, and guiding the user.
 
 Never expose secrets, signing keys, credentials, logs, or local `.env` files. New endpoints or Tauri APIs may require CSP updates in `src-tauri/tauri.conf.json` and permissions in `src-tauri/capabilities/default.json`; the current webview HTTP allowlist is scoped to `juno-backend`, PostHog, and `api.openai.com`.
 
+## Changelog
+
+`CHANGELOG.md` at the repo root is the release notes. A user-visible change gets
+one line under `## [Unreleased]` in the same commit, phrased for the person using
+the app, under Added, Changed or Fixed. Internal-only work gets none. The release
+workflow refuses a tag whose version has no section and publishes that section
+as the GitHub release body; the exact ship steps are in `CLAUDE.md` under
+Releasing.

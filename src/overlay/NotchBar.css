@@ -290,6 +290,22 @@
   height: 100%;
 }
 
+/* Buddy's face sits left of the waveform. The pill is authored for the Top
+   edge and rotated whole per edge, so the face is turned back upright. */
+.notch-buddy {
+  flex-shrink: 0;
+  margin-right: 6px;
+}
+.notch-buddy-bottom {
+  transform: scaleY(-1);
+}
+.notch-buddy-left {
+  transform: rotate(90deg);
+}
+.notch-buddy-right {
+  transform: rotate(-90deg);
+}
+
 /* Guide status stays amber while the agent handshake is pending. It turns red
    and pulses only after the agent confirms it has received a screen frame. */
 .notch-guide-indicator {

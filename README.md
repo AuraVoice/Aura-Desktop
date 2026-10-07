@@ -450,7 +450,7 @@ cd src-tauri && cargo check   # Rust compiles, no binary produced
 npx tsc --noEmit              # TypeScript type-checks
 ```
 
-CI (`.github/workflows/ci.yml`) runs those same two checks plus dependency audits (`npx audit-ci --config ./audit-ci.jsonc`, `cargo audit`) on every PR and push to `main`. The Rust checks run twice, on `windows-latest` and `macos-14`, so the non-Windows halves of every platform seam are compiled and linted rather than left to rot. `release.yml` builds and publishes tagged releases for Windows and macOS (see Platform support for the macOS artifacts).
+CI (`.github/workflows/ci.yml`) runs those same two checks plus dependency audits (`npx audit-ci --config ./audit-ci.jsonc`, `cargo audit`) on every PR and push to `main`. The Rust checks run twice, on `windows-latest` and `macos-14`, so the non-Windows halves of every platform seam are compiled and linted rather than left to rot. `release.yml` builds and publishes tagged releases for Windows and macOS (see Platform support for the macOS artifacts); its version guard requires a `## [X.Y.Z]` section in [`CHANGELOG.md`](./CHANGELOG.md) and the publish job uses that section as the GitHub release body.
 
 
 Config worth knowing about:
@@ -462,16 +462,13 @@ Config worth knowing about:
 
 | Doc | What it's for |
 |---|---|
-| [`BETA_ONBOARDING.md`](./BETA_ONBOARDING.md) | Beta tester getting-started: install, pairing, hotkeys, sending feedback |
-| [`SMOKE_TEST.md`](./SMOKE_TEST.md) | Manual pre-release smoke test, run in full before every tagged release |
-| [`ROLLBACK_RUNBOOK.md`](./ROLLBACK_RUNBOOK.md) | What to do when a shipped build breaks: pull the release, fix, fast-follow |
-| [`RELEASE_NOTES_TEMPLATE.md`](./RELEASE_NOTES_TEMPLATE.md) | The What's new / Fixed / Known issues shape every GitHub release body uses |
-| [`PRIVACY_AUDIT.md`](./PRIVACY_AUDIT.md) | What's persisted under `%APPDATA%`, what survives uninstall, and the open Firebase-persistence decision |
-| [`LEGAL_ADDENDUM_DRAFT.md`](./LEGAL_ADDENDUM_DRAFT.md) | Draft desktop addendum to the ToS/Privacy Policy, pending legal review |
-| [`DASHBOARD_PLAN.md`](./DASHBOARD_PLAN.md) | The three-repo web dashboard plan (this repo's side shipped in v0.1.5) |
-| [`todo.txt`](./todo.txt) | Living beta-to-GA readiness checklist, updated as items land |
+| [`CHANGELOG.md`](./CHANGELOG.md) | Release notes, one section per tag; lines land under Unreleased with the change and become the GitHub release body |
+| [`MACOS_RELEASE_CHECKLIST.md`](./MACOS_RELEASE_CHECKLIST.md) | The five Apple signing secrets, how to obtain each, and the company-certificate switch |
+| [`STRATEGY.md`](./STRATEGY.md) | Who the app is for and what it is not |
 | [`lessons-learnt.txt`](./lessons-learnt.txt) | Incident log: every non-obvious bug and the rule it produced |
 | [`CLAUDE.md`](./CLAUDE.md) | Working instructions for Claude Code in this repo |
+| [`AGENTS.md`](./AGENTS.md) | Repository guidelines every coding agent follows |
+| `*_ARCHITECTURE.md`, `*_PLAN.md` | Design records for individual features (browser agent, research agent, Swarm, interview companion, guide mode, theming, focused region) |
 
 ## Known issues / design constraints
 

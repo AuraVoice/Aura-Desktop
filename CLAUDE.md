@@ -18,7 +18,7 @@ The runtime has three Tauri webview windows:
 
 - `main` is the borderless, transparent, always-on-top companion overlay. It resizes/repositions itself between `hidden`, `panel`, `bar`, `companion`, `pointing`, and `movingnotch`; `panel` carries the `setup` or `companion` variant. See `src-tauri/src/overlay.rs` for the native state machine and `src/overlay/OverlayRoot.tsx` for the matching React root.
 - `dashboard` is the opaque, resizable app window built on demand by `src-tauri/src/dashboard.rs`, routed by `src/main.tsx` into `src/dashboard/DashboardApp`.
-- `dictation` is the separate transparent HUD built by `src-tauri/src/dictation/hud.rs`, routed by `src/main.tsx` into `src/dictation/DictationHud`. It shares the overlay notch edge, stays out of the taskbar and Dock, and must not steal focus from the target app except for the consent prompt (a `WS_EX_NOACTIVATE` window on Windows; on macOS a non-activating `NSPanel` whose `canBecomeKeyWindow` is phase-gated, because tao's `show()` is `makeKeyAndOrderFront:` and a panel that is always key-eligible takes key on every show). It and the buddy overlay are never both on screen: at rest any visible presentation hides the HUD, and for the length of a hold the notch hides and the HUD takes its edge, then the notch returns on `Idle`. Both directions run through `overlay::apply_result` (the `dictation_hold` flag, set only via `overlay::set_dictation_hold`); a live voice call, an explicit summon, or a hold whose target is one of Aura's own windows (`TARGET_IS_SELF` in hud.rs: dictating into the chat composer must keep the overlay visible and focused or the insert lands nowhere, so the chat card shows its own listening chip instead) keeps the notch and leaves the HUD hidden. The one self-target exception is the consent question, which still takes the edge because it has to be seen and clicked.
+- `dictation` is the separate transparent HUD built by `src-tauri/src/dictation/hud.rs`, routed by `src/main.tsx` into `src/dictation/DictationHud`. It shares the overlay notch edge, stays out of the taskbar and Dock, and must not steal focus from the target app except for the consent prompt (a `WS_EX_NOACTIVATE` window on Windows; on macOS a non-activating `NSPanel` whose `canBecomeKeyWindow` is phase-gated, because tao's `show()` is `makeKeyAndOrderFront:` and a panel that is always key-eligible takes key on every show). It and the buddy overlay are never both on screen: at rest any visible presentation hides the HUD, and for the length of a hold the notch hides and the HUD takes its edge, then the notch returns on `Idle`. Both directions run through `overlay::apply_result` (the `dictation_hold` flag, set only via `overlay::set_dictation_hold`); a live voice call, an explicit summon, or a hold whose target is the overlay window itself (`TARGET_IS_SELF` in hud.rs: dictating into the chat composer must keep the overlay visible and focused or the insert lands nowhere, so the chat card shows its own chip for errors instead) keeps the notch and leaves the HUD hidden. The one self-target exception is the consent question, which still takes the edge because it has to be seen and clicked. Only the `main` window is "self": the dashboard and every other Aura window are foreign targets, so the HUD takes the edge for them and an open chat card does not capture their text (`chat_sink` in dictation/mod.rs is the one place that decides where a hold's words go; issue #28 was the dashboard inheriting the chat rule).
 - Rust owns window geometry, the configurable voice trigger (default Left Ctrl double-tap on Windows, Ctrl+Alt+V on macOS, where a double-tapped bare modifier would need an Input Monitoring grant a registered chord does not), global hotkeys (chat is Ctrl+Alt+Space on Windows but Option+Space on macOS, where Ctrl+Alt+Space is already "select next input source"; then Ctrl+Alt+D dashboard, Ctrl+Alt+S Screen Sight, Ctrl+Alt+G Guide Mode, Ctrl+Alt+M output mute, Ctrl+Alt+Q sign-out), tray, and foreground handling (`win_focus.rs`: on Windows because it denies `SetForegroundWindow` while another app owns focus, on macOS because `set_focus` activates the whole app and would pull focus off whatever the user was typing in). Force foreground ONLY for the Setup `Panel` or the explicit chat summon path that uses `raise_for_hotkey`. Never force it for the resting notch/`Bar`: the notch is always-on-top, so it shows without stealing focus - see the 2026-07-16 "fail to dismiss" lesson.
 - React owns all visual content and copy (`src/dashboard/`, `src/overlay/`, `src/dictation/`), Firebase auth (`src/state/AuthProvider.tsx`), standard per-turn screen capture (`useTurnScreenCapture`), continuous change-filtered Guide capture (`useGuideMode`), and the LiveKit call.
 - The overlay drag surface is one continuous drag region (`data-tauri-drag-region="deep"` on `GlassSurface`) - real inputs/buttons/links block dragging on themselves automatically (Tauri's own rule), nothing else needs to opt in or out individually. Don't add a narrower `data-tauri-drag-region` (bare, no value) on an inner element unless you mean to shadow/restrict the outer region - a bare attribute closer to the click target short-circuits the walk and blocks the deep region from ever being reached. Clickable overlay elements must be real `<button>`s, inputs, or links, not `<div role="button">`.
@@ -341,6 +341,34 @@ Rules an edit could break:
   the cap for every hold, or dropping the addressed gate, reintroduces "typed a to-do item started
   a browser".
 
+## Aura Swarm: managers read, writes are approvals, the wallet is the off switch
+
+The Swarm tab (`src/dashboard/pages/SwarmPage.tsx`, `swarm/`, `src/lib/swarmApi.ts`) renders and
+polls a swarm that lives in `juno-backend` (`services/swarm/`, design record and as-built
+deviations in [`SWARM_STAGE2_ARCHITECTURE.md`](./SWARM_STAGE2_ARCHITECTURE.md) section 12).
+Rules an edit could break:
+
+- **Read-only is enforced by the registry, not the prompt.** `registry.py` has no write row, and
+  its guards are code: grants re-read per call, `web.read` only fetches URLs already in the
+  session's source table, `web.search` refused once a connector has run. A write is never a
+  row there: it is an `ApprovalTool` in `pending_actions.py` that a report draft proposes
+  through `actions.build_action` (today `github_create_issue`), with an idempotency key the
+  TARGET can be searched by. "Act without asking" is `swarm_grants/{mid}.auto_approve`, per
+  tool, per scope, under a daily cap, and only for tools in `actions.AUTO_APPROVE_TARGETS`;
+  a public post never joins that set. `setGrants` sends the policy only from its own switch,
+  so a connector toggle can never change it.
+- **Watches are a class, never a site** (`watches.py`, `SwarmManagerTools.tsx` `WatchList`).
+  A new kind of job is a brief, a grant, a watch and a policy. If one needs code, the class
+  is missing a row (an extractor kind, a read row, an approval tool), and the row is what
+  ships. There is no create-watch form: watches are derived from #group and only edited here.
+- **`PROJECT_SWARM_DAILY_COST_CAP_MICROUSD` covers routing too.** 0 refuses every #group message
+  and every session with `wallet_exhausted`. Models ship EMPTY (`SWARM_PLANNER/STEP/REPORT_MODELS`)
+  and refuse with `models_unset`; "managers never start" means check both first.
+- **Messages are append-only.** Anything live (the working chip, Stop) renders from the polled
+  session view; never edit a message the `after_seq` cursor has passed.
+- **The legacy `aura.swarm-sandbox.v1` key is import-only.** It carries no account, so it is
+  offered behind a button and never uploaded automatically.
+
 ## Desktop notifications
 
 `src/lib/desktopNotifications.ts` is the ONE broker every producer calls (local Rust/JS events and backend events polled from the outbox). It owns the durable inbox, dedup, permission, and the toast-once guarantee (delivered ids persist across restart, so a relaunch never replays a toast). Two non-obvious rules:
@@ -415,10 +443,11 @@ tag vX.Y.Z pushed
 
 To ship:
 
-1. Bump the version in **all FOUR** of `package.json`, `package-lock.json` (run `npm install --package-lock-only`; it has TWO root version entries), `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, then refresh `src-tauri/Cargo.lock` via `cargo check`. All four must be identical or the run dies on the guard (this is what killed v0.8.1).
-2. Commit, then ask the user to push `main`.
-3. `git tag vX.Y.Z && git push origin vX.Y.Z`, then `gh run watch --exit-status`.
-4. On failure, `Show what the sign command actually said` dumps the real signtool error, and the tag is one line to undo: `git push --delete origin vX.Y.Z; git tag -d vX.Y.Z`.
+1. In `CHANGELOG.md`, rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` and put a fresh empty `## [Unreleased]` above it. The version guard fails the run in seconds if the section is missing, and the publish job copies that section into the GitHub release body, so it IS the release notes. If the section is thin, that is the moment to write the lines the work deserved.
+2. Bump the version in **all FOUR** of `package.json`, `package-lock.json` (run `npm install --package-lock-only`; it has TWO root version entries), `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, then refresh `src-tauri/Cargo.lock` via `cargo check`. All four must be identical or the run dies on the guard (this is what killed v0.8.1).
+3. Commit, then ask the user to push `main`.
+4. `git tag vX.Y.Z && git push origin vX.Y.Z`, then `gh run watch --exit-status`.
+5. On failure, `Show what the sign command actually said` dumps the real signtool error, and the tag is one line to undo: `git push --delete origin vX.Y.Z; git tag -d vX.Y.Z`.
 
 **The signing credential lives five minutes, and that is load bearing.** `azure/login` with GitHub OIDC hands back a client assertion valid for exactly five minutes, not a refresh token, and the Azure CLI replays that same string on every later request. `AADSTS700024: Client assertion is not within its valid time range` is what that looks like, and signtool wraps it in a generic `SignerSign() failed` (`0x80004005`), which is also what a wrong region endpoint produces. Read the inner exception, not the exit code. Three rules protect this:
 
@@ -485,6 +514,7 @@ Meeting Notes (MEETING_NOTES_PLAN.md) adds `src-tauri/src/meeting/` (WASAPI capt
 - Only change what was asked. Don't refactor, rename, reorganize, or reformat anything else in the same pass; mention other issues noticed at the end instead of touching them.
 - Before deleting a file, dropping generated assets, or removing a dependency, say what will be affected before doing it.
 - End a task with a brief status update: what changed, what was left untouched, what needs the user's attention next.
+- Every user-visible change lands with a line under `## [Unreleased]` in [`CHANGELOG.md`](./CHANGELOG.md), in the same commit as the change, written for the person using the app (what they can do now, or what stopped going wrong) under Added, Changed or Fixed. Internal-only work (CI, refactors, docs, tests) gets no line. The release steps above turn that section into the release notes, so a change with no line ships unannounced.
 - Log in [`lessons-learnt.txt`](./lessons-learnt.txt) at the repo root ONLY when a real problem was overcome: a bug, a silent failure, a non-obvious constraint that broke (or would have broken) something, or a review finding - with problem, issue, solution, justification, date. Do NOT log routine feature work, additive changes, or design decisions that shipped without a problem being solved; a task producing working code is not a lesson. If nothing failed or surprised you, add nothing.
 - when explaining a plan potray in examples and data flow rather than simple text.
 - NEVER Push code to github without me explicitly saying, this doesn't include a plan where you propose to push commits to git. Always advice me to push. 

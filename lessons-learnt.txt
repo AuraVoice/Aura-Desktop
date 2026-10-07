@@ -1869,6 +1869,222 @@ runs. A liveness signal must come from the thing that can die (the callback),
 paired with an independent reading (GetAsyncKeyState) of what it should have
 seen, or a dead hook is indistinguishable from a quiet keyboard.
 ================================================================================
+
+2026-09-29  A Swarm roster could brick itself: model_copy skips max_length, so
+the bad roster came back as a success and only the NEXT message failed
+================================================================================
+Problem: review of the Swarm sandbox (big-O and abstraction passes) found that
+the per-card caps in swarm/models.py (routines 20, missing capabilities 8) were
+re-typed as slices in validator.py and simply absent from roster.py's merges
+(extend_manager, add_routine). Every roster transition uses
+model_copy(update=...), which does not validate, and SandboxResult does not
+re-validate nested model instances. So the request that pushed a manager to 21
+routines or 9 missing services returned 200 with an over-cap roster; the
+desktop stored it and sent it back, and every message after that failed with
+400 invalid_body, whose copy tells the user to reset the sandbox.
+
+Issue: the declared limit and the code that grows the list were two copies of
+one rule, and the copy that mattered (the merge) never had it. Separately the
+desktop gave up at 130 s while the backend, with no message deadline, could run
+6 serial stages and 12 attempts (~480 s) and bill for a result nobody received;
+and three handlers classified model failures into one reason vocabulary with
+drifted rules, reporting an exhausted attempt budget as "model unavailable".
+
+Solution: named caps in models.py used by the Field, the validator and the
+roster merges (dropping with an event, never silently); a final
+Roster.model_validate in handle_message that raises RosterInvalidError
+(roster_invalid, roster unchanged) instead of returning a roster the next
+request would reject; a 110 s asyncio.timeout on the whole message with the
+desktop at 130 s; shaper calls started together instead of one per item; a
+typed AttemptBudgetExhaustedError and one model_provider.failure_reason shared
+by Swarm and Interview Companion; SDK max_retries=0 only where an attempt
+budget or per-attempt deadline is active.
+
+Justification: in pydantic v2 a max_length only holds at construction from raw
+data, so any state machine built on model_copy must either enforce its caps at
+the point a list grows or re-validate before the state leaves the process. A
+server's deadline has to sit below its client's, or a timeout on the client is
+a bill on the server.
+================================================================================
+
+2026-10-01  A "reuse what exists" architecture doc was wrong on four load-bearing
+reuse claims, and Research had been following redirects to private addresses
+================================================================================
+Problem: SWARM_STAGE2_ARCHITECTURE.md said to reuse the research project wallet,
+the research sweep slot, a per-session lease for "one session per manager" and
+the URL policy for safe page reads. A Codex review against the real code before
+any implementation found that reserve_project_spend requires a spendable
+research_runs document and reads the research cap, the %5==3 scheduler slot was
+already taken, two session documents can each hold a valid lease, and
+tiered_reader followed redirects with follow_redirects=True after checking only
+the first URL, so any public link that 302s to a metadata or private address was
+fetched (Research included, live today).
+
+Issue: line-referenced proposals read as verified, but a symbol existing at a
+line says nothing about whether its contract fits the new caller. Each claim
+named a real function; none of them checked the function's preconditions.
+
+Solution: a Swarm-owned wallet copying the receipt pattern
+(swarm_project_budget/{day}/swarm_receipts, routine share tracked), fixed
+scheduler minutes, a manager-owned live slot claimed in the start transaction,
+and an httpx request event hook in tiered_reader that runs evaluate_url on every
+hop and returns URL_NOT_ALLOWED instead of handing the URL to Firecrawl.
+
+Justification: "reuse X" in a plan must name X's preconditions, not just its
+location; and a URL policy that checks only the first hop is not a URL policy.
+The hook sits on the one reader both features use, so the fix lands once.
+================================================================================
+2026-10-01  "I deployed the backend" while Cloud Run kept the day-old revision: the
+            Swarm tab showed an empty team marked Ready and every send got a 404.
+================================================================================
+Problem: after a Stage 2 deploy, every /swarm/* route except the Stage 1 sandbox
+answered 404 and Cloud Run still served juno-backend-00427 from the day before.
+The juno-swarm Cloud Tasks queue existed, so the deploy looked half done.
+
+Issue: deploy.sh provisions queues BEFORE its composite-index preflight, and the
+preflight exits 1 while a new index is still building. The three swarm indexes
+were added in the same change, so the first run created the queue and stopped
+before `gcloud run deploy`. On the desktop, SwarmPage rendered
+`resource.data ?? EMPTY_STATE`, so the failed /swarm/state load read as a new
+user's empty swarm with "Ready", and the bare 404 fell to "Swarm refused this".
+
+Solution: re-ran the deploy once the indexes were READY (00428). SwarmPage now
+reads `resource.error && !resource.data`: the rail says "Can't reach Swarm" and a
+notice shows in every channel; a 404 with no `reason` gets its own copy; errors
+clear when you switch channel.
+
+Justification: a deploy that ships new indexes must be run again after they
+build, and the only proof it landed is the serving revision name, not the script
+having been started. A default object over a failed fetch hides the failure;
+read the resource's error flag wherever "empty" and "unreachable" look alike.
+================================================================================
+2026-10-01  Swarm managers quit after one web search: the step prompt never showed
+            the model which arguments it had already used.
+================================================================================
+Problem: the first live run of a Neuron Watch manager searched once, got six
+aws.amazon.com marketing pages, then issued the identical search again. The
+repeat guard in runner._act returned no_progress, which ends the lane, so the
+session reported "partial" with 10 of 12 steps unused and told the user to go
+read the release notes themselves.
+
+Issue: STEP_SYSTEM says "never call the same capability with the same arguments
+twice", but the scratch entries the step prompt renders carry only the result
+text, never the call. The model could not see its own previous query, so it
+could not avoid it. Every manager hit this on any task needing a second search.
+
+Solution: Acted carries the call's canonical args JSON; the scratch entry stores
+it (300 chars); _scratch_block prints "Called <capability> with <args>" outside
+the untrusted tag. PROMPT_VERSION swarm-runtime-2. Old rows with no args render
+as before.
+
+Justification: a rule the model cannot check against its context is a rule it
+cannot follow. The repeat guard stays as the code-side backstop; the fix gives
+the model what the guard assumed it already had.
+================================================================================
+2026-10-01  A Swarm manager asked the user for a URL and could never read the reply.
+================================================================================
+Problem: once search stopped repeating, Neuron Watch reached the real wall: it
+knew github.com/aws-neuron/aws-neuron-sdk/releases but web.read refused it ("Only
+pages from earlier search results or the brief can be read"), so it asked the
+user for the link. Any URL the user sent back was refused the same way, and the
+manager asked again.
+
+Issue: runner.answer() put the reply into scratch only. registry.guard checks
+web.read against read_allowlist(sources), and only start_session copied URLs
+(from the brief) into sources. The one escape the guard leaves, "ask the user",
+was a dead end for exactly the thing it is usually asked for.
+
+Solution: answer() extracts https URLs with the brief's regex and merges them via
+_merge_sources as kind "brief", the same trust as a URL typed in the brief.
+
+Justification: a URL the user hands over is no less theirs than one in the
+brief. The allowlist rule is unchanged; the gap was that one user-input path
+never fed it.
+================================================================================
+2026-10-01  Swarm managers did not know today's date, so "the past week" meant nothing.
+================================================================================
+Problem: with release notes finally readable, Neuron Watch reported Neuron 2.32.0
+(August 17, 2026) as "released in the past week" on October 1, 2026.
+
+Issue: none of the four runtime prompts (planner, step, report, verifier) carried
+the date. Nearly every manager brief is relative to now (past week, since the
+last report, due soon, today's calendar), so every routine could misjudge
+recency, and the verifier could not catch it either.
+
+Solution: runtime_prompts._today() prefixes all four builders with "Today is
+<weekday dd Month yyyy> (UTC)". PROMPT_VERSION swarm-runtime-3.
+
+Justification: one clock for all four stages, so the report and the verifier
+judge "recent" against the same day the planner did.
+================================================================================
+2026-10-01  Every Swarm run on prod ended "partial" and none of them said why.
+================================================================================
+Problem: all three live Run now sessions (Neuron Watch) finished as partial with
+an empty stop_reason, so the report kicker and the toast said "Partial report"
+and nothing else. Two of them had a full, sourced report.
+
+Issue: _terminal_state_for marked a session partial for ANY entry in gaps, and
+the step commit added every refused capability as a gap, including the guard's
+own refusals (url_not_from_sources when the model guessed a release-notes URL,
+search_after_private_data). Those mean "the model tried something the guard
+blocks", not "your data was missing". Every finalize that used it also passed
+stop_reason="", and the runner never logged a session's end, so this was only
+visible by reading swarm_sessions in Firestore.
+
+Solution: registry.POLICY_REFUSALS are kept out of gaps (they still reach the
+model's scratchpad and the step message). _terminal_state_for returns
+(state, reason): lane_failed, no_progress, decision_cap, missing_access or
+incomplete; the report renders one plain sentence for it. _after logs
+"swarm.runner: session ended" with codes and counts only.
+
+Justification: replayed against the three prod sessions, two become done and
+the real failure reads no_progress. A guard doing its job is not a failure the
+user can act on; a missing grant is, and now says so.
+================================================================================
+2026-10-02  The approval primitive never re-checked that the args it ran were the args it showed.
+================================================================================
+Problem: while extending pending actions to Swarm drafts, pending_actions.approve
+turned out to run row["args"] after a claim that checked only status and expiry.
+
+Issue: the binding between what the card showed and what executed rested only on
+the approval id being a hash of the args at proposal time. approval_store.claim had
+the args_hash comparison, but that function was the dead confirmation-phrase path;
+the live claim (pending_actions._claim) had none. Any later change to the stored args
+would have executed silently. The rows also vanished 15 minutes after expiry, so there
+was no lasting record of what was posted.
+
+Solution: _claim recomputes canonical_args_hash(row.args) and fails the action as
+args_mismatch unless it equals the stored args_hash. finish() also writes
+users/{uid}/action_log/{id} with tool, origin, source, args hash, status and link,
+never the text.
+
+Justification: "approved exactly this, once" has to be checked at the moment of
+execution, not assumed from how the id was minted, before Swarm managers (whose drafts
+come from untrusted web content) are allowed to propose public posts.
+================================================================================
+2026-10-02  Manage billing said "try again" to an account that has no billing at all.
+================================================================================
+Problem: Billing showed "Billing could not open just now. Try again." on every press
+for a Pro account.
+
+Issue: the live log showed GET /billing/portal answering 404, which juno-backend uses
+only for no_billing_account. The entitlement doc was tier pro, status active, with no
+source, no dodo_customer_id and no subscription: a plan granted directly, never bought
+through checkout. The desktop caught every portal failure with one bare catch and one
+line, so a refusal no retry could ever fix read as a transient blip.
+
+Solution: fetchBillingPortal reads the backend's error field and throws a typed
+BillingPortalError (no_billing_account, billing_not_configured, portal_failed,
+unavailable). BillingPage maps each one to its own copy, says "try again" only for the
+two a retry can fix, and logs the cause.
+
+Justification: the "failures must keep their cause" rule. The copy alone still left a
+button that could only fail, because /entitlement never said whether a billing account
+existed. juno-backend's /entitlement now returns billing_manageable, the same
+dodo_customer_id check /billing/portal 404s on, and BillingPage hides the button when it
+is false. A missing field parses as null and keeps the button, so the desktop could ship
+before the backend.
+================================================================================
 2026-10-02  Swarm's round poller multiplied itself, and every abort signal into authFetchWithTimeout was dropped.
 =========================================================================Problem: an audit of PR #29 found the #group round poll sending about R(R+1)/2
 requests on mount instead of R (about 55 for 10 finished rounds), and the dashboard
@@ -1919,6 +2135,113 @@ done by the uid scope and the AAD, so deleting on top of that added no
 protection and destroyed real data. The 90-day age-out stays because sweep only
 runs for the signed-in uid, and without it a dormant account's rows would never
 expire.
+================================================================================
+
+2026-10-03  Guide Mode disarmed itself and the call dropped on "can you see my screen"
+================================================================================
+Problem: Ctrl+Alt+G, a normal-feeling conversation, then "Buddy hit a snag
+mid-call" the moment the user asked whether Buddy could see the screen. The
+user believed they had been in Guide Mode the whole time.
+
+Issue: two separate failures. (1) useGuideMode publishes the Guide request the
+instant the agent participant joins and gave it MODE_ACK_TIMEOUT_MS = 3s. The
+agent process needs ~2s after joining before it is listening (job dispatch to
+"Guide Mode launch" was 1.8s). The request was never seen, the timer disarmed
+Guide, the pill flipped to guide-off, and the call carried on as plain Buddy on
+gpt-4.1. Nothing felt wrong because the voice call never stopped. (2) On the
+screenshot turn the prompt was ~90k tokens (7.9k, 16k, 24k, 63k, 71k, 87k over
+eight turns; the ~8k/turn growth is still unexplained) and all three LLM legs
+missed pipelines.py's 2.5s attempt_timeout. livekit marked that error
+recoverable=True and its FallbackAdapter was retrying 0.1s later with two legs
+already back, but recorder._on_session_error published session.error for every
+error event. The desktop showed the snag copy, disconnected, and livekit closed
+the session on participant disconnect.
+
+Solution: MODE_ACK_TIMEOUT_MS is 5s; on a timeout the call stays up as Buddy
+and the user can ask for Guide Mode, which goes through set_guide_mode.
+_on_session_error now returns on recoverable errors (livekit's own
+AgentSession._on_error already ignores them) and publishes only when a
+non-recoverable one arrives.
+
+Justification: a client must never end a session the server is in the middle
+of recovering; the "fast path" comment on that handler was written for the
+zero-credit hang where every attempt fails with an auth error, and those still
+arrive as non-recoverable. Forensics: the agent's logs are logName cloud-agents
+with JSON in textPayload; the transcript is users/{uid}/chat_sessions/{id}/
+messages where {id} is the conversation_id in the "VoiceTranscript:
+reconciliation complete" line. Left open: the deactivate ack carries
+guide_session_id "" and agentData.ts rejects it (reason=schema), and the
+per-turn context growth that made 2.5s unreachable.
+================================================================================
+
+2026-10-02  Dictating into the dashboard showed no HUD, and an open chat card swallowed the text
+
+Problem: with the Aura bar on screen, holding the dictation chord in any dashboard text field
+ran the whole hold with no pill at all. The log showed every phase published (Listening,
+insert outcome=Inserted app=aura-desktop, Inserted) and the text arrived, so only the
+feedback was missing. Separately, with the overlay chat card open, a hold aimed at the
+dashboard typed into the chat composer instead (issue #28).
+
+Issue: the 2026-09-07 self-target exemption was one boolean. hud::show stamped TARGET_IS_SELF
+from is_own_window, which answered "is this HWND any of our webview windows", so the
+dashboard inherited a rule written for the chat composer: edge_wanted returned false, the
+Bar kept its edge, SUPPRESSED_BY_OVERLAY stayed set, and window.show() was skipped. The
+routing had the same shape: chat_slot_open() sent EVERY hold into the composer regardless of
+the foreground window, because the always-on-top overlay rarely owns focus. Both were correct
+for the one own window the Bar hand-over actually hides, and wrong for every other own window.
+Reproduces only while the overlay is visible; with the notch hidden the HUD already showed,
+which is why it went unnoticed.
+
+Solution: the probe returns the window LABEL (own_window_label: Windows maps the HWND to the
+webview_windows() key; macOS has only a pid, so it takes the focused webview's label and falls
+back to main). Only the `main` window is self (target_is_overlay). A new chat_sink(app, target)
+in dictation/mod.rs is the single reader of the chat flags and switches them off when the
+foreground is another Aura window (target_is_other_own_window); hud::show, the command brain
+gate and the insert step all go through it, so the three can never disagree about where a
+hold's words go. The dashboard now takes the ordinary foreign-target path: the Bar hides, the
+NOACTIVATE HUD takes the edge, SendInput types into the dashboard field, ownTarget stays false
+so the chat chip does not fire.
+
+Justification: the general rule from 2026-09-07 was "any arbitration between two surfaces has
+to know when one surface IS the other's target". This sharpens it: knowing it is OUR process
+is not knowing WHICH window, and a process-level answer silently applies one window's
+exemption to all of them. Any future own-window check in dictation should name the label.
+================================================================================
+
+2026-10-02: Swarm GitHub path schema blocked backend imports
+Problem: GitHubFileArgs passed negative lookaheads as a string pattern to Pydantic,
+whose default regex engine rejects lookarounds while constructing the model.
+Solution: pass the same pattern as a compiled Python re.Pattern, preserving the
+leading-slash and parent-path restrictions. Backend application import and the
+16-capability registry inspection now pass. Check the real import before claiming
+that a new capability is wired; valid Python syntax alone does not build a schema.
+================================================================================
+
+2026-10-03: Swarm manager asked four questions in seven steps with GitHub connected
+Problem: a manager hired for "in my github Aura/backend ..." asked for the repo URL twice,
+then for a docs link it could web-search, then asked again after the user typed "go search
+yourself", and never read GitHub although the account was connected on the Connectors page.
+Issue: three silent gaps, none of them a prompt bug on its own. (1) "Connected" and
+"granted" are different documents: integrations/github is what the user sets, but the guard
+reads swarm_grants/{manager}, which only the Team card switch wrote, so the shaper's
+requested_connectors became a label on the card and nothing else. (2) STEP_SYSTEM told the
+model "a capability marked not granted records a gap" while registry.describe never marked
+anything, so the model could not tell a usable account from a dead row. (3) Nothing counted
+ask_user: the only bound was the 12-decision cap, and the user's answers lived in a scratch
+window that drops the oldest rows first, which is where an early answer sits.
+Solution: grant at hire for connectors the shaper asked for AND the user has connected
+(persisted.route_message, union with existing grants because set_grants replaces the map);
+describe() marks [granted] / [not granted] / [account not connected] and the planner gets an
+Accounts: line; MAX_ASKS=1 parks once, later asks are answered in-prompt in the user's trust
+block and the lane continues; every user answer rides in a "Facts from the user (binding)"
+block built from the full scratch list; github.repos/tree/file give a repo brief something to
+read. The #group confidence fallback question is gone and a free-text draft answer can no
+longer be re-classified into a second ask.
+Justification: a prompt that describes a guard the code does not implement trains the model
+on fiction. When two switches share a name in the UI ("connected"), the one the guard reads
+must be derivable from the one the user touched, or the feature is off for everyone who
+never finds the second switch. Any ask/retry path needs a counter in code; a model told "do
+not ask" in a block it already read will ask again.
 ================================================================================
 
 2026-10-03: #group message to a busy Swarm manager vanished behind a red banner
@@ -1977,6 +2300,59 @@ manager. And a prompt rule the model can ignore is a wish, not a guard; the coun
 the capability check have to live in code, where the ask budget already did.
 ================================================================================
 
+2026-10-05: a second voice call in the same desktop chat thread saved none of its transcript
+Problem: Varun ran a 6.5 minute mock interview prep call (sess_71dee597). The worker logged
+voice_transcript_parity_mismatch with expected 64, matched 0, inserted 0, conflicts 26, and the
+call never appeared in the chat thread. The same thing had already happened to the second of
+two calls on 2026-10-03 in that thread. Separately, the call itself went wrong: Interview Mode
+said "Ready for your first question?" before setup, the user said "Directly questions, what the
+fuck?", setup read that as cancel_setup 19 seconds in, and the rest of the call was plain Buddy.
+Issue: (1) the desktop starts a voice call inside the current chat conversation
+(useChatSession sends its conversation_id to /voice/token), but reconciliation numbered
+message ids {cid}__v{i} from 0 on every run. The second run's __v0..__v25 were the first run's
+documents, every comparison failed, and the reconciler fails closed on any conflict, so it wrote
+nothing. Flutter never hit it because it creates a fresh conversation per call. The same per-run
+numbering also made voice_history_store._belongs_to_voice_run claim the EARLIER run's messages
+by id, so deleting the second call would have deleted the first. (2) start_mock_interview's tool
+result was "Interview Mode started.", which the next speaker read as "ask a question now", and
+cancel_setup's docstring said to call it "whenever the user wants to stop... or go back", which
+covered impatience.
+Solution: reconciliation reads the conversation's messages once and starts this run's index
+after the highest __v index stamped with ANOTHER run's voice_run_id (unstamped docs are Flutter
+writing this run live, so they do not move it), with sequence continuing after the same
+earlier runs. A stamped doc now belongs only to the run it names. The tool result tells the
+next speaker to announce setup, not a question, and cancel_setup only fires on an explicit stop;
+impatience gets a one-line acknowledgement and the next setup question.
+Justification: an id scheme that is "deterministic per run" is only collision-free if the
+container is per run too, and nothing enforced that; the conversation is the container, so the
+index has to be conversation-wide. Failing closed was right, but failing closed silently on
+every reused thread turned a guard into data loss, which is why the fix keeps the guard and
+removes the collision rather than loosening the comparison.
+================================================================================
+
+2026-10-05: Interview Companion sessions were erased on every account switch and every sign-out
+Problem: Varun's 9/19 and 9/22 Companion sessions (real screening calls, dozens of answers)
+were gone from interview-sessions.sqlite3; only two one-minute 9/28 rows were left. The
+backend never stores these transcripts, so there was no other copy.
+Issue: interview_store::retain_only_for_session, called from security::session_changed, ran
+DELETE FROM sessions WHERE uid <> ?1 on an account switch and DELETE FROM sessions when the
+uid was None. A transient signed-out report arrives on launch, so the second arm alone could
+wipe the table between sessions. This is the exact bug dictation history had and fixed on
+2026-10-01; the fix landed in one store and the same pattern stayed live in its sibling.
+Solution: the hook now does nothing without a uid and, on a switch, deletes only other
+accounts' sessions older than the 90-day cap (turns and exchanges cascade), then sweeps clips
+against every account's surviving rows. Explicit erasure stays on interview_session_delete and
+interview_sessions_clear.
+Justification: isolation was already complete without deletion (every read takes the uid and
+every sealed value binds it in the AAD), so the delete bought nothing and cost irreplaceable
+data. When a store-wipe bug is fixed, grep every retain_only_for_session in security.rs for the
+same shape rather than fixing only the store that was reported. That sweep, run the same day,
+found three more: interview_prep_store (deleted every other account's preparations on a
+switch), agent_browser/store (other accounts' tasks on a switch, everything on sign-out) and
+chat_cache (both, plus useChatSession cleared every account's cache on sign-out). All now
+age out other accounts' rows past 90 days only and do nothing without a uid.
+================================================================================
+
 2026-10-05: Interview Companion started before a brief could be attached, and one long turn broke answers and Reflect
 Problem: during a real interview the card said "I'm listening" the moment it opened, with no
 chance to attach a brief or resume, and a reboot changed nothing. Live answers stopped around
@@ -2000,4 +2376,26 @@ total failure of every request that carries it. Clamp on the client that knows t
 semantics (keep the tail), and stay lenient on the server for builds already in the field.
 The length was proved from the sealed store without decrypting it: AES-GCM adds a fixed 28
 bytes, and ciphertext 3,013 minus 28 matched the logged 2,985.
+================================================================================
+
+2026-10-06: Swarm drew the native Windows scrollbar and pushed the Agents tabs off the top
+Problem: the Swarm message list showed the stock Windows scrollbar with arrow buttons, and in
+a 708px-tall dashboard the Computer / Research / Swarm tab strip sat half hidden under the
+window frame. Neither showed up in source review; a PrintWindow capture of the live dev
+window found both.
+Issue: (1) .db-swarm-scroll set the standard scrollbar-width: thin and scrollbar-color.
+Chromium (WebView2) ignores every ::-webkit-scrollbar rule on an element once either
+standard property is non-auto, so the slim custom thumb never applied and the native bar
+rendered. (2) .db-swarm's height was clamp(560px, 100vh - 176px, 1200px). In a short window
+the 560px floor plus the tab strip was taller than .db-content, so the content scrolled and
+the stream's scroll-to-latest left the tabs scrolled up out of view.
+Solution: scrollbar-width: auto on the Swarm list, with ::-webkit-scrollbar-button hidden and
+a transparent track. The Agents page, tab stage and panel are a flex column that fills
+.db-content, so Swarm takes the space it has instead of guessing from the viewport.
+Justification: in this webview, styling a scrollbar takes one of the two mechanisms, never
+both; any container that wants a custom thumb must leave the standard properties at auto. A
+pane sized from 100vh ignores the chrome above it, while one sized by its flex parent cannot
+overflow it. To see the real pixels, capture the window with PrintWindow and
+PW_RENDERFULLCONTENT (flag 2) from a DPI-aware process; plain GDI CopyFromScreen cannot read
+the WebView2 surface.
 ================================================================================

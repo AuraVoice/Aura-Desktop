@@ -67,6 +67,9 @@ export function useAudioLevels(
   status: VoiceSessionStatus,
   canvasRef: RefObject<HTMLCanvasElement | null>,
   mediaTrack: MediaStreamTrack | null = null,
+  /** Receives the overall voice activity (0..1) every frame, for Buddy's
+   * avatar. A ref so the reader never re-renders. */
+  levelRef?: { current: number },
 ) {
   useEffect(() => {
     const canvasElement = canvasRef.current;
@@ -159,6 +162,7 @@ export function useAudioLevels(
       }
       const energy = Math.sqrt(energySum / Math.max(1, energySamples));
       const activity = clamp((energy - 0.025) * 7, 0, 1);
+      if (levelRef) levelRef.current = activity;
       if (activity < 0.04) return null;
 
       const targets = new Float32Array(BAR_COUNT);
@@ -190,6 +194,7 @@ export function useAudioLevels(
       context.clearRect(0, 0, width, height);
 
       const maxHalfHeight = maxHalfHeightFor(height);
+      if (levelRef) levelRef.current = 0;
       const reactiveTargets =
         status === "listening" || status === "speaking"
           ? audioTargets(maxHalfHeight)
@@ -239,5 +244,5 @@ export function useAudioLevels(
       room?.off(RoomEvent.TrackUnsubscribed, refreshTrack);
       releaseAnalyser();
     };
-  }, [canvasRef, mediaTrack, room, status]);
+  }, [canvasRef, mediaTrack, room, status, levelRef]);
 }
