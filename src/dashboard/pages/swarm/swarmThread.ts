@@ -246,6 +246,10 @@ export function channelItems(messages: SwarmMessage[], roster: SwarmRoster): Str
       case "routine":
         items.push({ key, kind: "system", text: `Routine: ${m.text}`, tone: "routine", at: m.at });
         break;
+      case "event":
+        // A watch saw its source change (backend watches.py); the brief is the watch's own.
+        items.push({ key, kind: "system", text: `Something it watches changed. ${m.text}`, tone: "routine", at: m.at });
+        break;
       case "working":
         items.push({ key, kind: "working", sessionId: m.sessionId, text: m.text, author: speaker, at: m.at });
         break;

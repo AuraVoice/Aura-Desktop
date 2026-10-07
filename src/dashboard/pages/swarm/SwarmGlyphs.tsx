@@ -390,6 +390,18 @@ export function CycleGlyph(p: GlyphProps) {
   );
 }
 
+/** A watched source: a node out there sending rings toward the manager listening. */
+export function BeaconGlyph(p: GlyphProps) {
+  return (
+    <Glyph name="beacon" {...p}>
+      <circle cx="6.5" cy="12" r="2.2" fill="currentColor" stroke="none" />
+      <path className="sw-ring sw-ring-1" d="M10.6 8.6a5 5 0 0 1 0 6.8" strokeWidth={1.6} />
+      <path className="sw-ring sw-ring-2" d="M13.6 6.2a8.6 8.6 0 0 1 0 11.6" strokeWidth={1.5} />
+      <circle cx="19.2" cy="12" r="1.5" strokeWidth={1.5} />
+    </Glyph>
+  );
+}
+
 /** Starter: climbing toward an offer. */
 export function AscentGlyph(p: GlyphProps) {
   return (

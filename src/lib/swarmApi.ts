@@ -204,6 +204,53 @@ export interface SwarmRoutine {
   nextRunAt: string;
 }
 
+export type SwarmWatchKind = "version_heading" | "feed" | "list_items" | "page_text";
+
+/** A source a manager watches; a change starts its work (backend watches.py). */
+export interface SwarmWatch {
+  id: string;
+  managerId: string;
+  kind: SwarmWatchKind;
+  /** Empty while a watch derived from chat still waits for its page link. */
+  url: string;
+  intervalH: number;
+  cssSelector: string;
+  versionRegex: string;
+  brief: string;
+  enabled: boolean;
+  dailyLimit: number;
+  /** The newest version, entry or change it has seen. */
+  lastIdentity: string;
+  /** Set while the watch waits on the user's go-ahead in #group. */
+  armingQuestion: string;
+  pendingHint: string;
+  nextPollAt: string;
+  lastPollAt: string;
+  /** Stopped after repeated failures; lastError says why. */
+  paused: boolean;
+  errorStreak: number;
+  lastError: string;
+}
+
+export interface SwarmWatchInput {
+  managerId: string;
+  kind: SwarmWatchKind;
+  url: string;
+  intervalH: number;
+  cssSelector: string;
+  versionRegex: string;
+  brief: string;
+  enabled: boolean;
+  dailyLimit: number;
+}
+
+/** One write a manager may run without asking, on these scopes, up to a daily limit. */
+export interface SwarmAutoApprove {
+  scopes: string[];
+  dailyLimit: number;
+  usedToday: number;
+}
+
 export interface SwarmLiveSession {
   sessionId: string;
   managerId: string;
@@ -221,6 +268,9 @@ export interface SwarmState {
   repoScopes: Record<string, string[]>;
   grantable: string[];
   routines: SwarmRoutine[];
+  watches: SwarmWatch[];
+  /** Per manager, by approval tool: what it may write without asking. */
+  autoApprove: Record<string, Record<string, SwarmAutoApprove>>;
   liveSessions: SwarmLiveSession[];
   /** Messages parked behind a live session, per manager. */
   waiting: { managerId: string; count: number }[];
@@ -450,6 +500,45 @@ function mapRoutine(raw: Json): SwarmRoutine {
   };
 }
 
+const WATCH_KINDS: readonly SwarmWatchKind[] = ["version_heading", "feed", "list_items", "page_text"];
+
+function mapWatch(raw: Json): SwarmWatch {
+  const filter = obj(raw.filter);
+  const kind = WATCH_KINDS.find((k) => k === str(filter.kind)) ?? "page_text";
+  return {
+    id: str(raw.id),
+    managerId: str(raw.manager_id),
+    kind,
+    url: str(filter.url),
+    intervalH: num(filter.interval_h) || 6,
+    cssSelector: str(filter.css_selector),
+    versionRegex: str(filter.version_regex),
+    brief: str(raw.brief),
+    enabled: raw.enabled === true,
+    dailyLimit: num(raw.daily_limit) || 3,
+    lastIdentity: str(raw.last_identity),
+    armingQuestion: str(raw.arming_question),
+    pendingHint: str(raw.pending_hint),
+    nextPollAt: str(raw.next_poll_at),
+    lastPollAt: str(raw.last_poll_at),
+    paused: raw.paused === true,
+    errorStreak: num(raw.error_streak),
+    lastError: str(raw.last_error),
+  };
+}
+
+function mapAutoApprove(raw: unknown): Record<string, Record<string, SwarmAutoApprove>> {
+  const out: Record<string, Record<string, SwarmAutoApprove>> = {};
+  for (const [managerId, tools] of Object.entries(obj(raw))) {
+    out[managerId] = {};
+    for (const [tool, rule] of Object.entries(obj(tools))) {
+      const r = obj(rule);
+      out[managerId][tool] = { scopes: strings(r.scopes), dailyLimit: num(r.daily_limit), usedToday: num(r.used_today) };
+    }
+  }
+  return out;
+}
+
 function mapSession(raw: Json): SwarmSessionView {
   return {
     sessionId: str(raw.session_id),
@@ -518,6 +607,8 @@ export async function getSwarmState(signal?: AbortSignal): Promise<SwarmState> {
     repoScopes,
     grantable: strings(body.grantable),
     routines: list(body.routines).map(mapRoutine),
+    watches: list(body.watches).map(mapWatch),
+    autoApprove: mapAutoApprove(body.auto_approve),
     liveSessions: list(body.live_sessions).map((s) => ({
       sessionId: str(s.session_id),
       managerId: str(s.manager_id),
@@ -647,13 +738,49 @@ export async function answerSession(sessionId: string, text: string): Promise<Sw
 }
 
 /** Replace one manager's grants. The repo scope rides along so a connector toggle never
- * silently drops the repositories the user picked; the backend caps it at three. */
-export async function setGrants(managerId: string, connectors: string[], githubRepos: string[] = []): Promise<string[]> {
+ * silently drops the repositories the user picked; the backend caps it at three.
+ * `autoApprove` is sent only when the user changed it: left out, the backend keeps the
+ * stored policy, so a connector toggle can never switch "act without asking" off or on. */
+export async function setGrants(
+  managerId: string,
+  connectors: string[],
+  githubRepos: string[] = [],
+  autoApprove?: Record<string, { scopes: string[]; dailyLimit: number }>,
+): Promise<string[]> {
+  const payload: Json = { connectors, github_repos: githubRepos };
+  if (autoApprove) {
+    payload.auto_approve = Object.fromEntries(
+      Object.entries(autoApprove).map(([tool, rule]) => [tool, { scopes: rule.scopes, daily_limit: rule.dailyLimit }]),
+    );
+  }
   const body = await call(`/swarm/managers/${encodeURIComponent(managerId)}/grants`, {
     method: "PUT",
-    body: JSON.stringify({ connectors, github_repos: githubRepos }),
+    body: JSON.stringify(payload),
   });
   return strings(body.connectors);
+}
+
+export async function upsertWatch(watchId: string, input: SwarmWatchInput): Promise<SwarmWatch> {
+  const filter: Json = { kind: input.kind, url: input.url, interval_h: input.intervalH };
+  if (input.kind === "list_items") filter.css_selector = input.cssSelector;
+  if (input.kind === "version_heading" && input.versionRegex) filter.version_regex = input.versionRegex;
+  return mapWatch(
+    await call(`/swarm/watches/${encodeURIComponent(watchId)}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        manager_id: input.managerId,
+        source: "web",
+        filter,
+        brief: input.brief,
+        enabled: input.enabled,
+        daily_limit: input.dailyLimit,
+      }),
+    }),
+  );
+}
+
+export async function deleteWatch(watchId: string): Promise<void> {
+  await call(`/swarm/watches/${encodeURIComponent(watchId)}`, { method: "DELETE" });
 }
 
 export interface SwarmRoutineInput {

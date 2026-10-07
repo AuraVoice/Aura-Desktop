@@ -377,6 +377,7 @@ const TARGET_LABEL: Record<string, string> = {
   x: "Post to X",
   linkedin: "Post to LinkedIn",
   calendar: "Add to your calendar",
+  github_issue: "Open an issue",
 };
 const TARGET_LIMIT: Record<string, number> = { x: 280, linkedin: 3000 };
 
@@ -399,6 +400,9 @@ const PROPOSE_COPY: Record<string, string> = {
   time_out_of_range: "That time is in the past or too far ahead to book.",
   time_invalid: "That time doesn't work for a calendar hold.",
   title_required: "The calendar hold needs a title.",
+  connector_not_granted: "GitHub isn't granted to this manager. Switch it on under Can read, then try again.",
+  repo_invalid: "This draft doesn't name a repository Aura can open an issue in.",
+  repo_not_scoped: "This draft names a repository this manager isn't pointed at. Pick it on the manager's card first.",
 };
 
 function localTime(iso: string): string {
@@ -478,6 +482,15 @@ function DraftAction({
               {"\n"}
               {localTime(item.preview.start)} to {localTime(item.preview.end)}
             </p>
+          ) : target === "github_issue" ? (
+            <p className="db-swarm-act-preview">
+              <b>{item.preview.issueTitle}</b>
+              {"\n"}
+              {item.preview.repo}
+              {item.preview.labels.length > 0 && ` · ${item.preview.labels.join(", ")}`}
+              {"\n\n"}
+              {item.preview.text}
+            </p>
           ) : (
             <p className="db-swarm-act-preview">{item.preview.text}</p>
           )}
@@ -500,9 +513,9 @@ function DraftAction({
             <textarea rows={Math.min(8, Math.max(3, Math.ceil(text.length / 70)))} value={text} onChange={(e) => setText(e.target.value)} />
           ) : (
             <p className="db-swarm-act-preview">
-              <b>{str(draft.title) || "Hold"}</b>
+              <b>{str(draft.title) || (target === "github_issue" ? "Issue" : "Hold")}</b>
               {"\n"}
-              {str(draft.when)}
+              {target === "github_issue" ? str(draft.scope) : str(draft.when)}
             </p>
           )}
           <div className="db-swarm-act-row">

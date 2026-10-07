@@ -16,6 +16,10 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+### Added
+- Swarm managers can watch the web for you. Tell #group something like "every time this project ships a release, check it against my repo and open issues for bugs we share", answer one question, and the manager watches that page, starts work when it changes, and reports what is interesting with options. Each watch shows on the manager's card with when it last looked and what it saw, and a page that keeps failing pauses itself and says why.
+- Swarm managers can open GitHub issues in your repository. Each one waits for your review in the report, or, if you switch on "Act without asking" for that repository on the manager's card, it is opened right after the report, up to a daily limit you set.
+
 ### Changed
 - Swarm avatars are redesigned. Your messages show your Google photo, each manager's initial sits on a solid tile in its own colour, and the Supervisor has a new hub icon in its own graphite colour, so it no longer looks like Aura.
 - Swarm is calm at rest. Only a manager that is actually working shows a pulsing ring, and a paused manager's dot is now a hollow ring, so you can tell it apart without relying on colour.

@@ -11,16 +11,17 @@ import { AuthRequiredError, authFetchWithTimeout } from "./api";
  * card and the executed action cannot disagree.
  */
 
-export type PendingActionTool = "post_to_x" | "post_to_linkedin" | "swarm_calendar_hold";
+export type PendingActionTool = "post_to_x" | "post_to_linkedin" | "swarm_calendar_hold" | "github_create_issue";
 
 export const PENDING_ACTION_TOOLS: ReadonlySet<string> = new Set<PendingActionTool>([
   "post_to_x",
   "post_to_linkedin",
   "swarm_calendar_hold",
+  "github_create_issue",
 ]);
 
-export type PendingActionConnector = "x" | "linkedin" | "google_calendar";
-const CONNECTORS: ReadonlySet<string> = new Set<PendingActionConnector>(["x", "linkedin", "google_calendar"]);
+export type PendingActionConnector = "x" | "linkedin" | "google_calendar" | "github";
+const CONNECTORS: ReadonlySet<string> = new Set<PendingActionConnector>(["x", "linkedin", "google_calendar", "github"]);
 
 export type PendingActionStatus =
   | "pending"
@@ -44,6 +45,10 @@ export interface PendingActionPreview {
   timezone: string;
   /** X only: what the post costs against the X budget, when the backend says. */
   estimatedCostUsd: number | null;
+  /** GitHub issues only: the repository, the issue title and its labels. */
+  repo: string;
+  issueTitle: string;
+  labels: string[];
 }
 
 export interface PendingAction {
@@ -112,6 +117,9 @@ export function parsePendingAction(raw: unknown): PendingAction | null {
       end: str(preview.end),
       timezone: str(preview.timezone),
       estimatedCostUsd: typeof preview.estimated_cost_usd === "number" ? preview.estimated_cost_usd : null,
+      repo: str(preview.repo),
+      issueTitle: tool === "github_create_issue" ? str(preview.title) : "",
+      labels: Array.isArray(preview.labels) ? preview.labels.filter((l): l is string => typeof l === "string") : [],
     },
     createdAt: str(data.created_at),
     expiresAt: str(data.expires_at),
@@ -126,6 +134,7 @@ export const CONNECTOR_NAMES: Record<PendingActionConnector, string> = {
   x: "X",
   linkedin: "LinkedIn",
   google_calendar: "Google Calendar",
+  github: "GitHub",
 };
 
 /** What happened after Approve, from the action's own status and result reason. One copy
@@ -133,8 +142,12 @@ export const CONNECTOR_NAMES: Record<PendingActionConnector, string> = {
 export function pendingActionOutcomeCopy(action: PendingAction): string {
   const name = CONNECTOR_NAMES[action.connector];
   const calendar = action.connector === "google_calendar";
-  const nothing = calendar ? "Nothing was booked." : "Nothing was posted.";
-  if (action.status === "done") return calendar ? `Added to ${name}.` : `Posted to ${name}.`;
+  const issue = action.connector === "github";
+  const nothing = calendar ? "Nothing was booked." : issue ? "Nothing was opened." : "Nothing was posted.";
+  if (action.status === "done") {
+    if (issue) return `Opened in ${action.preview.repo || name}.`;
+    return calendar ? `Added to ${name}.` : `Posted to ${name}.`;
+  }
   if (action.status === "expired") return "This expired. Ask again to prepare it.";
   if (action.status === "rejected") return `Discarded. ${nothing}`;
   if (action.status === "unknown" || action.status === "executing") {
@@ -149,6 +162,10 @@ export function pendingActionOutcomeCopy(action: PendingAction): string {
       return `Posting to ${name} is paused for now. Try again later.`;
     case "rate_limited":
       return `${name} is limiting requests right now. Try again in a few minutes.`;
+    case "permission_pending":
+      return "GitHub has to allow Aura to open issues first. Accept the new permission for the Aura app on GitHub, then review it again.";
+    case "repo_not_granted":
+      return "The Aura app on GitHub cannot see that repository. Add it to the app's repositories, then review it again.";
     default:
       return `${name} didn't accept it. ${nothing}`;
   }

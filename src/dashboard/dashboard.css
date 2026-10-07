@@ -10700,6 +10700,35 @@ span.db-swarm-routine-main { cursor: default; }
 .db-swarm-day.is-on { background: var(--sw-accent-soft); border-color: var(--sw-accent-ring); color: var(--sw-accent-strong); }
 .db-swarm-routine-actions { display: flex; justify-content: flex-end; gap: 6px; }
 
+/* Watches: a routine row's shape with a source line; rings travel while it is on. */
+.db-swarm-watch { grid-template-columns: 16px minmax(0, 1fr) auto auto; }
+.db-swarm-watch.is-paused { border-color: var(--sw-warn); }
+.db-swarm-watch.is-paused .db-swarm-routine-main span { color: var(--sw-warn); white-space: normal; }
+.db-swarm-watch.is-waiting { border-style: dashed; }
+.db-swarm-watch.is-on .sw-g-beacon .sw-ring { animation: db-swarm-g-beacon 3.2s ease-out infinite; }
+.db-swarm-watch.is-on .sw-g-beacon .sw-ring-2 { animation-delay: 0.5s; }
+@keyframes db-swarm-g-beacon {
+  0%, 100% { opacity: 0.25; }
+  30% { opacity: 1; }
+}
+.db-swarm-watch-form input,
+.db-swarm-watch-form select {
+  border: 1px solid var(--sw-field-border);
+  background: var(--sw-field);
+  color: var(--sw-text);
+  font: inherit;
+  font-size: 12.5px;
+  border-radius: 10px;
+  padding: 6px 9px;
+  min-width: 0;
+}
+.db-swarm-watch-form input:focus,
+.db-swarm-watch-form select:focus { outline: none; border-color: var(--sw-accent); box-shadow: 0 0 0 3px var(--sw-accent-soft); }
+.db-swarm-watch-fields { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; }
+.db-swarm-auto { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--sw-divider); }
+.db-swarm-auto-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; font-size: 12px; color: var(--sw-dim); }
+.db-swarm-auto-row strong { color: var(--sw-text); font-weight: 650; }
+
 /* Capability glyph motion: long-period, low amplitude, on hover or while live. */
 .sw-g-seek .sw-sat,
 .sw-g-deep .sw-sat { transform-box: view-box; transform-origin: 45% 45%; }

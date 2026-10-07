@@ -8,6 +8,7 @@ import {
   cancelRound,
   cancelSession,
   deleteRoutine,
+  deleteWatch,
   getRound,
   getSession,
   getSwarmState,
@@ -24,6 +25,7 @@ import {
   uploadSwarmDoc,
   uploadSwarmImage,
   upsertRoutine,
+  upsertWatch,
   type SwarmDoc,
   type SwarmMessage,
   type SwarmRoster,
@@ -31,6 +33,7 @@ import {
   type SwarmRoutineInput,
   type SwarmSessionView,
   type SwarmState,
+  type SwarmWatchInput,
 } from "../../lib/swarmApi";
 import { useDashboardResource } from "../useDashboardResource";
 import { SwarmChannels } from "./swarm/SwarmChannels";
@@ -316,6 +319,8 @@ const EMPTY_STATE: SwarmState = {
   repoScopes: {},
   grantable: [],
   routines: [],
+  watches: [],
+  autoApprove: {},
   liveSessions: [],
   waiting: [],
   runtimeProblem: "",
@@ -327,6 +332,8 @@ export function SwarmPage() {
   // The resource restores a disk snapshot written by an older build, which predates
   // this field: a cached state is not guaranteed to have every key of SwarmState.
   const repoScopes = state.repoScopes ?? {};
+  const watches = state.watches ?? [];
+  const autoApprove = state.autoApprove ?? {};
   const roster = state.roster;
   const reloadState = resource.reload;
   const navigate = useNavigate();
@@ -838,7 +845,21 @@ export function SwarmPage() {
   const setRepoScope = (managerId: string, repos: string[]) =>
     void withPending(() => setGrants(managerId, state.grants[managerId] ?? [], repos.slice(0, 3)));
 
+  // "Act without asking" for one write tool: the only caller that sends the policy, so a
+  // connector toggle above can never change it (setGrants leaves it out).
+  const setAutoApprove = (managerId: string, tool: string, rule: { scopes: string[]; dailyLimit: number } | null) =>
+    void withPending(() => {
+      const current = Object.fromEntries(
+        Object.entries(autoApprove[managerId] ?? {}).map(([t, r]) => [t, { scopes: r.scopes, dailyLimit: r.dailyLimit }]),
+      );
+      if (rule) current[tool] = rule;
+      else delete current[tool];
+      return setGrants(managerId, state.grants[managerId] ?? [], repoScopes[managerId] ?? [], current);
+    });
+
   const saveRoutine = (routineId: string, input: SwarmRoutineInput) => void withPending(() => upsertRoutine(routineId, input));
+  const saveWatch = (watchId: string, input: SwarmWatchInput) => void withPending(() => upsertWatch(watchId, input));
+  const removeWatch = (watchId: string) => void withPending(() => deleteWatch(watchId));
   const removeRoutine = (routineId: string) => void withPending(() => deleteRoutine(routineId));
   const runNow = (managerId: string, brief: string) => {
     select(managerChannel(managerId));
@@ -970,10 +991,16 @@ export function SwarmPage() {
         grants={state.grants}
         grantable={state.grantable}
         routines={state.routines}
+        watches={watches}
+        autoApprove={autoApprove}
+        repoScopes={repoScopes}
         pending={pending}
         onToggleGrant={toggleGrant}
         onSaveRoutine={saveRoutine}
         onDeleteRoutine={removeRoutine}
+        onSaveWatch={saveWatch}
+        onDeleteWatch={removeWatch}
+        onSetAutoApprove={setAutoApprove}
         onRunNow={runNow}
       />
     </div>

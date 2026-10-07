@@ -1,6 +1,14 @@
 import { useEffect, useState } from "react";
-import type { SwarmManager, SwarmRoster as Roster, SwarmRoutine, SwarmRoutineInput } from "../../../lib/swarmApi";
-import { GrantSwitches, RoutineList } from "./SwarmManagerTools";
+import type {
+  SwarmAutoApprove,
+  SwarmManager,
+  SwarmRoster as Roster,
+  SwarmRoutine,
+  SwarmRoutineInput,
+  SwarmWatch,
+  SwarmWatchInput,
+} from "../../../lib/swarmApi";
+import { AutoApproveSwitches, GrantSwitches, RoutineList, WatchList } from "./SwarmManagerTools";
 import { managerInitial, SwarmAvatar } from "./SwarmAvatar";
 import { CaretGlyph, CellGlyph, HubGlyph, DismissGlyph, HoldGlyph, SignalGlyph, WatchGlyph } from "./SwarmGlyphs";
 import { displayName, hueOf } from "./swarmThread";
@@ -17,14 +25,24 @@ interface Props {
   grants: Record<string, string[]>;
   grantable: string[];
   routines: SwarmRoutine[];
+  watches: SwarmWatch[];
+  autoApprove: Record<string, Record<string, SwarmAutoApprove>>;
+  repoScopes: Record<string, string[]>;
   pending: boolean;
   onToggleGrant: (managerId: string, connector: string, on: boolean) => void;
   onSaveRoutine: (routineId: string, input: SwarmRoutineInput) => void;
   onDeleteRoutine: (routineId: string) => void;
+  onSaveWatch: (watchId: string, input: SwarmWatchInput) => void;
+  onDeleteWatch: (watchId: string) => void;
+  onSetAutoApprove: (managerId: string, tool: string, rule: { scopes: string[]; dailyLimit: number } | null) => void;
   onRunNow: (managerId: string, brief: string) => void;
 }
 
-type ManagerTools = Pick<Props, "grants" | "grantable" | "routines" | "pending" | "onToggleGrant" | "onSaveRoutine" | "onDeleteRoutine" | "onRunNow">;
+type ManagerTools = Pick<
+  Props,
+  | "grants" | "grantable" | "routines" | "watches" | "autoApprove" | "repoScopes" | "pending" | "onToggleGrant"
+  | "onSaveRoutine" | "onDeleteRoutine" | "onSaveWatch" | "onDeleteWatch" | "onSetAutoApprove" | "onRunNow"
+>;
 
 const W = 268;
 const H = 156;
@@ -143,6 +161,7 @@ function ManagerCard({
 }) {
   const paused = manager.status === "paused";
   const routines = tools.routines.filter((r) => r.managerId === manager.id).length;
+  const watches = tools.watches.filter((w) => w.managerId === manager.id);
   return (
     <li className={`db-swarm-card${expanded ? " is-open" : ""}${paused ? " is-paused" : ""}${fresh ? " is-fresh" : ""}`}>
       <button type="button" className="db-swarm-card-head" onClick={onToggle} aria-expanded={expanded}>
@@ -155,6 +174,7 @@ function ManagerCard({
             {manager.subagents.length === 0 ? "works solo" : `${manager.subagents.length} subagent${manager.subagents.length === 1 ? "" : "s"}`}
             {manager.connectors.length > 0 && ` · ${manager.connectors.length} connector${manager.connectors.length === 1 ? "" : "s"}`}
             {routines > 0 && ` · ${routines} routine${routines === 1 ? "" : "s"}`}
+            {watches.length > 0 && ` · ${watches.length} watch${watches.length === 1 ? "" : "es"}`}
           </span>
         </span>
         {working && !paused && <span className="db-swarm-status-chip">Working</span>}
@@ -194,6 +214,19 @@ function ManagerCard({
             onSave={tools.onSaveRoutine}
             onDelete={tools.onDeleteRoutine}
             onRunNow={(brief) => tools.onRunNow(manager.id, brief)}
+          />
+          <WatchList
+            watches={watches}
+            pending={tools.pending}
+            onSave={tools.onSaveWatch}
+            onDelete={tools.onDeleteWatch}
+          />
+          <AutoApproveSwitches
+            granted={tools.grants[manager.id] ?? []}
+            repos={tools.repoScopes[manager.id] ?? []}
+            policy={tools.autoApprove[manager.id] ?? {}}
+            pending={tools.pending}
+            onSet={(tool, rule) => tools.onSetAutoApprove(manager.id, tool, rule)}
           />
         </div>
       </div>
