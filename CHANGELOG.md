@@ -16,6 +16,8 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+## [0.16.6] - 2026-10-06
+
 ### Added
 - Buddy has a face. Bolt, a little robot, now appears in chat while Aura is thinking, and in Swarm while Aura decides who owns a message.
 - Settings has a new Companion tab where you can pick Buddy's avatar or turn it off and keep the plain dots.
