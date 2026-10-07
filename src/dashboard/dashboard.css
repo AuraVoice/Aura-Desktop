@@ -8974,6 +8974,7 @@
   display: flex;
   align-items: center;
   gap: 9px;
+  margin-top: 10px;
   padding: 10px;
   border: 1px solid var(--sw-chip-border);
   border-radius: 14px;
@@ -8989,26 +8990,6 @@
 .db-swarm-contact:hover { background: var(--sw-hover); }
 .db-swarm-contact:focus-visible { outline: 2px solid var(--sw-accent-ring); outline-offset: 2px; }
 .db-swarm-contact .db-swarm-ch-role { white-space: normal; font-size: 12px; }
-.db-swarm-new-btn {
-  margin-left: auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 3px 8px;
-  border: 1px solid var(--sw-chip-border);
-  border-radius: 999px;
-  background: transparent;
-  color: var(--sw-dim);
-  font: inherit;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0;
-  text-transform: none;
-  cursor: pointer;
-  transition: background 160ms var(--sw-out), color 160ms var(--sw-out);
-}
-.db-swarm-new-btn:hover { background: var(--sw-hover); color: var(--sw-text); }
-.db-swarm-new-btn:focus-visible { outline: 2px solid var(--sw-accent-ring); outline-offset: 2px; }
 .db-swarm-role { font-size: 11.5px; color: var(--sw-mute); }
 .db-swarm-icon-btn.is-labelled { width: auto; gap: 6px; padding: 0 10px; font: inherit; font-size: 12.5px; font-weight: 550; display: inline-flex; align-items: center; }
 .db-swarm-ch-avatar { position: relative; display: inline-flex; flex: none; }
@@ -9025,16 +9006,6 @@
 /* Paused reads by shape, not only colour: a hollow ring. */
 .db-swarm-presence.is-paused { background: var(--sw-active); box-shadow: inset 0 0 0 1.5px var(--sw-mute); }
 .db-swarm-ch-paused { color: var(--sw-mute); flex: none; }
-.db-swarm-admin {
-  font-size: 9.5px;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  padding: 1px 6px;
-  border-radius: 999px;
-  color: var(--sw-boss);
-  background: var(--sw-boss-soft);
-}
 .db-swarm-unread {
   min-width: 18px;
   padding: 0 6px;
@@ -9617,9 +9588,127 @@
 }
 .db-swarm-compose-box { position: relative; }
 .db-swarm-compose-box:focus-within { border-color: var(--sw-accent-ring); box-shadow: 0 0 0 1px var(--sw-accent-soft); }
-/* Who will answer, named before you send. */
-.db-swarm-to { display: flex; align-items: center; gap: 7px; padding: 9px 16px 0; font-size: 12px; color: var(--sw-mute); }
-.db-swarm-to strong { font-weight: 650; color: var(--sw-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* What the recipient may read, as pills above the field: each granted connector
+   (x revokes in a DM), then + for the rest of the connected accounts. Pills are fully
+   round so they sit in the compose box's own 24px radius. GitHub's pill opens the
+   repository list. */
+.db-swarm-scope { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 10px 14px 0; }
+.db-swarm-scope-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 28px;
+  padding: 0 6px 0 2px;
+  border-radius: 999px;
+  border: 1px solid var(--sw-chip-border);
+  background: var(--sw-chip);
+  color: var(--sw-text);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.db-swarm-scope-chip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 6px 0 9px;
+  border: none;
+  border-radius: 999px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  cursor: default;
+}
+.db-swarm-scope-chip.is-clickable .db-swarm-scope-chip-btn { cursor: pointer; }
+.db-swarm-scope-chip.is-clickable .db-swarm-scope-chip-btn:hover { background: var(--sw-hover); }
+.db-swarm-scope-chip-btn:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--sw-accent-soft); }
+.db-swarm-scope-icon { flex: none; width: 14px; height: 14px; color: var(--sw-dim); }
+.db-swarm-scope-remove,
+.db-swarm-scope-add {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  color: var(--sw-mute);
+  cursor: pointer;
+  border-radius: 6px;
+}
+.db-swarm-scope-remove { width: 18px; height: 18px; border-radius: 999px; }
+.db-swarm-scope-add { width: 28px; height: 28px; border: 1px solid var(--sw-chip-border); background: var(--sw-chip); border-radius: 999px; }
+.db-swarm-scope-remove:hover:not(:disabled),
+.db-swarm-scope-add:hover:not(:disabled) { background: var(--sw-hover); color: var(--sw-text); }
+.db-swarm-scope-remove:disabled,
+.db-swarm-scope-add:disabled { opacity: 0.5; cursor: default; }
+.db-swarm-scope-remove:focus-visible,
+.db-swarm-scope-add:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--sw-accent-soft); }
+.db-swarm-scope-add-wrap { position: relative; display: inline-flex; }
+.db-swarm-scope-menu {
+  position: absolute;
+  z-index: 12;
+  left: 0;
+  bottom: calc(100% + 6px);
+  min-width: 190px;
+  padding: 6px;
+  border: 1px solid var(--sw-chip-border);
+  border-radius: 14px;
+  background: var(--sw-active);
+  box-shadow: 0 12px 28px var(--sw-lift);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  animation: db-popover-in 0.18s var(--db-ease) both;
+}
+.db-swarm-scope-menu-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-height: 36px;
+  padding: 4px 10px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--sw-text);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.db-swarm-scope-menu-row:hover { background: var(--sw-hover); }
+.db-swarm-scope-menu-row:focus-visible { outline: 2px solid var(--sw-accent-ring); outline-offset: -2px; }
+/* The repository picker rises above its pill or +, like the @ list, so the thread
+   never has to scroll to reveal it. */
+.db-swarm-scope-anchor { position: absolute; left: 0; bottom: 100%; z-index: 12; }
+.db-swarm-scope-menu.is-repos { position: static; width: 300px; max-height: 320px; overflow-y: auto; margin-bottom: 6px; padding: 8px 8px 10px; white-space: normal; font-weight: 500; }
+.db-swarm-scope-group { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.db-swarm-scope-menu-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 4px 6px; font-size: 12px; font-weight: 650; color: var(--sw-dim); }
+.db-swarm-scope-menu-note { margin: 4px; font-size: 12px; font-weight: 500; color: var(--sw-mute); line-height: 1.4; }
+.db-swarm-scope-repos { list-style: none; margin: 0; padding: 0; }
+.db-swarm-scope-repo {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  min-height: 32px;
+  padding: 2px 8px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--sw-text);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.db-swarm-scope-repo:hover:not(:disabled) { background: var(--sw-hover); }
+.db-swarm-scope-repo.is-on { color: var(--sw-accent-strong); background: var(--sw-accent-soft); }
+.db-swarm-scope-repo:disabled { opacity: 0.45; cursor: default; }
+.db-swarm-scope-repo:focus-visible { outline: 2px solid var(--sw-accent-ring); outline-offset: -2px; }
+.db-swarm-scope-repo svg { flex: none; color: var(--sw-mute); }
+.db-swarm-scope-repo.is-on svg { color: inherit; }
+.db-swarm-scope-repo-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The @ list rises from the composer; every colour is an --sw-* token, so dark needs no twin. */
 .db-swarm-mentions {
   position: absolute;
@@ -9993,7 +10082,6 @@
     white-space: nowrap;
   }
   .is-rail-collapsed .db-swarm-group-label,
-  .is-rail-collapsed .db-swarm-admin,
   .is-rail-collapsed .db-swarm-ch-paused,
   .is-rail-collapsed .db-swarm-meter,
   .is-rail-collapsed .db-swarm-rail-empty { display: none; }

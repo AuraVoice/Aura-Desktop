@@ -26,6 +26,7 @@ import {
 } from "./SwarmGlyphs";
 import { PlanEmbed, QuestionEmbed, ReportEmbed, RoundEmbed, RoundReplyEmbed, StepRow, WorkingEmbed } from "./SwarmWork";
 import { useMentionPicker } from "./SwarmMentionPicker";
+import { ComposerGrants } from "./SwarmComposerGrants";
 import {
   CAPABILITY_LABEL,
   CAPABILITY_PATH,
@@ -157,6 +158,14 @@ interface Props {
   onAnswerSession: (sessionId: string, text: string) => void;
   grants: Record<string, string[]>;
   onGrant: (managerId: string, connector: string) => void;
+  /** Connectors the account has connected that a manager may be granted. */
+  grantable: string[];
+  /** Per manager, the GitHub repositories it was pointed at (at most three). */
+  repoScopes: Record<string, string[]>;
+  /** A grant change is in flight; the composer's chips wait for it. */
+  grantPending: boolean;
+  onToggleGrant: (managerId: string, connector: string, on: boolean) => void;
+  onRepoScope: (managerId: string, repos: string[]) => void;
   onOpenSource: (url: string) => void;
   onOpenResearch: (runId: string) => void;
   /** A "not a swarm job" named a feature: go to its page. */
@@ -172,8 +181,6 @@ interface Props {
   rosterOpen: boolean;
   onToggleRoster: () => void;
   composerRef: RefObject<HTMLTextAreaElement | null>;
-  /** The New manager button was pressed: the empty composer says what to write. */
-  hireHint: boolean;
   /** Files picked for the next message, each read on this machine then put on the shelf. */
   attachments: ComposerDoc[];
   onAttach: (files: File[]) => void;
@@ -448,7 +455,6 @@ export function SwarmStream(props: Props) {
   const [showJump, setShowJump] = useState(false);
   const readOnly = view.kind === "activity";
   // Who answers what you send: the manager in its DM, the point of contact in #group.
-  const recipient = readOnly ? null : view.kind === "manager" ? view.author ?? null : props.busyAuthor;
   const messageMax = view.kind === "manager" ? BRIEF_MAX : GROUP_MESSAGE_MAX;
   // Handlers are read at click time, so the list below need not rebuild when only the
   // composer's text (or a fresh inline arrow from the page) changed.
@@ -759,9 +765,7 @@ export function SwarmStream(props: Props) {
     ? "Read only"
     : view.kind === "manager"
       ? `Message ${view.name}`
-      : props.hireHint
-        ? "Describe an ongoing job"
-        : `Message #${view.name}`;
+      : `Message #${view.name}`;
   const showSkeleton = props.loading && items.length === 0 && !busyHere;
   const showHero = view.kind === "group" && items.length === 0 && !busyHere && !showSkeleton;
 
@@ -844,12 +848,17 @@ export function SwarmStream(props: Props) {
 
       <div className={`db-swarm-compose-box${readOnly ? " is-readonly" : ""}${busy ? " is-busy" : ""}`}>
       {!readOnly && mention.popover}
-      {recipient && (
-        <div className="db-swarm-to">
-          <span>To</span>
-          <SwarmAvatar author={recipient} size="xs" />
-          <strong>{recipient.name}</strong>
-        </div>
+      {!readOnly && (
+        <ComposerGrants
+          view={view}
+          roster={props.roster}
+          grants={props.grants}
+          grantable={props.grantable}
+          repoScopes={props.repoScopes}
+          pending={props.grantPending}
+          onToggleGrant={props.onToggleGrant}
+          onRepoScope={props.onRepoScope}
+        />
       )}
       {!readOnly && props.attachments.length > 0 && (
         <div className="db-swarm-attachments" aria-label="Files for this message">
@@ -942,13 +951,9 @@ export function SwarmStream(props: Props) {
           ? "Activity is written by the swarm."
           : hasImage
             ? "Images are read once in the cloud and not kept. Only text reaches managers."
-            : view.kind === "manager"
-              ? props.attachments.length > 0
-                ? "Only the files' text leaves this computer."
-                : "Managers only read. Drafts are never sent."
-              : props.attachments.length > 0
-                ? "Only the files' text leaves this computer."
-                : null}
+            : props.attachments.length > 0
+              ? "Only the files' text leaves this computer."
+              : null}
       </p>
     </section>
   );

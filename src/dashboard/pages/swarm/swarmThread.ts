@@ -128,7 +128,7 @@ export function roleLabel(author: Author, roster: SwarmRoster): string {
   // A named manager shows its job as the role ("Snapshot Sam · Langfuse Snapshots").
   const job = manager?.name ? manager.title : "Manager";
   if (manager?.status === "paused") return `${job} · paused`;
-  return manager?.isCoordinator ? `${job} · point of contact` : job;
+  return job;
 }
 
 /** Everyone an @ in the composer can name: the Supervisor when it is active, then every

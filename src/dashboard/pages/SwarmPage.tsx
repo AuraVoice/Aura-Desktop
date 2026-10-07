@@ -315,6 +315,7 @@ const EMPTY_STATE: SwarmState = {
   rosterExists: false,
   channels: [],
   grants: {},
+  repoScopes: {},
   grantable: [],
   routines: [],
   liveSessions: [],
@@ -325,6 +326,9 @@ const EMPTY_STATE: SwarmState = {
 export function SwarmPage() {
   const resource = useDashboardResource<SwarmState>("swarm:state", getSwarmState, { freshnessMs: 30_000 });
   const state = resource.data ?? EMPTY_STATE;
+  // The resource restores a disk snapshot written by an older build, which predates
+  // this field: a cached state is not guaranteed to have every key of SwarmState.
+  const repoScopes = state.repoScopes ?? {};
   const roster = state.roster;
   const reloadState = resource.reload;
   const navigate = useNavigate();
@@ -377,7 +381,6 @@ export function SwarmPage() {
   const [freshManagers, markManagers] = useFreshSet();
   const [supervisorFresh, setSupervisorFresh] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
-  const [hireHint, setHireHint] = useState(false);
   const { user } = useAuth();
   const youName = (user?.displayName || user?.email?.split("@")[0] || "").split(" ")[0];
   const loading = useRef<Set<string>>(new Set());
@@ -605,7 +608,6 @@ export function SwarmPage() {
 
   const select = (next: ChannelId) => {
     setChannel(next);
-    setHireHint(false);
     // Files picked for one channel are never sent from another by accident.
     if (next !== liveChannel) clearAttachments();
     saveChannel(next);
@@ -687,7 +689,6 @@ export function SwarmPage() {
     // The box empties the moment Enter lands. Clearing it only after the router had
     // answered (up to two minutes) made every send look like it never went (2026-10-03).
     setText("");
-    setHireHint(false);
     setAttachments([]);
     setSending({ text: message, docs: ready.map((a) => ({ id: a.docId, name: a.name })), channel: liveChannel });
     const ok = view.kind === "manager" && view.manager
@@ -833,8 +834,11 @@ export function SwarmPage() {
     void withPending(() => {
       const current = state.grants[managerId] ?? [];
       const next = on ? [...new Set([...current, connector])] : current.filter((c) => c !== connector);
-      return setGrants(managerId, next);
+      return setGrants(managerId, next, repoScopes[managerId] ?? []);
     });
+
+  const setRepoScope = (managerId: string, repos: string[]) =>
+    void withPending(() => setGrants(managerId, state.grants[managerId] ?? [], repos.slice(0, 3)));
 
   const saveRoutine = (routineId: string, input: SwarmRoutineInput) => void withPending(() => upsertRoutine(routineId, input));
   const removeRoutine = (routineId: string) => void withPending(() => deleteRoutine(routineId));
@@ -858,12 +862,6 @@ export function SwarmPage() {
   const discardLegacy = () => {
     clearLegacy();
     setLegacy(null);
-  };
-
-  const newWorkflow = () => {
-    select("group");
-    setHireHint(true);
-    window.requestAnimationFrame(() => composerRef.current?.focus());
   };
 
   // A failed first load must not read as an empty team that is ready to go.
@@ -908,7 +906,6 @@ export function SwarmPage() {
         freshManagers={freshManagers}
         supervisorFresh={supervisorFresh}
         onSelect={select}
-        onNewWorkflow={newWorkflow}
         collapsed={railCollapsed}
         onToggleCollapsed={toggleRail}
       />
@@ -938,6 +935,11 @@ export function SwarmPage() {
           onAnswerSession={(id, value) => void answerManager(id, value)}
           grants={state.grants}
           onGrant={(managerId, connector) => toggleGrant(managerId, connector, true)}
+          grantable={state.grantable}
+          repoScopes={repoScopes}
+          grantPending={pending}
+          onToggleGrant={toggleGrant}
+          onRepoScope={setRepoScope}
           onOpenSource={(url) => void openUrl(url)}
           onOpenResearch={(runId) => navigate(`/agents?tab=research&run=${encodeURIComponent(runId)}`)}
           onOpenPath={(path) => navigate(path)}
@@ -951,7 +953,6 @@ export function SwarmPage() {
           rosterOpen={rosterOpen}
           onToggleRoster={() => setRosterOpen((open) => !open)}
           composerRef={composerRef}
-          hireHint={hireHint}
           attachments={attachments}
           onAttach={attach}
           onRemoveAttachment={removeAttachment}

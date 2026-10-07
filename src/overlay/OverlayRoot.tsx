@@ -114,7 +114,7 @@ interface OverlaySnapshot {
 }
 
 export function OverlayRoot() {
-  const { user } = useAuth();
+  const { user, initializing } = useAuth();
   const generalSettings = useGeneralSettings();
   const updateReady = useUpdateReady();
   const [presentation, setPresentation] = useState<OverlayPresentation>("hidden");
@@ -981,6 +981,9 @@ export function OverlayRoot() {
   }
 
   if (!user) {
+    // Until the persisted session is read, null is "unknown", not "signed out":
+    // drawing the sign-in panel here flashed it on every launch.
+    if (initializing) return null;
     return (
       <div className="overlay-column">
         <GlassSurface>

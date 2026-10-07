@@ -33,6 +33,7 @@
     "os:allow-locale",
     "log:default",
     "store:default",
+    "process:allow-restart",
     "clipboard-manager:allow-write-text",
     "clipboard-manager:allow-read-text",
     "notification:allow-is-permission-granted",

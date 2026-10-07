@@ -261,18 +261,22 @@ export function DashboardApp() {
     if (uid) void loadAccountOnboarding(uid);
   }, [uid, loadAccountOnboarding]);
 
-  const showApp = user !== null && onboarded === true && accountComplete === true;
+  const showApp = Boolean(user) && onboarded === true && accountComplete === true;
+  // Nothing but the frame until the persisted session has been read: rendering the
+  // onboarding shell on the pre-rehydration null flashed the welcome screen on
+  // every launch for a signed-in user.
+  const authResolved = user !== undefined;
 
   return (
     // Above the showApp fork on purpose: the onboarding tail's voice picker
     // needs the same shared entitlement the finished app does.
-    <EntitlementProvider signedIn={user !== null} uid={uid}>
+    <EntitlementProvider signedIn={Boolean(user)} uid={uid}>
     <div className="db-window">
       {!showApp && <DashboardTitleBar collapsed={collapsed} />}
       <div className="db-window-content">
-        {onboarded !== null && (
+        {authResolved && onboarded !== null && (
           <ErrorBoundary>
-            {showApp ? (
+            {showApp && user ? (
               <HashRouter>
                 <DashboardShell user={user} collapsed={collapsed} onToggle={() => setCollapsed((current) => !current)} onCollapse={() => setCollapsed(true)} />
               </HashRouter>

@@ -217,6 +217,8 @@ export interface SwarmState {
   rosterExists: boolean;
   channels: SwarmChannelInfo[];
   grants: Record<string, string[]>;
+  /** Per manager, the GitHub repositories it was pointed at (at most three). */
+  repoScopes: Record<string, string[]>;
   grantable: string[];
   routines: SwarmRoutine[];
   liveSessions: SwarmLiveSession[];
@@ -505,12 +507,15 @@ export async function getSwarmState(signal?: AbortSignal): Promise<SwarmState> {
   const body = await call("/swarm/state", { signal });
   const grants: Record<string, string[]> = {};
   for (const [managerId, connectors] of Object.entries(obj(body.grants))) grants[managerId] = strings(connectors);
+  const repoScopes: Record<string, string[]> = {};
+  for (const [managerId, repos] of Object.entries(obj(body.repo_scopes))) repoScopes[managerId] = strings(repos);
   return {
     rosterWire: body.roster ?? {},
     roster: mapRoster(body.roster),
     rosterExists: body.roster_exists === true,
     channels: list(body.channels).map((c) => ({ id: str(c.id), nextSeq: num(c.next_seq) || 1, lastPreview: str(c.last_preview) })),
     grants,
+    repoScopes,
     grantable: strings(body.grantable),
     routines: list(body.routines).map(mapRoutine),
     liveSessions: list(body.live_sessions).map((s) => ({
@@ -641,10 +646,12 @@ export async function answerSession(sessionId: string, text: string): Promise<Sw
   );
 }
 
-export async function setGrants(managerId: string, connectors: string[]): Promise<string[]> {
+/** Replace one manager's grants. The repo scope rides along so a connector toggle never
+ * silently drops the repositories the user picked; the backend caps it at three. */
+export async function setGrants(managerId: string, connectors: string[], githubRepos: string[] = []): Promise<string[]> {
   const body = await call(`/swarm/managers/${encodeURIComponent(managerId)}/grants`, {
     method: "PUT",
-    body: JSON.stringify({ connectors }),
+    body: JSON.stringify({ connectors, github_repos: githubRepos }),
   });
   return strings(body.connectors);
 }

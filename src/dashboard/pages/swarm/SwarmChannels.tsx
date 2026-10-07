@@ -1,6 +1,6 @@
 import type { SwarmRoster } from "../../../lib/swarmApi";
 import { SwarmAvatar } from "./SwarmAvatar";
-import { CaretGlyph, HoldGlyph, LatticeGlyph, PulseGlyph, SpawnGlyph, SwarmMark } from "./SwarmGlyphs";
+import { CaretGlyph, HoldGlyph, LatticeGlyph, PulseGlyph, SwarmMark } from "./SwarmGlyphs";
 import {
   contactDuty,
   displayName,
@@ -26,7 +26,6 @@ interface Props {
   freshManagers: ReadonlySet<string>;
   supervisorFresh: boolean;
   onSelect: (channel: ChannelId) => void;
-  onNewWorkflow: () => void;
   /** Folded to a strip of icons, so the conversation gets the width. */
   collapsed: boolean;
   onToggleCollapsed: () => void;
@@ -39,7 +38,7 @@ function Badge({ count }: { count: number }) {
 
 /** Left rail: the two shared channels, then one DM per manager, then whether the
  * managers can work right now. */
-export function SwarmChannels({ roster, channel, unread, working, loading, status, freshManagers, supervisorFresh, onSelect, onNewWorkflow, collapsed, onToggleCollapsed }: Props) {
+export function SwarmChannels({ roster, channel, unread, working, loading, status, freshManagers, supervisorFresh, onSelect, collapsed, onToggleCollapsed }: Props) {
   // Folded, the names are visually hidden but still read out; the tooltip names each row.
   const tip = (label: string) => (collapsed ? label : undefined);
   const hasSupervisor = supervisorActive(roster);
@@ -66,7 +65,6 @@ export function SwarmChannels({ roster, channel, unread, working, loading, statu
       </div>
 
       <div className="db-swarm-rail-scroll">
-        <div className="db-swarm-group-label">Point of contact</div>
         <button
           type="button"
           className="db-swarm-contact"
@@ -90,7 +88,6 @@ export function SwarmChannels({ roster, channel, unread, working, loading, statu
         >
           <span className="db-swarm-ch-hash"><LatticeGlyph size={17} /></span>
           <span className="db-swarm-ch-name">{groupChannelName(roster)}</span>
-          {hasSupervisor && <span className="db-swarm-admin" title="Supervisor runs this channel">admin</span>}
           <Badge count={channel === "group" ? 0 : unread.group ?? 0} />
         </button>
         <button
@@ -107,9 +104,6 @@ export function SwarmChannels({ roster, channel, unread, working, loading, statu
 
         <div className="db-swarm-group-label">
           Managers <span className="db-swarm-group-count">{roster.managers.length}</span>
-          <button type="button" className="db-swarm-new-btn" onClick={onNewWorkflow} title="Describe an ongoing job and Aura hires a manager for it">
-            <SpawnGlyph size={14} /> New
-          </button>
         </div>
         {roster.managers.length === 0 && loading && (
           <div className="db-swarm-skel-list" aria-hidden="true">
