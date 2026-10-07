@@ -360,6 +360,7 @@ export function StepRow({
           <strong>{label}</strong>
           {sub && <span className="db-swarm-muted">via {sub}</span>}
           {duration > 0 && <span className="db-swarm-muted">{(duration / 1000).toFixed(1)}s</span>}
+          {data.cached === true && <span className="db-swarm-muted">already read this session</span>}
           {added > 0 && <span className="db-swarm-muted">+{added} source{added === 1 ? "" : "s"}</span>}
         </span>
         {(str(data.why) || message.text) && <span className="db-swarm-step-why">{str(data.why) || message.text}</span>}
