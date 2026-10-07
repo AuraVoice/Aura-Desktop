@@ -109,9 +109,10 @@ pub fn open_dashboard_route(
     }
 
     let url = format!("index.html#{destination}");
+    let (width, height) = initial_size(app);
     let window = WebviewWindowBuilder::new(app, DASHBOARD_WINDOW, WebviewUrl::App(url.into()))
         .title("Aura")
-        .inner_size(1000.0, 700.0)
+        .inner_size(width, height)
         .min_inner_size(720.0, 520.0)
         .decorations(false)
         .transparent(false)
@@ -126,6 +127,24 @@ pub fn open_dashboard_route(
 
     let _ = window.set_focus();
     Ok(())
+}
+
+/// The size a fresh dashboard opens at: 1600x840 (the old 1000x700 plus 30% on
+/// each side and 10% top and bottom), shrunk to fit the primary monitor's work
+/// area so a laptop screen never opens it under the taskbar or off the edge.
+/// `.center()` places it on that same monitor.
+fn initial_size(app: &AppHandle) -> (f64, f64) {
+    const WIDTH: f64 = 1600.0;
+    const HEIGHT: f64 = 840.0;
+    const FIT: f64 = 0.94;
+    let Some(monitor) = app.primary_monitor().ok().flatten() else {
+        return (WIDTH, HEIGHT);
+    };
+    let area = monitor.work_area().size.to_logical::<f64>(monitor.scale_factor());
+    (
+        WIDTH.min(area.width * FIT).max(720.0),
+        HEIGHT.min(area.height * FIT).max(520.0),
+    )
 }
 
 /// Whether the dashboard window should own a taskbar button. Defaults to true

@@ -16,6 +16,10 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+### Changed
+
+- The dashboard opens much larger by default, 1600 by 840 instead of 1000 by 700, so the Agents tabs and long Swarm reports have room without resizing. On a smaller screen it shrinks to fit, so it never opens under the taskbar.
+
 ## [0.16.8] - 2026-10-07
 
 ### Added
