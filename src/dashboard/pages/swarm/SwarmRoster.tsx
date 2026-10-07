@@ -8,7 +8,7 @@ import type {
   SwarmWatch,
   SwarmWatchInput,
 } from "../../../lib/swarmApi";
-import { AutoApproveSwitches, GrantSwitches, RoutineList, WatchList } from "./SwarmManagerTools";
+import { AutoApproveSwitches, GrantSwitches, MemoryList, RoutineList, WatchList } from "./SwarmManagerTools";
 import { managerInitial, SwarmAvatar } from "./SwarmAvatar";
 import { CaretGlyph, CellGlyph, HubGlyph, DismissGlyph, HoldGlyph, SignalGlyph, WatchGlyph } from "./SwarmGlyphs";
 import { displayName, hueOf } from "./swarmThread";
@@ -36,12 +36,14 @@ interface Props {
   onDeleteWatch: (watchId: string) => void;
   onSetAutoApprove: (managerId: string, tool: string, rule: { scopes: string[]; dailyLimit: number } | null) => void;
   onRunNow: (managerId: string, brief: string) => void;
+  /** A row was forgotten on this computer; the server's last envelope must go too. */
+  onForgotMemory: (managerId: string) => void;
 }
 
 type ManagerTools = Pick<
   Props,
   | "grants" | "grantable" | "routines" | "watches" | "autoApprove" | "repoScopes" | "pending" | "onToggleGrant"
-  | "onSaveRoutine" | "onDeleteRoutine" | "onSaveWatch" | "onDeleteWatch" | "onSetAutoApprove" | "onRunNow"
+  | "onSaveRoutine" | "onDeleteRoutine" | "onSaveWatch" | "onDeleteWatch" | "onSetAutoApprove" | "onRunNow" | "onForgotMemory"
 >;
 
 const W = 268;
@@ -228,6 +230,7 @@ function ManagerCard({
             pending={tools.pending}
             onSet={(tool, rule) => tools.onSetAutoApprove(manager.id, tool, rule)}
           />
+          <MemoryList manager={manager} onForgot={tools.onForgotMemory} />
         </div>
       </div>
     </li>

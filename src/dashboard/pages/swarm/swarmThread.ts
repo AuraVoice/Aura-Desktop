@@ -74,9 +74,9 @@ export type StreamItem =
   | { key: string; kind: "crosspost"; text: string; at: number }
   | { key: string; kind: "system"; text: string; tone: "supervisor" | "routine" | "plain"; at: number }
   | { key: string; kind: "say"; text: string; author: Author; at: number }
-  | { key: string; kind: "working"; sessionId: string; text: string; author: Author; at: number }
-  | { key: string; kind: "plan"; message: SwarmMessage; author: Author; at: number }
-  | { key: string; kind: "step"; message: SwarmMessage; author: Author; at: number }
+  /** A session's working line. Its plan and steps ride on it rather than as rows of their
+   * own, so a finished run folds to one line and a live one shows only the chip. */
+  | { key: string; kind: "working"; sessionId: string; text: string; author: Author; at: number; plan?: SwarmMessage; steps: SwarmMessage[]; reportAt: number }
   | { key: string; kind: "question"; message: SwarmMessage; author: Author; at: number }
   | { key: string; kind: "report"; message: SwarmMessage; author: Author; at: number }
   | { key: string; kind: "round"; roundId: string; message: SwarmMessage; author: Author; at: number }
@@ -197,6 +197,18 @@ function decisionsOf(message: SwarmMessage): SwarmDecision[] {
 export function channelItems(messages: SwarmMessage[], roster: SwarmRoster): StreamItem[] {
   const backer = frontDoorAuthor(roster);
   const items: StreamItem[] = [];
+  // First pass: what each session did, keyed by session, so the working line can carry it.
+  const work: { plan: Record<string, SwarmMessage>; steps: Record<string, SwarmMessage[]>; reportAt: Record<string, number> } = {
+    plan: {},
+    steps: {},
+    reportAt: {},
+  };
+  for (const m of messages) {
+    if (m.authorKind === "user" || !m.sessionId) continue;
+    if (m.kind === "plan") work.plan[m.sessionId] = m;
+    else if (m.kind === "step") (work.steps[m.sessionId] ??= []).push(m);
+    else if (m.kind === "report") work.reportAt[m.sessionId] = m.at;
+  }
   let asked: { text: string; docs: { id: string; name: string }[] } = { text: "", docs: [] };
   for (const m of messages) {
     const key = `${m.channelId}-${m.seq}`;
@@ -256,13 +268,21 @@ export function channelItems(messages: SwarmMessage[], roster: SwarmRoster): Str
         items.push({ key, kind: "system", text: `Something it watches changed. ${m.text}`, tone: "routine", at: m.at });
         break;
       case "working":
-        items.push({ key, kind: "working", sessionId: m.sessionId, text: m.text, author: speaker, at: m.at });
+        items.push({
+          key,
+          kind: "working",
+          sessionId: m.sessionId,
+          text: m.text,
+          author: speaker,
+          at: m.at,
+          plan: work.plan[m.sessionId],
+          steps: work.steps[m.sessionId] ?? [],
+          reportAt: work.reportAt[m.sessionId] ?? 0,
+        });
         break;
       case "plan":
-        items.push({ key, kind: "plan", message: m, author: speaker, at: m.at });
-        break;
       case "step":
-        items.push({ key, kind: "step", message: m, author: speaker, at: m.at });
+        // Folded under the session's working line (collected above); never a row of its own.
         break;
       case "question":
         items.push({ key, kind: "question", message: m, author: speaker, at: m.at });

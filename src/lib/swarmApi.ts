@@ -169,6 +169,40 @@ export interface SwarmMessageRequest {
   docIds?: string[];
   /** Managers typed as @mentions, a strong hint to the router. */
   mentionIds?: string[];
+  /** What each manager this message may land on already knows, recalled on this
+   * computer (swarmMemory.ts). The backend keeps the last one per manager for runs
+   * that start while this machine is off. */
+  memory?: Record<string, MemoryEnvelope>;
+}
+
+/** One manager's recalled memory, exactly as `swarm_memory_recall` serializes it and
+ * `MemoryEnvelope` on the backend validates it. Snake case on purpose: it goes up verbatim. */
+export interface MemoryEnvelope {
+  v: 1;
+  manager_id: string;
+  generated_at: string;
+  facts: MemoryEnvelopeRow[];
+  outcomes: MemoryEnvelopeRow[];
+  preferences: MemoryEnvelopeRow[];
+  reported_ids: string[];
+  threads: { key: string; text: string }[];
+}
+
+export interface MemoryEnvelopeRow {
+  key: string;
+  text: string;
+  confidence: number;
+  source: "observed" | "user_stated";
+}
+
+/** What a finished session asks this computer to remember (runner.py _clean_report and
+ * _code_learnings). */
+export interface SwarmLearning {
+  type: "fact" | "outcome" | "preference" | "thread";
+  key: string;
+  text: string;
+  confidence: number;
+  source: "observed" | "user_stated";
 }
 
 export type SwarmAuthorKind = "user" | "manager" | "aura" | "system";
@@ -308,6 +342,12 @@ export interface SwarmSessionView {
   roundId: string;
   /** Report draft id (d1..) to the approval it became, when the user pressed Review. */
   draftActions: Record<string, string>;
+  /** Set once the session ended: what this computer should remember, and the raw ISO
+   * end time the memory cursor is kept in (endedAt loses it). */
+  learnings: SwarmLearning[];
+  reportedIds: string[];
+  closedThreads: string[];
+  endedAtIso: string;
 }
 
 export const TERMINAL_SESSION_STATES: ReadonlySet<string> = new Set(["done", "partial", "failed", "cancelled"]);
@@ -568,6 +608,16 @@ function mapSession(raw: Json): SwarmSessionView {
     draftActions: Object.fromEntries(
       Object.entries(obj(raw.draft_actions)).filter((e): e is [string, string] => typeof e[1] === "string"),
     ),
+    learnings: list(raw.learnings).flatMap((l) => {
+      const type = str(l.type);
+      const source = str(l.source);
+      if (!(type === "fact" || type === "outcome" || type === "preference" || type === "thread")) return [];
+      if (!(source === "observed" || source === "user_stated")) return [];
+      return [{ type, key: str(l.key), text: str(l.text), confidence: num(l.confidence), source }];
+    }),
+    reportedIds: strings(raw.reported_ids),
+    closedThreads: strings(raw.closed_threads),
+    endedAtIso: str(raw.ended_at),
   };
 }
 
@@ -644,6 +694,7 @@ export async function sendSwarmMessage(req: SwarmMessageRequest): Promise<SwarmR
         doc_ids: req.docIds ?? [],
         // Left out when empty so a backend without the field still accepts the send.
         ...(req.mentionIds && req.mentionIds.length > 0 ? { mention_ids: req.mentionIds } : {}),
+        memory: req.memory ?? {},
       }),
     },
     MESSAGE_TIMEOUT_MS,
@@ -672,10 +723,11 @@ export async function runManager(
   clientSessionId: string,
   origin: "dm" | "run_now" = "dm",
   docIds: string[] = [],
+  memory: MemoryEnvelope | null = null,
 ): Promise<{ sessionId: string; replayed: boolean; queued: boolean; answered: boolean }> {
   const body = await call(`/swarm/managers/${encodeURIComponent(managerId)}/run`, {
     method: "POST",
-    body: JSON.stringify({ brief, client_session_id: clientSessionId, origin, doc_ids: docIds }),
+    body: JSON.stringify({ brief, client_session_id: clientSessionId, origin, doc_ids: docIds, memory }),
   });
   // `queued`: the manager was busy, so the brief waits in its line and starts on its own.
   // `answered`: the manager was parked on a question and this DM answered it; `sessionId`
@@ -812,6 +864,19 @@ export async function upsertRoutine(routineId: string, input: SwarmRoutineInput)
 
 export async function deleteRoutine(routineId: string): Promise<void> {
   await call(`/swarm/routines/${encodeURIComponent(routineId)}`, { method: "DELETE" });
+}
+
+/** Sessions that ended after `sinceIso`, oldest first, for the memory sweep on launch and
+ * wake. Terminal sessions only; each carries its learnings. */
+export async function listFinishedSessions(sinceIso: string, limit = 50): Promise<SwarmSessionView[]> {
+  const body = await call(`/swarm/sessions?since=${encodeURIComponent(sinceIso)}&limit=${limit}`);
+  return list(body.sessions).map(mapSession);
+}
+
+/** Drops the last envelope this computer sent for a manager, so a routine that fires
+ * before the next send runs without a forgotten row rather than with it. */
+export async function deleteMemoryEnvelope(managerId: string): Promise<void> {
+  await call(`/swarm/managers/${encodeURIComponent(managerId)}/memory-envelope`, { method: "DELETE" });
 }
 
 export interface SwarmImportMessage {

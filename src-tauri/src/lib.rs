@@ -73,6 +73,7 @@ mod telemetry;
 mod site_icons;
 mod status_pill;
 mod swarm_documents;
+mod swarm_memory;
 mod system_control;
 mod system_idle;
 mod toast;
@@ -592,6 +593,14 @@ pub fn run() {
             interview::save_interview_reflection,
             interview::save_interview_prep,
             swarm_documents::save_swarm_document,
+            swarm_memory::swarm_memory_recall,
+            swarm_memory::swarm_memory_ingest,
+            swarm_memory::swarm_memory_cursors,
+            swarm_memory::swarm_memory_list,
+            swarm_memory::swarm_memory_forget,
+            swarm_memory::swarm_memory_delete_manager,
+            swarm_memory::swarm_memory_export,
+            swarm_memory::swarm_memory_import,
             interview_store::interview_session_save,
             interview_store::interview_session_checkpoint,
             interview_store::interview_sessions_list,

@@ -9,7 +9,9 @@ import type {
   SwarmWatchKind,
 } from "../../../lib/swarmApi";
 import { CONNECTOR_LABEL } from "./SwarmWork";
-import { BeaconGlyph, CycleGlyph, DartGlyph, DismissGlyph, SparkGlyph } from "./SwarmGlyphs";
+import { BeaconGlyph, CycleGlyph, DartGlyph, DismissGlyph, KeepGlyph, SparkGlyph } from "./SwarmGlyphs";
+import { exportMemory, forgetMemory, importMemory, listMemory, type MemoryRow, type MemoryRowType } from "../../../lib/swarmMemory";
+import { displayName } from "./swarmThread";
 
 /** A manager's two controls: which connectors it may read (on when the account is connected
  * and the manager asked for it, one switch each) and its routines. A routine fires with the laptop closed, so nothing is scheduled until
@@ -490,6 +492,153 @@ export function AutoApproveSwitches({
         );
       })}
       <p className="db-swarm-tools-hint">Off, every change waits for your review in the report. On, it runs right after the report, up to the daily limit, and says what it did.</p>
+    </div>
+  );
+}
+
+const MEMORY_TYPE_LABEL: Record<MemoryRowType, string> = {
+  fact: "Knows",
+  outcome: "Site and tool lessons",
+  preference: "Your preferences",
+  thread: "Open commitments",
+  reported: "Already told you",
+};
+const MEMORY_TYPE_ORDER: MemoryRowType[] = ["preference", "thread", "fact", "outcome", "reported"];
+
+function memoryAge(updatedAtMs: number): string {
+  const days = Math.floor((Date.now() - updatedAtMs) / 86_400_000);
+  if (days <= 0) return "today";
+  if (days === 1) return "yesterday";
+  if (days < 30) return `${days}d ago`;
+  return `${Math.floor(days / 30)}mo ago`;
+}
+
+/** What this manager remembers, read from the sealed store on this computer when the
+ * section opens. Forget tombstones a row here and drops the server's last envelope
+ * (`onForgot`), so a routine firing before the next send cannot see it either. Export
+ * writes plain JSON the user owns; Import reads one back under this manager. */
+export function MemoryList({
+  manager,
+  onForgot,
+}: {
+  manager: SwarmManager;
+  onForgot: (managerId: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [rows, setRows] = useState<MemoryRow[] | null>(null);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    try {
+      setRows(await listMemory(manager.id));
+    } catch (err) {
+      setRows([]);
+      setNote(typeof err === "string" ? err : "Aura couldn't read this manager's memory.");
+    }
+  };
+
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    if (next && rows === null) void load();
+  };
+
+  const forget = async (row: MemoryRow) => {
+    setBusy(true);
+    setNote("");
+    try {
+      await forgetMemory(manager.id, [row.id]);
+      setRows((prev) => (prev ?? []).filter((r) => r.id !== row.id));
+      onForgot(manager.id);
+    } catch (err) {
+      setNote(typeof err === "string" ? err : "Aura couldn't forget that.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doExport = async () => {
+    setBusy(true);
+    setNote("");
+    try {
+      const { path } = await exportMemory(manager.id, displayName(manager));
+      setNote(`Saved to ${path}`);
+    } catch (err) {
+      setNote(typeof err === "string" ? err : "Aura couldn't save the file.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const doImport = async (file: File | undefined) => {
+    if (!file) return;
+    setBusy(true);
+    setNote("");
+    try {
+      const summary = await importMemory(manager.id, await file.text());
+      setNote(`Brought in ${summary.added + summary.updated} row${summary.added + summary.updated === 1 ? "" : "s"}${summary.skipped ? `, skipped ${summary.skipped}` : ""}.`);
+      await load();
+    } catch (err) {
+      setNote(typeof err === "string" ? err : "That file isn't a memory export Aura can read.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const grouped = MEMORY_TYPE_ORDER.map((type) => ({ type, rows: (rows ?? []).filter((r) => r.type === type) })).filter((g) => g.rows.length > 0);
+  const count = rows?.length ?? 0;
+
+  return (
+    <div className="db-swarm-memory">
+      <button type="button" className="db-swarm-memory-head" onClick={toggle} aria-expanded={open}>
+        <KeepGlyph size={15} />
+        <span className="db-swarm-tools-label">Memory</span>
+        {rows !== null && <em>{count === 0 ? "nothing yet" : `${count} row${count === 1 ? "" : "s"}`}</em>}
+      </button>
+      {open && (
+        <div className="db-swarm-memory-body">
+          {rows === null && <p className="db-swarm-tools-hint">Reading…</p>}
+          {rows !== null && grouped.length === 0 && (
+            <p className="db-swarm-tools-hint">Nothing remembered yet. Each finished run leaves what it learned here, on this computer only.</p>
+          )}
+          {grouped.map((group) => (
+            <div key={group.type} className="db-swarm-memory-group">
+              <span className="db-swarm-memory-type">{MEMORY_TYPE_LABEL[group.type]}</span>
+              <ul>
+                {group.rows.map((row) => (
+                  <li key={row.id} className={row.closed ? "is-closed" : ""}>
+                    <span className="db-swarm-memory-text" title={row.key}>
+                      {row.type === "reported" ? row.key : row.text}
+                    </span>
+                    <span className="db-swarm-memory-meta">
+                      {row.type !== "reported" && row.type !== "preference" && (
+                        <i className="db-swarm-memory-conf" aria-label={`confidence ${row.confidence} of 10`}>
+                          <b style={{ width: `${Math.max(10, row.confidence * 10)}%` }} />
+                        </i>
+                      )}
+                      {row.source === "user_stated" && <span>you said</span>}
+                      <span>{memoryAge(row.updatedAtMs)}</span>
+                    </span>
+                    <button type="button" className="db-swarm-icon-btn is-small" aria-label="Forget" title="Forget" disabled={busy} onClick={() => void forget(row)}>
+                      <DismissGlyph size={13} />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+          <div className="db-swarm-memory-foot">
+            <button type="button" className="db-swarm-pill-btn" disabled={busy || count === 0} onClick={() => void doExport()}>Export</button>
+            <label className={`db-swarm-pill-btn${busy ? " is-disabled" : ""}`}>
+              Import
+              <input type="file" accept=".json,application/json" disabled={busy} onChange={(event) => { void doImport(event.target.files?.[0]); event.target.value = ""; }} />
+            </label>
+          </div>
+          <p className="db-swarm-tools-hint">Kept encrypted on this computer. A reinstall gets back only the last 7 days of runs, so export if it matters.</p>
+          {note && <p className="db-swarm-tools-hint">{note}</p>}
+        </div>
+      )}
     </div>
   );
 }

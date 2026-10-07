@@ -34,6 +34,7 @@ import {
 import { usePresence } from "./usePresence";
 import { useCallbackCard } from "./useCallbackCard";
 import { useDesktopNotifications } from "../state/useDesktopNotifications";
+import { useSwarmMemorySync } from "../state/useSwarmMemorySync";
 import { openDashboardWindow } from "../lib/dashboardWindow";
 import type { StoredNotification } from "../lib/desktopNotifications";
 import { GlassSurface } from "./GlassSurface";
@@ -458,6 +459,9 @@ export function OverlayRoot() {
     busy: callLive || showInterviewHacker || meetingCapture.recording,
   });
   const [inboxOpen, setInboxOpen] = useState(false);
+  // Swarm memory lives on this computer; a report notice is the cue to pull what the
+  // session learned, so it lands even when the Swarm page is not open.
+  useSwarmMemorySync({ signedIn: user !== null, uid: user?.uid ?? null, inbox: notifications.inbox });
   const callbackCard = useCallbackCard({
     presentation,
     signedIn: user !== null,

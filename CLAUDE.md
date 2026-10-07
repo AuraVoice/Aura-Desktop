@@ -368,6 +368,15 @@ Rules an edit could break:
   session view; never edit a message the `after_seq` cursor has passed.
 - **The legacy `aura.swarm-sandbox.v1` key is import-only.** It carries no account, so it is
   offered behind a button and never uploaded automatically.
+- **A manager's memory lives on this computer, and local is truth** (`src-tauri/src/swarm_memory/`,
+  `src/lib/swarmMemory.ts`). Every send recalls a bounded envelope per manager and attaches it;
+  the backend freezes it into the session like docs and keeps only the LAST envelope per manager
+  (`swarm_state/memory_envelope`) for routines and phone-sent runs. Learnings ride the report
+  (`learnings`, `reported_ids`, `closed_threads` on the session view); the desktop ingests on poll
+  and sweeps `GET /swarm/sessions?since=` from a local cursor on launch and wake. A Forget is a
+  tombstone whose timestamp beats any later sweep, plus a DELETE of the server envelope. Never
+  put the memory back in Firestore as the source of truth, and never add a model call for it:
+  extraction rides the report call that already runs.
 
 ## Desktop notifications
 

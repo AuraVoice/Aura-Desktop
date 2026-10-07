@@ -7,6 +7,7 @@ import {
   answerSession,
   cancelRound,
   cancelSession,
+  deleteMemoryEnvelope,
   deleteRoutine,
   deleteWatch,
   getRound,
@@ -26,6 +27,7 @@ import {
   uploadSwarmImage,
   upsertRoutine,
   upsertWatch,
+  type MemoryEnvelope,
   type SwarmDoc,
   type SwarmMessage,
   type SwarmRoster,
@@ -36,6 +38,7 @@ import {
   type SwarmWatchInput,
 } from "../../lib/swarmApi";
 import { useDashboardResource } from "../useDashboardResource";
+import { deleteManagerMemory, ingestSessionViews, recallMemory, sweepFinishedSessions } from "../../lib/swarmMemory";
 import { SwarmChannels } from "./swarm/SwarmChannels";
 import { SwarmRoster as SwarmRosterPanel } from "./swarm/SwarmRoster";
 import { DocumentExtractionError, extractDocument } from "../../lib/documentText";
@@ -495,7 +498,11 @@ export function SwarmPage() {
             // A Stop or an answer may already have stored a newer view than this poll's.
             setSessions((prev) => (prev[id] && prev[id].stateRevision > view.stateRevision ? prev : { ...prev, [id]: view }));
             void pull(managerChannel(view.managerId), true);
-            if (TERMINAL_SESSION_STATES.has(view.state)) ended = true;
+            if (TERMINAL_SESSION_STATES.has(view.state)) {
+              ended = true;
+              // What the run learned goes into the manager's memory on this computer.
+              void ingestSessionViews([view]).catch(() => undefined);
+            }
           } catch {
             failed = true;
           }
@@ -603,10 +610,25 @@ export function SwarmPage() {
       if (item.kind !== "working" || sessions[item.sessionId] || settled.has(item.sessionId) || requested.current.has(item.sessionId)) continue;
       requested.current.add(item.sessionId);
       void getSession(item.sessionId)
-        .then((view) => view && setSessions((prev) => ({ ...prev, [item.sessionId]: view })))
+        .then((view) => {
+          if (!view) return;
+          setSessions((prev) => ({ ...prev, [item.sessionId]: view }));
+          void ingestSessionViews([view]).catch(() => undefined);
+        })
         .catch(() => undefined);
     }
   }, [items, sessions]);
+
+  // Coming back to the page after a sleep or a long absence: catch up on every session
+  // that ended meanwhile (the overlay's hook does the same when this page is closed).
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && navigator.onLine) void sweepFinishedSessions().catch(() => undefined);
+    };
+    onVisible();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, []);
 
   const view = useMemo(() => channelView(liveChannel, roster), [liveChannel, roster]);
   const openDrafts = useMemo(() => new Set(roster.drafts.map((d) => d.id)), [roster]);
@@ -627,6 +649,13 @@ export function SwarmPage() {
   const afterRoster = (before: SwarmRoster, after: SwarmRoster) => {
     const known = new Set(before.managers.map((m) => m.id));
     markManagers(after.managers.filter((m) => !known.has(m.id)).map((m) => m.id));
+    // A manager that left the roster takes its memory with it, here and on the server.
+    const kept = new Set(after.managers.map((m) => m.id));
+    for (const id of known) {
+      if (kept.has(id)) continue;
+      void deleteManagerMemory(id).catch(() => undefined);
+      void deleteMemoryEnvelope(id).catch(() => undefined);
+    }
     if (after.supervisor?.status === "active" && !supervisorActive(before)) {
       setSupervisorFresh(true);
       window.setTimeout(() => setSupervisorFresh(false), FRESH_MS * 1.5);
@@ -641,7 +670,15 @@ export function SwarmPage() {
     setBusySince(Date.now());
     setError("");
     try {
-      const result = await sendSwarmMessage({ clientMessageId: clientId(), ...req });
+      // What each manager this message may reach already knows, recalled on this computer
+      // first: the @mentioned ones, else every active manager. A failed recall sends none.
+      const targets = req.mentionIds && req.mentionIds.length > 0
+        ? req.mentionIds
+        : roster.managers.filter((m) => m.status === "active").map((m) => m.id);
+      const memory: Record<string, MemoryEnvelope> = req.text
+        ? await recallMemory(targets, req.text).catch((): Record<string, MemoryEnvelope> => ({}))
+        : {};
+      const result = await sendSwarmMessage({ clientMessageId: clientId(), ...req, memory });
       afterRoster(roster, result.roster);
       result.sessions.forEach((s) => watch(s.sessionId));
       if (result.round) {
@@ -670,7 +707,9 @@ export function SwarmPage() {
     setBusySince(Date.now());
     setError("");
     try {
-      const started = await runManager(managerId, brief, clientId(), origin, docIds);
+      const recalled = await recallMemory([managerId], brief).catch((): Record<string, MemoryEnvelope> => ({}));
+      const memory = recalled[managerId] ?? null;
+      const started = await runManager(managerId, brief, clientId(), origin, docIds, memory);
       // A queued brief has no session yet; the DM's waiting line says so and the state
       // poll picks the session up when it starts.
       if (!started.queued) watch(started.sessionId);
@@ -866,6 +905,10 @@ export function SwarmPage() {
     void run(managerId, brief, "run_now");
   };
 
+  // Local is truth for memory: a Forget tombstones here, then drops the envelope the
+  // server kept so a routine firing before the next send cannot see the row either.
+  const forgotMemory = (managerId: string) => void deleteMemoryEnvelope(managerId).catch(() => undefined);
+
   const bringOver = async () => {
     if (!legacy) return;
     const legacyRoster = mapRoster(legacy.rosterWire);
@@ -1002,6 +1045,7 @@ export function SwarmPage() {
         onDeleteWatch={removeWatch}
         onSetAutoApprove={setAutoApprove}
         onRunNow={runNow}
+        onForgotMemory={forgotMemory}
       />
     </div>
   );

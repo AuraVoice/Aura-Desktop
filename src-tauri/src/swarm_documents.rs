@@ -21,7 +21,7 @@ pub struct SavedDocument {
     path: String,
 }
 
-fn safe_stem(raw: &str) -> String {
+pub(crate) fn safe_stem(raw: &str) -> String {
     let mut out = String::new();
     for ch in raw.chars() {
         if ch.is_alphanumeric() || matches!(ch, ' ' | '-' | '_' | '(' | ')' | '.' | ',' | '&') {

@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
-import type { SwarmDecision, SwarmDoc, SwarmManager, SwarmMessage, SwarmRoster, SwarmRoundView, SwarmSessionView } from "../../../lib/swarmApi";
+import type { SwarmDecision, SwarmDoc, SwarmManager, SwarmRoster, SwarmRoundView, SwarmSessionView } from "../../../lib/swarmApi";
 import { DOCUMENT_ACCEPT } from "../../../lib/documentText";
 import { IMAGE_ACCEPT } from "../../../lib/chatAttachments";
 import { ArrowDown, Paperclip, Send } from "lucide-react";
@@ -25,7 +25,7 @@ import {
   TackGlyph,
   WatchGlyph,
 } from "./SwarmGlyphs";
-import { CONNECTOR_LABEL, PlanEmbed, QuestionEmbed, ReportEmbed, RoundEmbed, RoundReplyEmbed, StepRow, WorkingEmbed } from "./SwarmWork";
+import { CONNECTOR_LABEL, QuestionEmbed, ReportEmbed, RoundEmbed, RoundReplyEmbed, WorkingEmbed } from "./SwarmWork";
 import { useMentionPicker } from "./SwarmMentionPicker";
 import { ComposerGrants } from "./SwarmComposerGrants";
 import {
@@ -572,12 +572,9 @@ export function SwarmStream(props: Props) {
     const latestQuestion: Record<string, string> = {};
     // A session whose report is in the thread needs no fetch to say it finished.
     const reported = new Set<string>();
-    // The newest finished step per session is what its working card says it is reading now.
-    const latestStep: Record<string, SwarmMessage> = {};
     for (const item of items) {
       if (item.kind === "question") latestQuestion[item.message.sessionId] = item.key;
       if (item.kind === "report") reported.add(item.message.sessionId);
-      if (item.kind === "step") latestStep[item.message.sessionId] = item.message;
     }
     let lastDay = "";
     let lastAuthorKey = "";
@@ -597,22 +594,6 @@ export function SwarmStream(props: Props) {
               </span>
               <span className="db-swarm-sys-text">{item.text}</span>
               {item.at > 0 && <time>{timeLabel(item.at)}</time>}
-            </div>
-          </Fragment>
-        );
-      }
-      if (item.kind === "step") {
-        lastAuthorKey = "";
-        return (
-          <Fragment key={item.key}>
-            {daySep && <div className="db-swarm-daysep"><span>{daySep}</span></div>}
-            <div className={`db-swarm-step-wrap${fresh ? " is-fresh" : ""}`}>
-              <StepRow
-                message={item.message}
-                managerId={item.author.id}
-                granted={props.grants[item.author.id] ?? []}
-                onGrant={(managerId, connector) => live.current.onGrant(managerId, connector)}
-              />
             </div>
           </Fragment>
         );
@@ -709,20 +690,21 @@ export function SwarmStream(props: Props) {
                       name={item.author.name}
                       managerId={item.author.id}
                       manager={findManager(props.roster, item.author.id)}
-                      latestStep={latestStep[item.sessionId]}
+                      plan={item.plan}
+                      steps={item.steps}
+                      reportAt={item.reportAt}
+                      granted={props.grants[item.author.id] ?? []}
+                      onGrant={(managerId, connector) => live.current.onGrant(managerId, connector)}
                       session={props.sessions[item.sessionId]}
                       reported={reported.has(item.sessionId)}
                       stopping={props.stopping.has(item.sessionId)}
                       onStop={() => live.current.onStop(item.sessionId)}
                     />
                   )}
-                  {item.kind === "plan" && <PlanEmbed message={item.message} />}
                   {item.kind === "question" && (
                     <QuestionEmbed
                       message={item.message}
                       open={props.sessions[item.message.sessionId]?.state === "waiting_user" && latestQuestion[item.message.sessionId] === item.key}
-                      busy={busy}
-                      onAnswer={(value) => live.current.onAnswerSession(item.message.sessionId, value)}
                     />
                   )}
                   {item.kind === "report" && (

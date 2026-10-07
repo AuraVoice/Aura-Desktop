@@ -16,6 +16,15 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+### Added
+- Swarm managers remember. Each finished run leaves what it learned, which sites it could not read, what you asked for and what it already told you, kept encrypted on this computer and handed to the manager on its next run so it stops repeating itself. Every manager's card has a Memory section where you can read it, forget a row, export it as a file or bring a file back in. A routine that fires while your laptop is closed uses the last memory the app sent.
+
+### Changed
+- Swarm reads like a chat. A manager's report is plain prose in its message, with findings as bullets and their sources inline, drafts quoted, and the buttons you can act on (Review, Grant, Open) as small links. Its plan and every step fold into one line under the message, "Searched 6 sources, read 2 pages, 1.2 min", that you can open. A question is just a message; reply below to answer it.
+
+### Fixed
+- A run that stopped early no longer shows raw page text as its report, and every reason it stopped now has a plain sentence instead of a code like "(unavailable)".
+
 ## [0.16.6] - 2026-10-06
 
 ### Added

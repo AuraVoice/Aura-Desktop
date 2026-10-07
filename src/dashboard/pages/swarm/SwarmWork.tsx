@@ -7,7 +7,6 @@ import {
   type PendingAction,
 } from "../../../lib/pendingActions";
 import { openPath } from "@tauri-apps/plugin-opener";
-import { Send } from "lucide-react";
 import { FORMAT_LABEL, saveDocumentDraft, type DocumentFormat } from "../../../lib/swarmDocumentFile";
 import type { SwarmManager, SwarmMessage, SwarmRoundMember, SwarmRoundView, SwarmSessionView } from "../../../lib/swarmApi";
 import { mapRoundMember, proposeDraft, SwarmRequestError, TERMINAL_SESSION_STATES } from "../../../lib/swarmApi";
@@ -21,7 +20,6 @@ import {
   BranchGlyph,
   CellGlyph,
   CourseGlyph,
-  HubGlyph,
   DayGlyph,
   DeepGlyph,
   HaltGlyph,
@@ -30,18 +28,16 @@ import {
   MailGlyph,
   SealGlyph,
   SeekGlyph,
-  SignalGlyph,
   SparkGlyph,
   TeamGlyph,
 } from "./SwarmGlyphs";
 
-/** Everything a manager's session shows in its DM: the live chip, the plan, one row per
- * step, a question it is waiting on, and the report. All of it renders from append-only
- * messages plus the polled session view, so nothing here edits history. */
+/** Everything a manager's session shows in its DM: the live chip, then the plan and steps
+ * folded into one line once it ends, a question it is waiting on, and the report. All of
+ * it renders from append-only messages plus the polled session view, so nothing here
+ * edits history. */
 
 type Json = Record<string, unknown>;
-
-const ANSWER_MAX = 1000;
 
 export const CONNECTOR_LABEL: Record<string, string> = {
   gmail: "Gmail",
@@ -161,12 +157,77 @@ function ThinkingRow({
 
 const ORB_STATES: ReadonlySet<string> = new Set<OrbState>(["queued", "planning", "acting", "reporting", "verifying", "waiting_user"]);
 
+/** "Searched 6 sources, read 2 pages, 1.2 min": what a finished run did, in one line. */
+function workSummary(steps: SwarmMessage[], startedAt: number, endedAt: number): string {
+  let searched = 0;
+  let read = 0;
+  let accounts = 0;
+  for (const step of steps) {
+    const capability = str(step.data.capability_id);
+    if (capability === "web.search") searched += num(step.data.sources_added);
+    else if (capability === "web.read") read += step.data.ok === true ? 1 : 0;
+    else if (capability && capability !== "aura.research") accounts += 1;
+  }
+  const parts: string[] = [];
+  if (searched > 0) parts.push(`Searched ${searched} source${searched === 1 ? "" : "s"}`);
+  if (read > 0) parts.push(`${parts.length ? "read" : "Read"} ${read} page${read === 1 ? "" : "s"}`);
+  if (accounts > 0) parts.push(`${parts.length ? "checked" : "Checked"} ${accounts} account${accounts === 1 ? "" : "s"}`);
+  if (parts.length === 0) parts.push(steps.length > 0 ? `${steps.length} step${steps.length === 1 ? "" : "s"}` : "Worked on this");
+  const seconds = startedAt && endedAt > startedAt ? Math.round((endedAt - startedAt) / 1000) : 0;
+  if (seconds >= 60) parts.push(`${(seconds / 60).toFixed(seconds >= 600 ? 0 : 1)} min`);
+  else if (seconds > 0) parts.push(`${seconds} s`);
+  return parts.join(", ");
+}
+
+/** A finished session's plan and steps behind one line. A real button so it is keyboard
+ * reachable, and nothing inside it is live: it renders from the thread alone. */
+function WorkFold({
+  managerId,
+  plan,
+  steps,
+  startedAt,
+  endedAt,
+  granted,
+  onGrant,
+}: {
+  managerId: string;
+  plan: SwarmMessage | undefined;
+  steps: SwarmMessage[];
+  startedAt: number;
+  endedAt: number;
+  granted: string[];
+  onGrant: (managerId: string, connector: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  if (!plan && steps.length === 0) return null;
+  return (
+    <div className={`db-swarm-fold${open ? " is-open" : ""}`}>
+      <button type="button" className="db-swarm-fold-line" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+        <span className="db-swarm-fold-caret" aria-hidden="true" />
+        <span>{workSummary(steps, startedAt, endedAt)}</span>
+      </button>
+      {open && (
+        <div className="db-swarm-fold-body">
+          {plan && <PlanEmbed message={plan} />}
+          {steps.map((step) => (
+            <StepRow key={`${step.channelId}-${step.seq}`} message={step} managerId={managerId} granted={granted} onGrant={onGrant} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** The live chip on a session's "working" message. Once the session ends it folds to one line. */
 export function WorkingEmbed({
   name,
   managerId,
   manager,
-  latestStep,
+  plan,
+  steps,
+  reportAt,
+  granted,
+  onGrant,
   session,
   reported,
   stopping,
@@ -175,23 +236,38 @@ export function WorkingEmbed({
   name: string;
   managerId: string;
   manager: SwarmManager | undefined;
-  latestStep: SwarmMessage | undefined;
+  plan: SwarmMessage | undefined;
+  steps: SwarmMessage[];
+  reportAt: number;
+  granted: string[];
+  onGrant: (managerId: string, connector: string) => void;
   session: SwarmSessionView | undefined;
   reported: boolean;
   stopping: boolean;
   onStop: () => void;
 }) {
   const slot = useSlot();
-  if (!session && !reported) return <p className="db-swarm-muted">{name} took this on.</p>;
+  const latestStep = steps[steps.length - 1];
+  if (!session && !reported) return null;
   if (!session || TERMINAL_SESSION_STATES.has(session.state)) {
-    return <p className="db-swarm-muted">{name} worked on this. The report is below.</p>;
+    return (
+      <WorkFold
+        managerId={managerId}
+        plan={plan}
+        steps={steps}
+        startedAt={session?.createdAt || plan?.at || steps[0]?.at || 0}
+        endedAt={reportAt || session?.endedAt || 0}
+        granted={granted}
+        onGrant={onGrant}
+      />
+    );
   }
   const tasks = session.lanes.filter((l) => l.kind === "task");
   const stopRequested = session.cancelRequested || stopping;
   const line = thinkingLine(stopRequested ? { ...session, cancelRequested: true } : session, latestStep, manager, slot);
   const orbState: OrbState = stopRequested ? "stopping" : ORB_STATES.has(session.state) ? (session.state as OrbState) : "acting";
   return (
-    <div className={`db-swarm-embed is-work${stopRequested ? " is-stopping" : ""}`}>
+    <div className={`db-swarm-work${stopRequested ? " is-stopping" : ""}`}>
       <ThinkingRow
         id={managerId}
         name={name}
@@ -302,54 +378,17 @@ export function StepRow({
   );
 }
 
-export function QuestionEmbed({
-  message,
-  open,
-  busy,
-  onAnswer,
-}: {
-  message: SwarmMessage;
-  open: boolean;
-  busy: boolean;
-  onAnswer: (text: string) => void;
-}) {
-  const [value, setValue] = useState("");
+/** A question reads like any other message. The answer is the next thing typed in the
+ * composer: a DM to a parked manager, or a #group reply the router recognises, both
+ * resume the session (handlers/swarm.handle_run and persisted.route_message). */
+export function QuestionEmbed({ message, open }: { message: SwarmMessage; open: boolean }) {
   return (
     <>
       <p className="db-swarm-text">{message.text}</p>
-      {open && (
-        <div className="db-swarm-embed is-ask">
-          <div className="db-swarm-embed-kicker"><SignalGlyph size={16} /> Waiting on you</div>
-          <form
-            className="db-swarm-free-answer"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (value.trim()) onAnswer(value.trim());
-            }}
-          >
-            <input
-              value={value}
-              maxLength={ANSWER_MAX}
-              onChange={(event) => setValue(event.target.value)}
-              placeholder="Your answer"
-              aria-label="Your answer"
-            />
-            <button type="submit" className="db-swarm-send is-small" disabled={busy || !value.trim()} aria-label="Send answer">
-              <Send size={16} aria-hidden="true" />
-            </button>
-          </form>
-        </div>
-      )}
+      {open && <p className="db-swarm-muted">Waiting on you. Reply below to answer.</p>}
     </>
   );
 }
-
-const REPORT_KICKER: Record<string, string> = {
-  done: "Report",
-  partial: "Partial report",
-  cancelled: "Stopped",
-  failed: "Could not finish",
-};
 
 /** Why a run stopped short, from the session's stop_reason (runner.py _terminal_state_for
  * and the fallback paths). An unknown code adds nothing rather than a raw slug. */
@@ -362,6 +401,16 @@ const STOP_REASON_COPY: Record<string, string> = {
   wallet_exhausted: "Today's Swarm budget ran out.",
   timed_out: "It ran past its 30 minute limit.",
   no_answer: "It asked you something and did not hear back.",
+  cancelled: "You stopped it.",
+  unavailable: "The model it uses was unavailable, so it stopped.",
+  retries_exhausted: "The model kept failing, so it stopped.",
+  invalid_output: "The model's answer could not be read, so it stopped.",
+  too_large: "What it gathered was too large for the model to finish.",
+  model_unsupported: "The model it uses is not available right now.",
+  model_unpriced: "The model it uses has no price set, so Aura would not spend on it.",
+  meter_unavailable: "Aura could not check the Swarm budget, so it stopped.",
+  stage_crashed: "Something went wrong on Aura's side, so it stopped.",
+  manager_not_found: "This manager was removed while it was working.",
 };
 
 const DRAFT_KIND: Record<string, string> = {
@@ -658,108 +707,125 @@ export function ReportEmbed({
   const nextSteps = strings(report.next_steps);
   const runs = strings(data.research_runs);
   const verified = data.verified === true;
+  // A report built with no model call (runner.py _fallback_report): its findings were
+  // raw excerpt lines, so the sources it had are shown instead of prose that was never written.
+  const fallback = report.fallback === true;
+  const stopCopy = state === "partial" || state === "failed" ? STOP_REASON_COPY[str(data.stop_reason)] ?? "" : "";
 
+  // A source reads as what it is, never as "s3": the page's host for a web result, the
+  // connector's own title (GitHub Aura-Desktop issues, Calendar) for a private read, which
+  // has no URL to open and so renders as plain text.
   const chip = (ref: string): ReactNode => {
     const source = sources.get(ref);
     const url = str(source?.url);
     const title = str(source?.title) || ref;
+    let label = title;
+    if (url) {
+      try {
+        label = new URL(url).hostname.replace(/^www\./, "");
+      } catch {
+        label = title;
+      }
+    }
     return url ? (
       <button key={ref} type="button" className="db-swarm-src" title={title} onClick={() => onOpenSource(url)}>
-        {ref}
+        {label}
       </button>
     ) : (
-      <span key={ref} className="db-swarm-src is-static" title={title}>{ref}</span>
+      <span key={ref} className="db-swarm-src is-static" title={title}>{label}</span>
     );
   };
 
   return (
-    <div className={`db-swarm-embed is-report is-${state || "done"}`}>
-      <div className="db-swarm-embed-kicker">
-        <SparkGlyph size={15} /> {REPORT_KICKER[state] ?? "Report"}
-        {verified && (
-          <span className="db-swarm-verified" title="A separate checker confirmed every goal against the sources">
-            <SealGlyph size={14} /> Verified
-          </span>
-        )}
-      </div>
-      {state === "partial" && STOP_REASON_COPY[str(data.stop_reason)] && (
-        <p className="db-swarm-note">{STOP_REASON_COPY[str(data.stop_reason)]}</p>
+    <div className={`db-swarm-report is-${state || "done"}`}>
+      {stopCopy && <p className="db-swarm-report-stop">{stopCopy}</p>}
+      {report.summary && !(fallback && stopCopy) ? (
+        <p className="db-swarm-text">
+          {str(report.summary)}
+          {verified && (
+            <span className="db-swarm-verified" title="A separate checker confirmed every goal against the sources">
+              <SealGlyph size={13} /> Verified
+            </span>
+          )}
+        </p>
+      ) : null}
+      {fallback && sources.size > 0 && (
+        <p className="db-swarm-report-line">
+          <span className="db-swarm-report-lead">Sources it had</span>
+          <span className="db-swarm-src-row">{[...sources.keys()].map(chip)}</span>
+        </p>
       )}
-      {report.summary ? <p className="db-swarm-report-summary">{str(report.summary)}</p> : null}
-      {findings.length > 0 && (
-        <ul className="db-swarm-findings">
+      {!fallback && findings.length > 0 && (
+        <ul className="db-swarm-report-list">
           {findings.map((f, i) => {
             const refs = strings(f.source_refs);
             return (
               <li key={i} className={`${refs.length === 0 ? "is-unsourced" : ""}${f.verified === true ? " is-verified" : ""}`}>
-                <span>{str(f.claim)}</span>
-                <span className="db-swarm-src-row">
-                  {refs.length > 0 ? refs.map(chip) : <em>no source</em>}
-                </span>
+                {str(f.claim)}
+                {refs.length > 0 ? <span className="db-swarm-src-row">{refs.map(chip)}</span> : <em className="db-swarm-report-unsourced">no source</em>}
               </li>
             );
           })}
         </ul>
       )}
-      {drafts.length > 0 && (
-        <div className="db-swarm-drafts">
-          {drafts.map((d, i) => (
-            <div key={i} className="db-swarm-draft">
-              <span className="db-swarm-draft-head">
-                <b>{DRAFT_KIND[str(d.kind)] ?? "Draft"}</b>
-                {str(d.destination) && <span> to {str(d.destination)}</span>}
-                <em>
-                  {str(d.target) === "file"
-                    ? "saved only on your computer"
-                    : TARGET_LABEL[str(d.target)] && str(d.id)
-                      ? "needs your approval"
-                      : "not sent"}
-                </em>
-              </span>
-              {str(d.target) === "file" ? <DocumentDraft draft={d} /> : <p>{str(d.body)}</p>}
-              {TARGET_LABEL[str(d.target)] && str(d.id) && message.sessionId && (
-                <DraftAction
-                  sessionId={message.sessionId}
-                  draft={d}
-                  approvalId={draftActions[str(d.id)] ?? ""}
-                  onOpenLink={onOpenSource}
-                />
-              )}
-            </div>
-          ))}
-        </div>
-      )}
+      {drafts.map((d, i) => (
+        <blockquote key={i} className="db-swarm-report-draft">
+          <span className="db-swarm-report-draft-head">
+            <b>{DRAFT_KIND[str(d.kind)] ?? "Draft"}</b>
+            {str(d.destination) && <span> to {str(d.destination)}</span>}
+            <em>
+              {str(d.target) === "file"
+                ? "saved only on your computer"
+                : TARGET_LABEL[str(d.target)] && str(d.id)
+                  ? "needs your approval"
+                  : "not sent"}
+            </em>
+          </span>
+          {str(d.target) === "file" ? <DocumentDraft draft={d} /> : <p>{str(d.body)}</p>}
+          {TARGET_LABEL[str(d.target)] && str(d.id) && message.sessionId && (
+            <DraftAction
+              sessionId={message.sessionId}
+              draft={d}
+              approvalId={draftActions[str(d.id)] ?? ""}
+              onOpenLink={onOpenSource}
+            />
+          )}
+        </blockquote>
+      ))}
       {gaps.length > 0 && (
-        <div className="db-swarm-gaps">
-          <span className="db-swarm-gaps-label">Could not read</span>
+        <p className="db-swarm-report-line is-gap">
+          <span className="db-swarm-report-lead">Could not read</span>
           {gaps.map((g, i) => {
             const connector = str(g.connector);
             return (
-              <p key={i}>
+              <span key={i} className="db-swarm-report-gap">
                 {str(g.reason)}
                 {str(g.code) === "connector_not_granted" && connector && !granted.includes(connector) && (
-                  <button type="button" className="db-swarm-pill-btn" onClick={() => onGrant(managerId, connector)}>
+                  <button type="button" className="db-swarm-link-btn" onClick={() => onGrant(managerId, connector)}>
                     Grant {CONNECTOR_LABEL[connector] ?? connector}
                   </button>
                 )}
-              </p>
+              </span>
             );
           })}
-        </div>
+        </p>
       )}
       {nextSteps.length > 0 && (
-        <ul className="db-swarm-next">
-          {nextSteps.map((step, i) => <li key={i}>{step}</li>)}
-        </ul>
+        <>
+          <p className="db-swarm-report-line"><span className="db-swarm-report-lead">Next</span></p>
+          <ul className="db-swarm-report-list is-next">
+            {nextSteps.map((step, i) => <li key={i}>{step}</li>)}
+          </ul>
+        </>
       )}
       {runs.length > 0 && (
-        <div className="db-swarm-embed-foot">
+        <p className="db-swarm-report-foot">
           {runs.map((runId) => (
-            <button key={runId} type="button" className="db-swarm-pill-btn" onClick={() => onOpenResearch(runId)}>
-              <DeepGlyph size={14} /> Open the Research run
+            <button key={runId} type="button" className="db-swarm-link-btn" onClick={() => onOpenResearch(runId)}>
+              <DeepGlyph size={13} /> Open the Research run
             </button>
           ))}
-        </div>
+        </p>
       )}
     </div>
   );
@@ -822,12 +888,9 @@ export function RoundEmbed({
     return END_COPY[s?.state ?? m.endState] ?? (m.state === "running" ? "Starting" : "done");
   };
   return (
-    <div className={`db-swarm-embed is-work${stopping ? " is-stopping" : ""}`}>
+    <div className={`db-swarm-work${stopping ? " is-stopping" : ""}`}>
       {done ? (
-        <div className="db-swarm-embed-kicker">
-          <TeamGlyph size={15} />
-          Team round
-        </div>
+        <p className="db-swarm-muted"><TeamGlyph size={14} /> Team round</p>
       ) : (
         <ThinkingRow
           id="swarm"
@@ -873,25 +936,21 @@ export function RoundReplyEmbed({ message, onOpen }: { message: SwarmMessage; on
   const reply = str(message.data.reply) || message.text;
   const short = members.some((m) => str(m.state) === "skipped" || str(m.end_state) !== "done");
   return (
-    <div className={`db-swarm-embed is-report is-${short ? "partial" : "done"}`}>
-      <div className="db-swarm-embed-kicker">
-        <HubGlyph size={15} /> Team answer
-        {message.data.fallback === true && <span className="db-swarm-tag">Plain summary</span>}
-      </div>
-      <p className="db-swarm-report-summary">{reply}</p>
+    <div className={`db-swarm-report is-${short ? "partial" : "done"}`}>
+      {message.data.fallback === true && <p className="db-swarm-report-stop">A plain summary: the team's writer was not available.</p>}
+      <p className="db-swarm-text">{reply}</p>
       {needs.length > 0 && (
-        <div className="db-swarm-gaps">
-          <span className="db-swarm-gaps-label">Needs you</span>
-          {needs.map((n, i) => <p key={i} className="db-swarm-note">{n}</p>)}
-        </div>
+        <p className="db-swarm-report-line is-gap">
+          <span className="db-swarm-report-lead">Needs you</span>
+          {needs.map((n, i) => <span key={i} className="db-swarm-report-gap">{n}</span>)}
+        </p>
       )}
-      <ul className="db-swarm-lanes">
+      <ul className="db-swarm-report-list">
         {members.map((m) => (
-          <li key={str(m.manager_id)} className={str(m.state) === "skipped" ? "is-failed" : str(m.end_state) === "done" ? "" : "is-failed"}>
-            <CellGlyph size={14} />
-            <span><b>{str(m.title)}:</b> {str(m.line)}</span>
+          <li key={str(m.manager_id)} className={str(m.state) === "skipped" || str(m.end_state) !== "done" ? "is-unsourced" : ""}>
+            <b>{str(m.title)}:</b> {str(m.line)}
             {str(m.state) !== "skipped" && (
-              <button type="button" className="db-swarm-pill-btn" onClick={() => onOpen(str(m.manager_id))}>
+              <button type="button" className="db-swarm-link-btn db-swarm-report-open" onClick={() => onOpen(str(m.manager_id))}>
                 Open report
               </button>
             )}

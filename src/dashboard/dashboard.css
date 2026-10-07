@@ -10277,9 +10277,9 @@ button:hover > .sw-g-dismiss { transform: rotate(90deg); }
    routine editor. Every colour is a --sw-* token, so the dark sheet's token remap covers
    these with no twin rules. No backdrop-filter: these sit on the panel's flat fill. */
 
-.db-swarm-embed.is-work { --sw-av: var(--sw-accent); }
-.db-swarm-embed.is-work.is-stopping { --sw-av: var(--sw-warn); }
-.db-swarm-embed.is-work.is-stopping::before { background: var(--sw-warn); }
+/* A live run: the thinking row and its lanes as plain lines, no card around them. */
+.db-swarm-work { margin-top: 6px; max-width: 560px; }
+.db-swarm-work.is-stopping .db-swarm-think-activity { color: var(--sw-warn); }
 .db-swarm-work-time,
 .db-swarm-work-budget {
   margin-left: auto;
@@ -10338,7 +10338,6 @@ button:hover > .sw-g-dismiss { transform: rotate(90deg); }
 .db-swarm-think-meta { display: inline-flex; align-items: center; gap: 8px; align-self: start; padding-top: 2px; }
 .db-swarm-think-meta .db-swarm-work-time,
 .db-swarm-think-meta .db-swarm-work-budget { margin-left: 0; }
-.db-swarm-embed.is-work.is-stopping .db-swarm-think-activity { color: var(--sw-warn); }
 
 /* The orb: a 2D canvas the shared WebGL renderer fills (SwarmOrb.tsx). Until three.js has
    loaded, or for good without WebGL, a breathing dot stands in. */
@@ -10387,6 +10386,34 @@ button:hover > .sw-g-dismiss { transform: rotate(90deg); }
 .db-swarm-embed.is-plan { --sw-av: var(--sw-sup); }
 .db-swarm-criteria { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 3px; font-size: 12.5px; color: var(--sw-dim); }
 
+/* A finished run: one line, the plan and steps behind it. */
+.db-swarm-fold { display: grid; gap: 4px; max-width: 560px; }
+.db-swarm-fold-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px 2px 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--sw-mute);
+  cursor: pointer;
+  text-align: left;
+}
+.db-swarm-fold-line:hover { color: var(--sw-dim); }
+.db-swarm-fold-line:focus-visible { outline: 2px solid var(--sw-accent); outline-offset: 2px; border-radius: 4px; }
+.db-swarm-fold-caret {
+  width: 0;
+  height: 0;
+  border-left: 5px solid currentColor;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform 160ms var(--sw-out);
+}
+.db-swarm-fold.is-open .db-swarm-fold-caret { transform: rotate(90deg); }
+.db-swarm-fold-body { display: grid; gap: 2px; padding-left: 2px; }
+.db-swarm-fold-body .db-swarm-embed { margin: 4px 0 6px; }
 .db-swarm-step-wrap { padding: 2px 16px 2px 58px; }
 .db-swarm-step-wrap.is-fresh { animation: db-swarm-sys-in 420ms var(--sw-spring) both; }
 .db-swarm-step {
@@ -10435,7 +10462,57 @@ button:hover > .sw-g-dismiss { transform: rotate(90deg); }
   letter-spacing: 0.04em;
 }
 .db-swarm-verified .sw-g-seal .sw-check { stroke-dasharray: 1; animation: db-swarm-g-draw 700ms var(--sw-out) 200ms both; }
-.db-swarm-embed p.db-swarm-report-summary { color: var(--sw-text); font-size: 13.5px; }
+/* The report, as prose in the manager's message: paragraphs, bullets with inline
+ * source links, quoted drafts. Buttons that do something stay, as text links. */
+.db-swarm-report { max-width: 640px; }
+.db-swarm-report .db-swarm-verified { margin-left: 8px; padding: 1px 7px; font-size: 11px; vertical-align: 2px; }
+.db-swarm-report-stop { margin: 3px 0 0; font-size: 13px; color: var(--sw-dim); font-style: italic; }
+.db-swarm-report-list { margin: 8px 0 0; padding-left: 20px; display: grid; gap: 5px; font-size: 14px; line-height: 1.5; color: var(--sw-text); }
+.db-swarm-report-list li.is-unsourced { color: var(--sw-dim); }
+.db-swarm-report-list .db-swarm-src-row { display: inline-flex; margin-left: 6px; vertical-align: 1px; justify-content: flex-start; }
+.db-swarm-report-list.is-next { margin-top: 4px; color: var(--sw-dim); }
+.db-swarm-report-unsourced { margin-left: 6px; font-style: normal; font-size: 11px; color: var(--sw-mute); }
+.db-swarm-report-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 8px; margin: 10px 0 0; font-size: 13.5px; line-height: 1.5; color: var(--sw-text); }
+.db-swarm-report-line.is-gap { color: var(--sw-dim); }
+.db-swarm-report-lead { font-weight: 650; color: var(--sw-dim); }
+.db-swarm-report-gap { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.db-swarm-report-gap + .db-swarm-report-gap::before { content: "·"; color: var(--sw-mute); }
+.db-swarm-report-draft {
+  margin: 10px 0 0;
+  padding: 2px 0 2px 12px;
+  border-left: 2px solid var(--sw-chip-border);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--sw-text);
+}
+.db-swarm-report-draft p { margin: 4px 0 0; white-space: pre-wrap; }
+.db-swarm-report-draft-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; font-size: 12px; color: var(--sw-dim); }
+.db-swarm-report-draft-head em { font-style: normal; font-size: 11px; color: var(--sw-mute); }
+.db-swarm-report-draft-head em::before { content: "·"; margin-right: 6px; }
+.db-swarm-report-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 10px 0 0; }
+.db-swarm-link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--sw-accent-strong);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 3px;
+  transition: text-decoration-color 160ms var(--sw-out), color 160ms var(--sw-out);
+}
+.db-swarm-link-btn:hover:not(:disabled) { text-decoration-color: currentColor; }
+.db-swarm-link-btn:focus-visible { outline: 2px solid var(--sw-accent-ring); outline-offset: 2px; border-radius: 4px; }
+.db-swarm-link-btn:disabled { color: var(--sw-mute); cursor: default; }
+.db-swarm-report-foot .db-swarm-link-btn:last-child { margin-left: auto; color: var(--sw-mute); }
+.db-swarm-report-open { margin-left: 8px; font-size: 12px; }
+.db-swarm-work > .db-swarm-muted { display: inline-flex; align-items: center; gap: 5px; margin: 0; }
 .db-swarm-findings { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
 .db-swarm-findings li {
   display: grid;
@@ -10668,6 +10745,50 @@ span.db-swarm-routine-main { cursor: default; }
 .db-swarm-routine-main strong { font-size: 12px; font-weight: 650; }
 .db-swarm-routine-main span { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .db-swarm-icon-btn.is-small { width: 26px; height: 26px; }
+
+/* What a manager remembers, on this computer. */
+.db-swarm-memory { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--sw-divider); }
+.db-swarm-memory-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--sw-mute);
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.db-swarm-memory-head:hover { color: var(--sw-dim); }
+.db-swarm-memory-head:focus-visible { outline: 2px solid var(--sw-accent-ring); outline-offset: 2px; border-radius: 4px; }
+.db-swarm-memory-head em { margin-left: auto; font-style: normal; font-size: 11px; }
+.db-swarm-memory-body { display: grid; gap: 8px; margin-top: 8px; }
+.db-swarm-memory-group { display: grid; gap: 4px; }
+.db-swarm-memory-type { font-size: 11px; font-weight: 650; color: var(--sw-dim); }
+.db-swarm-memory-group ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+.db-swarm-memory-group li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px 5px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--sw-chip-border);
+  background: var(--sw-chip);
+  color: var(--sw-text);
+  font-size: 12px;
+}
+.db-swarm-memory-group li.is-closed { color: var(--sw-mute); text-decoration: line-through; }
+.db-swarm-memory-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.db-swarm-memory-meta { display: inline-flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--sw-mute); white-space: nowrap; }
+.db-swarm-memory-conf { position: relative; display: inline-block; width: 28px; height: 4px; border-radius: 999px; background: var(--sw-field-border); overflow: hidden; }
+.db-swarm-memory-conf b { position: absolute; inset: 0 auto 0 0; border-radius: 999px; background: var(--sw-accent); }
+.db-swarm-memory-foot { display: flex; gap: 6px; }
+.db-swarm-memory-foot label { position: relative; cursor: pointer; }
+.db-swarm-memory-foot label.is-disabled { opacity: 0.55; cursor: default; }
+.db-swarm-memory-foot label input { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: inherit; }
 .db-swarm-add-routine { margin-top: 8px; }
 .db-swarm-routine-form { display: grid; gap: 8px; margin-top: 8px; }
 .db-swarm-routine-form textarea,

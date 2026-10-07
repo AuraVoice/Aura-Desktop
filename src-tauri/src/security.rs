@@ -674,6 +674,9 @@ pub fn session_changed(app: &AppHandle, signed_in: bool, uid: Option<String>) {
     // Browser task rows (brief, answer, trace) are per-account and exist
     // nowhere else; same boundary, same reason.
     crate::agent_browser::store::retain_only_for_session(app, session_uid.as_deref());
+    // Swarm manager memory rows are per-account and exist nowhere else either;
+    // only decay runs over the other account's rows, nothing is deleted.
+    crate::swarm_memory::store::retain_only_for_session(app, session_uid.as_deref());
     if let Some(uid) = session_uid.clone() {
         crate::interview::hydrate_preparation(app, uid);
     }
