@@ -23,10 +23,14 @@ was started and read like commit subjects rather than release notes.
 - The selected tab on the Agents and History pages is now a white pill instead of a green one, and the notification count is dark instead of green.
 - Swarm's jump-to-latest button is now a round arrow with no label.
 - The Swarm channel list can fold down to a strip of icons with the small arrow beside "Swarm", giving the conversation more room. It remembers your choice, and hovering an icon names it. The list also lost its green tint and now matches the rest of the page.
+- The Swarm channel list no longer carries a "Swarm" heading and logo above the channels. The fold arrow now sits at the bottom of the list, the rule under the channel header is gone, #group no longer repeats who answers it beside its name, and the Team button is gone from the channel header.
+- The point-of-contact box at the top of the Swarm channel list (the Supervisor, or whoever answers the front door) is gone. The #group channel and the Team panel already say who answers.
 - The Swarm composer now shows who will answer before you send. Manager rows in the rail say "Working" while they are on a task, and the Team panel shows each manager's connectors and routines, a Working chip, and separate Supervisor and Managers sections.
 
 ### Fixed
 - Swarm no longer pushes the Computer, Research and Swarm tabs half off the top of a smaller window; it now fits the space it has.
+- The GitHub pill above the Swarm composer now opens the repository picker in #group as well as in a manager's DM. A repository picked there applies to every active manager that can read GitHub.
+- The Swarm composer no longer leaves an empty band below itself; the box now sits a few pixels above the bottom edge, and the privacy note appears only when a file or image is attached.
 - The Swarm message list shows a slim scrollbar instead of the Windows one with arrow buttons.
 - Swarm is no longer tinted green. Controls, highlights and report cards are neutral, and colour is kept for what each manager is and for anything that needs your attention.
 - A Swarm manager's direct message header now uses the same name as the rail.

@@ -171,14 +171,6 @@ export function mentionsIn(text: string, roster: SwarmRoster): string[] {
   return found.slice(0, 4);
 }
 
-/** What the front door's current owner does there, for the point-of-contact block. */
-export function contactDuty(roster: SwarmRoster): string {
-  const backer = frontDoorAuthor(roster);
-  if (backer.role === "supervisor") return "Routes to your managers";
-  if (backer.role === "manager") return "Answers until 2 managers";
-  return "Hires your managers";
-}
-
 export function groupChannelName(roster: SwarmRoster): string {
   return supervisorActive(roster) ? "group" : "front-door";
 }

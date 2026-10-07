@@ -5884,6 +5884,7 @@
 
 .db-content:has(.db-swarm) {
   padding-inline: 6px;
+  padding-bottom: 6px;
   display: flex;
   flex-direction: column;
 }
@@ -8868,33 +8869,16 @@
 @keyframes db-swarm-spin { to { transform: rotate(1turn); } }
 
 /* ── Left rail ── */
-.db-swarm-rail-head {
+.db-swarm-rail-foot {
   display: flex;
   align-items: center;
-  gap: 10px;
-  min-height: 58px;
-  box-sizing: border-box;
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--sw-divider);
-}
-.db-swarm-logo {
-  width: 30px;
-  height: 30px;
-  border-radius: 11px;
-  display: grid;
-  place-items: center;
-  color: var(--sw-on-accent);
-  background: var(--sw-accent);
-  box-shadow: none;
   flex: none;
+  padding: 6px 12px 10px;
 }
 @keyframes db-swarm-float {
   0%, 100% { transform: translateY(0) rotate(0deg); }
   50% { transform: translateY(-2px) rotate(-4deg); }
 }
-.db-swarm-rail-title { flex: 1; min-width: 0; line-height: 1.2; }
-.db-swarm-rail-title strong { display: block; font-family: var(--font-title, inherit); font-size: 15px; }
-.db-swarm-rail-title span { font-size: 11.5px; color: var(--sw-mute); font-variant-numeric: tabular-nums; }
 /* The "<" that folds the rail; it turns to ">" once folded. */
 .db-swarm-rail-collapse {
   width: 28px;
@@ -8906,6 +8890,7 @@
   border-radius: 9px;
   background: transparent;
   color: var(--sw-mute);
+  margin-left: auto;
   cursor: pointer;
   transition: background 160ms var(--sw-out), color 160ms var(--sw-out);
 }
@@ -8969,27 +8954,6 @@
 /* Not hired yet: the Supervisor's tile is only an outline. */
 .db-swarm-ch.is-ghost .db-swarm-avatar { background: transparent; color: var(--sw-mute); box-shadow: none; outline: 1px dashed var(--sw-field-border); outline-offset: 0; }
 .db-swarm-ch-role.is-working { color: var(--sw-accent-strong); font-weight: 600; }
-.db-swarm-contact {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  margin-top: 10px;
-  padding: 10px;
-  border: 1px solid var(--sw-chip-border);
-  border-radius: 14px;
-  background: var(--sw-chip);
-  color: var(--sw-text);
-  font: inherit;
-  font-size: 14px;
-  font-weight: 650;
-  text-align: left;
-  cursor: pointer;
-  transition: background 180ms var(--sw-out);
-}
-.db-swarm-contact:hover { background: var(--sw-hover); }
-.db-swarm-contact:focus-visible { outline: 2px solid var(--sw-accent-ring); outline-offset: 2px; }
-.db-swarm-contact .db-swarm-ch-role { white-space: normal; font-size: 12px; }
 .db-swarm-role { font-size: 11.5px; color: var(--sw-mute); }
 .db-swarm-icon-btn.is-labelled { width: auto; gap: 6px; padding: 0 10px; font: inherit; font-size: 12.5px; font-weight: 550; display: inline-flex; align-items: center; }
 .db-swarm-ch-avatar { position: relative; display: inline-flex; flex: none; }
@@ -9080,7 +9044,6 @@
   min-height: 58px;
   box-sizing: border-box;
   padding: 10px 18px;
-  border-bottom: 1px solid var(--sw-divider);
 }
 .db-swarm-stream-head h2 {
   margin: 0;
@@ -9101,7 +9064,6 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.db-swarm-head-tools { display: flex; align-items: center; gap: 4px; }
 .db-swarm-history { position: relative; display: flex; flex: 1; min-height: 0; min-width: 0; }
 .db-swarm-jump {
   position: absolute;
@@ -9580,7 +9542,7 @@
 .db-swarm-error span { flex: 1; }
 .db-swarm-error button { border: 0; background: none; color: inherit; font: inherit; font-weight: 650; cursor: pointer; text-decoration: underline; }
 .db-swarm-compose-box {
-  margin: 12px 20px 0;
+  margin: 12px 20px 8px;
   border-radius: 24px;
   border: 1px solid color-mix(in srgb, var(--sw-field-border) 65%, transparent);
   background: var(--sw-field);
@@ -9834,7 +9796,7 @@
 .db-swarm-send:active:not(:disabled) { opacity: 0.8; }
 .db-swarm-send:disabled { opacity: 0.4; box-shadow: none; filter: saturate(0.4); cursor: default; }
 .db-swarm-send.is-small { width: 32px; height: 32px; border-radius: 10px; }
-.db-swarm-composer-hint { margin: 6px 20px 12px; font-size: 11.5px; color: var(--sw-mute); text-align: center; }
+.db-swarm-composer-hint { margin: -2px 20px 8px; font-size: 11.5px; color: var(--sw-mute); text-align: center; }
 /* Files: the attach button, the chips waiting above the composer, and the chips on a sent
    message. Tokens only, so the dark sheet needs no twin. */
 .db-swarm-attach {
@@ -10043,7 +10005,6 @@
 
 /* The team panel is a drawer at every width, opened from the Team button, so the
    conversation keeps the full width. */
-.db-swarm-roster-toggle,
 .db-swarm-roster-close { display: inline-grid; }
 .db-swarm-roster {
   position: absolute;
@@ -10070,8 +10031,8 @@
 @media (min-width: 861px) {
   .db-swarm { transition: grid-template-columns 240ms var(--sw-out); }
   .db-swarm.is-rail-collapsed { grid-template-columns: 64px minmax(0, 1fr); }
-  .is-rail-collapsed .db-swarm-rail-head { flex-direction: column; justify-content: center; gap: 6px; padding: 10px 0; }
-  .is-rail-collapsed .db-swarm-rail-title,
+  .is-rail-collapsed .db-swarm-rail-foot { justify-content: center; padding: 6px 0 10px; }
+  .is-rail-collapsed .db-swarm-rail-collapse { margin-left: 0; }
   .is-rail-collapsed .db-swarm-ch-text,
   .is-rail-collapsed .db-swarm-ch > .db-swarm-ch-name {
     position: absolute;
@@ -10086,7 +10047,6 @@
   .is-rail-collapsed .db-swarm-meter,
   .is-rail-collapsed .db-swarm-rail-empty { display: none; }
   .is-rail-collapsed .db-swarm-rail-scroll { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 10px 6px; }
-  .is-rail-collapsed .db-swarm-contact { width: 48px; justify-content: center; padding: 6px; margin-bottom: 8px; }
   .is-rail-collapsed .db-swarm-ch { width: 48px; justify-content: center; padding: 7px 0; }
   .is-rail-collapsed .db-swarm-ch-hash { width: auto; }
   /* An unread count becomes a dot on the icon's corner. */
@@ -10100,17 +10060,14 @@
 @media (max-width: 860px) {
   .db-swarm { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
   .db-swarm-rail { flex-direction: row; align-items: center; border-right: 0; border-bottom: 1px solid var(--sw-divider); }
-  .db-swarm-rail-head { border-bottom: 0; border-right: 1px solid var(--sw-divider); }
-  .db-swarm-rail-title,
+  .db-swarm-rail-foot { display: none; }
   .db-swarm-rail-collapse,
   .db-swarm-meter,
   .db-swarm-group-label,
   .db-swarm-rail-empty { display: none; }
   .db-swarm-rail-scroll { display: flex; gap: 4px; overflow-x: auto; overflow-y: hidden; padding: 8px; }
   .db-swarm-ch { width: auto; flex: none; }
-  .db-swarm-contact { width: auto; flex: none; }
   .db-swarm-topic { display: none; }
-  .db-swarm-head-tools { margin-left: auto; }
   .db-swarm-msg { padding-left: 16px; padding-right: 16px; }
   .db-swarm-compose-box { margin-left: 12px; margin-right: 12px; }
   .db-swarm-stream { min-height: 0; }

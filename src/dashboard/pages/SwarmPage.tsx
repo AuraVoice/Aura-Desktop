@@ -50,7 +50,6 @@ import {
   managerChannel,
   managerIdOfChannel,
   mentionsIn,
-  contactDuty,
   supervisorActive,
   type ChannelId,
   type ThreadEntry,
@@ -301,11 +300,10 @@ function channelView(channel: ChannelId, roster: SwarmRoster): ChannelView {
       author: { id: manager.id, name: displayName(manager), role: "manager", hue: hueOf(manager.id) },
     };
   }
-  const backer = frontDoorAuthor(roster);
   return {
     kind: "group",
     name: groupChannelName(roster),
-    topic: `${backer.name} · ${contactDuty(roster)}`,
+    topic: "",
   };
 }
 

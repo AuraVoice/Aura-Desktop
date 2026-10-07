@@ -21,7 +21,6 @@ import {
   StudyGlyph,
   SwarmMark,
   TackGlyph,
-  TeamGlyph,
   WatchGlyph,
 } from "./SwarmGlyphs";
 import { PlanEmbed, QuestionEmbed, ReportEmbed, RoundEmbed, RoundReplyEmbed, StepRow, WorkingEmbed } from "./SwarmWork";
@@ -782,18 +781,7 @@ export function SwarmStream(props: Props) {
           <span className="db-swarm-head-hash">{view.kind === "activity" ? <PulseGlyph size={20} /> : <LatticeGlyph size={20} />}</span>
         )}
         <h2>{view.name}</h2>
-        <span className="db-swarm-topic">{view.topic}</span>
-        <div className="db-swarm-head-tools">
-          <button
-            type="button"
-            className={`db-swarm-icon-btn is-labelled db-swarm-roster-toggle${props.rosterOpen ? " is-active" : ""}`}
-            onClick={props.onToggleRoster}
-            aria-pressed={props.rosterOpen}
-            title="Each manager's job, team, connectors and routines"
-          >
-            <TeamGlyph size={18} /> Team
-          </button>
-        </div>
+        {view.topic && <span className="db-swarm-topic">{view.topic}</span>}
       </header>
 
       {props.banner}
@@ -946,15 +934,15 @@ export function SwarmStream(props: Props) {
         </button>
       </form>
       </div>
-      <p className="db-swarm-composer-hint">
-        {readOnly
-          ? "Activity is written by the swarm."
-          : hasImage
-            ? "Images are read once in the cloud and not kept. Only text reaches managers."
-            : props.attachments.length > 0
-              ? "Only the files' text leaves this computer."
-              : null}
-      </p>
+      {(readOnly || hasImage || props.attachments.length > 0) && (
+        <p className="db-swarm-composer-hint">
+          {readOnly
+            ? "Activity is written by the swarm."
+            : hasImage
+              ? "Images are read once in the cloud and not kept. Only text reaches managers."
+              : "Only the files' text leaves this computer."}
+        </p>
+      )}
     </section>
   );
 }

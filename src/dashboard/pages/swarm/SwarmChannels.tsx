@@ -1,10 +1,8 @@
 import type { SwarmRoster } from "../../../lib/swarmApi";
 import { SwarmAvatar } from "./SwarmAvatar";
-import { CaretGlyph, HoldGlyph, LatticeGlyph, PulseGlyph, SwarmMark } from "./SwarmGlyphs";
+import { CaretGlyph, HoldGlyph, LatticeGlyph, PulseGlyph } from "./SwarmGlyphs";
 import {
-  contactDuty,
   displayName,
-  frontDoorAuthor,
   groupChannelName,
   hueOf,
   managerChannel,
@@ -42,42 +40,11 @@ export function SwarmChannels({ roster, channel, unread, working, loading, statu
   // Folded, the names are visually hidden but still read out; the tooltip names each row.
   const tip = (label: string) => (collapsed ? label : undefined);
   const hasSupervisor = supervisorActive(roster);
-  const contact = frontDoorAuthor(roster);
   const supervisorArchived = roster.supervisor?.status === "archived";
 
   return (
     <nav className={`db-swarm-rail${supervisorFresh ? " is-supervisor-fresh" : ""}`} aria-label="Swarm channels">
-      <div className="db-swarm-rail-head">
-        <span className="db-swarm-logo" aria-hidden="true"><SwarmMark size={22} /></span>
-        <div className="db-swarm-rail-title">
-          <strong>Swarm</strong>
-        </div>
-        <button
-          type="button"
-          className="db-swarm-rail-collapse"
-          onClick={onToggleCollapsed}
-          aria-expanded={!collapsed}
-          aria-label={collapsed ? "Expand channels" : "Collapse channels"}
-          title={collapsed ? "Expand channels" : "Collapse channels"}
-        >
-          <CaretGlyph size={16} />
-        </button>
-      </div>
-
       <div className="db-swarm-rail-scroll">
-        <button
-          type="button"
-          className="db-swarm-contact"
-          onClick={() => onSelect("group")}
-          title={`${contact.name} answers everything you send to #${groupChannelName(roster)}`}
-        >
-          <SwarmAvatar author={contact} />
-          <span className="db-swarm-ch-text">
-            <span className="db-swarm-ch-name">{contact.name}</span>
-            <span className="db-swarm-ch-role">{contactDuty(roster)}</span>
-          </span>
-        </button>
-
         <div className="db-swarm-group-label">Channels</div>
         <button
           type="button"
@@ -163,6 +130,19 @@ export function SwarmChannels({ roster, channel, unread, working, loading, statu
           <strong>{status.text}</strong>
         </div>
       )}
+
+      <div className="db-swarm-rail-foot">
+        <button
+          type="button"
+          className="db-swarm-rail-collapse"
+          onClick={onToggleCollapsed}
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? "Expand channels" : "Collapse channels"}
+          title={collapsed ? "Expand channels" : "Collapse channels"}
+        >
+          <CaretGlyph size={16} />
+        </button>
+      </div>
     </nav>
   );
 }

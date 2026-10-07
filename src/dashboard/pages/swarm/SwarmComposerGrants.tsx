@@ -18,7 +18,8 @@ import type { ChannelView } from "./SwarmStream";
  * answering this message. In a manager's DM every granted connector is a pill with an x
  * that revokes it, and "+" lists the rest of the account's connected ones to grant. In
  * #group the pills are the union across active managers and only inform: grants are per
- * manager, so they are changed from a DM or the Team panel. The grant itself is the same
+ * manager, so they are changed from a DM. The one exception is the GitHub repo scope,
+ * which #group applies to every active manager that can read GitHub. The grant itself is the same
  * PUT /swarm/managers/{id}/grants as the Team panel's switches; this is a second view of
  * that state, not a second store.
  *
@@ -171,18 +172,24 @@ export function ComposerGrants({
   const granted = [...readers.keys()].sort((a, b) => order(a) - order(b));
   const available = editable ? grantable.filter((c) => !readers.has(c)) : [];
 
-  // The repo scope: this manager's in a DM, the union in #group (read-only there).
+  // The repo scope: this manager's in a DM, the union in #group. In #group a pick
+  // applies to every active manager that can read GitHub, so the pill works there too.
+  const githubManagerIds = editable ? [managerId] : managers.filter((m) => (grants[m.id] ?? []).includes("github")).map((m) => m.id);
+  const repoEditable = githubManagerIds.length > 0;
   const picked = editable
     ? (repoScopes[managerId] ?? []).slice(0, MAX_REPOS)
-    : [...new Set(managers.flatMap((m) => repoScopes[m.id] ?? []))];
+    : [...new Set(managers.flatMap((m) => repoScopes[m.id] ?? []))].slice(0, MAX_REPOS);
   const repos = useGitHubRepos(open === "repos");
 
   if (granted.length === 0 && available.length === 0) return null;
 
+  const scopeRepos = (next: string[]) => {
+    for (const id of githubManagerIds) onRepoScope(id, next);
+  };
   const pickRepo = (fullName: string) => {
     const next = picked.includes(fullName) ? picked.filter((r) => r !== fullName) : [...picked, fullName].slice(0, MAX_REPOS);
     setOpen(null);
-    onRepoScope(managerId, next);
+    scopeRepos(next);
   };
 
   const picker = open === "repos" && (
@@ -222,12 +229,13 @@ export function ComposerGrants({
         if (picked.length === 0) {
           // No repository picked yet: the pill is GitHub itself and opens the picker.
           return (
-            <span key={connector} className={`db-swarm-scope-chip${editable ? " is-clickable" : ""}`}>
-              {editable ? (
+            <span key={connector} className={`db-swarm-scope-chip${repoEditable ? " is-clickable" : ""}`}>
+              {repoEditable ? (
                 <button
                   ref={reposRef}
                   type="button"
                   className="db-swarm-scope-chip-btn"
+                  disabled={pending}
                   aria-haspopup="dialog"
                   aria-expanded={open === "repos"}
                   title={`${title}. Click to pick the repositories to read first.`}
@@ -256,20 +264,20 @@ export function ComposerGrants({
                   <GitHubBrandIcon size={14} className="db-swarm-scope-icon" />
                   {fullName}
                 </span>
-                {editable && (
+                {repoEditable && (
                   <button
                     type="button"
                     className="db-swarm-scope-remove"
                     disabled={pending}
                     aria-label={`Remove ${fullName}`}
-                    onClick={() => onRepoScope(managerId, picked.filter((r) => r !== fullName))}
+                    onClick={() => scopeRepos(picked.filter((r) => r !== fullName))}
                   >
                     <X size={12} aria-hidden="true" />
                   </button>
                 )}
               </span>
             ))}
-            {editable && picked.length < MAX_REPOS && (
+            {repoEditable && picked.length < MAX_REPOS && (
               <span className="db-swarm-scope-add-wrap">
                 <button
                   ref={reposRef}
