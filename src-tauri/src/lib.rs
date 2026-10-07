@@ -393,6 +393,8 @@ pub fn run() {
                 .with_handler(|app, shortcut, event| {
                     if event.state() == ShortcutState::Pressed {
                         hotkeys::handle(app, shortcut);
+                    } else {
+                        hotkeys::handle_release(shortcut);
                     }
                 })
                 .build(),
@@ -434,6 +436,7 @@ pub fn run() {
         .manage(screenshot::RegionFreezeHandle::default())
         .invoke_handler(tauri::generate_handler![
             current_overlay_state,
+            win_focus::overlay_yield_focus,
             esc_pressed,
             set_voice_active,
             set_voice_screen_context,
@@ -788,6 +791,12 @@ pub fn run() {
                     macos_window::make_non_activating_panel(&window);
                     macos_window::refresh_screen_cache(&window);
                 }
+                // The Windows counterpart: the overlay must still activate on
+                // a click (WebView2 drops clicks into an unfocused window), so
+                // instead it remembers the user's app and gives focus back
+                // once the click is handled (win_focus::yield_focus).
+                #[cfg(target_os = "windows")]
+                win_focus::install_focus_subclass(app.handle(), &window);
                 // Not `?`: a failure here used to abort setup and leave the
                 // user with no app at all. Launching with the overlay
                 // capturable is the better of two bad outcomes, because the

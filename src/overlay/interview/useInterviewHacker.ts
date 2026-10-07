@@ -392,6 +392,9 @@ export interface InterviewHackerState {
   /** Send the screen, with the composer's question when there is one. Never
    *  pass this straight to onClick: the first argument is the question. */
   screenSight: (text?: string) => void;
+  /** The card's own Send while its composer is mounted, so Ctrl+Alt+S sends
+   *  what is typed in the box. Null while the card is collapsed. */
+  composerSendRef: { current: (() => void) | null };
   questionSource: QuestionSource;
   /** Ask: the candidate types the question themselves. Works with no audio
    *  and no screenshot, which is the only input a silent interview has. */
@@ -2027,6 +2030,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
   }, [adoptSyntheticTurn, evaluate, mintSyntheticRemoteTurn]);
 
   const screenSightRef = useRef<(() => void) | null>(null);
+  const composerSendRef = useRef<(() => void) | null>(null);
   /**
    * Send the screen, optionally with a question about it.
    *
@@ -2053,7 +2057,10 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     const turn = typed
       ? mintSyntheticRemoteTurn("typed", typed)
       : lastRemoteTurnRef.current
-        ?? mintSyntheticRemoteTurn("screen", "What's on my screen?");
+        // An instruction, not a question. The chat leg's first rule is "do
+        // exactly what the latest message asks", so "What's on my screen?" got
+        // a description of the screen back instead of the solution.
+        ?? mintSyntheticRemoteTurn("screen", "Solve what's on my screen.");
     if (!identity || !turn) return;
     if (phase !== "listening") {
       setMessage("Screen Sight needs the session to be listening.");
@@ -2194,7 +2201,9 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     let disposed = false;
     let unlisten: (() => void) | undefined;
     void listen(INTERVIEW_SCREEN_SIGHT_REQUESTED, () => {
-      screenSightRef.current?.();
+      // The composer's Send when the card is open, so the typed question and
+      // the screen go out together; the bare screen when it is collapsed.
+      (composerSendRef.current ?? screenSightRef.current)?.();
     })
       .then((stop) => {
         if (disposed) stop();
@@ -2633,6 +2642,7 @@ export function useInterviewHacker(signedIn: boolean): InterviewHackerState {
     stop,
     shorter: () => runManualAction("shorter"),
     screenSight,
+    composerSendRef,
     askTyped,
     questionSource,
     answerMode,

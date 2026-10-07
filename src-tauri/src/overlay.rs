@@ -273,6 +273,19 @@ pub(crate) fn main_window(app: &AppHandle) -> Option<WebviewWindow> {
     app.get_webview_window(MAIN_WINDOW)
 }
 
+/// Whether the overlay is showing the Panel (setup, sign-in, the onboarding
+/// tail): the one presentation the user is deliberately switching INTO, so
+/// focus borrowed by a click there is never handed back
+/// (`win_focus::yield_focus`).
+pub(crate) fn is_panel_showing(app: &AppHandle) -> bool {
+    state_handle(app)
+        .map(|h| {
+            h.0.lock().unwrap_or_else(|e| e.into_inner()).presentation
+                == OverlayPresentation::Panel
+        })
+        .unwrap_or(false)
+}
+
 /// What the last capture-exclusion attempt actually achieved for one window,
 /// as READ BACK from the platform rather than as asked for. `Unknown` is the
 /// state before any attempt; a window that was never put through
@@ -1478,12 +1491,83 @@ pub fn set_panel_variant(app: &AppHandle, variant: PanelVariant) {
 /// The draft slot's extra height, driven by React. The height is remembered
 /// across a temporary pointing takeover.
 pub fn set_slot_height(app: &AppHandle, height: Option<f64>, centered: bool) {
+    let mut centered_slot = false;
     if let Some(handle) = state_handle(app) {
         let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
         state.slot_height = height;
         state.centered_slot = centered && height.is_some();
+        centered_slot = state.centered_slot;
     }
     apply(app);
+    crate::hotkeys::set_interview_nudge(app, centered_slot);
+}
+
+/// Whether the Interview Companion card (expanded or collapsed) is the Bar's
+/// slot right now. While it is, Ctrl+Alt+S means Send rather than Screen Sight.
+pub fn interview_card_showing(app: &AppHandle) -> bool {
+    state_handle(app).is_some_and(|handle| {
+        let state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        state.presentation == OverlayPresentation::Bar && state.centered_slot
+    })
+}
+
+/// One Ctrl+Alt+Arrow step for the Interview Companion card (hotkeys.rs
+/// NUDGE_KEYS). Starts from the real window position, so a drag in between is
+/// respected, and stays inside the work area of the monitor the card is on;
+/// crossing monitors is still a drag. Moves the window directly because a
+/// position change is not part of the `applied` cache, so apply() would no-op.
+pub fn nudge_centered_slot(app: &AppHandle, dx: f64, dy: f64) {
+    let (Some(handle), Some(window)) = (state_handle(app), main_window(app)) else {
+        return;
+    };
+    let size = {
+        let state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        if state.presentation != OverlayPresentation::Bar
+            || !state.centered_slot
+            || state.effectively_hidden()
+            || state.applying_bounds
+        {
+            return;
+        }
+        size_for(&state)
+    };
+    let (Ok(position), Ok(Some(monitor))) = (window.outer_position(), window.current_monitor())
+    else {
+        warn!("overlay: nudge skipped, window position or monitor unavailable");
+        return;
+    };
+    let scale = monitor.scale_factor();
+    let current = position.to_logical::<f64>(scale);
+    let (work_pos, work_size) = work_area_within(
+        monitor.position().to_logical::<f64>(scale),
+        monitor.size().to_logical::<f64>(scale),
+        scale,
+    );
+    let max_x = (work_pos.x + work_size.width - size.width).max(work_pos.x);
+    let max_y = (work_pos.y + work_size.height - size.height).max(work_pos.y);
+    let target = LogicalPosition::new(
+        (current.x + dx).clamp(work_pos.x, max_x),
+        (current.y + dy).clamp(work_pos.y, max_y),
+    );
+    // Same reentrancy rule as apply_result: set_position can deliver WM_MOVE
+    // into capture_user_position on this thread before it returns, so no guard
+    // is held across it, and applying_bounds keeps that move from reading as a
+    // drag.
+    handle.0.lock().unwrap_or_else(|e| e.into_inner()).applying_bounds = true;
+    let result = window.set_position(target);
+    handle.0.lock().unwrap_or_else(|e| e.into_inner()).applying_bounds = false;
+    match result {
+        // Written only after the move landed, so a failed move never leaves
+        // the anchor pointing somewhere the window is not.
+        Ok(()) => {
+            handle
+                .0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .centered_slot_anchor = Some((target.x + size.width / 2.0, target.y));
+        }
+        Err(e) => warn!("overlay: nudge set_position failed: {e}"),
+    }
 }
 
 pub fn set_onboarding_step(app: &AppHandle, step: OnboardingStep) {

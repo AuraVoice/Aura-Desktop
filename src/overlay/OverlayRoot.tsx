@@ -976,6 +976,41 @@ export function OverlayRoot() {
     );
   }, [presentation, showInterviewHacker]);
 
+  // A click on the overlay borrows the foreground from the app the user was
+  // working in (WebView2 needs it to deliver the click at all); this gives it
+  // back once the click is handled, so their caret and typing resume. Rust
+  // owns the hand-back (win_focus::yield_focus, a no-op on macOS where the
+  // panel never took focus). Kept for anything the user types into or steers
+  // with keys: text fields, open menus and dialogs, and the whole Interview
+  // Companion card. The Panel is excluded in Rust as well.
+  useEffect(() => {
+    if (!user || presentation === "panel") return;
+    const KEEPS_FOCUS =
+      ".interview-hacker-card, .interview-hacker-control-bar, .interview-hacker-brief-menu-surface, " +
+      '.interview-context-card, [role="menu"], [role="dialog"], [role="listbox"]';
+    const CLICK_ONLY_INPUTS = ["button", "submit", "reset", "checkbox", "radio", "file", "range"];
+    const isEditable = (el: Element | null) =>
+      el instanceof HTMLElement &&
+      (el.isContentEditable ||
+        el instanceof HTMLTextAreaElement ||
+        (el instanceof HTMLInputElement && !CLICK_ONLY_INPUTS.includes(el.type)));
+    const onPointerUp = (event: PointerEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest(KEEPS_FOCUS)) return;
+      // The click's own handlers run after this capture listener; let them
+      // settle (a menu opening, the composer refocusing) before deciding.
+      requestAnimationFrame(() => {
+        if (isEditable(document.activeElement)) return;
+        if (document.querySelector('[role="menu"], [role="dialog"]')) return;
+        invoke("overlay_yield_focus").catch((err) =>
+          logError("OverlayRoot: give focus back", err),
+        );
+      });
+    };
+    document.addEventListener("pointerup", onPointerUp, true);
+    return () => document.removeEventListener("pointerup", onPointerUp, true);
+  }, [user, presentation]);
+
   if (presentation === "pointing") {
     return <PointingOverlay />;
   }

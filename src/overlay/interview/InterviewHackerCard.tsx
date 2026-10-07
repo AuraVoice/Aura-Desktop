@@ -600,9 +600,31 @@ export function InterviewHackerCard({
   // pure card chrome - the hook only needs the text and the flag at send time.
   // `withScreen` is sticky on purpose: a follow-up about the same screen is the
   // common case, and flipping it back on every send is what made "now give me
-  // the code" go out with no screen at all.
-  const [withScreen, setWithScreen] = useState(false);
+  // the code" go out with no screen at all. It starts on: the screen goes with
+  // every send unless the candidate switches it off for this card.
+  const [withScreen, setWithScreen] = useState(true);
   const [askText, setAskText] = useState("");
+  // The form's Send, and what Ctrl+Alt+S presses through composerSendRef. It
+  // bails with the text kept wherever the Send button is disabled, so a press
+  // while a capture is still in flight cannot eat the typed question.
+  const sendComposer = () => {
+    if (hacker.capturingScreen || hacker.phase !== "listening") return;
+    const text = askText.trim();
+    if (withScreen) {
+      hacker.screenSight(text);
+    } else {
+      if (!text) return;
+      hacker.askTyped(text);
+    }
+    setAskText("");
+  };
+  const composerSendRef = hacker.composerSendRef;
+  useEffect(() => {
+    composerSendRef.current = sendComposer;
+  });
+  useEffect(() => () => {
+    composerSendRef.current = null;
+  }, [composerSendRef]);
   useEffect(() => {
     if (!active) return;
     let cancelled = false;
@@ -947,14 +969,7 @@ export function InterviewHackerCard({
             className="interview-hacker-ask"
             onSubmit={(event) => {
               event.preventDefault();
-              const text = askText.trim();
-              if (withScreen) {
-                hacker.screenSight(text);
-              } else {
-                if (!text) return;
-                hacker.askTyped(text);
-              }
-              setAskText("");
+              sendComposer();
             }}
           >
             <input

@@ -280,6 +280,11 @@ windows = { version = "0.61", features = [
     "Win32_Graphics_Gdi",
     "Win32_UI_WindowsAndMessaging",
     "Win32_UI_Input_KeyboardAndMouse",
+    # win_focus.rs: SetWindowSubclass on the overlay and a system foreground
+    # hook, so a click can borrow the foreground from the user's app and hand
+    # it back.
+    "Win32_UI_Shell",
+    "Win32_UI_Accessibility",
     # system_idle.rs: GetTickCount, paired with GetLastInputInfo above, so the
     # dictation share pump can tell an idle machine from a busy one.
     "Win32_System_SystemInformation",

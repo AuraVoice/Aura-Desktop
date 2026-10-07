@@ -1,4 +1,6 @@
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(target_os = "windows")]
+use std::sync::atomic::AtomicIsize;
 use std::thread;
 
 use log::error;
@@ -8,12 +10,20 @@ use tauri::{AppHandle, WebviewWindow};
 #[cfg(target_os = "windows")]
 use tauri::Manager;
 #[cfg(target_os = "windows")]
-use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+#[cfg(target_os = "windows")]
+use windows::Win32::System::Threading::GetCurrentProcessId;
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::Input::KeyboardAndMouse::{SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_MENU, VK_NONAME};
 #[cfg(target_os = "windows")]
+use windows::Win32::UI::Accessibility::{SetWinEventHook, HWINEVENTHOOK};
+#[cfg(target_os = "windows")]
+use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
+#[cfg(target_os = "windows")]
 use windows::Win32::UI::WindowsAndMessaging::{
-    BringWindowToTop, GetForegroundWindow, GetWindowRect, SetForegroundWindow,
+    BringWindowToTop, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId, IsIconic,
+    IsWindow, IsWindowVisible, SetForegroundWindow, EVENT_SYSTEM_FOREGROUND, OBJID_WINDOW,
+    WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_EXITSIZEMOVE,
 };
 
 /// Monotonically increasing "which `force_foreground` call is the latest"
@@ -239,6 +249,194 @@ fn tap_key(key: VIRTUAL_KEY) {
     unsafe {
         SendInput(&[key_down, key_up], core::mem::size_of::<INPUT>() as i32);
     }
+}
+
+/// The last window outside Aura that held the foreground, as a raw HWND value
+/// (0 when there has not been one yet). Kept current by the system foreground
+/// hook below, so by the time a click on the overlay has activated us, this
+/// is still the app the user came from. Read by `yield_focus`.
+///
+/// Not sourced from `WM_MOUSEACTIVATE`, deliberately: that message is answered
+/// by the window the click lands in, and in a Tauri window on Windows that is
+/// `Chrome_RenderWidgetHostHWND`, owned by msedgewebview2.exe. It activates
+/// and never forwards the message to our top-level window, so neither
+/// reading the foreground there nor returning `MA_NOACTIVATE` is reachable
+/// from this process (verified 2026-10-07 by enumerating the overlay's child
+/// windows and their owning processes).
+#[cfg(target_os = "windows")]
+static FOREIGN_FOREGROUND: AtomicIsize = AtomicIsize::new(0);
+
+/// Installs the two hooks that let a click borrow the foreground and give it
+/// back: a system foreground hook that tracks the user's app, and a
+/// window-procedure subclass on the overlay for the drag region. Call once,
+/// on the window's own thread (both callbacks are delivered through its
+/// message pump).
+///
+/// Why not `WS_EX_NOACTIVATE`: a window carrying that style cannot hand its
+/// WebView2 child focus, and a click into an unfocused WebView2 never reaches
+/// the DOM (see `dictation/hud.rs`, which is why the HUD drops the style for
+/// every phase with a button). The overlay has buttons in every presentation,
+/// so it must activate on the click; the fix is to know who had the
+/// foreground and return it afterwards.
+///
+/// `WM_EXITSIZEMOVE` covers the drag region: a press on the glass goes
+/// through tao's `WM_NCLBUTTONDOWN`/`HTCAPTION` path into `DefWindowProc`'s
+/// modal move loop, so no DOM `pointerup` ever fires for it. The loop's exit
+/// is the one message that fires for both a real drag and a plain click
+/// there, with or without movement.
+#[cfg(target_os = "windows")]
+pub fn install_focus_subclass(app: &AppHandle, window: &WebviewWindow) {
+    let Ok(hwnd) = window.hwnd() else {
+        error!("win_focus::install_focus_subclass: failed to get HWND");
+        return;
+    };
+    // Seed from whatever is in front right now, so a click before the first
+    // foreground change still has somewhere to go back to.
+    note_foreign_foreground(unsafe { GetForegroundWindow() });
+    // WINEVENT_SKIPOWNPROCESS: Aura's own windows coming forward are not
+    // what the user "came from", and skipping them in the kernel filter is
+    // cheaper than a pid check per event.
+    let hook = unsafe {
+        SetWinEventHook(
+            EVENT_SYSTEM_FOREGROUND,
+            EVENT_SYSTEM_FOREGROUND,
+            None,
+            Some(foreground_changed),
+            0,
+            0,
+            WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS,
+        )
+    };
+    if hook.is_invalid() {
+        warn!("win_focus: SetWinEventHook failed; focus borrowed by a click cannot be returned");
+        return;
+    }
+    // Leaked once for the life of the process: the overlay window is never
+    // destroyed before exit, and the subclass procedure must be able to reach
+    // an AppHandle from a plain C callback.
+    let app_ref = Box::into_raw(Box::new(app.clone())) as usize;
+    let installed = unsafe {
+        SetWindowSubclass(hwnd, Some(overlay_subclass_proc), FOCUS_SUBCLASS_ID, app_ref)
+    };
+    if installed.as_bool() {
+        info!("win_focus: focus borrow hooks installed on the overlay");
+    } else {
+        warn!("win_focus: SetWindowSubclass failed; a drag of the overlay keeps focus");
+    }
+}
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn foreground_changed(
+    _hook: HWINEVENTHOOK,
+    _event: u32,
+    hwnd: HWND,
+    id_object: i32,
+    _id_child: i32,
+    _thread: u32,
+    _time: u32,
+) {
+    if id_object == OBJID_WINDOW.0 {
+        note_foreign_foreground(hwnd);
+    }
+}
+
+/// Records `hwnd` as the user's app if it is a real window outside Aura.
+#[cfg(target_os = "windows")]
+fn note_foreign_foreground(hwnd: HWND) {
+    if hwnd.0.is_null() {
+        return;
+    }
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+    if pid == unsafe { GetCurrentProcessId() } {
+        return;
+    }
+    FOREIGN_FOREGROUND.store(hwnd.0 as isize, Ordering::Relaxed);
+}
+
+#[cfg(target_os = "windows")]
+const FOCUS_SUBCLASS_ID: usize = 1;
+
+#[cfg(target_os = "windows")]
+unsafe extern "system" fn overlay_subclass_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _subclass_id: usize,
+    ref_data: usize,
+) -> LRESULT {
+    // SAFETY: ref_data is the AppHandle leaked by install_focus_subclass and
+    // lives as long as the process.
+    let app = unsafe { &*(ref_data as *const AppHandle) };
+    if msg == WM_EXITSIZEMOVE {
+        yield_focus(app);
+    }
+    unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+}
+
+/// Hands the foreground back to the window a click (or summon) took it from.
+/// Does nothing while the Panel is showing, since that is the one surface the
+/// user is switching into on purpose, and nothing when there is no live,
+/// visible, non-minimised window to go back to.
+///
+/// No key tap here: `SetForegroundWindow` is permitted for the process that
+/// currently owns the foreground, which after a click into the overlay is
+/// us. Tapping would also push the user's app into keyboard menu mode (the
+/// hazard `raise_for_hotkey` documents) at the exact moment they resume
+/// typing in it. Same generation guard and off-pump thread as `raise`: a
+/// yield that wakes up after a newer summon must not undo it.
+#[cfg(target_os = "windows")]
+pub fn yield_focus(app: &AppHandle) {
+    if crate::overlay::is_panel_showing(app) {
+        info!("win_focus::yield_focus: panel showing; keeping focus");
+        return;
+    }
+    let raw = FOREIGN_FOREGROUND.load(Ordering::Relaxed);
+    if raw == 0 {
+        info!("win_focus::yield_focus: no previous window recorded; keeping focus");
+        return;
+    }
+    let my_generation = app
+        .try_state::<ForegroundGeneration>()
+        .map(|gen_state| gen_state.0.fetch_add(1, Ordering::Relaxed) + 1)
+        .unwrap_or(0);
+    let app = app.clone();
+    thread::spawn(move || {
+        if let Some(gen_state) = app.try_state::<ForegroundGeneration>() {
+            if gen_state.0.load(Ordering::Relaxed) != my_generation {
+                info!("win_focus::yield_focus: superseded by a newer call (generation {my_generation}); skipping");
+                return;
+            }
+        }
+        let hwnd = HWND(raw as *mut core::ffi::c_void);
+        let alive = unsafe {
+            IsWindow(Some(hwnd)).as_bool()
+                && IsWindowVisible(hwnd).as_bool()
+                && !IsIconic(hwnd).as_bool()
+        };
+        if !alive {
+            info!("win_focus::yield_focus: previous window gone; keeping focus");
+            return;
+        }
+        if unsafe { SetForegroundWindow(hwnd) }.as_bool() {
+            info!("win_focus::yield_focus: foreground returned to the user's app");
+        } else {
+            warn!("win_focus::yield_focus: OS denied returning foreground; the overlay keeps it");
+        }
+    });
+}
+
+#[cfg(not(target_os = "windows"))]
+pub fn yield_focus(_app: &AppHandle) {}
+
+/// React's half of the borrow: called after a click on the overlay that did
+/// not land in something the user types into or navigates with keys. On
+/// macOS the overlay is a non-activating panel and never took the app's
+/// focus in the first place, so this is a no-op there.
+#[tauri::command]
+pub async fn overlay_yield_focus(app: AppHandle) {
+    yield_focus(&app);
 }
 
 /// macOS equivalent of the Windows dance above. macOS has no analogue of
