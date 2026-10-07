@@ -17,6 +17,8 @@ was started and read like commit subjects rather than release notes.
 ## [Unreleased]
 
 ### Added
+- Buddy has a face. Bolt, a little robot, now appears in chat while Aura is thinking, and in Swarm while Aura decides who owns a message.
+- Settings has a new Companion tab where you can pick Buddy's avatar or turn it off and keep the plain dots.
 - Swarm managers can watch the web for you. Tell #group something like "every time this project ships a release, check it against my repo and open issues for bugs we share", answer one question, and the manager watches that page, starts work when it changes, and reports what is interesting with options. Each watch shows on the manager's card with when it last looked and what it saw, and a page that keeps failing pauses itself and says why.
 - Swarm managers can open GitHub issues in your repository. Each one waits for your review in the report, or, if you switch on "Act without asking" for that repository on the manager's card, it is opened right after the report, up to a daily limit you set.
 

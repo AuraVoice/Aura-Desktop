@@ -1023,6 +1023,7 @@ export function OverlayRoot() {
           activeTurnId={chat.activeTurnId}
           limitReached={chat.limitReached}
           lane={chat.lane}
+          companionAvatar={generalSettings.showCompanionAvatar ? generalSettings.companionAvatar : null}
           onHeightChange={setChatSlotHeight}
         />
       )}

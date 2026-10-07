@@ -785,6 +785,11 @@
   color: var(--db-text-mute);
 }
 
+.chat-thinking-buddy {
+  flex-shrink: 0;
+  margin: -4px 0;
+}
+
 .chat-thinking-dots {
   display: inline-flex;
   gap: 3px;

@@ -323,3 +323,39 @@
 :root[data-theme="dark"] .db-chips::before {
   box-shadow: 0 3px 10px rgba(0, 0, 0, 0.4);
 }
+
+/* ── Companion avatar picker ── */
+:root[data-theme="dark"] .db-companion-ring {
+  box-shadow: 0 0 0 4px rgba(46, 224, 196, 0.16), 0 10px 26px rgba(0, 0, 0, 0.4);
+}
+:root[data-theme="dark"] .db-companion.is-disabled .db-companion-ring {
+  opacity: 0.4;
+}
+:root[data-theme="dark"] .db-companion-tile {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .db-companion-tile:hover {
+  border-color: var(--dk-glass-border-hover);
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow-hover);
+}
+:root[data-theme="dark"] .db-companion-tile:focus-visible {
+  outline-color: var(--dk-accent);
+}
+:root[data-theme="dark"] .db-companion-tile::after {
+  background: linear-gradient(90deg, transparent, var(--dk-sheen-soft), var(--dk-sheen-peak), var(--dk-sheen-soft), transparent);
+}
+:root[data-theme="dark"] .db-companion-stage {
+  background: var(--dk-surface-2);
+}
+:root[data-theme="dark"] .db-companion-name {
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .db-companion-tagline {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-companion-check {
+  color: var(--dk-accent);
+}

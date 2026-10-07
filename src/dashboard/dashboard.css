@@ -10356,6 +10356,7 @@ button:hover > .sw-g-dismiss { transform: rotate(90deg); }
 .db-swarm-orb.is-fallback .db-swarm-orb-dot { opacity: 1; animation: db-swarm-g-breathe 1.6s ease-in-out infinite; }
 .db-swarm-orb.is-fallback canvas { display: none; }
 .db-swarm-typing .db-swarm-orb { margin: -4px 0; }
+.db-swarm-typing-buddy { flex-shrink: 0; margin: -6px 0; }
 
 /* Loading a channel: three glass rows the real messages replace. */
 .db-swarm-skel-list { display: grid; gap: 4px; padding-top: 6px; }

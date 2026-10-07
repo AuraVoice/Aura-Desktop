@@ -9,7 +9,7 @@ import {
   type NavItem,
 } from "./navConfig";
 
-const SETTINGS_ROUTES = new Set(["/general", "/system", "/account", "/billing", "/privacy"]);
+const SETTINGS_ROUTES = new Set(["/general", "/companion", "/system", "/account", "/billing", "/privacy"]);
 
 interface SidebarProps {
   collapsed: boolean;

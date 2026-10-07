@@ -3,6 +3,7 @@ import { NavLink } from "react-router-dom";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import {
+  Bot,
   CloudCheck,
   CreditCard,
   AudioLines,
@@ -15,6 +16,7 @@ import {
 } from "lucide-react";
 import { AccountPage } from "./pages/AccountPage";
 import { BillingPage } from "./pages/BillingPage";
+import { CompanionPage } from "./pages/CompanionPage";
 import { GeneralPage } from "./pages/GeneralPage";
 import { VoicePage } from "./pages/VoicePage";
 
@@ -27,6 +29,7 @@ interface SettingsItem {
 const SETTINGS_ITEMS: SettingsItem[] = [
   { to: "/general", label: "General", Icon: SlidersHorizontal },
   { to: "/voice", label: "Voice", Icon: AudioLines },
+  { to: "/companion", label: "Companion", Icon: Bot },
   { to: "/system", label: "System", Icon: Monitor },
 ];
 
@@ -39,6 +42,7 @@ const ACCOUNT_ITEMS: SettingsItem[] = [
 const SETTINGS_PAGES: Record<string, ReactElement> = {
   "/general": <GeneralPage section="general" />,
   "/voice": <VoicePage />,
+  "/companion": <CompanionPage />,
   "/system": <GeneralPage section="system" />,
   "/account": <AccountPage />,
   "/billing": <BillingPage />,

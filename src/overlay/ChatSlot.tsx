@@ -2,6 +2,8 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import type { ChangeEvent, ClipboardEvent, CSSProperties } from "react";
 import { currentMonitor } from "@tauri-apps/api/window";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { BuddyAvatar } from "../components/BuddyAvatar";
+import type { CompanionAvatarId } from "../components/buddy/avatars";
 import {
   Bell,
   Brain,
@@ -353,6 +355,8 @@ interface ChatSlotProps {
    * already open, so the composer takes the caret back. */
   focusNonce: number;
   screen: ChatScreenState;
+  /** Buddy's face for the thinking row, or null to show plain dots. */
+  companionAvatar: CompanionAvatarId | null;
   /** Reports the card's measured height so OverlayRoot can size the window to
    * the transcript instead of reserving a fixed block of empty glass. */
   onHeightChange?: (height: number) => void;
@@ -572,6 +576,7 @@ const MessageRow = memo(function MessageRow({
   signalling,
   sending,
   lane,
+  companionAvatar,
   onRetry,
   onClarification,
 }: {
@@ -579,6 +584,7 @@ const MessageRow = memo(function MessageRow({
   signalling: boolean;
   sending: boolean;
   lane: ChatLane;
+  companionAvatar: CompanionAvatarId | null;
   onRetry: (messageId: string) => void;
   onClarification: (messageId: string, selectedOptions: string[]) => void;
 }) {
@@ -647,9 +653,13 @@ const MessageRow = memo(function MessageRow({
         )}
         {item.state === "streaming" && !item.text && !signalling && (
           <span className="chat-thinking" role="status">
-            <span className="chat-thinking-dots" aria-hidden="true">
-              <i /><i /><i />
-            </span>
+            {companionAvatar ? (
+              <BuddyAvatar className="chat-thinking-buddy" move="thinking" size={32} />
+            ) : (
+              <span className="chat-thinking-dots" aria-hidden="true">
+                <i /><i /><i />
+              </span>
+            )}
             Aura is thinking
           </span>
         )}
@@ -780,6 +790,7 @@ export function ChatSlot({
   lane,
   focusNonce,
   screen,
+  companionAvatar,
   onHeightChange,
 }: ChatSlotProps) {
   const [message, setMessage] = useState(readChatDraft);
@@ -1129,6 +1140,7 @@ export function ChatSlot({
               signalling={!!item.turnId && signallingTurns.has(item.turnId)}
               sending={sending}
               lane={lane}
+              companionAvatar={companionAvatar}
               onRetry={onRetry}
               onClarification={onClarification}
             />

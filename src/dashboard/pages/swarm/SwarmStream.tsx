@@ -5,6 +5,8 @@ import { IMAGE_ACCEPT } from "../../../lib/chatAttachments";
 import { ArrowDown, Paperclip, Send } from "lucide-react";
 import { SwarmAvatar } from "./SwarmAvatar";
 import { SwarmOrb } from "./SwarmOrb";
+import { BuddyAvatar } from "../../../components/BuddyAvatar";
+import { useGeneralSettings } from "../../../state/useGeneralSettings";
 import {
   AscentGlyph,
   BuildGlyph,
@@ -291,9 +293,18 @@ function Typing({ author, since }: { author: Author; since: number }) {
     return () => window.clearInterval(timer);
   }, []);
   const seconds = Math.max(0, Math.floor((now - since) / 1000));
+  // Managers keep their own tile; Buddy's face stands in for the orb on
+  // Aura's own turn, the same thinking pose the chat overlay shows.
+  const { showCompanionAvatar } = useGeneralSettings();
   return (
     <div className="db-swarm-typing" aria-live="polite">
-      {author.role === "manager" ? <SwarmAvatar author={author} size="sm" state="working" /> : <SwarmOrb id="swarm" state="planning" tone={author.role === "supervisor" ? "sup" : "accent"} size={28} />}
+      {author.role === "manager" ? (
+        <SwarmAvatar author={author} size="sm" state="working" />
+      ) : showCompanionAvatar ? (
+        <BuddyAvatar className="db-swarm-typing-buddy" move="thinking" size={32} />
+      ) : (
+        <SwarmOrb id="swarm" state="planning" tone={author.role === "supervisor" ? "sup" : "accent"} size={28} />
+      )}
       <span><strong>{author.name}</strong> is deciding who owns this</span>
       {seconds >= 4 && <span className="db-swarm-typing-time">{seconds}s</span>}
     </div>

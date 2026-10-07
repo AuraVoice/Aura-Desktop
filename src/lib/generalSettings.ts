@@ -1,6 +1,7 @@
 import { Store } from "@tauri-apps/plugin-store";
 import { overlayStorePath } from "./copy";
 import { logError } from "./log";
+import type { CompanionAvatarId } from "../components/buddy/avatars";
 
 export const GENERAL_SETTINGS_KEY = "dashboard_general_settings";
 // Bumped to 2 when uploads actually became real. Version 1 was recorded
@@ -40,6 +41,9 @@ export interface GeneralSettings {
   improveConversations: boolean;
   improveActions: boolean;
   improvementConsentVersion: number;
+  /** Buddy's face in chat. Off shows the plain thinking dots instead. */
+  showCompanionAvatar: boolean;
+  companionAvatar: CompanionAvatarId;
 }
 
 // Launch-at-login is deliberately absent: autostart.rs owns it in a different
@@ -86,6 +90,8 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   improveConversations: false,
   improveActions: false,
   improvementConsentVersion: 0,
+  showCompanionAvatar: true,
+  companionAvatar: "bolt",
 };
 
 function mergeSettings(saved: GeneralSettings | null | undefined): GeneralSettings {
