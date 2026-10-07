@@ -16,9 +16,6 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
-### Changed
-- Swarm reads like a team chat now. Managers and the Supervisor talk to you in first person, like teammates in Slack, instead of narrating how each message was routed. A new manager joins #group and introduces itself, it asks its own setup questions, and replies drop the "Answered" and "New manager" badges.
-
 ## [0.16.6] - 2026-10-06
 
 ### Added
@@ -28,6 +25,7 @@ was started and read like commit subjects rather than release notes.
 - Swarm managers can open GitHub issues in your repository. Each one waits for your review in the report, or, if you switch on "Act without asking" for that repository on the manager's card, it is opened right after the report, up to a daily limit you set.
 
 ### Changed
+- Swarm reads like a team chat now. Managers and the Supervisor talk to you in first person, like teammates in Slack, instead of narrating how each message was routed. A new manager joins #group and introduces itself, it asks its own setup questions, and replies drop the "Answered" and "New manager" badges.
 - Swarm avatars are redesigned. Your messages show your Google photo, each manager's initial sits on a solid tile in its own colour, and the Supervisor has a new hub icon in its own graphite colour, so it no longer looks like Aura.
 - Swarm is calm at rest. Only a manager that is actually working shows a pulsing ring, and a paused manager's dot is now a hollow ring, so you can tell it apart without relying on colour.
 - Your Swarm messages now sit on the right in a bubble, and the agents' replies keep the full width on the left, so you can see what you asked and what came back at a glance. Agent names read in plain ink with their role beside them, and days are marked with a small label.
