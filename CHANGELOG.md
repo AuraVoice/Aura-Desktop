@@ -16,8 +16,11 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+## [0.16.7] - 2026-10-07
+
 ### Added
 - Swarm managers remember. Each finished run leaves what it learned, which sites it could not read, what you asked for and what it already told you, kept encrypted on this computer and handed to the manager on its next run so it stops repeating itself. Every manager's card has a Memory section where you can read it, forget a row, export it as a file or bring a file back in. A routine that fires while your laptop is closed uses the last memory the app sent.
+- Bolt can sit in a corner of your screen. Turn on "Sit on the desktop" in Settings > Companion and he waits there, listens while you dictate, cheers when the words land, and holds up Aura's messages over his head. Drag him to any corner, or pick one on the same page. Click him to hide him for an hour or until tomorrow.
 
 ### Changed
 - Swarm reads like a chat. A manager's report is plain prose in its message, with findings as bullets and their sources inline, drafts quoted, and the buttons you can act on (Review, Grant, Open) as small links. Its plan and every step fold into one line under the message, "Searched 6 sources, read 2 pages, 1.2 min", that you can open. A question is just a message; reply below to answer it.
