@@ -2,7 +2,6 @@ import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type C
 import type { SwarmDecision, SwarmDoc, SwarmManager, SwarmRoster, SwarmRoundView, SwarmSessionView } from "../../../lib/swarmApi";
 import { DOCUMENT_ACCEPT } from "../../../lib/documentText";
 import { IMAGE_ACCEPT } from "../../../lib/chatAttachments";
-import { ArrowDown, Paperclip, Send } from "lucide-react";
 import { SwarmAvatar } from "./SwarmAvatar";
 import { SwarmOrb } from "./SwarmOrb";
 import { BuddyAvatar } from "../../../components/BuddyAvatar";
@@ -12,9 +11,9 @@ import {
   BuildGlyph,
   BurstGlyph,
   CellGlyph,
-  HubGlyph,
-  CycleGlyph,
-  HopGlyph,
+  DartGlyph,
+  DismissGlyph,
+  DropGlyph,
   LatticeGlyph,
   PulseGlyph,
   SheetGlyph,
@@ -23,10 +22,12 @@ import {
   StudyGlyph,
   SwarmMark,
   TackGlyph,
+  TeamGlyph,
   WatchGlyph,
 } from "./SwarmGlyphs";
 import { CONNECTOR_LABEL, QuestionEmbed, ReportEmbed, RoundEmbed, RoundReplyEmbed, WorkingEmbed } from "./SwarmWork";
 import { useMentionPicker } from "./SwarmMentionPicker";
+import { SwarmMarkdown } from "./SwarmMarkdown";
 import { ComposerGrants } from "./SwarmComposerGrants";
 import {
   CAPABILITY_LABEL,
@@ -168,7 +169,8 @@ interface Props {
   onToggleGrant: (managerId: string, connector: string, on: boolean) => void;
   onRepoScope: (managerId: string, repos: string[]) => void;
   onOpenSource: (url: string) => void;
-  onOpenResearch: (runId: string) => void;
+  /** A tapped answer to a report's question: sent to that manager as a DM. */
+  onReply: (managerId: string, text: string) => void;
   /** A "not a swarm job" named a feature: go to its page. */
   onOpenPath: (path: string) => void;
   /** Resend a declined request as a hire, with the files it came with. */
@@ -181,6 +183,10 @@ interface Props {
   onAnswer: (draftId: string, label: string, managerId: string) => void;
   rosterOpen: boolean;
   onToggleRoster: () => void;
+  /** Managers parked on a question, with how many each is waiting on. */
+  waiting: { managerId: string; count: number }[];
+  /** A poll or a channel pull failed and the page is retrying on its backoff. */
+  reconnecting: boolean;
   composerRef: RefObject<HTMLTextAreaElement | null>;
   /** Files picked for the next message, each read on this machine then put on the shelf. */
   attachments: ComposerDoc[];
@@ -279,7 +285,7 @@ function AskEmbed({
           aria-label="Your answer"
         />
         <button type="submit" className="db-swarm-send is-small" disabled={busy || !freeAnswer.trim()} aria-label="Send answer">
-          <Send size={16} aria-hidden="true" />
+          <DartGlyph size={15} />
         </button>
       </form>
     </div>
@@ -576,6 +582,8 @@ export function SwarmStream(props: Props) {
       if (item.kind === "question") latestQuestion[item.message.sessionId] = item.key;
       if (item.kind === "report") reported.add(item.message.sessionId);
     }
+    // A report's question can be answered with a tap only while nothing came after it.
+    const lastKey = items.length > 0 ? items[items.length - 1].key : "";
     let lastDay = "";
     let lastAuthorKey = "";
     let lastAt = 0;
@@ -589,11 +597,7 @@ export function SwarmStream(props: Props) {
           <Fragment key={item.key}>
             {daySep && <div className="db-swarm-daysep"><span>{daySep}</span></div>}
             <div className={`db-swarm-sys${item.tone === "supervisor" ? " is-supervisor" : ""}${fresh ? " is-fresh" : ""}`}>
-              <span className="db-swarm-sys-icon">
-                {item.tone === "supervisor" ? <HubGlyph size={15} /> : item.tone === "routine" ? <CycleGlyph size={15} /> : <SparkGlyph size={15} />}
-              </span>
               <span className="db-swarm-sys-text">{item.text}</span>
-              {item.at > 0 && <time>{timeLabel(item.at)}</time>}
             </div>
           </Fragment>
         );
@@ -604,13 +608,11 @@ export function SwarmStream(props: Props) {
           <Fragment key={item.key}>
             {daySep && <div className="db-swarm-daysep"><span>{daySep}</span></div>}
             <div className={`db-swarm-sys is-queued${fresh ? " is-fresh" : ""}`}>
-              <span className="db-swarm-sys-icon">{item.picked ? <HopGlyph size={15} /> : <CycleGlyph size={15} />}</span>
               <span className="db-swarm-sys-text">
                 {view.kind === "manager"
                   ? <><b>{item.picked ? "Picked up" : "Waiting"}</b>{item.picked ? ": " : " for the current task to finish: "}{item.text}</>
                   : item.text}
               </span>
-              {item.at > 0 && <time>{timeLabel(item.at)}</time>}
             </div>
           </Fragment>
         );
@@ -621,11 +623,9 @@ export function SwarmStream(props: Props) {
           <Fragment key={item.key}>
             {daySep && <div className="db-swarm-daysep"><span>{daySep}</span></div>}
             <div className={`db-swarm-sys is-crosspost${fresh ? " is-fresh" : ""}`}>
-              <span className="db-swarm-sys-icon"><HopGlyph size={15} /></span>
               <span className="db-swarm-sys-text">
                 <b>Routed</b> from #{props.roster.supervisor?.status === "active" ? "group" : "front-door"}: {item.text}
               </span>
-              {item.at > 0 && <time>{timeLabel(item.at)}</time>}
             </div>
           </Fragment>
         );
@@ -684,10 +684,10 @@ export function SwarmStream(props: Props) {
                     {item.author.name !== roleLabel(item.author, props.roster) && <span className={`db-swarm-role is-${item.author.role}`}>{roleLabel(item.author, props.roster)}</span>}
                     {item.at > 0 && <time>{timeLabel(item.at)}</time>}
                   </div>}
-                  {item.kind === "say" && <p className="db-swarm-text">{item.text}</p>}
+                  {item.kind === "say" && <SwarmMarkdown className="db-swarm-text" text={item.text} onOpenLink={(url) => live.current.onOpenSource(url)} />}
                   {item.kind === "working" && (
                     <WorkingEmbed
-                      name={item.author.name}
+                      at={item.at}
                       managerId={item.author.id}
                       manager={findManager(props.roster, item.author.id)}
                       plan={item.plan}
@@ -715,7 +715,8 @@ export function SwarmStream(props: Props) {
                       draftActions={props.sessions[item.message.sessionId]?.draftActions ?? {}}
                       onGrant={(managerId, connector) => live.current.onGrant(managerId, connector)}
                       onOpenSource={(url) => live.current.onOpenSource(url)}
-                      onOpenResearch={(runId) => live.current.onOpenResearch(runId)}
+                      answerable={item.key === lastKey}
+                      onReply={(value) => live.current.onReply(item.author.id, value)}
                     />
                   )}
                   {item.kind === "round" && (
@@ -761,6 +762,7 @@ export function SwarmStream(props: Props) {
       ? `Message ${view.name}`
       : `Message #${view.name}`;
   const showSkeleton = props.loading && items.length === 0 && !busyHere;
+  const needsYou = props.waiting.reduce((sum, w) => sum + (w.count > 0 ? 1 : 0), 0);
   const showHero = view.kind === "group" && items.length === 0 && !busyHere && !showSkeleton;
 
   return (
@@ -777,6 +779,42 @@ export function SwarmStream(props: Props) {
         )}
         <h2>{view.name}</h2>
         {view.topic && <span className="db-swarm-topic">{view.topic}</span>}
+        <div className="db-swarm-head-actions">
+          {props.reconnecting && <span className="db-swarm-reconnect" role="status">Reconnecting</span>}
+          {(props.working.size > 0 || needsYou > 0) && (
+            <button
+              type="button"
+              className={`db-swarm-status-pill${needsYou > 0 ? " is-warn" : ""}`}
+              onClick={() => {
+                const first = props.waiting.find((w) => w.count > 0)?.managerId ?? [...props.working][0];
+                if (first) props.onOpenChannel(managerChannel(first));
+              }}
+              title={needsYou > 0 ? "Open the first manager waiting on you" : "Open a manager that is working"}
+            >
+              {props.working.size > 0 && (
+                <span className="db-swarm-status-part">
+                  <span className="db-swarm-run-dot" aria-hidden="true" />
+                  {props.working.size} working
+                </span>
+              )}
+              {needsYou > 0 && (
+                <span className="db-swarm-status-part is-warn">
+                  <SignalGlyph size={13} />
+                  {needsYou} need{needsYou === 1 ? "s" : ""} you
+                </span>
+              )}
+            </button>
+          )}
+          <button
+            type="button"
+            className={`db-swarm-head-btn${props.rosterOpen ? " is-on" : ""}`}
+            aria-pressed={props.rosterOpen}
+            onClick={props.onToggleRoster}
+            title="Your team: what each manager can read, its routines, watches and memory"
+          >
+            <TeamGlyph size={16} /> Team
+          </button>
+        </div>
       </header>
 
       {props.banner}
@@ -812,7 +850,7 @@ export function SwarmStream(props: Props) {
           {busyHere && <Typing author={props.busyAuthor} since={props.busySince} />}
         </div>
       </div>
-      {showJump && <button type="button" className="db-swarm-jump" onClick={jumpToLatest} aria-label="Jump to latest" title="Jump to latest"><ArrowDown size={18} /></button>}
+      {showJump && <button type="button" className="db-swarm-jump" onClick={jumpToLatest} aria-label="Jump to latest" title="Jump to latest"><DropGlyph size={18} /></button>}
       </div>
 
       {props.notice && (view.kind === "manager" || props.noticeEverywhere) && (
@@ -852,7 +890,7 @@ export function SwarmStream(props: Props) {
               {a.status === "reading" && <span className="db-swarm-file-state">Reading</span>}
               {a.status === "failed" && <span className="db-swarm-file-state">{a.error}</span>}
               <button type="button" className="db-swarm-file-remove" aria-label={`Remove ${a.name}`} onClick={() => props.onRemoveAttachment(a.key)}>
-                ×
+                <DismissGlyph size={12} />
               </button>
             </span>
           ))}
@@ -886,7 +924,7 @@ export function SwarmStream(props: Props) {
               aria-label="Attach a file or image"
               title="Attach a PDF, Word, text file or image, or paste a screenshot. Files are read on this computer; images are read once in the cloud and not kept."
             >
-              <Paperclip size={19} aria-hidden="true" />
+              <SheetGlyph size={19} />
             </button>
           </>
         )}
@@ -925,7 +963,7 @@ export function SwarmStream(props: Props) {
         </span>
         {!readOnly && text.length > messageMax - 400 && <span className="db-swarm-count">{messageMax - text.length}</span>}
         <button type="submit" className="db-swarm-send" disabled={readOnly || busy || reading || !text.trim() || text.length > messageMax} aria-label="Send">
-          <Send size={19} aria-hidden="true" />
+          <DartGlyph size={18} />
         </button>
       </form>
       </div>

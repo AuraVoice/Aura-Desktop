@@ -472,19 +472,19 @@
    artifact's palette one to one. */
 :root[data-theme="dark"] .db-swarm {
   --sw-panel-border: var(--dk-glass-border);
-  --sw-panel-fill: var(--dk-glass-fill);
-  --sw-panel-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
-  --sw-rail-fill: var(--dk-surface-2);
+  --sw-panel-fill: linear-gradient(160deg, #111215, #08090a);
+  --sw-panel-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), var(--dk-glass-shadow);
+  --sw-rail-fill: rgba(255, 255, 255, 0.018);
   --sw-divider: var(--dk-divider);
   --sw-hover: var(--dk-hover);
   --sw-active: var(--dk-active);
   --sw-active-ring: var(--dk-border-strong);
   --sw-lift: rgba(0, 0, 0, 0.35);
-  --sw-field: var(--dk-surface-2);
+  --sw-field: rgba(255, 255, 255, 0.04);
   --sw-field-border: var(--dk-field-border);
-  --sw-chip: rgba(255, 255, 255, 0.035);
-  --sw-chip-border: var(--dk-border);
-  --sw-sheen: transparent;
+  --sw-chip: rgba(255, 255, 255, 0.045);
+  --sw-chip-border: rgba(255, 255, 255, 0.08);
+  --sw-sheen: rgba(255, 255, 255, 0.07);
   --sw-text: var(--dk-text);
   --sw-dim: var(--dk-text-dim);
   --sw-mute: var(--dk-text-mute);
@@ -506,12 +506,24 @@
   --sw-danger: var(--dk-danger);
   --sw-you: var(--dk-text);
   --sw-you-soft: rgba(255, 255, 255, 0.08);
-  --sw-you-bubble: var(--dk-surface-2);
-  --sw-you-bubble-border: var(--dk-border);
+  --sw-you-bubble: linear-gradient(160deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.05));
+  --sw-you-bubble-border: rgba(255, 255, 255, 0.1);
   --sw-mention: #a3b1ff;
   --sw-mention-soft: rgba(143, 160, 255, 0.22);
-  --sw-aurora-a: transparent;
-  --sw-aurora-b: transparent;
+  /* The one place dark is glass, not matte (Varun's call, 2026-10-08): Swarm's cards
+     frost over the ambient field below with a light edge and an inset highlight. The
+     rest of the dashboard stays matte. */
+  --sw-card-fill: linear-gradient(160deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.022));
+  --sw-card-border: rgba(255, 255, 255, 0.09);
+  --sw-card-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 18px 40px -18px rgba(0, 0, 0, 0.75);
+  --sw-step-fill: rgba(255, 255, 255, 0.06);
+  --sw-aurora-a: rgba(79, 199, 154, 0.13);
+  --sw-aurora-b: rgba(124, 134, 255, 0.12);
+  --sw-aurora-c: rgba(196, 128, 255, 0.07);
+  --sw-glow: rgba(79, 199, 154, 0.12);
+  --sw-live: #4fc79a;
+  --sw-ok: #6fd3a8;
+  --sw-ok-soft: rgba(111, 211, 168, 0.12);
   --sw-drawer-shadow: -18px 0 44px rgba(0, 0, 0, 0.55);
   --sw-scroll-thumb: var(--dk-scroll-thumb);
   --sw-h0: color-mix(in srgb, var(--sw-h0-ink) 48%, var(--dk-text));

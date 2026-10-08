@@ -71,13 +71,13 @@ Job Hunt, Silicon Brief and a student's Semester manager differ only in brief, g
 | `web.search` | `brave_search(feature="swarm")` | query, recency | none | 4 |
 | `web.read` | `TieredPageReader` after `url_policy.evaluate_url` | url | none | 6 |
 | `gmail.search` | `list_recent_messages` | query, days | gmail | 3 |
-| `gmail.read` | `get_message` | message_id | gmail | 5 |
+| `gmail.read` | `get_message` | message_id | gmail | 12 (effectively none) |
 | `calendar.events` | `query_events` | from, to | google_calendar | 2 |
 | `classroom.due` | `list_due_work` | days | google_classroom | 1 |
 | `github.activity` | github `activity` | repo?, days | github | 2 |
 | `x.bookmarks` | `search_bookmarks` | query | x | 1 |
 | `notion.recent` | `recent_pages` | days | notion | 1 |
-| `aura.research` | research `engine.start` | question | none | 1 |
+| `aura.research` | research `engine.start` | question | none | 3 |
 
 Each row carries a pydantic args model, a result trimmer (≤1.5 KB into the scratchpad), a timeout (30 s), a trust label (web or connector) and its grant requirement. The registry is the only thing the step prompt lists; an unknown id or invalid args is a failed attempt, never an exception. There is no write row, so a prompt-injected page can at worst pollute a report.
 
@@ -166,7 +166,7 @@ What is stored and what is not:
 
 ### 3.2 Caps per session
 
-From the design doc's "later as jobs" column: 12 model decisions, the capability caps in 1.1, 3 evaluate rounds, 5 attempts per task, stage attempt cap 2 (Research's `STAGE_ATTEMPT_CAP`), 60 s per model call, 30 s per capability, 30 min wall. The same capability with the same args hash twice in a row counts as no progress and ends the session `partial`. Routines may spend at most 80% of the daily wallet, so interactive runs always keep 20%.
+From the design doc's "later as jobs" column: 12 model decisions, the capability caps in 1.1, 3 evaluate rounds, 5 attempts per task, stage attempt cap 2 (Research's `STAGE_ATTEMPT_CAP`), 60 s per model call, 30 s per capability, 30 min wall. The same capability with the same args hash twice in a row counts as no progress and ends the session `partial`. Since 2026-10-07 a cap is a real limit only where a call costs something outside the wallet (a Research run, the list-everything connector calls, searches that spend credits); reads whose cost is nothing but the model decision (`github.file`, `github.tree`, `github.issues`, `gmail.read`, `doc.*`) are capped at `MAX_DECISIONS`, which cannot bind. A call whose args hash matches an earlier successful scratch row is served from that row instead of fetched: no reserve, no cap use, and the decision the claim counted is handed back. A lane that asks for the same cached row twice is looping and ends as no progress. A cap that is hit names the capability in the gap. Routines may spend at most 80% of the daily wallet, so interactive runs always keep 20%.
 
 ## 4. Three non-obvious traces
 

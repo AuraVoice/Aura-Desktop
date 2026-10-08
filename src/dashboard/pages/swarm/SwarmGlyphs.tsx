@@ -379,6 +379,56 @@ export function SealGlyph(p: GlyphProps) {
   );
 }
 
+/** Done: a plain check with its end node. */
+export function TickGlyph(p: GlyphProps) {
+  return (
+    <Glyph name="tick" {...p}>
+      <path className="sw-check" d="m5.5 12.6 4.2 4.2 8.8-9.6" strokeWidth={2} pathLength={1} />
+    </Glyph>
+  );
+}
+
+/** Jump to the latest: a link falling to a node. */
+export function DropGlyph(p: GlyphProps) {
+  return (
+    <Glyph name="drop" {...p}>
+      <path d="M12 4v11.5M6.5 11l5.5 5.5 5.5-5.5" strokeWidth={1.9} />
+      <circle cx="12" cy="20.4" r="1.5" fill="currentColor" stroke="none" />
+    </Glyph>
+  );
+}
+
+/** Add: two links crossing at a node. */
+export function AddGlyph(p: GlyphProps) {
+  return (
+    <Glyph name="add" {...p}>
+      <path d="M12 5v4.6M12 14.4V19M5 12h4.6M14.4 12H19" strokeWidth={1.9} />
+      <circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none" />
+    </Glyph>
+  );
+}
+
+/** Private: a shackle over a cell. */
+export function LockGlyph(p: GlyphProps) {
+  return (
+    <Glyph name="lock" {...p}>
+      <path d="M8 10.5V8a4 4 0 0 1 8 0v2.5" strokeWidth={1.7} />
+      <rect x="5" y="10.5" width="14" height="10" rx="2.6" strokeWidth={1.6} />
+      <circle cx="12" cy="15.5" r="1.5" fill="currentColor" stroke="none" />
+    </Glyph>
+  );
+}
+
+/** The open web: an orbit around a globe's meridian. */
+export function WebGlyph(p: GlyphProps) {
+  return (
+    <Glyph name="web" {...p}>
+      <circle cx="12" cy="12" r="8.4" strokeWidth={1.5} />
+      <path d="M3.8 12h16.4M12 3.6c2.4 2.4 3.4 5.2 3.4 8.4s-1 6-3.4 8.4c-2.4-2.4-3.4-5.2-3.4-8.4s1-6 3.4-8.4Z" strokeWidth={1.3} />
+    </Glyph>
+  );
+}
+
 /** A schedule: a clock face drawn as an orbit with one hand. */
 export function CycleGlyph(p: GlyphProps) {
   return (

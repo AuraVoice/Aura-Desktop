@@ -17,6 +17,8 @@ interface Props {
   unread: Record<string, number>;
   /** Managers currently working, by id. */
   working: ReadonlySet<string>;
+  /** Managers parked on a question for the user, by id. */
+  waiting: ReadonlySet<string>;
   /** The roster has not loaded yet, so "None yet" would be a lie. */
   loading: boolean;
   /** One line on whether managers can work right now. */
@@ -36,7 +38,7 @@ function Badge({ count }: { count: number }) {
 
 /** Left rail: the two shared channels, then one DM per manager, then whether the
  * managers can work right now. */
-export function SwarmChannels({ roster, channel, unread, working, loading, status, freshManagers, supervisorFresh, onSelect, collapsed, onToggleCollapsed }: Props) {
+export function SwarmChannels({ roster, channel, unread, working, waiting, loading, status, freshManagers, supervisorFresh, onSelect, collapsed, onToggleCollapsed }: Props) {
   // Folded, the names are visually hidden but still read out; the tooltip names each row.
   const tip = (label: string) => (collapsed ? label : undefined);
   const hasSupervisor = supervisorActive(roster);
@@ -91,22 +93,27 @@ export function SwarmChannels({ roster, channel, unread, working, loading, statu
           const active = channel === id;
           const paused = m.status === "paused";
           const busy = !paused && working.has(m.id);
+          // Presence is what the manager is doing for you, never a generic "online" dot.
+          const asking = !paused && waiting.has(m.id);
+          const presence = paused ? "is-paused" : asking ? "is-waiting" : busy ? "is-working" : "";
           return (
             <button
               key={m.id}
               type="button"
-              className={`db-swarm-ch is-manager${active ? " is-active" : ""}${paused ? " is-paused" : ""}${freshManagers.has(m.id) ? " is-fresh" : ""}${working.has(m.id) ? " is-working" : ""}`}
+              className={`db-swarm-ch is-manager${active ? " is-active" : ""}${paused ? " is-paused" : ""}${freshManagers.has(m.id) ? " is-fresh" : ""}${working.has(m.id) ? " is-working" : ""}${asking ? " is-waiting" : ""}`}
               aria-current={active ? "page" : undefined}
               title={tip(displayName(m))}
               onClick={() => onSelect(id)}
             >
               <span className="db-swarm-ch-avatar">
                 <SwarmAvatar author={{ id: m.id, name: displayName(m), role: "manager", hue: hueOf(m.id) }} size="sm" state={paused ? "paused" : busy ? "working" : "idle"} />
-                <i className={`db-swarm-presence${paused ? " is-paused" : ""}${working.has(m.id) ? " is-working" : ""}`} aria-hidden="true" />
+                {presence && <i className={`db-swarm-presence ${presence}`} aria-hidden="true" />}
               </span>
               <span className="db-swarm-ch-text">
                 <span className="db-swarm-ch-name">{displayName(m)}{paused && <span className="db-swarm-sr">, paused</span>}</span>
-                <span className={`db-swarm-ch-role${busy ? " is-working" : ""}`}>{busy ? "Working" : roleLabel({ id: m.id, name: displayName(m), role: "manager", hue: 0 }, roster)}</span>
+                <span className={`db-swarm-ch-role${asking ? " is-waiting" : busy ? " is-working" : ""}`}>
+                  {asking ? "Needs you" : busy ? "Working" : roleLabel({ id: m.id, name: displayName(m), role: "manager", hue: 0 }, roster)}
+                </span>
               </span>
               {paused ? <span className="db-swarm-ch-paused" title="Paused"><HoldGlyph size={15} /></span> : <Badge count={active ? 0 : unread[id] ?? 0} />}
             </button>

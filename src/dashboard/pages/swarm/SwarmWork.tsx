@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
   approvePendingAction,
   fetchPendingAction,
@@ -11,25 +11,26 @@ import { FORMAT_LABEL, saveDocumentDraft, type DocumentFormat } from "../../../l
 import type { SwarmManager, SwarmMessage, SwarmRoundMember, SwarmRoundView, SwarmSessionView } from "../../../lib/swarmApi";
 import { mapRoundMember, proposeDraft, SwarmRequestError, TERMINAL_SESSION_STATES } from "../../../lib/swarmApi";
 import { SwarmOrb } from "./SwarmOrb";
-import { SwarmAvatar } from "./SwarmAvatar";
-import { hueOf } from "./swarmThread";
 import type { OrbState, OrbTone } from "./swarmOrbRenderer";
-import { thinkingLine, voiceLine, type VoiceBank } from "./swarmThinking";
+import { thinkingLine } from "./swarmThinking";
+import { SwarmMarkdown } from "./SwarmMarkdown";
 import {
   BlockGlyph,
   BranchGlyph,
+  CaretGlyph,
   CellGlyph,
   CourseGlyph,
   DayGlyph,
-  DeepGlyph,
   HaltGlyph,
   KeepGlyph,
   LeafGlyph,
   MailGlyph,
   SealGlyph,
   SeekGlyph,
+  SignalGlyph,
   SparkGlyph,
   TeamGlyph,
+  TickGlyph,
 } from "./SwarmGlyphs";
 
 /** Everything a manager's session shows in its DM: the live chip, then the plan and steps
@@ -58,7 +59,11 @@ const CAPABILITY_COPY: Record<string, string> = {
   "github.activity": "Checked GitHub",
   "x.bookmarks": "Searched X bookmarks",
   "notion.recent": "Checked Notion",
-  "aura.research": "Started a Research run",
+  "github.repos": "Listed repositories",
+  "github.tree": "Listed files",
+  "github.file": "Read a file",
+  "github.search": "Searched the code",
+  "github.issues": "Checked issues",
 };
 
 function CapabilityGlyph({ id, size = 15 }: { id: string; size?: number }) {
@@ -67,10 +72,9 @@ function CapabilityGlyph({ id, size = 15 }: { id: string; size?: number }) {
   if (id.startsWith("gmail.")) return <MailGlyph size={size} />;
   if (id === "calendar.events") return <DayGlyph size={size} />;
   if (id === "classroom.due") return <CourseGlyph size={size} />;
-  if (id === "github.activity") return <BranchGlyph size={size} />;
+  if (id.startsWith("github.")) return <BranchGlyph size={size} />;
   if (id === "x.bookmarks") return <KeepGlyph size={size} />;
   if (id === "notion.recent") return <BlockGlyph size={size} />;
-  if (id === "aura.research") return <DeepGlyph size={size} />;
   return <SparkGlyph size={size} />;
 }
 
@@ -99,6 +103,10 @@ const PHASE_COPY: Record<string, string> = {
   waiting_user: "Waiting on you",
 };
 
+function clock(seconds: number): string {
+  return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
+
 function Elapsed({ since }: { since: number }) {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -106,59 +114,22 @@ function Elapsed({ since }: { since: number }) {
     return () => window.clearInterval(timer);
   }, []);
   if (!since) return null;
-  const seconds = Math.max(0, Math.floor((now - since) / 1000));
-  const label = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
-  return <span className="db-swarm-work-time">{label}</span>;
+  return <span className="db-swarm-run-time">{clock(Math.max(0, Math.floor((now - since) / 1000)))}</span>;
 }
 
-/** Ticks every few seconds so the voice line under an orb moves on to its next phrase. */
-const SLOT_MS = 3200;
-function useSlot(): number {
-  const [slot, setSlot] = useState(0);
-  useEffect(() => {
-    const timer = window.setInterval(() => setSlot((n) => n + 1), SLOT_MS);
-    return () => window.clearInterval(timer);
-  }, []);
-  return slot;
-}
-
-/** Orb on the left, what the manager is doing on the right. `activity` is the only live
- * region: the clock and the rotating voice line stay quiet for screen readers. */
-function ThinkingRow({
-  id,
-  name,
-  state,
-  tone,
-  activity,
-  voice,
-  slot,
-  meta,
-}: {
-  id: string;
-  name?: string;
-  state: OrbState;
-  tone: OrbTone;
-  activity: string;
-  voice: string;
-  slot: number;
-  meta?: ReactNode;
-}) {
+/** The Supervisor's orb beside what the round is doing. Only rounds use it now: a manager's
+ * own run says what it is doing in its ledger. `activity` is the one live region. */
+function ThinkingRow({ id, state, tone, activity }: { id: string; state: OrbState; tone: OrbTone; activity: string }) {
   return (
     <div className="db-swarm-think">
-      {name ? <SwarmAvatar author={{ id, name, role: "manager", hue: hueOf(id) }} state="working" /> : <SwarmOrb id={id} state={state} tone={tone} />}
-      <div className="db-swarm-think-text">
-        <span className="db-swarm-think-activity" aria-live="polite">{activity}</span>
-        <span key={slot} className="db-swarm-think-voice" aria-hidden="true">{voice}</span>
-      </div>
-      {meta && <span className="db-swarm-think-meta">{meta}</span>}
+      <SwarmOrb id={id} state={state} tone={tone} />
+      <span className="db-swarm-think-activity db-swarm-shimmer" aria-live="polite">{activity}</span>
     </div>
   );
 }
 
-const ORB_STATES: ReadonlySet<string> = new Set<OrbState>(["queued", "planning", "acting", "reporting", "verifying", "waiting_user"]);
-
-/** "Searched 6 sources, read 2 pages, 1.2 min": what a finished run did, in one line. */
-function workSummary(steps: SwarmMessage[], startedAt: number, endedAt: number): string {
+/** "Searched 6 sources, read 2 pages": what a finished run did, in one line. */
+function workSummary(steps: SwarmMessage[]): string {
   let searched = 0;
   let read = 0;
   let accounts = 0;
@@ -166,21 +137,100 @@ function workSummary(steps: SwarmMessage[], startedAt: number, endedAt: number):
     const capability = str(step.data.capability_id);
     if (capability === "web.search") searched += num(step.data.sources_added);
     else if (capability === "web.read") read += step.data.ok === true ? 1 : 0;
-    else if (capability && capability !== "aura.research") accounts += 1;
+    else if (capability) accounts += 1;
   }
   const parts: string[] = [];
-  if (searched > 0) parts.push(`Searched ${searched} source${searched === 1 ? "" : "s"}`);
-  if (read > 0) parts.push(`${parts.length ? "read" : "Read"} ${read} page${read === 1 ? "" : "s"}`);
-  if (accounts > 0) parts.push(`${parts.length ? "checked" : "Checked"} ${accounts} account${accounts === 1 ? "" : "s"}`);
-  if (parts.length === 0) parts.push(steps.length > 0 ? `${steps.length} step${steps.length === 1 ? "" : "s"}` : "Worked on this");
+  if (searched > 0) parts.push(`searched ${searched} source${searched === 1 ? "" : "s"}`);
+  if (read > 0) parts.push(`read ${read} page${read === 1 ? "" : "s"}`);
+  if (accounts > 0) parts.push(`checked ${accounts} account${accounts === 1 ? "" : "s"}`);
+  if (parts.length === 0 && steps.length > 0) parts.push(`took ${steps.length} step${steps.length === 1 ? "" : "s"}`);
+  const said = parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}` : parts[0] ?? "";
+  return said ? said[0].toUpperCase() + said.slice(1) : "";
+}
+
+function workDuration(startedAt: number, endedAt: number): string {
   const seconds = startedAt && endedAt > startedAt ? Math.round((endedAt - startedAt) / 1000) : 0;
-  if (seconds >= 60) parts.push(`${(seconds / 60).toFixed(seconds >= 600 ? 0 : 1)} min`);
-  else if (seconds > 0) parts.push(`${seconds} s`);
-  return parts.join(", ");
+  if (seconds >= 60) return `${(seconds / 60).toFixed(seconds >= 600 ? 0 : 1)} min`;
+  return seconds > 0 ? `${seconds}s` : "";
+}
+
+/** One ledger row: a step, or a run of the same successful step folded into "x N". */
+interface LedgerRow {
+  key: string;
+  step: SwarmMessage;
+  count: number;
+  duration: number;
+  added: number;
+}
+
+/** Consecutive successful steps that did the same thing for the same helper read as one
+ * row with a count, the way a person would say "read 3 pages". A failed step never folds:
+ * it is the row the user may need to act on. */
+function ledgerRows(steps: SwarmMessage[]): LedgerRow[] {
+  const rows: LedgerRow[] = [];
+  for (const step of steps) {
+    const capability = str(step.data.capability_id);
+    const prev = rows[rows.length - 1];
+    if (
+      prev &&
+      capability &&
+      step.data.ok === true &&
+      prev.step.data.ok === true &&
+      str(prev.step.data.capability_id) === capability &&
+      str(prev.step.data.subagent_title) === str(step.data.subagent_title)
+    ) {
+      prev.count += 1;
+      prev.duration += num(step.data.duration_ms);
+      prev.added += num(step.data.sources_added);
+      prev.step = step;
+      continue;
+    }
+    rows.push({ key: `${step.channelId}-${step.seq}`, step, count: 1, duration: num(step.data.duration_ms), added: num(step.data.sources_added) });
+  }
+  return rows;
+}
+
+/** The steps as a vertical ledger: done rows from the thread, then, while the run is live,
+ * one active row that says what it is doing now. */
+function Ledger({
+  steps,
+  managerId,
+  granted,
+  onGrant,
+  active,
+  stopping,
+}: {
+  steps: SwarmMessage[];
+  managerId: string;
+  granted: string[];
+  onGrant: (managerId: string, connector: string) => void;
+  active?: string;
+  stopping?: boolean;
+}) {
+  const rows = ledgerRows(steps);
+  if (rows.length === 0 && !active) return null;
+  return (
+    <ol className="db-swarm-ledger">
+      {rows.map((row) => (
+        <StepRow key={row.key} row={row} managerId={managerId} granted={granted} onGrant={onGrant} />
+      ))}
+      {active && (
+        <li className={`db-swarm-step is-active${stopping ? " is-stopping" : ""}`}>
+          <span className="db-swarm-step-node" aria-hidden="true"><span className="db-swarm-step-spin" /></span>
+          <div className="db-swarm-step-body">
+            <span className="db-swarm-step-head">
+              <strong className="db-swarm-shimmer" aria-live="polite">{active}</strong>
+            </span>
+          </div>
+        </li>
+      )}
+    </ol>
+  );
 }
 
 /** A finished session's plan and steps behind one line. A real button so it is keyboard
- * reachable, and nothing inside it is live: it renders from the thread alone. */
+ * reachable. A run this card watched go live stays open for a beat after it ends, so the
+ * last step is seen landing before it folds away. */
 function WorkFold({
   managerId,
   plan,
@@ -189,6 +239,7 @@ function WorkFold({
   endedAt,
   granted,
   onGrant,
+  settle,
 }: {
   managerId: string;
   plan: SwarmMessage | undefined;
@@ -197,30 +248,45 @@ function WorkFold({
   endedAt: number;
   granted: string[];
   onGrant: (managerId: string, connector: string) => void;
+  settle: boolean;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(settle);
+  useEffect(() => {
+    if (!settle) return;
+    const timer = window.setTimeout(() => setOpen(false), FOLD_SETTLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [settle]);
   if (!plan && steps.length === 0) return null;
+  const summary = workSummary(steps);
+  const took = workDuration(startedAt, endedAt);
   return (
     <div className={`db-swarm-fold${open ? " is-open" : ""}`}>
       <button type="button" className="db-swarm-fold-line" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
-        <span className="db-swarm-fold-caret" aria-hidden="true" />
-        <span>{workSummary(steps, startedAt, endedAt)}</span>
+        <CaretGlyph size={13} className="db-swarm-fold-caret" />
+        <span>
+          {summary || "Worked on this"}
+          {took && <span className="db-swarm-fold-sum"> in {took}</span>}
+        </span>
       </button>
       {open && (
         <div className="db-swarm-fold-body">
           {plan && <PlanEmbed message={plan} />}
-          {steps.map((step) => (
-            <StepRow key={`${step.channelId}-${step.seq}`} message={step} managerId={managerId} granted={granted} onGrant={onGrant} />
-          ))}
+          <Ledger steps={steps} managerId={managerId} granted={granted} onGrant={onGrant} />
         </div>
       )}
     </div>
   );
 }
 
-/** The live chip on a session's "working" message. Once the session ends it folds to one line. */
+/** How long a run that just finished stays open before folding (AI Elements' 1 s). */
+const FOLD_SETTLE_MS = 1000;
+/** How long a run with no session view yet still reads as starting: a few poll cycles. */
+const FRESH_RUN_MS = 60_000;
+
+/** A session's run card. While live it is a ledger that grows as steps land, with what the
+ * manager is doing now at the foot; once the session ends it folds to one line. */
 export function WorkingEmbed({
-  name,
+  at,
   managerId,
   manager,
   plan,
@@ -233,7 +299,8 @@ export function WorkingEmbed({
   stopping,
   onStop,
 }: {
-  name: string;
+  /** When the session's working message landed. */
+  at: number;
   managerId: string;
   manager: SwarmManager | undefined;
   plan: SwarmMessage | undefined;
@@ -246,10 +313,13 @@ export function WorkingEmbed({
   stopping: boolean;
   onStop: () => void;
 }) {
-  const slot = useSlot();
-  const latestStep = steps[steps.length - 1];
-  if (!session && !reported) return null;
-  if (!session || TERMINAL_SESSION_STATES.has(session.state)) {
+  // Set once this card has rendered the run live, so its end settles open for a beat.
+  const sawLive = useRef(false);
+  // With no session view yet, only a just-sent run is "starting"; an old one that is no
+  // longer polled (it ended without a report) folds like any finished run.
+  const fresh = Date.now() - at < FRESH_RUN_MS;
+  const ended = reported || (session ? TERMINAL_SESSION_STATES.has(session.state) : !fresh);
+  if (ended) {
     return (
       <WorkFold
         managerId={managerId}
@@ -259,33 +329,40 @@ export function WorkingEmbed({
         endedAt={reportAt || session?.endedAt || 0}
         granted={granted}
         onGrant={onGrant}
+        settle={sawLive.current}
       />
     );
   }
-  const tasks = session.lanes.filter((l) => l.kind === "task");
-  const stopRequested = session.cancelRequested || stopping;
-  const line = thinkingLine(stopRequested ? { ...session, cancelRequested: true } : session, latestStep, manager, slot);
-  const orbState: OrbState = stopRequested ? "stopping" : ORB_STATES.has(session.state) ? (session.state as OrbState) : "acting";
+  sawLive.current = true;
+  // Before the first poll lands there is no session yet: the card already stands, so the
+  // message never shows a name over an empty body.
+  const stopRequested = Boolean(session?.cancelRequested) || stopping;
+  const tasks = session ? session.lanes.filter((l) => l.kind === "task") : [];
+  const active = session ? thinkingLine(stopRequested ? { ...session, cancelRequested: true } : session, steps[steps.length - 1], manager) : "Getting started";
+  const phase = stopRequested ? "Stopping" : session ? PHASE_COPY[session.state] ?? "Working" : "Starting";
+  const sources = session?.sources ?? 0;
   return (
-    <div className={`db-swarm-work${stopRequested ? " is-stopping" : ""}`}>
-      <ThinkingRow
-        id={managerId}
-        name={name}
-        state={orbState}
-        tone={stopRequested ? "warn" : "accent"}
-        activity={line.activity}
-        voice={line.voice}
-        slot={slot}
-        meta={
-          <>
-            <Elapsed since={session.createdAt} />
-            <span className="db-swarm-work-budget" title="Model decisions used of this session's limit">
-              {session.decisionsUsed}/{session.maxDecisions} steps
-            </span>
-          </>
-        }
-      />
-      {tasks.length > 0 && (
+    <div className={`db-swarm-run${stopRequested ? " is-stopping" : ""}`}>
+      <div className="db-swarm-run-head">
+        <span className="db-swarm-run-state">
+          <span className="db-swarm-run-dot" aria-hidden="true" />
+          {phase}
+        </span>
+        {session && <Elapsed since={session.createdAt} />}
+        {session && (
+          <span className="db-swarm-run-budget" title="Model decisions used of this session's limit">
+            step {session.decisionsUsed} of {session.maxDecisions}
+          </span>
+        )}
+        {session && (
+          <button type="button" className="db-swarm-pill-btn is-stop" onClick={onStop} disabled={stopRequested}>
+            <HaltGlyph size={14} /> {stopRequested ? "Stopping" : "Stop"}
+          </button>
+        )}
+      </div>
+      {plan?.text && <SwarmMarkdown className="db-swarm-run-plan" text={plan.text} />}
+      <Ledger steps={steps} managerId={managerId} granted={granted} onGrant={onGrant} active={active} stopping={stopRequested} />
+      {tasks.length > 1 && (
         <ul className="db-swarm-lanes">
           {tasks.map((lane) => (
             <li key={lane.id} className={`is-${lane.state}`}>
@@ -299,12 +376,11 @@ export function WorkingEmbed({
           ))}
         </ul>
       )}
-      <div className="db-swarm-work-foot">
-        <span className="db-swarm-muted">{session.sources} source{session.sources === 1 ? "" : "s"} so far</span>
-        <button type="button" className="db-swarm-pill-btn is-stop" onClick={onStop} disabled={stopRequested}>
-          <HaltGlyph size={14} /> Stop
-        </button>
-      </div>
+      {sources > 0 && (
+        <div className="db-swarm-run-foot">
+          {sources} source{sources === 1 ? "" : "s"} so far
+        </div>
+      )}
     </div>
   );
 }
@@ -313,16 +389,16 @@ export function PlanEmbed({ message }: { message: SwarmMessage }) {
   const criteria = list(message.data.criteria);
   const tasks = list(message.data.tasks);
   return (
-    <div className="db-swarm-embed is-plan">
-      <div className="db-swarm-embed-kicker"><SparkGlyph size={15} /> Plan</div>
-      {message.text && <p>{message.text}</p>}
+    <div className="db-swarm-plan">
+      <div className="db-swarm-kicker"><SparkGlyph size={13} /> Plan</div>
+      {message.text && <SwarmMarkdown text={message.text} />}
       {criteria.length > 0 && (
         <ol className="db-swarm-criteria">
           {criteria.map((c) => <li key={str(c.id)}>{str(c.text)}</li>)}
         </ol>
       )}
       {tasks.length > 1 && (
-        <div className="db-swarm-embed-row">
+        <div className="db-swarm-plan-tasks">
           {tasks.map((t) => <em key={str(t.id)}>{str(t.goal)}</em>)}
         </div>
       )}
@@ -330,52 +406,57 @@ export function PlanEmbed({ message }: { message: SwarmMessage }) {
   );
 }
 
-/** One step: what it did, on whose behalf, and how it went. A refused connector carries
- * its own Grant button, because that is the only thing the user can do about it. */
-export function StepRow({
-  message,
+/** One ledger row: what it did, on whose behalf, and how it went. A refused connector
+ * carries its own Grant button, because that is the only thing the user can do about it. */
+function StepRow({
+  row,
   managerId,
   granted,
   onGrant,
 }: {
-  message: SwarmMessage;
+  row: LedgerRow;
   managerId: string;
   granted: string[];
   onGrant: (managerId: string, connector: string) => void;
 }) {
-  const data = message.data;
+  const data = row.step.data;
   const capability = str(data.capability_id);
   const action = str(data.action);
   const ok = data.ok === true;
   const connector = str(data.connector);
-  const label = capability ? CAPABILITY_COPY[capability] ?? capability : action === "finish" ? "Finished its part" : "Step";
-  const duration = num(data.duration_ms);
-  const added = num(data.sources_added);
+  const label = capability ? CAPABILITY_COPY[capability] ?? "Used a tool" : action === "finish" ? "Finished its part" : "Step";
   const sub = str(data.subagent_title);
+  const why = row.count === 1 ? str(data.why) || row.step.text : "";
+  const gap = Boolean(capability) && !ok;
   return (
-    <div className={`db-swarm-step${capability && !ok ? " is-gap" : ""}`}>
-      <span className="db-swarm-step-icon">{capability ? <CapabilityGlyph id={capability} /> : <SparkGlyph size={15} />}</span>
+    <li className={`db-swarm-step${gap ? " is-gap" : ""}`}>
+      <span className="db-swarm-step-node" aria-hidden="true">
+        {capability ? <CapabilityGlyph id={capability} size={13} /> : <TickGlyph size={12} />}
+      </span>
       <div className="db-swarm-step-body">
         <span className="db-swarm-step-head">
           <strong>{label}</strong>
+          {row.count > 1 && <span className="db-swarm-step-count">×{row.count}</span>}
           {sub && <span className="db-swarm-muted">via {sub}</span>}
-          {duration > 0 && <span className="db-swarm-muted">{(duration / 1000).toFixed(1)}s</span>}
-          {data.cached === true && <span className="db-swarm-muted">already read this session</span>}
-          {added > 0 && <span className="db-swarm-muted">+{added} source{added === 1 ? "" : "s"}</span>}
+          <span className="db-swarm-step-meta">
+            {data.cached === true && <span>already read</span>}
+            {row.added > 0 && <span>+{row.added} source{row.added === 1 ? "" : "s"}</span>}
+            {row.duration > 0 && <span>{(row.duration / 1000).toFixed(1)}s</span>}
+          </span>
         </span>
-        {(str(data.why) || message.text) && <span className="db-swarm-step-why">{str(data.why) || message.text}</span>}
-        {capability && !ok && str(data.gap_reason) && (
+        {why && <span className="db-swarm-step-why">{why}</span>}
+        {gap && str(data.gap_reason) && (
           <span className="db-swarm-step-gap">
             {str(data.gap_reason)}
             {str(data.gap_code) === "connector_not_granted" && connector && !granted.includes(connector) && (
-              <button type="button" className="db-swarm-pill-btn" onClick={() => onGrant(managerId, connector)}>
+              <button type="button" className="db-swarm-pill-btn is-small" onClick={() => onGrant(managerId, connector)}>
                 Grant {CONNECTOR_LABEL[connector] ?? connector}
               </button>
             )}
           </span>
         )}
       </div>
-    </div>
+    </li>
   );
 }
 
@@ -383,11 +464,13 @@ export function StepRow({
  * composer: a DM to a parked manager, or a #group reply the router recognises, both
  * resume the session (handlers/swarm.handle_run and persisted.route_message). */
 export function QuestionEmbed({ message, open }: { message: SwarmMessage; open: boolean }) {
+  if (!open) return <SwarmMarkdown className="db-swarm-text" text={message.text} />;
   return (
-    <>
-      <p className="db-swarm-text">{message.text}</p>
-      {open && <p className="db-swarm-muted">Waiting on you. Reply below to answer.</p>}
-    </>
+    <div className="db-swarm-ask-card" role="group" aria-label="Waiting on you">
+      <span className="db-swarm-kicker is-warn"><SignalGlyph size={13} /> Waiting on you</span>
+      <SwarmMarkdown className="db-swarm-text" text={message.text} />
+      <span className="db-swarm-muted">Reply below to answer. The run picks up from here.</span>
+    </div>
   );
 }
 
@@ -404,6 +487,8 @@ const STOP_REASON_COPY: Record<string, string> = {
   no_answer: "It asked you something and did not hear back.",
   cancelled: "You stopped it.",
   unavailable: "The model it uses was unavailable, so it stopped.",
+  model_timed_out: "The model took too long to answer, so it stopped.",
+  provider_config: "Something is misconfigured on Aura's side, not with your request. Retrying will not help yet.",
   retries_exhausted: "The model kept failing, so it stopped.",
   invalid_output: "The model's answer could not be read, so it stopped.",
   too_large: "What it gathered was too large for the model to finish.",
@@ -430,6 +515,8 @@ const TARGET_LABEL: Record<string, string> = {
   github_issue: "Open an issue",
 };
 const TARGET_LIMIT: Record<string, number> = { x: 280, linkedin: 3000 };
+/** Targets anyone can read. Their approval card takes a different shape, not just a tint. */
+const PUBLIC_TARGETS: ReadonlySet<string> = new Set(["x", "linkedin"]);
 
 /** True when a report carries a draft Review can act on, which needs the session's
  * draftActions to find its approval. Every other finished session is already told in full. */
@@ -487,7 +574,9 @@ function DraftAction({
   useEffect(() => {
     if (!approvalId || item) return;
     let live = true;
-    void fetchPendingAction(approvalId).then((found) => live && found && setItem(found)).catch(() => undefined);
+    void fetchPendingAction(approvalId)
+      .then((found) => live && found && setItem(found))
+      .catch(() => live && setError("Couldn't check whether this was already approved. Review it to prepare it again."));
     return () => {
       live = false;
     };
@@ -517,14 +606,15 @@ function DraftAction({
   const pending = item?.status === "pending";
   const finished = item !== null && !pending && item.status !== "executing";
   const over = limit > 0 && text.trim().length > limit;
+  const isPublic = PUBLIC_TARGETS.has(target);
 
   return (
     <div className="db-swarm-act">
       {pending && item ? (
         <>
-          <span className="db-swarm-gaps-label">
+          <span className="db-swarm-act-title">
             {item.title}
-            {item.preview.account && ` · ${item.preview.account}`}
+            {item.preview.account && <span className="db-swarm-muted"> · {item.preview.account}</span>}
           </span>
           {target === "calendar" ? (
             <p className="db-swarm-act-preview">
@@ -544,17 +634,17 @@ function DraftAction({
           ) : (
             <p className="db-swarm-act-preview">{item.preview.text}</p>
           )}
-          <div className="db-swarm-act-row">
-            <button type="button" className="db-swarm-pill-btn is-primary" disabled={busy} onClick={() => void run(() => approvePendingAction(item.approvalId))}>
-              {busy ? "Working" : "Approve"}
-            </button>
+          <p className={`db-swarm-act-fine${isPublic ? " is-public" : ""}`}>
+            {isPublic ? "Posts exactly this, once, where anyone can see it." : "Runs exactly this, once."}
+            {item.preview.estimatedCostUsd !== null && ` About $${item.preview.estimatedCostUsd.toFixed(2)}.`}
+          </p>
+          <div className="db-swarm-act-row is-end">
             <button type="button" className="db-swarm-pill-btn" disabled={busy} onClick={() => void run(() => rejectPendingAction(item.approvalId))}>
               Not now
             </button>
-            <span className="db-swarm-act-count">
-              {item.preview.estimatedCostUsd !== null && `about $${item.preview.estimatedCostUsd.toFixed(2)} · `}
-              Exactly this, once
-            </span>
+            <button type="button" className="db-swarm-pill-btn is-primary" disabled={busy} onClick={() => void run(() => approvePendingAction(item.approvalId))}>
+              {busy ? "Working" : isPublic ? "Approve and post" : "Approve"}
+            </button>
           </div>
         </>
       ) : editing ? (
@@ -580,7 +670,12 @@ function DraftAction({
         </>
       ) : (
         <div className="db-swarm-act-row">
-          {finished && item && <span className="db-swarm-muted">{pendingActionOutcomeCopy(item)}</span>}
+          {finished && item && (
+            <span className={`db-swarm-act-record${item.status === "done" ? " is-done" : ""}`}>
+              {item.status === "done" && <TickGlyph size={13} />}
+              {pendingActionOutcomeCopy(item)}
+            </span>
+          )}
           {finished && item?.status === "done" && item.resultUrl && (
             <button type="button" className="db-swarm-pill-btn" onClick={() => onOpenLink(item.resultUrl as string)}>
               Open
@@ -591,7 +686,7 @@ function DraftAction({
               {item ? "Review again" : `Review: ${TARGET_LABEL[target]}`}
             </button>
           )}
-          {item?.status === "executing" && <span className="db-swarm-muted">Working on it.</span>}
+          {item?.status === "executing" && <span className="db-swarm-act-record db-swarm-shimmer">Working on it</span>}
         </div>
       )}
       {error && <p className="db-swarm-note">{error}</p>}
@@ -688,7 +783,8 @@ export function ReportEmbed({
   draftActions,
   onGrant,
   onOpenSource,
-  onOpenResearch,
+  answerable,
+  onReply,
 }: {
   message: SwarmMessage;
   managerId: string;
@@ -696,7 +792,10 @@ export function ReportEmbed({
   draftActions: Record<string, string>;
   onGrant: (managerId: string, connector: string) => void;
   onOpenSource: (url: string) => void;
-  onOpenResearch: (runId: string) => void;
+  /** The newest thing in the channel: its question still waits on the user. */
+  answerable: boolean;
+  /** Sends a tapped answer to this manager as a DM, which its next run reads as the answer. */
+  onReply: (text: string) => void;
 }) {
   const data = message.data;
   const state = str(data.state);
@@ -706,7 +805,9 @@ export function ReportEmbed({
   const drafts = list(report.drafts);
   const gaps = list(report.gaps);
   const nextSteps = strings(report.next_steps);
-  const runs = strings(data.research_runs);
+  const question = (report.question && typeof report.question === "object" ? report.question : {}) as Json;
+  const questionText = str(question.text);
+  const questionChoices = strings(question.choices);
   const verified = data.verified === true;
   // A report built with no model call (runner.py _fallback_report): its findings were
   // raw excerpt lines, so the sources it had are shown instead of prose that was never written.
@@ -720,7 +821,9 @@ export function ReportEmbed({
     const source = sources.get(ref);
     const url = str(source?.url);
     const title = str(source?.title) || ref;
-    let label = title;
+    // A private read's title is a path ("GitHub Owner/Repo/src/lib/chatCache.ts"); its
+    // last part is what tells two chips apart, and the tooltip keeps the whole thing.
+    let label = title.includes("/") ? title.slice(title.lastIndexOf("/") + 1) || title : title;
     if (url) {
       try {
         label = new URL(url).hostname.replace(/^www\./, "");
@@ -737,53 +840,66 @@ export function ReportEmbed({
     );
   };
 
+  const actionable = (d: Json) => Boolean(TARGET_LABEL[str(d.target)] && str(d.id));
+  const foot = gaps.length > 0 || nextSteps.length > 0;
+
   return (
-    <div className={`db-swarm-report is-${state || "done"}`}>
-      {stopCopy && <p className="db-swarm-report-stop">{stopCopy}</p>}
+    <section className={`db-swarm-report is-${state || "done"}`} aria-label="Report">
+      {stopCopy && (
+        <div className="db-swarm-report-status" role="note">
+          <SignalGlyph size={14} />
+          <span>{stopCopy}</span>
+        </div>
+      )}
+      {(sources.size > 0 || verified) && <div className="db-swarm-report-head">
+        {sources.size > 0 && <span className="db-swarm-muted">{sources.size} source{sources.size === 1 ? "" : "s"}</span>}
+        {verified && (
+          <span className="db-swarm-verified" title="A separate checker confirmed every goal against the sources">
+            <SealGlyph size={13} /> Verified
+          </span>
+        )}
+      </div>}
       {report.summary && !(fallback && stopCopy) ? (
-        <p className="db-swarm-text">
-          {str(report.summary)}
-          {verified && (
-            <span className="db-swarm-verified" title="A separate checker confirmed every goal against the sources">
-              <SealGlyph size={13} /> Verified
-            </span>
-          )}
-        </p>
+        <SwarmMarkdown className="db-swarm-report-summary" text={str(report.summary)} onOpenLink={onOpenSource} />
       ) : null}
       {fallback && sources.size > 0 && (
-        <p className="db-swarm-report-line">
+        <div className="db-swarm-report-line">
           <span className="db-swarm-report-lead">Sources it had</span>
           <span className="db-swarm-src-row">{[...sources.keys()].map(chip)}</span>
-        </p>
+        </div>
       )}
       {!fallback && findings.length > 0 && (
-        <ul className="db-swarm-report-list">
+        <ul className="db-swarm-findings">
           {findings.map((f, i) => {
-            const refs = strings(f.source_refs);
+            // Two reads of the same place (one repo's issues, searched twice) are one chip.
+            const seen = new Set<string>();
+            const refs = strings(f.source_refs).filter((ref) => {
+              const s = sources.get(ref);
+              const key = str(s?.url) || str(s?.title) || ref;
+              if (seen.has(key)) return false;
+              seen.add(key);
+              return true;
+            });
             return (
               <li key={i} className={`${refs.length === 0 ? "is-unsourced" : ""}${f.verified === true ? " is-verified" : ""}`}>
-                {str(f.claim)}
-                {refs.length > 0 ? <span className="db-swarm-src-row">{refs.map(chip)}</span> : <em className="db-swarm-report-unsourced">no source</em>}
+                <span className="db-swarm-finding-claim">{str(f.claim)}</span>
+                {refs.length > 0 ? <FindingSources refs={refs} chip={chip} /> : <em className="db-swarm-report-unsourced">no source</em>}
               </li>
             );
           })}
         </ul>
       )}
       {drafts.map((d, i) => (
-        <blockquote key={i} className="db-swarm-report-draft">
-          <span className="db-swarm-report-draft-head">
-            <b>{DRAFT_KIND[str(d.kind)] ?? "Draft"}</b>
-            {str(d.destination) && <span> to {str(d.destination)}</span>}
-            <em>
-              {str(d.target) === "file"
-                ? "saved only on your computer"
-                : TARGET_LABEL[str(d.target)] && str(d.id)
-                  ? "needs your approval"
-                  : "not sent"}
-            </em>
-          </span>
-          {str(d.target) === "file" ? <DocumentDraft draft={d} /> : <p>{str(d.body)}</p>}
-          {TARGET_LABEL[str(d.target)] && str(d.id) && message.sessionId && (
+        <article key={i} className={`db-swarm-draft-card${PUBLIC_TARGETS.has(str(d.target)) && actionable(d) ? " is-public" : ""}`}>
+          <header className="db-swarm-draft-card-head">
+            <span className="db-swarm-kicker">{DRAFT_KIND[str(d.kind)] ?? "Draft"}</span>
+            {str(d.destination) && <span className="db-swarm-muted">to {str(d.destination)}</span>}
+            <span className={`db-swarm-tag${actionable(d) ? " is-ask" : ""}`}>
+              {str(d.target) === "file" ? "Saved only on your computer" : actionable(d) ? "Needs your approval" : "Not sent"}
+            </span>
+          </header>
+          {str(d.target) === "file" ? <DocumentDraft draft={d} /> : <p className="db-swarm-draft-card-body">{str(d.body)}</p>}
+          {actionable(d) && message.sessionId && (
             <DraftAction
               sessionId={message.sessionId}
               draft={d}
@@ -791,44 +907,74 @@ export function ReportEmbed({
               onOpenLink={onOpenSource}
             />
           )}
-        </blockquote>
+        </article>
       ))}
-      {gaps.length > 0 && (
-        <p className="db-swarm-report-line is-gap">
-          <span className="db-swarm-report-lead">Could not read</span>
-          {gaps.map((g, i) => {
-            const connector = str(g.connector);
-            return (
-              <span key={i} className="db-swarm-report-gap">
-                {str(g.reason)}
-                {str(g.code) === "connector_not_granted" && connector && !granted.includes(connector) && (
-                  <button type="button" className="db-swarm-link-btn" onClick={() => onGrant(managerId, connector)}>
-                    Grant {CONNECTOR_LABEL[connector] ?? connector}
-                  </button>
-                )}
-              </span>
-            );
-          })}
-        </p>
+      {foot && (
+        <div className="db-swarm-report-foot">
+          {gaps.length > 0 && (
+            <div className="db-swarm-report-line is-gap">
+              <span className="db-swarm-report-lead">Couldn't read</span>
+              {gaps.map((g, i) => {
+                const connector = str(g.connector);
+                return (
+                  <span key={i} className="db-swarm-report-gap">
+                    {str(g.reason)}
+                    {str(g.code) === "connector_not_granted" && connector && !granted.includes(connector) && (
+                      <button type="button" className="db-swarm-link-btn" onClick={() => onGrant(managerId, connector)}>
+                        Grant {CONNECTOR_LABEL[connector] ?? connector}
+                      </button>
+                    )}
+                  </span>
+                );
+              })}
+            </div>
+          )}
+          {nextSteps.length > 0 && (
+            <div className="db-swarm-report-line">
+              <span className="db-swarm-report-lead">What's next</span>
+              <ul className="db-swarm-report-next">
+                {nextSteps.map((step, i) => <li key={i}>{step}</li>)}
+              </ul>
+            </div>
+          )}
+        </div>
       )}
-      {nextSteps.length > 0 && (
-        <>
-          <p className="db-swarm-report-line"><span className="db-swarm-report-lead">Next</span></p>
-          <ul className="db-swarm-report-list is-next">
-            {nextSteps.map((step, i) => <li key={i}>{step}</li>)}
-          </ul>
-        </>
+      {questionText && (
+        <div className={`db-swarm-report-ask${answerable ? " is-open" : ""}`}>
+          <span className="db-swarm-kicker is-warn"><SignalGlyph size={13} /> Your call</span>
+          <SwarmMarkdown className="db-swarm-text" text={questionText} />
+          {answerable && questionChoices.length > 0 && (
+            <div className="db-swarm-choice-row">
+              {questionChoices.map((choice) => (
+                <button key={choice} type="button" className="db-swarm-choice" onClick={() => onReply(choice)}>
+                  {choice}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       )}
-      {runs.length > 0 && (
-        <p className="db-swarm-report-foot">
-          {runs.map((runId) => (
-            <button key={runId} type="button" className="db-swarm-link-btn" onClick={() => onOpenResearch(runId)}>
-              <DeepGlyph size={13} /> Open the Research run
-            </button>
-          ))}
-        </p>
+    </section>
+  );
+}
+
+/** How many source chips a finding shows before "+N" folds the rest. */
+const SOURCES_SHOWN = 2;
+
+/** A finding's sources at the end of its claim: the first few by domain, then "+N". */
+function FindingSources({ refs, chip }: { refs: string[]; chip: (ref: string) => ReactNode }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? refs : refs.slice(0, SOURCES_SHOWN);
+  const rest = refs.length - shown.length;
+  return (
+    <span className="db-swarm-src-row">
+      {shown.map(chip)}
+      {rest > 0 && (
+        <button type="button" className="db-swarm-src is-more" onClick={() => setAll(true)} aria-label={`Show ${rest} more source${rest === 1 ? "" : "s"}`}>
+          +{rest}
+        </button>
       )}
-    </div>
+    </span>
   );
 }
 
@@ -873,7 +1019,6 @@ export function RoundEmbed({
   onStop: () => void;
   onOpen: (managerId: string) => void;
 }) {
-  const slot = useSlot();
   const members = roundMembers(message, round);
   const ended = (m: SwarmRoundMember) => {
     const s = sessions[m.sessionId];
@@ -881,7 +1026,6 @@ export function RoundEmbed({
   };
   const running = members.filter((m) => !ended(m));
   const done = round?.state === "done";
-  const bank: VoiceBank = stopping ? "stopping" : running.length > 0 ? "round" : "roundWriting";
   const label = (m: SwarmRoundMember): string => {
     if (m.state === "skipped") return ROUND_SKIP_COPY[m.reason] ?? "could not start";
     const s = sessions[m.sessionId];
@@ -889,26 +1033,24 @@ export function RoundEmbed({
     return END_COPY[s?.state ?? m.endState] ?? (m.state === "running" ? "Starting" : "done");
   };
   return (
-    <div className={`db-swarm-work${stopping ? " is-stopping" : ""}`}>
+    <div className={`db-swarm-run is-round${stopping ? " is-stopping" : ""}${done ? " is-done" : ""}`}>
       {done ? (
-        <p className="db-swarm-muted"><TeamGlyph size={14} /> Team round</p>
+        <span className="db-swarm-kicker"><TeamGlyph size={13} /> Team round</span>
       ) : (
         <ThinkingRow
           id="swarm"
           state={stopping ? "stopping" : running.length > 0 ? "round" : "reporting"}
           tone={stopping ? "warn" : "sup"}
-          activity={running.length > 0 ? (stopping ? "Stopping after this step" : `${running.length} working`) : "Writing the answer"}
-          voice={voiceLine(bank, message.sessionId || "swarm", slot)}
-          slot={slot}
+          activity={running.length > 0 ? (stopping ? "Stopping after this step" : `${running.length} of ${members.length} working`) : "Writing the answer"}
         />
       )}
-      {message.text && <p className="db-swarm-muted">{message.text}</p>}
+      {message.text && <p className="db-swarm-run-plan">{message.text}</p>}
       <ul className="db-swarm-lanes">
         {members.map((m) => (
           <li key={m.managerId} className={m.state === "skipped" ? "is-failed" : ended(m) ? "is-done" : "is-leased"}>
             <CellGlyph size={14} />
             <span>
-              <button type="button" className="db-swarm-src is-static" onClick={() => onOpen(m.managerId)} title={`Open ${m.title}'s DM`}>
+              <button type="button" className="db-swarm-link-btn" onClick={() => onOpen(m.managerId)} title={`Open ${m.title}'s DM`}>
                 {m.title}
               </button>
             </span>
@@ -917,8 +1059,8 @@ export function RoundEmbed({
         ))}
       </ul>
       {running.length > 0 && (
-        <div className="db-swarm-work-foot">
-          <span className="db-swarm-muted">The answer lands here when they finish.</span>
+        <div className="db-swarm-run-foot">
+          <span>The answer lands here when they finish.</span>
           <button type="button" className="db-swarm-pill-btn is-stop" onClick={onStop} disabled={stopping}>
             <HaltGlyph size={14} /> Stop all
           </button>
@@ -937,9 +1079,15 @@ export function RoundReplyEmbed({ message, onOpen }: { message: SwarmMessage; on
   const reply = str(message.data.reply) || message.text;
   const short = members.some((m) => str(m.state) === "skipped" || str(m.end_state) !== "done");
   return (
-    <div className={`db-swarm-report is-${short ? "partial" : "done"}`}>
-      {message.data.fallback === true && <p className="db-swarm-report-stop">A plain summary: the team's writer was not available.</p>}
-      <p className="db-swarm-text">{reply}</p>
+    <section className={`db-swarm-report is-${short ? "partial" : "done"}`} aria-label="Team answer">
+      {message.data.fallback === true && (
+        <div className="db-swarm-report-status" role="note">
+          <SignalGlyph size={14} />
+          <span>A plain summary: the team's writer was not available.</span>
+        </div>
+      )}
+      <div className="db-swarm-report-head"><span className="db-swarm-kicker"><TeamGlyph size={13} /> Team answer</span></div>
+      <SwarmMarkdown className="db-swarm-report-summary" text={reply} />
       {needs.length > 0 && (
         <p className="db-swarm-report-line is-gap">
           <span className="db-swarm-report-lead">Needs you</span>
@@ -958,6 +1106,6 @@ export function RoundReplyEmbed({ message, onOpen }: { message: SwarmMessage; on
           </li>
         ))}
       </ul>
-    </div>
+    </section>
   );
 }

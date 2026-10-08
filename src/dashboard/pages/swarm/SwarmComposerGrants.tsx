@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, type ComponentType } from "react";
-import { Globe, Lock, Plus, X } from "lucide-react";
 import type { SwarmRoster } from "../../../lib/swarmApi";
 import { ConnectorReauthorizationRequiredError, GitHubRateLimitedError, fetchGitHubRepos, type GitHubRepos } from "../../../lib/connectors";
 import { useOutsideClick } from "../../components/useOutsideClick";
@@ -12,6 +11,7 @@ import {
   XBrandIcon,
 } from "../../components/connectorBrandIcons";
 import { CONNECTOR_LABEL } from "./SwarmWork";
+import { AddGlyph, DismissGlyph, LockGlyph, WebGlyph } from "./SwarmGlyphs";
 import type { ChannelView } from "./SwarmStream";
 
 /** The pill row above the composer: which connected accounts the recipient can read while
@@ -42,7 +42,7 @@ const CONNECTOR_ICON: Record<string, ComponentType<{ size?: number; className?: 
 
 function ConnectorIcon({ connector }: { connector: string }) {
   const Icon = CONNECTOR_ICON[connector];
-  return Icon ? <Icon size={14} className="db-swarm-scope-icon" /> : <Globe size={14} className="db-swarm-scope-icon" aria-hidden="true" />;
+  return Icon ? <Icon size={14} className="db-swarm-scope-icon" /> : <WebGlyph size={14} className="db-swarm-scope-icon" />;
 }
 
 type RepoState = { kind: "idle" } | { kind: "loading" } | { kind: "ready"; repos: GitHubRepos } | { kind: "error"; message: string };
@@ -89,7 +89,7 @@ function RepoPicker({
     <div className="db-swarm-scope-menu is-repos" role="dialog" aria-label="Choose repositories">
       <div className="db-swarm-scope-menu-head">
         <span>{full ? `Up to ${MAX_REPOS} repositories` : "Repositories to read first"}</span>
-        <button type="button" className="db-swarm-scope-remove" aria-label="Close" onClick={onClose}><X size={12} aria-hidden="true" /></button>
+        <button type="button" className="db-swarm-scope-remove" aria-label="Close" onClick={onClose}><DismissGlyph size={13} /></button>
       </div>
       {(state.kind === "loading" || state.kind === "idle") && <p className="db-swarm-scope-menu-note">Loading</p>}
       {state.kind === "error" && <p className="db-swarm-scope-menu-note">{state.message}</p>}
@@ -112,7 +112,7 @@ function RepoPicker({
                 >
                   <GitHubBrandIcon size={13} className="db-swarm-scope-icon" />
                   <span className="db-swarm-scope-repo-name">{repo.fullName}</span>
-                  {repo.private && <Lock size={11} aria-label="Private" />}
+                  {repo.private && <span title="Private" aria-label="Private" role="img"><LockGlyph size={12} /></span>}
                 </button>
               </li>
             );
@@ -212,7 +212,7 @@ export function ComposerGrants({
             aria-label={`Stop ${who[0]} reading ${label}`}
             onClick={() => onToggleGrant(managerId, connector, false)}
           >
-            <X size={12} aria-hidden="true" />
+            <DismissGlyph size={13} />
           </button>
         );
         if (connector !== "github") {
@@ -272,7 +272,7 @@ export function ComposerGrants({
                     aria-label={`Remove ${fullName}`}
                     onClick={() => scopeRepos(picked.filter((r) => r !== fullName))}
                   >
-                    <X size={12} aria-hidden="true" />
+                    <DismissGlyph size={13} />
                   </button>
                 )}
               </span>
@@ -290,7 +290,7 @@ export function ComposerGrants({
                   title={`Add another repository (up to ${MAX_REPOS})`}
                   onClick={() => setOpen((v) => (v === "repos" ? null : "repos"))}
                 >
-                  <Plus size={14} aria-hidden="true" />
+                  <AddGlyph size={15} />
                 </button>
                 {picker}
               </span>
@@ -311,7 +311,7 @@ export function ComposerGrants({
             title="Let this manager read another connected account"
             onClick={() => setOpen((v) => (v === "add" ? null : "add"))}
           >
-            <Plus size={14} aria-hidden="true" />
+            <AddGlyph size={15} />
           </button>
           {open === "add" && (
             <div ref={menuRef} className="db-swarm-scope-menu" role="menu" aria-label="Connected accounts to grant">

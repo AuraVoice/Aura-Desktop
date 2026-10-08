@@ -405,6 +405,8 @@ export function SwarmPage() {
   const liveChannel: ChannelId =
     channel.startsWith("m:") && resource.data && !roster.managers.some((m) => m.id === managerIdOfChannel(channel)) ? "group" : channel;
 
+  // A channel pull that failed; the header says so until the next one lands.
+  const [pullFailed, setPullFailed] = useState(false);
   /** Fetch everything after the last seq this tab holds for one channel. */
   const pull = useCallback(async (cid: string, markFresh = false) => {
     if (loading.current.has(cid)) return;
@@ -418,6 +420,7 @@ export function SwarmPage() {
         if (batch.length > 0) after = batch[batch.length - 1].seq;
         if (!hasMore) break;
       }
+      setPullFailed(false);
       if (added.length === 0) {
         // Mark an empty channel as loaded, or every other channel's update re-fetches it.
         setMessages((prev) => (prev[cid] === undefined ? { ...prev, [cid]: [] } : prev));
@@ -431,6 +434,7 @@ export function SwarmPage() {
       if (markFresh) markItems(added.map((m) => `${cid}-${m.seq}`));
     } catch {
       // The next poll or focus retries; a failed page never blanks what is shown.
+      setPullFailed(true);
     } finally {
       loading.current.delete(cid);
     }
@@ -473,6 +477,7 @@ export function SwarmPage() {
     return ids;
   }, [state.liveSessions, liveIds, sessions]);
   const waitingCount = state.waiting.reduce((sum, w) => sum + w.count, 0);
+  const waitingIds = useMemo(() => new Set(state.waiting.filter((w) => w.count > 0).map((w) => w.managerId)), [state.waiting]);
 
   // The Research page's loop: 2.5 s while anything runs, 15 s after an error, nothing
   // while the window is hidden or offline. A changed revision pulls that DM.
@@ -958,11 +963,13 @@ export function SwarmPage() {
 
   return (
     <div className={`db-swarm${rosterOpen ? " is-roster-open" : ""}${railCollapsed ? " is-rail-collapsed" : ""}`}>
+      <div className="db-swarm-aurora" aria-hidden="true" />
       <SwarmChannels
         roster={roster}
         channel={liveChannel}
         unread={unread}
         working={working}
+        waiting={waitingIds}
         loading={resource.loading}
         status={status}
         freshManagers={freshManagers}
@@ -1003,7 +1010,7 @@ export function SwarmPage() {
           onToggleGrant={toggleGrant}
           onRepoScope={setRepoScope}
           onOpenSource={(url) => void openUrl(url)}
-          onOpenResearch={(runId) => navigate(`/agents?tab=research&run=${encodeURIComponent(runId)}`)}
+          onReply={(managerId, value) => void run(managerId, value, "dm")}
           onOpenPath={(path) => navigate(path)}
           onHireInstead={(hireText, docIds) => void route({ text: hireText, docIds })}
           text={text}
@@ -1014,6 +1021,8 @@ export function SwarmPage() {
           onAnswer={(draftId, label, managerId) => void route({ text: "", draftId, choiceLabel: label, choiceManagerId: managerId })}
           rosterOpen={rosterOpen}
           onToggleRoster={() => setRosterOpen((open) => !open)}
+          waiting={state.waiting}
+          reconnecting={!loadFailed && (pollError || roundPollError || pullFailed)}
           composerRef={composerRef}
           attachments={attachments}
           onAttach={attach}

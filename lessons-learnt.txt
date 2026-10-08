@@ -2400,6 +2400,49 @@ PW_RENDERFULLCONTENT (flag 2) from a DPI-aware process; plain GDI CopyFromScreen
 the WebView2 surface.
 ================================================================================
 
+2026-10-07: a Swarm report said "The limit of 1 for this session is used up" with no subject
+Problem: Changelog Charlie's report listed, under "Could not read", the line "The limit of 1
+for this session is used up." The user could not tell what had a limit of 1 or why it mattered.
+Issue: (1) runner._act built the cap_reached gap reason without the capability id, and the
+desktop renders only gap.reason, so the subject was dropped at both ends. (2) The limit itself
+was aura.research's per-session cap of 1, hit on the manager's second attempt after web.search
+had been closed by the GitHub taint; the cap was its only way left to reach the web. (3) Most
+per-capability caps predate MAX_DECISIONS and the wallet reserve and were a smaller fence
+inside those; the ones on zero-cost reads bought nothing but confusing gaps.
+Solution: the gap names the capability. Zero-cost reads are capped at MAX_DECISIONS, so the cap
+cannot bind; aura.research allows 3. A call whose args hash matches an earlier successful
+scratch row is served from scratch with the decision handed back, and a lane that asks for the
+same cached row twice ends as no progress.
+Justification: cap the thing whose cost is outside the wallet, and nothing else. A string
+written for a log line must carry its subject before it is shown to a person.
+================================================================================
+
+2026-10-07: a click on the overlay cannot decline activation on Windows
+Problem: clicking a button on the notch or a card pulled the foreground off the app the user
+was working in, and their caret stopped. The first fix tried the native answer, returning
+MA_NOACTIVATE from WM_MOUSEACTIVATE in a subclass on the overlay's top-level HWND, with the
+previous foreground window read in that same message as the one to return focus to.
+Issue: WM_MOUSEACTIVATE never reached the top-level window. A run with logging showed zero
+such messages while the drag loop's WM_EXITSIZEMOVE arrived normally and Aura's process came
+forward on every click. Enumerating the overlay's children explained it: WRY_WEBVIEW and
+Chrome_WidgetWin_0 are ours, but Chrome_WidgetWin_1 and Chrome_RenderWidgetHostHWND, the
+windows the click actually lands in, belong to msedgewebview2.exe. That window answers the
+message and activates without forwarding it, and a window owned by another process cannot be
+subclassed. So the previous-window reading was never written either, and the hand-back
+silently did nothing every time.
+Solution: the overlay keeps activating on the click (WebView2 drops clicks into an unfocused
+window, per the hud.rs note), and the "who had it" question is answered by a system
+foreground hook (SetWinEventHook, EVENT_SYSTEM_FOREGROUND, WINEVENT_SKIPOWNPROCESS) that
+tracks the last non-Aura foreground window at all times. React asks for the hand-back after
+a click that left no text field focused and no menu open; the drag region hands back on
+WM_EXITSIZEMOVE. macOS needed nothing: its overlay is already a non-activating NSPanel.
+Justification: the user's app still sees a blur and a focus a few dozen milliseconds apart;
+that is the ceiling for windowed WebView2 hosting, and the only way past it is composition
+hosting with hand-forwarded input, which Tauri does not expose. Any future "make the overlay
+never take focus" idea on Windows starts from this entry, not from WS_EX_NOACTIVATE or
+MA_NOACTIVATE.
+================================================================================
+
 2026-10-07: a 20-minute voice call saved no transcript, and no mode gave coding hints
 Problem: Varun's first interview-practice call (sess_346bd9dc, 201 turns) left nothing in
 Firestore. The log read "post-session pipeline started", then 33 seconds of silence, then
@@ -2439,4 +2482,53 @@ promise from the model is not state and decayed after one turn in the transcript
 exactly why the modes that hold are separate agents with their own prompts. Desktop forensics
 start from the LiveKit Cloud session recording when Firestore is empty; nothing on the
 desktop keeps voice captions.
+================================================================================
+2026-10-07: an empty Interview Companion screen send was told to describe, so it did
+Problem: pressing Ctrl+Alt+S (or Send with an empty box) on a coding problem came back as
+"the editor contains the carPooling method signature, but no implementation yet" instead of
+the solution.
+Issue: an empty composer send minted its turn with the hardcoded text "What's on my screen?",
+and since 2026-09-22 composer sends ride the chat leg, whose first rule is "do exactly what the
+latest message asks". The backend's screen_sight action text ("the screen alone is a complete
+question") only reaches the spoken leg, so on the chat leg nothing outranked the literal
+question and the model answered it faithfully.
+Solution: the minted text is now the instruction "Solve what's on my screen." (useInterviewHacker
+screenSight), which rule 5 of INTERVIEW_CHAT_SYSTEM turns into code and rule 2 into a pick.
+Desktop only, no juno-backend deploy.
+Justification: text the client invents is a prompt, not a label. When a prompt says "obey the
+message", any placeholder the client sends in the message slot has to be the instruction it
+means, never a neutral caption.
+================================================================================
+2026-10-07: a Swarm manager answered six messages in a row and never delivered the comparison
+Problem: Changelog Charlie was asked to map the HeyClicky changelog against Aura-Desktop. Over
+seven DMs it stopped twice with "the model it uses was unavailable", once with "could not be
+read / the limit of 1 is used up", four times under "It kept finding the same things", paired
+chat_cache.rs with Clicky's chat memory by file name, said the changelog had no memory detail a
+few hours after quoting the memory item from it, and answered "what's wrong?" and "try again"
+by starting fresh research. It only asked what to do next after being sworn at.
+Issue: (1) every DM started a session whose whole context was that one message, so "again",
+"only these two" and "what's wrong" had no referent; (2) failure_reason folded a DeepInfra 402,
+a Gemini 402 and an Anthropic schema 400 into one "unavailable", the session kept only the last
+code, and nothing alerted; (3) _terminal_state_for promoted any one lane's note to the whole
+run, and no_progress fired on the first repeated call, so a good report wore a failure banner;
+(4) caps_used counted refusals and cap_reached itself, and cap_reached was a report gap; (5) a
+session-wide taint flag raced across parallel lanes, so whether the web lane could still search
+depended on which lane read first, and a public repo tainted like an inbox; (6) web.read kept
+the first 1,500 of 12,000 fetched characters and github.file the first 3,600, with no code
+search, so features were matched by file name; (7) only a single-lane session could ask, and
+the planner could not ask at all; (8) twelve decisions for the whole session across three lanes.
+Solution: the channel's recent messages are frozen into each dm/route session as a thread and
+the planner sets an intent (retry, follow_up, about_last_run, answer) with a self-contained
+working brief; every failed chain link is recorded by content-free kind, a chain that fails only
+on configuration kinds becomes provider_config with no retry, and every exhausted chain logs an
+alert; a repeat is a lane finishing, one stuck lane is never the headline, and only executed
+calls spend a cap; public lanes run first with private lanes held behind them, and public repos
+no longer taint; reads keep the passages matching the task, with part paging and github.search;
+any lane or the planner can ask, with tap answers on the report; 20 decisions per lane, 50 per
+session. aura.research was deleted: it reran Brave and Firecrawl in a run whose output could
+never come back into the report.
+Justification: an agent's answers are only as good as what it is allowed to see and how
+honestly its outcome is labelled. Every one of the eight issues was harness, not model, and each
+was fixed as the class (conversation, failure cause, outcome label, cap accounting, taint
+ordering, read depth, asking, budget) rather than as this one conversation.
 ================================================================================
