@@ -16,9 +16,25 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+## [0.16.9] - 2026-10-08
+
+### Added
+
+- Swarm managers can ask you a question when the next move is your call, right on their report, and you answer with one tap. A manager can also ask before it starts, when what you asked for could mean two different jobs.
+
 ### Changed
 
 - The dashboard opens much larger by default, 1600 by 840 instead of 1000 by 700, so the Agents tabs and long Swarm reports have room without resizing. On a smaller screen it shrinks to fit, so it never opens under the taskbar.
+- Swarm managers now follow the conversation in their channel. "Try again" retries what you last asked for, "only these two" narrows it, and "what's wrong?" gets a straight answer about the last run instead of starting a new search.
+- Swarm managers read much deeper: up to 20 steps per task, the parts of a page or file that match what they are looking for instead of only its first lines, and a code search that finds a feature in your repository by what it does. Web research now always finishes before a manager opens your accounts, so it no longer loses web search halfway through.
+- Swarm managers no longer start separate Research runs; they do that reading themselves and put it in their own report.
+- The Swarm tab has a cleaner design. While a manager works you now see each step land as it happens (what it searched or read, how long it took, how many sources it added), with what it is doing right now at the bottom, and the steps fold into one line like "Searched 6 sources and read 2 pages in 1.2 min" when it finishes. Cards are frosted glass over a soft colour field, in light and dark. Reports lead with the answer, show each source's site next to the claim it backs, and put drafts that need your approval in their own card. Public posts are marked so they never look like a private calendar hold. Manager messages show bold text, lists and links properly.
+- The Team panel opens again from the Team button in the Swarm header, and a status pill there shows how many managers are working or waiting on you. Managers waiting on an answer are marked "Needs you" in the channel list.
+
+### Fixed
+
+- A Swarm report that did its job no longer says "It kept finding the same things, so it stopped" because one part repeated a step, and a manager no longer says it "could not read" something just because it asked for the same thing twice.
+- When a Swarm run fails because of a problem on Aura's side (a model provider out of credit or rejecting a request), the report now says so instead of "The model it uses was unavailable", and it no longer tells you to try again when that would not help.
 
 ## [0.16.8] - 2026-10-07
 
