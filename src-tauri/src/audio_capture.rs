@@ -59,7 +59,6 @@ pub(crate) enum AudioSource {
 pub(crate) struct PcmFrame {
     pub source: AudioSource,
     pub captured_at_ms: u64,
-    pub captured_at_unix_ms: u64,
     pub samples: Arc<[f32]>,
 }
 
@@ -511,7 +510,6 @@ fn capture_thread(
                     CaptureEvent::Frame(PcmFrame {
                         source,
                         captured_at_ms: origin.elapsed().as_millis() as u64,
-                        captured_at_unix_ms: crate::util::now_ms_u64(),
                         samples: Arc::from(samples),
                     }),
                 );

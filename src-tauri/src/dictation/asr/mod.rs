@@ -32,7 +32,6 @@ use std::time::Instant;
 use regex::Regex;
 
 pub mod deepgram;
-pub mod openai;
 
 /// Every ASR model here expects 16 kHz mono.
 pub const SAMPLE_RATE: i32 = 16_000;
@@ -99,29 +98,6 @@ pub enum AsrEvent {
     Failed(AsrError),
 }
 
-/// Events from a continuous recognizer. Unlike dictation, one live session
-/// may produce any number of completed turns before it is cancelled.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ContinuousAsrEvent {
-    /// The socket completed its handshake. `start_continuous` returns as soon
-    /// as the socket task is SPAWNED, not when it is up, so without this a
-    /// caller has no way to tell a live stream from one that is about to be
-    /// rejected. Reporting "listening" off the spawn alone is what let a 400
-    /// on every connect read as 134 successful reconnects.
-    Connected,
-    Partial(ContinuousTranscript),
-    Final(ContinuousTranscript),
-    Failed(AsrError),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ContinuousTranscript {
-    pub text: String,
-    pub speaker_id: Option<u32>,
-    pub speaker_overlap: bool,
-    pub final_word_at_ms: Option<u64>,
-}
-
 /// Deliberately a closed set rather than a string: the worker picks HUD copy
 /// and a telemetry category from the variant, and a provider must not be able
 /// to smuggle its own prose (or a URL carrying a credential) into either.
@@ -177,18 +153,6 @@ pub struct SessionConfig {
     /// Product and personal vocabulary, biased for this utterance only.
     pub keyterms: Vec<String>,
     pub credential: String,
-}
-
-/// Configuration for a provider-endpointed, multi-turn stream.
-/// `Clone` so a provider can derive a variant of the same session (the
-/// diarization-free retry) without the caller having to build it twice.
-#[derive(Clone)]
-pub struct ContinuousSessionConfig {
-    pub sample_rate: i32,
-    pub keyterms: Vec<String>,
-    pub credential: String,
-    pub endpointing_ms: u16,
-    pub diarize: bool,
 }
 
 /// One live utterance. Dropping it without `finish` cancels and closes.
@@ -265,31 +229,13 @@ pub trait AsrSession: Send {
     fn cancel(&mut self);
 }
 
-pub trait ContinuousAsrSession: Send {
-    fn send_pcm(&mut self, samples: &[i16], captured_at_ms: u64) -> Result<(), AsrError>;
-    fn poll(&mut self) -> Option<ContinuousAsrEvent>;
-    fn cancel(&mut self);
-}
-
 pub trait AsrProvider: Send + Sync {
     fn start(&self, config: SessionConfig) -> Result<Box<dyn AsrSession>, AsrError>;
-    fn start_continuous(
-        &self,
-        config: ContinuousSessionConfig,
-    ) -> Result<Box<dyn ContinuousAsrSession>, AsrError>;
 }
 
 /// The one place the concrete provider is named.
 pub fn provider() -> &'static dyn AsrProvider {
-    deepgram_provider()
-}
-
-pub fn deepgram_provider() -> &'static dyn AsrProvider {
     &deepgram::DeepgramProvider
-}
-
-pub fn openai_provider() -> &'static dyn AsrProvider {
-    &openai::OpenAiProvider
 }
 
 /// Accumulates a provider's segment stream into the two strings the worker

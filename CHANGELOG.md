@@ -16,6 +16,13 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-10-08
+
+### Changed
+
+- The live Interview Companion has moved out of Aura into its own app, SideKick. The tray item, its card and card keys, the "Start Interview Companion on its own" and "Keep interview audio" settings, and the Sessions tab on the Interview page are gone. Your prepared interviews, company dossiers, prep rooms and Interview Mode with Buddy are unchanged.
+- Ctrl+Alt+S is always Screen Sight again; it no longer turns into a screen send while an interview card is open.
+
 ## [0.16.9] - 2026-10-08
 
 ### Added

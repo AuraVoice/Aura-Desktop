@@ -41,9 +41,7 @@ mod fsx;
 mod guide;
 mod hotkeys;
 mod interview;
-mod interview_audio;
 mod interview_prep_store;
-mod interview_store;
 mod logging;
 #[cfg(target_os = "macos")]
 mod macos_audio;
@@ -128,8 +126,8 @@ fn set_panel_variant(app: AppHandle, variant: PanelVariant) {
 /// (OverlayRoot) resolves which surface - draft, catch-up, calendar agenda, or
 /// kebab menu - wins the single slot and passes its fixed height here.
 #[tauri::command]
-fn set_slot_height(app: AppHandle, height: Option<f64>, centered: bool) {
-    overlay::set_slot_height(&app, height, centered);
+fn set_slot_height(app: AppHandle, height: Option<f64>) {
+    overlay::set_slot_height(&app, height);
 }
 
 /// Temporarily drops the overlay's always-on-top/window-level so a native
@@ -393,8 +391,6 @@ pub fn run() {
                 .with_handler(|app, shortcut, event| {
                     if event.state() == ShortcutState::Pressed {
                         hotkeys::handle(app, shortcut);
-                    } else {
-                        hotkeys::handle_release(shortcut);
                     }
                 })
                 .build(),
@@ -488,7 +484,6 @@ pub fn run() {
             logging::read_recent_log_lines,
             screenshot::capture_cursor_display_with_geometry,
             screenshot::capture_turn_screen_with_geometry,
-            screenshot::capture_interview_screen_with_geometry,
             screenshot::take_chat_capture,
             screenshot::refresh_chat_capture,
             screenshot::discard_chat_capture,
@@ -536,7 +531,6 @@ pub fn run() {
             voice_toggle_key::voice_toggle_key_permission,
             voice_toggle_key::voice_toggle_key_request_permission,
             hotkeys::hotkey_bindings,
-            hotkeys::interview_card_hotkeys,
             hotkeys::set_hotkey_binding,
             hotkeys::reset_hotkey_bindings,
             hotkeys::begin_hotkey_test,
@@ -585,23 +579,12 @@ pub fn run() {
             dictation::history::dictation_history_export_text,
             dictation::history::dictation_history_settings,
             dictation::history::dictation_history_set_settings,
-            interview::interview_supported_call,
-            interview::interview_request_accessibility,
-            interview::start_interview_hacker,
-            interview::pause_interview_hacker,
-            interview::resume_interview_hacker,
-            // registered ahead of UI: pull-style status snapshot; the frontend
-            // listens to the interview-hacker-status event instead
-            interview::interview_hacker_status,
-            interview::update_interview_hacker_credential,
             interview::set_interview_hacker_brief,
             interview::interview_hacker_brief,
             interview::clear_interview_hacker_brief,
             interview::set_interview_resume,
             interview::interview_resume,
             interview::clear_interview_resume,
-            interview::stop_interview_hacker,
-            interview::save_interview_reflection,
             interview::save_interview_prep,
             swarm_documents::save_swarm_document,
             swarm_memory::swarm_memory_recall,
@@ -612,14 +595,6 @@ pub fn run() {
             swarm_memory::swarm_memory_delete_manager,
             swarm_memory::swarm_memory_export,
             swarm_memory::swarm_memory_import,
-            interview_store::interview_session_save,
-            interview_store::interview_session_checkpoint,
-            interview_store::interview_sessions_list,
-            interview_store::interview_session_load,
-            interview_store::interview_session_delete,
-            interview_audio::interview_session_audio,
-            interview_store::interview_reflection_save,
-            interview_store::interview_sessions_clear,
             interview_prep_store::interview_prep_load,
             interview_prep_store::interview_prep_upsert,
             interview_prep_store::interview_prep_delete,

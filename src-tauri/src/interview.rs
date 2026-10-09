@@ -1,420 +1,32 @@
-//! Explicit, video-call-only Interview Companion runtime.
+//! The interview preparation slots: the reviewed brief and the resume text,
+//! held in process memory so every window reads the same ones.
 //!
-//! The shared audio broker supplies microphone and render-loopback frames.
-//! Each physical source owns a separate continuous ASR session, preserving
-//! speaker provenance before any transcript reaches the webview.
+//! The live Interview Companion that used to run here (two ASR sockets over the
+//! capture broker, the answer card, session history) moved to its own app,
+//! SideKick, on 2026-10-08. What stays is what the Interview page and Interview
+//! Mode still use: the dashboard writes the active brief here, and the Interview
+//! Mode context card reads the resume.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, mpsc};
+use std::sync::Mutex;
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
-use std::time::{Duration, Instant};
-
-use crate::audio_capture::{self, AudioSource, CaptureEvent, Delivery};
-use crate::dictation::asr::{
-    self, AsrError, ContinuousAsrEvent, ContinuousAsrSession, ContinuousSessionConfig,
-};
-
 use crate::events::{
-    INTERVIEW_BRIEF_UPDATED as BRIEF_EVENT, INTERVIEW_HACKER_STATUS as STATUS_EVENT,
-    INTERVIEW_HACKER_TRANSCRIPT as TRANSCRIPT_EVENT, INTERVIEW_RESUME_UPDATED as RESUME_EVENT,
+    INTERVIEW_BRIEF_UPDATED as BRIEF_EVENT, INTERVIEW_RESUME_UPDATED as RESUME_EVENT,
 };
 const MAX_BRIEF_BYTES: usize = 128_000;
 // Generous next to the 20,000 characters the backend accepts, so a resume is
 // rejected by the extractor's own limit rather than truncated silently here.
 const MAX_RESUME_BYTES: usize = 64_000;
-const ENDPOINTING_MS: u16 = 300;
-// The interviewer stream waits longer before finalizing than the candidate
-// stream: a remote speaker pausing past the silence window splits one question
-// in two and the first half gets answered alone. The candidate stream stays
-// fast because its finals are what release an answer held during speech.
-const REMOTE_ENDPOINTING_MS: u16 = 500;
-const MAX_RECONNECTS: u8 = 10;
-const DEEPGRAM_RECONNECTS: u8 = 5;
-const MAX_RECONNECT_BACKOFF_SECS: u64 = 30;
-const SESSION_LIMIT: Duration = Duration::from_secs(2 * 60 * 60);
-// The hard stop below is abrupt by nature; this is how much notice the card
-// gets to say so before it lands.
-const SESSION_LIMIT_WARNING: Duration = Duration::from_secs(5 * 60);
-
-enum RuntimeCommand {
-    Pause,
-    Resume,
-    UpdateCredentials(TranscriptionCredentials),
-    Stop,
-}
-
-struct TranscriptionCredentials {
-    deepgram: String,
-    openai: String,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum TranscriptionProvider {
-    Deepgram,
-    OpenAi,
-}
-
-impl TranscriptionProvider {
-    fn credential(self, credentials: &TranscriptionCredentials) -> &str {
-        match self {
-            Self::Deepgram => &credentials.deepgram,
-            Self::OpenAi => &credentials.openai,
-        }
-    }
-
-    fn retry_floor(self) -> u8 {
-        match self {
-            Self::Deepgram => 0,
-            Self::OpenAi => DEEPGRAM_RECONNECTS,
-        }
-    }
-}
-
-struct ActiveInterview {
-    epoch: u64,
-    session_id: String,
-    app_name: String,
-    paused: bool,
-    phase: String,
-    commands: mpsc::Sender<RuntimeCommand>,
-}
 
 #[derive(Default)]
 pub struct InterviewHandle(
-    Mutex<Option<ActiveInterview>>,
-    AtomicU64,
     Mutex<Option<serde_json::Value>>,
     // Plain resume text, kept beside the brief because it is the same class of
     // preparation: user-supplied, cleared on sign-out, never persisted to disk.
     Mutex<Option<String>>,
 );
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SupportedCallPayload {
-    supported: bool,
-    app: Option<String>,
-    /// Why detection cannot succeed right now, as opposed to "no call yet".
-    /// `"accessibility"`: the macOS grant is missing, so `window_titles` reads
-    /// an empty list for every process and no title can ever match. Without
-    /// this the two cases are indistinguishable to the caller, and the card
-    /// waits forever on a check that cannot come good. `None` on Windows.
-    blocker: Option<&'static str>,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InterviewStatusPayload {
-    phase: String,
-    session_id: Option<String>,
-    epoch: Option<u64>,
-    app: Option<String>,
-    reason: Option<String>,
-}
-
-#[derive(Clone, Copy, Serialize)]
-#[serde(rename_all = "lowercase")]
-enum TranscriptSource {
-    Candidate,
-    Remote,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct TranscriptPayload {
-    session_id: String,
-    epoch: u64,
-    turn_id: String,
-    source: TranscriptSource,
-    start_ms: u64,
-    end_ms: u64,
-    text: String,
-    is_final: bool,
-    remote_speaker_id: Option<String>,
-    speaker_overlap: bool,
-    final_word_at_ms: Option<u64>,
-}
-
-fn snapshot(handle: &InterviewHandle) -> InterviewStatusPayload {
-    let state = handle.0.lock().unwrap_or_else(|error| error.into_inner());
-    match state.as_ref() {
-        Some(active) => InterviewStatusPayload {
-            phase: active.phase.clone(),
-            session_id: Some(active.session_id.clone()),
-            epoch: Some(active.epoch),
-            app: Some(active.app_name.clone()),
-            reason: None,
-        },
-        None => stopped_status(None),
-    }
-}
-
-fn stopped_status(reason: Option<&str>) -> InterviewStatusPayload {
-    InterviewStatusPayload {
-        phase: "stopped".to_string(),
-        session_id: None,
-        epoch: None,
-        app: None,
-        reason: reason.map(str::to_string),
-    }
-}
-
-#[tauri::command]
-pub async fn interview_supported_call(app: AppHandle) -> Result<SupportedCallPayload, String> {
-    let ticket = crate::security::authorize(
-        &app,
-        crate::security::Operation::StartInterviewHacker,
-    )?;
-    // spawn_blocking on both platforms: this is a #[tauri::command], and the
-    // macOS scan reads every running app's accessibility window list, which is
-    // heavier than the Windows EnumWindows walk and must not run on the thread
-    // pumping window messages.
-    let detected = tauri::async_runtime::spawn_blocking(crate::meeting::detect::find_meeting_window)
-        .await
-        .map_err(|_| "call detection failed".to_string())?;
-    crate::security::recheck(
-        &app,
-        crate::security::Operation::StartInterviewHacker,
-        &ticket,
-    )?;
-    Ok(SupportedCallPayload {
-        supported: detected.is_some(),
-        app: detected.map(|(app_name, _)| app_name),
-        blocker: accessibility_blocker(),
-    })
-}
-
-/// Read SILENTLY: a status read must never raise a TCC dialog, so this passes
-/// `prompt: false` the way dictation's own status refresh does. The prompt
-/// belongs to `interview_request_accessibility`, at the user's click.
-fn accessibility_blocker() -> Option<&'static str> {
-    #[cfg(target_os = "macos")]
-    if !crate::macos_ax::is_trusted(false) {
-        return Some("accessibility");
-    }
-    None
-}
-
-/// The user-initiated moment where prompting IS correct. Returns whether the
-/// grant is now held; macOS shows its dialog only the first time, and points at
-/// the Privacy & Security pane thereafter.
-#[tauri::command]
-pub async fn interview_request_accessibility(app: AppHandle) -> Result<bool, String> {
-    crate::security::authorize(
-        &app,
-        crate::security::Operation::StartInterviewHacker,
-    )?;
-    #[cfg(target_os = "macos")]
-    let granted = crate::macos_ax::is_trusted(true);
-    #[cfg(not(target_os = "macos"))]
-    let granted = true;
-    Ok(granted)
-}
-
-#[tauri::command]
-pub async fn start_interview_hacker(
-    app: AppHandle,
-    access_token: String,
-    openai_access_token: Option<String>,
-    keyterms: Option<Vec<String>>,
-    // The interviewer is in the room or on a second device, so their voice
-    // arrives through the MICROPHONE rather than through this machine's audio.
-    // Attribution here is physical - one socket per device - so without this
-    // the interviewer is transcribed as the candidate, no remote turn is ever
-    // produced, and nothing is ever answered.
-    room_audio: Option<bool>,
-    // Frozen at Start like the round and the room-audio choice: the recorder
-    // subscribes once, when the worker opens, so flipping the setting mid
-    // interview must not half-record a session.
-    keep_audio: Option<bool>,
-) -> Result<InterviewStatusPayload, String> {
-    let credentials = TranscriptionCredentials {
-        deepgram: access_token,
-        openai: openai_access_token.unwrap_or_default(),
-    };
-    if credentials.deepgram.trim().is_empty() && credentials.openai.trim().is_empty() {
-        return Err("transcription credential is required".to_string());
-    }
-    // Recognition bias for this session, resolved on the desktop from the brief,
-    // job description, and resume. The provider truncates to its own cap, so this
-    // only drops blanks and bounds what a malformed caller can hand us.
-    let keyterms: Vec<String> = keyterms
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|term| !term.trim().is_empty())
-        .take(asr::deepgram::MAX_KEYTERMS)
-        .collect();
-    let cancel_generation = app.state::<InterviewHandle>().1.load(Ordering::Relaxed);
-    let ticket = crate::security::authorize(
-        &app,
-        crate::security::Operation::StartInterviewHacker,
-    )?;
-    let detected = tauri::async_runtime::spawn_blocking(crate::meeting::detect::find_meeting_window)
-        .await
-        .map_err(|_| "call detection failed".to_string())?;
-    crate::security::recheck(
-        &app,
-        crate::security::Operation::StartInterviewHacker,
-        &ticket,
-    )?;
-    // Detection only labels the session (the "Call" widget, app_name in status
-    // events); it must not gate Start. A recruiter platform outside the
-    // Zoom/Teams/Meet table, a missing macOS Accessibility grant, or a call
-    // whose title doesn't match the detector's substring table would otherwise
-    // block someone already sitting in a real interview with no way through.
-    let app_name = detected
-        .map(|(app_name, _)| app_name)
-        .unwrap_or_else(|| "call".to_string());
-
-    let handle = app.state::<InterviewHandle>();
-    let mut state = handle.0.lock().unwrap_or_else(|error| error.into_inner());
-    if handle.1.load(Ordering::Relaxed) != cancel_generation {
-        return Err("Interview Companion start was cancelled.".to_string());
-    }
-    if state.is_some() {
-        return Err("Interview Companion is already active.".to_string());
-    }
-    {
-        static NEXT_EPOCH: std::sync::atomic::AtomicU64 =
-            std::sync::atomic::AtomicU64::new(0);
-        let epoch = NEXT_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-        let session_id = format!("interview-{}-{epoch}", crate::meeting::now_ms());
-        let (command_tx, command_rx) = mpsc::channel();
-        *state = Some(ActiveInterview {
-            epoch,
-            session_id: session_id.clone(),
-            app_name: app_name.clone(),
-            paused: false,
-            phase: "starting".to_string(),
-            commands: command_tx,
-        });
-        drop(state);
-
-        emit_status(
-            &app,
-            "starting",
-            Some(&session_id),
-            Some(epoch),
-            Some(&app_name),
-            None,
-        );
-        let worker_app = app.clone();
-        std::thread::Builder::new()
-            .name("aura-interview".to_string())
-            .spawn(move || {
-                run_worker(
-                    worker_app,
-                    credentials,
-                    keyterms,
-                    session_id,
-                    app_name,
-                    epoch,
-                    room_audio.unwrap_or(false),
-                    keep_audio.unwrap_or(false),
-                    command_rx,
-                );
-            })
-            .map_err(|error| {
-                let handle = app.state::<InterviewHandle>();
-                *handle.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
-                format!("could not start Interview Companion: {error}")
-            })?;
-        Ok(snapshot(&handle))
-    }
-}
-
-#[tauri::command]
-pub fn pause_interview_hacker(app: AppHandle) -> Result<InterviewStatusPayload, String> {
-    set_paused(&app, true)
-}
-
-#[tauri::command]
-pub fn resume_interview_hacker(app: AppHandle) -> Result<InterviewStatusPayload, String> {
-    set_paused(&app, false)
-}
-
-fn set_paused(app: &AppHandle, paused: bool) -> Result<InterviewStatusPayload, String> {
-    let handle = app.state::<InterviewHandle>();
-    let mut state = handle.0.lock().unwrap_or_else(|error| error.into_inner());
-    let active = state
-        .as_mut()
-        .ok_or_else(|| "Interview Companion is not active.".to_string())?;
-    let retrying_failure = !paused && matches!(active.phase.as_str(), "degraded" | "error");
-    if active.paused == paused && !retrying_failure {
-        return Ok(snapshot_locked(active));
-    }
-    active
-        .commands
-        .send(if paused {
-            RuntimeCommand::Pause
-        } else {
-            RuntimeCommand::Resume
-        })
-        .map_err(|_| "Interview Companion worker is unavailable.".to_string())?;
-    active.paused = paused;
-    active.phase = if paused { "paused" } else { "starting" }.to_string();
-    let status = snapshot_locked(active);
-    drop(state);
-    let _ = app.emit(STATUS_EVENT, status.clone());
-    Ok(status)
-}
-
-fn snapshot_locked(active: &ActiveInterview) -> InterviewStatusPayload {
-    InterviewStatusPayload {
-        phase: active.phase.clone(),
-        session_id: Some(active.session_id.clone()),
-        epoch: Some(active.epoch),
-        app: Some(active.app_name.clone()),
-        reason: None,
-    }
-}
-
-#[tauri::command]
-pub fn interview_hacker_status(app: AppHandle) -> InterviewStatusPayload {
-    snapshot(&app.state::<InterviewHandle>())
-}
-
-/// The session the worker is running right now, if any. The store uses it to
-/// tell a live checkpointed session from one a crash left open.
-pub fn active_session_id(app: &AppHandle) -> Option<String> {
-    let handle = app.try_state::<InterviewHandle>()?;
-    let state = handle.0.lock().unwrap_or_else(|error| error.into_inner());
-    state.as_ref().map(|active| active.session_id.clone())
-}
-
-#[tauri::command]
-pub fn update_interview_hacker_credential(
-    app: AppHandle,
-    session_id: String,
-    epoch: u64,
-    access_token: String,
-    openai_access_token: Option<String>,
-) -> Result<(), String> {
-    let credentials = TranscriptionCredentials {
-        deepgram: access_token,
-        openai: openai_access_token.unwrap_or_default(),
-    };
-    if credentials.deepgram.trim().is_empty() && credentials.openai.trim().is_empty() {
-        return Err("transcription credential is required".to_string());
-    }
-    crate::security::authorize(
-        &app,
-        crate::security::Operation::StartInterviewHacker,
-    )?;
-    let handle = app.state::<InterviewHandle>();
-    let state = handle.0.lock().unwrap_or_else(|error| error.into_inner());
-    let active = state
-        .as_ref()
-        .filter(|active| active.session_id == session_id && active.epoch == epoch)
-        .ok_or_else(|| "Interview Companion session is no longer active.".to_string())?;
-    active
-        .commands
-        .send(RuntimeCommand::UpdateCredentials(credentials))
-        .map_err(|_| "Interview Companion worker is unavailable.".to_string())
-}
 
 #[tauri::command]
 pub fn set_interview_hacker_brief(
@@ -440,7 +52,7 @@ pub fn set_interview_hacker_brief(
         return Err("Interview brief is too large.".to_string());
     }
     let handle = app.state::<InterviewHandle>();
-    *handle.2.lock().unwrap_or_else(|error| error.into_inner()) = Some(brief.clone());
+    *handle.0.lock().unwrap_or_else(|error| error.into_inner()) = Some(brief.clone());
     let _ = app.emit(BRIEF_EVENT, brief);
     Ok(())
 }
@@ -453,7 +65,7 @@ pub fn interview_hacker_brief(app: AppHandle) -> Result<Option<serde_json::Value
     )?;
     let handle = app.state::<InterviewHandle>();
     let brief = handle
-        .2
+        .0
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .clone();
@@ -484,7 +96,7 @@ pub fn set_interview_resume(app: AppHandle, resume: String) -> Result<(), String
         return Err("Resume is too large.".to_string());
     }
     let handle = app.state::<InterviewHandle>();
-    *handle.3.lock().unwrap_or_else(|error| error.into_inner()) = Some(resume.clone());
+    *handle.1.lock().unwrap_or_else(|error| error.into_inner()) = Some(resume.clone());
     let _ = app.emit(RESUME_EVENT, resume);
     Ok(())
 }
@@ -497,7 +109,7 @@ pub fn interview_resume(app: AppHandle) -> Result<Option<String>, String> {
     )?;
     let handle = app.state::<InterviewHandle>();
     let resume = handle
-        .3
+        .1
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .clone();
@@ -519,7 +131,7 @@ fn clear_stored_resume(app: &AppHandle) {
         return;
     };
     let removed = handle
-        .3
+        .1
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .take()
@@ -535,7 +147,7 @@ pub fn clear_preparation(app: &AppHandle) {
         return;
     };
     let removed = handle
-        .2
+        .0
         .lock()
         .unwrap_or_else(|error| error.into_inner())
         .take()
@@ -546,14 +158,11 @@ pub fn clear_preparation(app: &AppHandle) {
 }
 
 /// Fills the brief and resume slots from the on-disk preparation store at
-/// sign-in, so the companion runs with the reviewed brief whichever window
-/// mounts first. Before this the slots were filled only when the dashboard
-/// Interview page mounted: a relaunch followed by opening the companion from
-/// the notch ran with no brief and showed "add resume" (2026-09-16). Same
-/// shape checks as `set_interview_hacker_brief`; a record that fails them
-/// leaves the slots empty and the page's own restore path does what it did.
-/// Fire-and-forget off the main thread: the session hook runs inside a sync
-/// command and the store read decrypts a quarter megabyte at most.
+/// sign-in, so whichever window mounts first sees the reviewed brief and the
+/// resume. Same shape checks as `set_interview_hacker_brief`; a record that
+/// fails them leaves the slots empty and the page's own restore path does what
+/// it did. Fire-and-forget off the main thread: the session hook runs inside a
+/// sync command and the store read decrypts a quarter megabyte at most.
 pub fn hydrate_preparation(app: &AppHandle, uid: String) {
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -596,78 +205,20 @@ pub fn hydrate_preparation(app: &AppHandle, uid: String) {
             .filter(|text| !text.is_empty() && text.len() <= MAX_RESUME_BYTES)
             .map(str::to_string);
         if let Some(brief) = brief {
-            *handle.2.lock().unwrap_or_else(|error| error.into_inner()) = Some(brief.clone());
+            *handle.0.lock().unwrap_or_else(|error| error.into_inner()) = Some(brief.clone());
             let _ = app.emit(BRIEF_EVENT, brief);
         }
         if let Some(resume) = resume {
-            *handle.3.lock().unwrap_or_else(|error| error.into_inner()) = Some(resume.clone());
+            *handle.1.lock().unwrap_or_else(|error| error.into_inner()) = Some(resume.clone());
             let _ = app.emit(RESUME_EVENT, resume);
         }
     });
 }
 
-#[tauri::command]
-pub fn stop_interview_hacker(app: AppHandle) -> InterviewStatusPayload {
-    request_stop(&app, "user");
-    stopped_status(Some("user"))
-}
-
-pub fn request_stop(app: &AppHandle, reason: &str) {
-    let Some(handle) = app.try_state::<InterviewHandle>() else {
-        return;
-    };
-    handle.1.fetch_add(1, Ordering::Relaxed);
-    let active = handle
-        .0
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .take();
-    if let Some(active) = active {
-        let _ = active.commands.send(RuntimeCommand::Stop);
-        let _ = app.emit(
-            STATUS_EVENT,
-            InterviewStatusPayload {
-                phase: "stopped".to_string(),
-                session_id: Some(active.session_id),
-                epoch: Some(active.epoch),
-                app: Some(active.app_name),
-                reason: Some(reason.to_string()),
-            },
-        );
-    }
-}
-
-pub fn is_active(app: &AppHandle) -> bool {
-    app.try_state::<InterviewHandle>()
-        .map(|handle| {
-            handle
-                .0
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .is_some()
-        })
-        .unwrap_or(false)
-}
-
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct InterviewReflectionExport {
+pub struct InterviewPrepExport {
     path: String,
-}
-
-#[tauri::command]
-pub async fn save_interview_reflection(
-    app: AppHandle,
-    markdown: String,
-) -> Result<InterviewReflectionExport, String> {
-    save_markdown_export(
-        &app,
-        &markdown,
-        "Interview reflection",
-        "Aura Interview Reflections",
-        format!("interview-reflection-{}.md", crate::meeting::now_ms()),
-    )
-    .await
 }
 
 /// Saves a prep room as Markdown, named for the company so several interviews in
@@ -677,15 +228,48 @@ pub async fn save_interview_prep(
     app: AppHandle,
     markdown: String,
     company: String,
-) -> Result<InterviewReflectionExport, String> {
-    save_markdown_export(
+) -> Result<InterviewPrepExport, String> {
+    let trimmed = markdown.trim();
+    if trimmed.is_empty() || trimmed.len() > 64_000 {
+        return Err("Interview prep is empty or too large.".to_string());
+    }
+    let ticket = crate::security::authorize(
         &app,
-        &markdown,
-        "Interview prep",
-        "Aura Interview Prep",
-        format!("{}-prep-{}.md", file_slug(&company), crate::meeting::now_ms()),
-    )
+        crate::security::Operation::StartInterviewHacker,
+    )?;
+    let destination = app
+        .path()
+        .download_dir()
+        .map_err(|error| error.to_string())?
+        .join("Aura Interview Prep")
+        .join(format!("{}-prep-{}.md", file_slug(&company), crate::util::now_ms()));
+    let content = format!("{}\n", trimmed);
+    let output = destination.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let parent = output
+            .parent()
+            .ok_or("Interview prep path is invalid.".to_string())?;
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&output)
+            .map_err(|error| error.to_string())?;
+        use std::io::Write as _;
+        file.write_all(content.as_bytes())
+            .map_err(|error| error.to_string())?;
+        file.sync_all().map_err(|error| error.to_string())
+    })
     .await
+    .map_err(|error| error.to_string())??;
+    crate::security::recheck(
+        &app,
+        crate::security::Operation::StartInterviewHacker,
+        &ticket,
+    )?;
+    Ok(InterviewPrepExport {
+        path: destination.to_string_lossy().to_string(),
+    })
 }
 
 fn file_slug(value: &str) -> String {
@@ -706,814 +290,4 @@ fn file_slug(value: &str) -> String {
     } else {
         slug.to_string()
     }
-}
-
-async fn save_markdown_export(
-    app: &AppHandle,
-    markdown: &str,
-    what: &str,
-    folder: &str,
-    file_name: String,
-) -> Result<InterviewReflectionExport, String> {
-    let trimmed = markdown.trim();
-    if trimmed.is_empty() || trimmed.len() > 64_000 {
-        return Err(format!("{what} is empty or too large."));
-    }
-    let ticket = crate::security::authorize(
-        app,
-        crate::security::Operation::StartInterviewHacker,
-    )?;
-    let destination = app
-        .path()
-        .download_dir()
-        .map_err(|error| error.to_string())?
-        .join(folder)
-        .join(file_name);
-    let content = format!("{}\n", trimmed);
-    let output = destination.clone();
-    let invalid_path = format!("{what} path is invalid.");
-    tauri::async_runtime::spawn_blocking(move || {
-        let parent = output
-            .parent()
-            .ok_or(invalid_path)?;
-        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&output)
-            .map_err(|error| error.to_string())?;
-        use std::io::Write as _;
-        file.write_all(content.as_bytes())
-            .map_err(|error| error.to_string())?;
-        file.sync_all().map_err(|error| error.to_string())
-    })
-    .await
-    .map_err(|error| error.to_string())??;
-    crate::security::recheck(
-        app,
-        crate::security::Operation::StartInterviewHacker,
-        &ticket,
-    )?;
-    Ok(InterviewReflectionExport {
-        path: destination.to_string_lossy().to_string(),
-    })
-}
-
-fn emit_status(
-    app: &AppHandle,
-    phase: &str,
-    session_id: Option<&str>,
-    epoch: Option<u64>,
-    app_name: Option<&str>,
-    reason: Option<&str>,
-) {
-    match phase {
-        "error" => log::error!(
-            "interview.companion: phase=error reason={} epoch={}",
-            reason.unwrap_or("unknown"),
-            epoch.unwrap_or_default()
-        ),
-        "degraded" => log::warn!(
-            "interview.companion: phase=degraded reason={} epoch={}",
-            reason.unwrap_or("unknown"),
-            epoch.unwrap_or_default()
-        ),
-        _ if reason.is_some() => log::info!(
-            "interview.companion: phase={phase} reason={} epoch={}",
-            reason.unwrap_or("unknown"),
-            epoch.unwrap_or_default()
-        ),
-        _ => {}
-    }
-    if let (Some(epoch), Some(handle)) = (epoch, app.try_state::<InterviewHandle>()) {
-        let mut state = handle.0.lock().unwrap_or_else(|error| error.into_inner());
-        if let Some(active) = state.as_mut().filter(|active| active.epoch == epoch) {
-            active.phase = phase.to_string();
-            active.paused = phase == "paused";
-        }
-    }
-    let _ = app.emit(
-        STATUS_EVENT,
-        InterviewStatusPayload {
-            phase: phase.to_string(),
-            session_id: session_id.map(str::to_string),
-            epoch,
-            app: app_name.map(str::to_string),
-            reason: reason.map(str::to_string),
-        },
-    );
-}
-
-struct Streams {
-    capture: audio_capture::CaptureConsumer,
-    candidate: Box<dyn ContinuousAsrSession>,
-    remote: Box<dyn ContinuousAsrSession>,
-}
-
-fn open_streams(
-    provider: TranscriptionProvider,
-    credentials: &TranscriptionCredentials,
-    keyterms: &[String],
-) -> Result<Streams, AsrError> {
-    let capture = audio_capture::subscribe(
-        "interview-hacker",
-        Delivery::Bounded { capacity: 512 },
-    )
-    .map_err(|_| AsrError::Provider)?;
-    let credential = provider.credential(credentials);
-    let asr_provider = match provider {
-        TranscriptionProvider::Deepgram => asr::deepgram_provider(),
-        TranscriptionProvider::OpenAi => asr::openai_provider(),
-    };
-    let config = |diarize, endpointing_ms| ContinuousSessionConfig {
-        sample_rate: asr::SAMPLE_RATE,
-        keyterms: keyterms.to_vec(),
-        credential: credential.to_string(),
-        endpointing_ms,
-        diarize,
-    };
-    let mut candidate = asr_provider.start_continuous(config(false, ENDPOINTING_MS))?;
-    let remote = match asr_provider.start_continuous(config(true, REMOTE_ENDPOINTING_MS)) {
-        Ok(session) => session,
-        Err(error) => {
-            candidate.cancel();
-            return Err(error);
-        }
-    };
-    Ok(Streams {
-        capture,
-        candidate,
-        remote,
-    })
-}
-
-/// Why the worker parked on a credential. The two cases look identical at the
-/// call site and are not: an expired credential is fixed by the next rotation,
-/// while a missing FALLBACK credential is not fixed by anything the client can
-/// do, and reporting it as expired is what made the card ask for a rotation
-/// that reset the retry counter and restarted the same failing dial forever.
-fn blocked_code(
-    provider: TranscriptionProvider,
-    credentials: &TranscriptionCredentials,
-) -> &'static str {
-    if provider == TranscriptionProvider::OpenAi && credentials.openai.trim().is_empty() {
-        "no_fallback_provider"
-    } else {
-        "credential_expired"
-    }
-}
-
-fn reconnect_delay(next_attempt: u8) -> Duration {
-    let exponent = next_attempt.saturating_sub(1).min(5);
-    Duration::from_secs((1u64 << exponent).min(MAX_RECONNECT_BACKOFF_SECS))
-}
-
-fn close_streams(streams: &mut Option<Streams>) {
-    if let Some(mut live) = streams.take() {
-        live.candidate.cancel();
-        live.remote.cancel();
-        live.capture.stop();
-    }
-}
-
-fn source_failure_code(source: TranscriptSource, error: AsrError) -> &'static str {
-    match (source, error) {
-        (TranscriptSource::Candidate, AsrError::NotAuthenticated) => "candidate_no_credential",
-        (TranscriptSource::Candidate, AsrError::Rejected) => "candidate_auth_rejected",
-        (TranscriptSource::Candidate, AsrError::Network) => "candidate_network",
-        (TranscriptSource::Candidate, AsrError::Timeout) => "candidate_timeout",
-        (TranscriptSource::Candidate, AsrError::Provider) => "candidate_provider_error",
-        (TranscriptSource::Remote, AsrError::NotAuthenticated) => "remote_no_credential",
-        (TranscriptSource::Remote, AsrError::Rejected) => "remote_auth_rejected",
-        (TranscriptSource::Remote, AsrError::Network) => "remote_network",
-        (TranscriptSource::Remote, AsrError::Timeout) => "remote_timeout",
-        (TranscriptSource::Remote, AsrError::Provider) => "remote_provider_error",
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn run_worker(
-    app: AppHandle,
-    credentials: TranscriptionCredentials,
-    keyterms: Vec<String>,
-    session_id: String,
-    app_name: String,
-    epoch: u64,
-    room_audio: bool,
-    keep_audio: bool,
-    commands: mpsc::Receiver<RuntimeCommand>,
-) {
-    // Outside catch_unwind on purpose. The Recorder finalises its last chunk on
-    // Drop, so a panicking loop still leaves the interview playable up to the
-    // moment it died, exactly like the streams below.
-    let recorder = if keep_audio {
-        crate::security::current_uid(&app)
-            .filter(|uid| !uid.is_empty())
-            .and_then(|uid| crate::interview_audio::start(&app, &uid, &session_id))
-    } else {
-        None
-    };
-    // A panic anywhere in the loop must still release the handle and tell the
-    // card, or the session stays "active" forever with nothing listening. The
-    // streams clean themselves up on unwind (every member cancels in Drop).
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        run_worker_loop(
-            app.clone(),
-            credentials,
-            keyterms,
-            session_id.clone(),
-            app_name.clone(),
-            epoch,
-            room_audio,
-            commands,
-        )
-    }));
-    // Before the handle is released, so the clip is closed by the time the card
-    // is told the session stopped and can offer to play it.
-    if let Some(recorder) = recorder {
-        recorder.stop();
-    }
-    let stop_reason = match outcome {
-        Ok(reason) => reason,
-        Err(_) => {
-            log::error!("interview.companion: worker panicked epoch={epoch}");
-            Some("worker_panic")
-        }
-    };
-    let handle = app.state::<InterviewHandle>();
-    let mut state = handle.0.lock().unwrap_or_else(|error| error.into_inner());
-    let owned = state.as_ref().is_some_and(|active| active.epoch == epoch);
-    if owned {
-        *state = None;
-    }
-    drop(state);
-    if owned {
-        if let Some(reason) = stop_reason {
-            let _ = app.emit(
-                STATUS_EVENT,
-                InterviewStatusPayload {
-                    phase: "stopped".to_string(),
-                    session_id: Some(session_id),
-                    epoch: Some(epoch),
-                    app: Some(app_name),
-                    reason: Some(reason.to_string()),
-                },
-            );
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn run_worker_loop(
-    app: AppHandle,
-    mut credentials: TranscriptionCredentials,
-    keyterms: Vec<String>,
-    session_id: String,
-    app_name: String,
-    epoch: u64,
-    room_audio: bool,
-    commands: mpsc::Receiver<RuntimeCommand>,
-) -> Option<&'static str> {
-    let started_at = Instant::now();
-    let mut limit_warned = false;
-    let mut provider = if credentials.deepgram.trim().is_empty() {
-        TranscriptionProvider::OpenAi
-    } else {
-        TranscriptionProvider::Deepgram
-    };
-    let (mut streams, mut credential_blocked, initial_failure) = match open_streams(provider, &credentials, &keyterms) {
-        Ok(streams) => (Some(streams), false, None),
-        Err(error) => (
-            None,
-            matches!(error, AsrError::NotAuthenticated | AsrError::Rejected),
-            Some(error.category()),
-        ),
-    };
-    let mut paused = false;
-    let mut blocked_reason: Option<&'static str> = None;
-    let mut reconnects = provider.retry_floor();
-    let mut rebinding = false;
-    let mut retry_at = Instant::now()
-        + if streams.is_some() {
-            Duration::ZERO
-        } else {
-            reconnect_delay(1)
-        };
-    let mut stable_since = streams.as_ref().map(|_| Instant::now());
-    // `start_continuous` returns as soon as the socket task is SPAWNED, so a
-    // live `Streams` proves nothing about either handshake. "listening" is
-    // held back until BOTH legs report `Connected`; announcing it at spawn
-    // time is what turned a 400 on every remote connect into 134 reported
-    // reconnects with nothing on screen to say otherwise.
-    let mut candidate_connected = false;
-    let mut remote_connected = false;
-    let mut listening_pending = streams.is_some();
-    let mut listening_reason: Option<&'static str> = None;
-    let mut candidate_start = None;
-    let mut remote_start = None;
-    let mut candidate_turn = 0u64;
-    let mut remote_turn = 0u64;
-    let mut stop_reason = None;
-
-    if streams.is_some() {
-        // Deliberately silent here: the card is already on "Starting
-        // transcription..." and the first honest status is the one emitted
-        // once both handshakes land (or the failure that replaces it).
-    } else {
-        emit_status(
-            &app,
-            "degraded",
-            Some(&session_id),
-            Some(epoch),
-            Some(&app_name),
-            Some(if credential_blocked {
-                let code = blocked_code(provider, &credentials);
-                blocked_reason = Some(code);
-                code
-            } else {
-                initial_failure.unwrap_or("transcription_unavailable")
-            }),
-        );
-    }
-
-    'runtime: loop {
-        if started_at.elapsed() >= SESSION_LIMIT {
-            stop_reason = Some("session_limit");
-            break;
-        }
-        if !limit_warned && started_at.elapsed() >= SESSION_LIMIT - SESSION_LIMIT_WARNING {
-            limit_warned = true;
-            // Re-emit whatever phase the card is in: the warning is a reason,
-            // not a state change, and emit_status writes the phase back.
-            let phase = app
-                .try_state::<InterviewHandle>()
-                .and_then(|handle| {
-                    let state = handle.0.lock().unwrap_or_else(|error| error.into_inner());
-                    state
-                        .as_ref()
-                        .filter(|active| active.epoch == epoch)
-                        .map(|active| active.phase.clone())
-                })
-                .unwrap_or_else(|| "listening".to_string());
-            emit_status(
-                &app,
-                &phase,
-                Some(&session_id),
-                Some(epoch),
-                Some(&app_name),
-                Some("session_limit_warning"),
-            );
-        }
-        while let Ok(command) = commands.try_recv() {
-            match command {
-                RuntimeCommand::Pause => {
-                    paused = true;
-                    close_streams(&mut streams);
-                    candidate_start = None;
-                    remote_start = None;
-                    candidate_connected = false;
-                    remote_connected = false;
-                    listening_pending = false;
-                }
-                RuntimeCommand::Resume => {
-                    paused = false;
-                    reconnects = provider.retry_floor();
-                    retry_at = Instant::now();
-                    // Resume is also the card's "Retry transcription". Leaving
-                    // this set makes the reconnect guard below skip forever, so
-                    // the retry emits no status at all and the card sits on the
-                    // "starting" set_paused already painted. If the credential
-                    // really is dead, the next open_streams sets it again and
-                    // re-emits the error - one honest attempt either way.
-                    credential_blocked = false;
-                    blocked_reason = None;
-                }
-                RuntimeCommand::UpdateCredentials(next_credentials) => {
-                    credentials = next_credentials;
-                    if provider.credential(&credentials).trim().is_empty() {
-                        provider = if credentials.deepgram.trim().is_empty() {
-                            TranscriptionProvider::OpenAi
-                        } else {
-                            TranscriptionProvider::Deepgram
-                        };
-                    }
-                    // A rotation is automatic and lands every ~30s. It may
-                    // unblock a genuinely expired credential, and it must NOT
-                    // forgive a provider failing for its own reasons.
-                    // Unconditionally resetting `reconnects` here is what let a
-                    // rejected dial restart from zero on every rotation and
-                    // loop for a whole interview without once reaching
-                    // MAX_RECONNECTS. Only the credential that was actually
-                    // missing can clear the block; "Retry transcription"
-                    // (RuntimeCommand::Resume) remains the explicit reset.
-                    let unblocks = match blocked_reason {
-                        Some("credential_expired") => {
-                            !provider.credential(&credentials).trim().is_empty()
-                        }
-                        // A fresh PRIMARY token cannot conjure a fallback one.
-                        Some("no_fallback_provider") => !credentials.openai.trim().is_empty(),
-                        _ => false,
-                    };
-                    if unblocks {
-                        blocked_reason = None;
-                        credential_blocked = false;
-                        reconnects = provider.retry_floor();
-                        retry_at = Instant::now();
-                    }
-                }
-                RuntimeCommand::Stop => break 'runtime,
-            }
-        }
-
-        if !paused
-            && !credential_blocked
-            && streams.is_none()
-            && reconnects < MAX_RECONNECTS
-            && Instant::now() >= retry_at
-        {
-            let next_provider = if reconnects < DEEPGRAM_RECONNECTS {
-                TranscriptionProvider::Deepgram
-            } else {
-                TranscriptionProvider::OpenAi
-            };
-            let switched_provider = provider != next_provider;
-            provider = next_provider;
-            if rebinding {
-                rebinding = false;
-            } else {
-                reconnects += 1;
-            }
-            match open_streams(provider, &credentials, &keyterms) {
-                Ok(next_streams) => {
-                    streams = Some(next_streams);
-                    stable_since = Some(Instant::now());
-                    candidate_connected = false;
-                    remote_connected = false;
-                    listening_pending = true;
-                    listening_reason = Some(if switched_provider {
-                        "fallback_openai"
-                    } else {
-                        "reconnected"
-                    });
-                }
-                Err(AsrError::NotAuthenticated | AsrError::Rejected) => {
-                    if provider == TranscriptionProvider::Deepgram
-                        && !credentials.openai.trim().is_empty()
-                    {
-                        reconnects = DEEPGRAM_RECONNECTS;
-                        retry_at = Instant::now();
-                        emit_status(
-                            &app,
-                            "degraded",
-                            Some(&session_id),
-                            Some(epoch),
-                            Some(&app_name),
-                            Some("fallback_openai"),
-                        );
-                    } else {
-                        credential_blocked = true;
-                        blocked_reason = Some(blocked_code(provider, &credentials));
-                        emit_status(
-                            &app,
-                            "error",
-                            Some(&session_id),
-                            Some(epoch),
-                            Some(&app_name),
-                            blocked_reason,
-                        );
-                    }
-                }
-                Err(error) => {
-                    let failure_code = error.category();
-                    retry_at = Instant::now()
-                        + reconnect_delay((reconnects % DEEPGRAM_RECONNECTS).saturating_add(1));
-                    emit_status(
-                        &app,
-                        // `==` left the card on "degraded" forever if the
-                        // counter ever stepped past the ceiling instead of
-                        // landing on it.
-                        if reconnects >= MAX_RECONNECTS { "error" } else { "degraded" },
-                        Some(&session_id),
-                        Some(epoch),
-                        Some(&app_name),
-                        Some(failure_code),
-                    );
-                }
-            }
-        }
-
-        let mut failure = None;
-        let mut failure_reason = None;
-        if let Some(live) = streams.as_mut() {
-            if stable_since.is_some_and(|since| since.elapsed() >= Duration::from_secs(10)) {
-                reconnects = provider.retry_floor();
-                stable_since = None;
-            }
-            if live.capture.take_overflowed() {
-                emit_status(
-                    &app,
-                    "degraded",
-                    Some(&session_id),
-                    Some(epoch),
-                    Some(&app_name),
-                    Some("audio_overflow"),
-                );
-                failure = Some(AsrError::Provider);
-                failure_reason = Some("audio_overflow");
-            }
-            while let Ok(event) = live.capture.try_recv() {
-                match event {
-                    CaptureEvent::Frame(frame) => {
-                        let pcm = to_i16(&frame.samples);
-                        let captured_at_ms = frame.captured_at_unix_ms;
-                        // In room audio the microphone carries the INTERVIEWER
-                        // (a phone on the desk, a speaker in the room), so it
-                        // feeds the question leg. The candidate's own voice
-                        // arrives on the same mic and cannot be split out
-                        // acoustically; the backend gate already skips a turn it
-                        // reads as the candidate's own speech (SKIP|self), which
-                        // is the same judgement it makes for a speakerphone on a
-                        // normal call.
-                        let to_remote = match frame.source {
-                            AudioSource::Microphone => room_audio,
-                            AudioSource::Loopback => true,
-                        };
-                        let result = if to_remote {
-                            live.remote.send_pcm(&pcm, captured_at_ms)
-                        } else {
-                            live.candidate.send_pcm(&pcm, captured_at_ms)
-                        };
-                        if let Err(error) = result {
-                            failure_reason = Some(source_failure_code(
-                                match frame.source {
-                                    AudioSource::Microphone => TranscriptSource::Candidate,
-                                    AudioSource::Loopback => TranscriptSource::Remote,
-                                },
-                                error,
-                            ));
-                            failure = Some(error);
-                            break;
-                        }
-                    }
-                    CaptureEvent::Failed { source } => {
-                        failure = Some(AsrError::Provider);
-                        failure_reason = Some(match source {
-                            AudioSource::Microphone => "candidate_device_unavailable",
-                            AudioSource::Loopback => "remote_device_unavailable",
-                        });
-                        break;
-                    }
-                    CaptureEvent::DeviceRebound { source } => {
-                        candidate_start = None;
-                        remote_start = None;
-                        // A headphone swap is not a provider failure: reopen at
-                        // once and leave the reconnect budget alone, or four
-                        // device changes walk the session to terminal `error`.
-                        rebinding = true;
-                        failure = Some(AsrError::Provider);
-                        failure_reason = Some(match source {
-                            AudioSource::Microphone => "candidate_device_switch",
-                            AudioSource::Loopback => "remote_device_switch",
-                        });
-                        break;
-                    }
-                    // A timing glitch is not a dead stream. Windows sets these
-                    // flags at stream start and whenever a render stream goes
-                    // idle and resumes, so tearing both ASR sockets down here
-                    // would burn the reconnect budget during a normal call.
-                    // Only the turn boundaries are no longer trustworthy.
-                    CaptureEvent::Glitch { .. } => {
-                        candidate_start = None;
-                        remote_start = None;
-                    }
-                    CaptureEvent::DeviceBound { .. } => {}
-                }
-            }
-            if failure.is_none() {
-                if let Some(error) = drain_asr(
-                    &app,
-                    &session_id,
-                    epoch,
-                    TranscriptSource::Candidate,
-                    &mut candidate_turn,
-                    &mut candidate_start,
-                    &mut candidate_connected,
-                    live.candidate.as_mut(),
-                ) {
-                    failure_reason = Some(source_failure_code(TranscriptSource::Candidate, error));
-                    failure = Some(error);
-                }
-                if failure.is_none() {
-                    if let Some(error) = drain_asr(
-                        &app,
-                        &session_id,
-                        epoch,
-                        TranscriptSource::Remote,
-                        &mut remote_turn,
-                        &mut remote_start,
-                        &mut remote_connected,
-                        live.remote.as_mut(),
-                    ) {
-                        failure_reason = Some(source_failure_code(TranscriptSource::Remote, error));
-                        failure = Some(error);
-                    }
-                }
-            }
-        }
-        if listening_pending && failure.is_none() && candidate_connected && remote_connected {
-            listening_pending = false;
-            emit_status(
-                &app,
-                "listening",
-                Some(&session_id),
-                Some(epoch),
-                Some(&app_name),
-                listening_reason,
-            );
-        }
-        if let Some(error) = failure {
-            let failure_code = failure_reason.unwrap_or_else(|| error.category());
-            close_streams(&mut streams);
-            stable_since = None;
-            candidate_start = None;
-            remote_start = None;
-            candidate_connected = false;
-            remote_connected = false;
-            listening_pending = false;
-            if matches!(error, AsrError::NotAuthenticated | AsrError::Rejected) {
-                if provider == TranscriptionProvider::Deepgram
-                    && !credentials.openai.trim().is_empty()
-                {
-                    reconnects = DEEPGRAM_RECONNECTS;
-                    retry_at = Instant::now();
-                    emit_status(
-                        &app,
-                        "degraded",
-                        Some(&session_id),
-                        Some(epoch),
-                        Some(&app_name),
-                        Some("fallback_openai"),
-                    );
-                } else {
-                    credential_blocked = true;
-                    blocked_reason = Some(blocked_code(provider, &credentials));
-                    emit_status(
-                        &app,
-                        "error",
-                        Some(&session_id),
-                        Some(epoch),
-                        Some(&app_name),
-                        blocked_reason,
-                    );
-                }
-            } else {
-                retry_at = if rebinding {
-                    Instant::now()
-                } else {
-                    Instant::now()
-                        + reconnect_delay((reconnects % DEEPGRAM_RECONNECTS).saturating_add(1))
-                };
-                let fallback_ready = provider == TranscriptionProvider::Deepgram
-                    && reconnects >= DEEPGRAM_RECONNECTS
-                    && !credentials.openai.trim().is_empty();
-                emit_status(
-                    &app,
-                    if reconnects >= MAX_RECONNECTS { "error" } else { "degraded" },
-                    Some(&session_id),
-                    Some(epoch),
-                    Some(&app_name),
-                    Some(if fallback_ready {
-                        "fallback_openai"
-                    } else {
-                        failure_code
-                    }),
-                );
-            }
-        }
-        // This poll loop drains capture + both ASR sockets, so its tick bounds
-        // how long a final transcript waits before emission. 5ms halves the old
-        // 10ms worst case without spinning the CPU the way 2ms would.
-        std::thread::sleep(Duration::from_millis(5));
-    }
-
-    close_streams(&mut streams);
-    stop_reason
-}
-
-#[allow(clippy::too_many_arguments)]
-fn drain_asr(
-    app: &AppHandle,
-    session_id: &str,
-    epoch: u64,
-    source: TranscriptSource,
-    turn: &mut u64,
-    started_at: &mut Option<u64>,
-    connected: &mut bool,
-    session: &mut dyn ContinuousAsrSession,
-) -> Option<AsrError> {
-    while let Some(event) = session.poll() {
-        let now = crate::meeting::now_ms().max(0) as u64;
-        match event {
-            ContinuousAsrEvent::Connected => *connected = true,
-            ContinuousAsrEvent::Partial(transcript) => {
-                if transcript.text.trim().is_empty() {
-                    continue;
-                }
-                let start_ms = *started_at.get_or_insert(now);
-                emit_transcript(
-                    app,
-                    session_id,
-                    epoch,
-                    source,
-                    *turn,
-                    start_ms,
-                    now,
-                    transcript,
-                    false,
-                );
-            }
-            ContinuousAsrEvent::Final(transcript) => {
-                if transcript.text.trim().is_empty() {
-                    *started_at = None;
-                    continue;
-                }
-                let start_ms = started_at.take().unwrap_or(now);
-                emit_transcript(
-                    app,
-                    session_id,
-                    epoch,
-                    source,
-                    *turn,
-                    start_ms,
-                    now,
-                    transcript,
-                    true,
-                );
-                *turn = turn.wrapping_add(1);
-            }
-            ContinuousAsrEvent::Failed(error) => return Some(error),
-        }
-    }
-    None
-}
-
-#[allow(clippy::too_many_arguments)]
-fn emit_transcript(
-    app: &AppHandle,
-    session_id: &str,
-    epoch: u64,
-    source: TranscriptSource,
-    turn: u64,
-    start_ms: u64,
-    end_ms: u64,
-    transcript: asr::ContinuousTranscript,
-    is_final: bool,
-) {
-    let Some(handle) = app.try_state::<InterviewHandle>() else {
-        return;
-    };
-    if !handle
-        .0
-        .lock()
-        .unwrap_or_else(|error| error.into_inner())
-        .as_ref()
-        .is_some_and(|active| active.epoch == epoch && active.session_id == session_id)
-    {
-        return;
-    }
-    let source_id = match source {
-        TranscriptSource::Candidate => "candidate",
-        TranscriptSource::Remote => "remote",
-    };
-    let _ = app.emit(
-        TRANSCRIPT_EVENT,
-        TranscriptPayload {
-            session_id: session_id.to_string(),
-            epoch,
-            turn_id: format!("{epoch}-{source_id}-{turn}"),
-            source,
-            start_ms,
-            end_ms,
-            text: transcript.text,
-            is_final,
-            remote_speaker_id: match source {
-                TranscriptSource::Candidate => None,
-                TranscriptSource::Remote => transcript
-                    .speaker_id
-                    .map(|speaker| format!("speaker-{speaker}")),
-            },
-            speaker_overlap: transcript.speaker_overlap,
-            final_word_at_ms: transcript.final_word_at_ms,
-        },
-    );
-}
-
-fn to_i16(samples: &[f32]) -> Vec<i16> {
-    samples
-        .iter()
-        .map(|sample| {
-            let scaled = sample.clamp(-1.0, 1.0) * i16::MAX as f32;
-            scaled.round() as i16
-        })
-        .collect()
 }

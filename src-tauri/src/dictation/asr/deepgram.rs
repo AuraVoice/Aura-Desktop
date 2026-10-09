@@ -32,8 +32,6 @@
 //! no code path may ever format the request, the URL, or a tungstenite error
 //! that might quote them.
 
-
-use std::collections::BTreeSet;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -47,9 +45,8 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::Connector;
 
 use super::{
-    AsrError, AsrEvent, AsrProvider, AsrSession, ContinuousAsrEvent, ContinuousAsrSession,
-    ContinuousSessionConfig, RecognitionMetrics, SessionConfig, TranscriptAccumulator,
-    WordTiming, MAX_WORDS,
+    AsrError, AsrEvent, AsrProvider, AsrSession, RecognitionMetrics, SessionConfig,
+    TranscriptAccumulator, WordTiming, MAX_WORDS,
 };
 
 const ENDPOINT: &str = "wss://api.deepgram.com/v1/listen";
@@ -72,7 +69,6 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(6);
 enum Command {
     Audio {
         bytes: Vec<u8>,
-        captured_at_ms: Option<u64>,
     },
     /// The chord came up: flush what the provider already has.
     Finalize,
@@ -120,38 +116,6 @@ impl AsrProvider for DeepgramProvider {
             connected_at,
         }))
     }
-
-    fn start_continuous(
-        &self,
-        config: ContinuousSessionConfig,
-    ) -> Result<Box<dyn ContinuousAsrSession>, AsrError> {
-        if config.credential.trim().is_empty() {
-            return Err(AsrError::NotAuthenticated);
-        }
-        let url = build_continuous_url(&config);
-        // The same session with diarization off, kept as the one retry the
-        // handshake is allowed. Built here rather than in the socket task so
-        // the socket never has to know how a URL is assembled.
-        let plain_url = config.diarize.then(|| {
-            build_continuous_url(&ContinuousSessionConfig {
-                diarize: false,
-                ..config.clone()
-            })
-        });
-        let credential = config.credential;
-        let (command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel::<Command>();
-        let (event_tx, event_rx) = std::sync::mpsc::channel::<ContinuousAsrEvent>();
-
-        tauri::async_runtime::spawn(async move {
-            run_continuous_socket(url, plain_url, credential, command_rx, event_tx).await;
-        });
-
-        Ok(Box::new(DeepgramContinuousSession {
-            commands: command_tx,
-            events: event_rx,
-            closed: false,
-        }))
-    }
 }
 
 /// Builds the handshake URL. Split out from `start` purely so it can be
@@ -184,44 +148,6 @@ fn build_url(config: &SessionConfig) -> String {
         // Do not hold interim results back for extra context. This is a
         // latency knob for exactly this kind of interactive use.
         query.append_pair("no_delay", "true");
-        for term in config.keyterms.iter().take(MAX_KEYTERMS) {
-            let trimmed = term.trim();
-            if !trimmed.is_empty() {
-                query.append_pair("keyterm", trimmed);
-            }
-        }
-    }
-    url.into()
-}
-
-fn build_continuous_url(config: &ContinuousSessionConfig) -> String {
-    let mut url = url::Url::parse(ENDPOINT).expect("the Deepgram endpoint is a valid URL");
-    {
-        let mut query = url.query_pairs_mut();
-        query.append_pair("model", MODEL);
-        query.append_pair("language", LANGUAGE);
-        query.append_pair("encoding", "linear16");
-        query.append_pair("sample_rate", &config.sample_rate.to_string());
-        query.append_pair("channels", "1");
-        query.append_pair("interim_results", "true");
-        query.append_pair("endpointing", &config.endpointing_ms.to_string());
-        query.append_pair("punctuate", "true");
-        query.append_pair("smart_format", "true");
-        query.append_pair("tag", "aura-desktop-interview");
-        query.append_pair("mip_opt_out", "true");
-        query.append_pair("no_delay", "true");
-        if config.diarize {
-            // Exactly one diarization parameter, never both. Deepgram rejects
-            // the pair outright ("diarize_model cannot be used together with
-            // diarize or diarize_version") with a 400 on the handshake, which
-            // took down the remote leg on every connect for a whole interview.
-            // `diarize_model` alone is the newer spelling but never switched
-            // diarization on here: every transcript arrived with no speaker id,
-            // so the crosstalk short-circuit and the same-speaker merge were
-            // dead. `diarize=true` is the one that actually emits per-word
-            // speaker fields on the streaming socket.
-            query.append_pair("diarize", "true");
-        }
         for term in config.keyterms.iter().take(MAX_KEYTERMS) {
             let trimmed = term.trim();
             if !trimmed.is_empty() {
@@ -293,10 +219,7 @@ impl AsrSession for DeepgramSession {
             bytes.extend_from_slice(&sample.to_le_bytes());
         }
         self.commands
-            .send(Command::Audio {
-                bytes,
-                captured_at_ms: None,
-            })
+            .send(Command::Audio { bytes })
             .map_err(|_| AsrError::Network)
     }
 
@@ -374,62 +297,6 @@ impl Drop for DeepgramSession {
     fn drop(&mut self) {
         // Dropping the command sender ends the socket task on its own, but say
         // so explicitly: an open stream is billed for as long as it is open.
-        let _ = self.commands.send(Command::Close);
-    }
-}
-
-struct DeepgramContinuousSession {
-    commands: UnboundedSender<Command>,
-    events: Receiver<ContinuousAsrEvent>,
-    closed: bool,
-}
-
-impl ContinuousAsrSession for DeepgramContinuousSession {
-    fn send_pcm(&mut self, samples: &[i16], captured_at_ms: u64) -> Result<(), AsrError> {
-        if samples.is_empty() || self.closed {
-            return Ok(());
-        }
-        let mut bytes = Vec::with_capacity(samples.len() * 2);
-        for sample in samples {
-            bytes.extend_from_slice(&sample.to_le_bytes());
-        }
-        self.commands
-            .send(Command::Audio {
-                bytes,
-                captured_at_ms: Some(captured_at_ms),
-            })
-            .map_err(|_| AsrError::Network)
-    }
-
-    fn poll(&mut self) -> Option<ContinuousAsrEvent> {
-        if self.closed {
-            return None;
-        }
-        match self.events.try_recv() {
-            Ok(event) => {
-                if matches!(event, ContinuousAsrEvent::Failed(_)) {
-                    self.closed = true;
-                }
-                Some(event)
-            }
-            Err(TryRecvError::Empty) => None,
-            Err(TryRecvError::Disconnected) => {
-                self.closed = true;
-                Some(ContinuousAsrEvent::Failed(AsrError::Network))
-            }
-        }
-    }
-
-    fn cancel(&mut self) {
-        if !self.closed {
-            let _ = self.commands.send(Command::Close);
-            self.closed = true;
-        }
-    }
-}
-
-impl Drop for DeepgramContinuousSession {
-    fn drop(&mut self) {
         let _ = self.commands.send(Command::Close);
     }
 }
@@ -680,184 +547,6 @@ impl RecognitionAccumulator {
     }
 }
 
-async fn run_continuous_socket(
-    url: String,
-    plain_url: Option<String>,
-    credential: String,
-    mut commands: UnboundedReceiver<Command>,
-    events: Sender<ContinuousAsrEvent>,
-) {
-    // Dial the configured URL, then - only if diarization was requested - the
-    // same URL without it. A provider that refuses the diarization parameters
-    // must not be able to take down the leg that hears the interviewer:
-    // speaker labels are a nice-to-have, hearing the questions IS the feature.
-    // `plain_url` is None when there is nothing to drop, so a plain leg still
-    // gets exactly one dial.
-    let attempts: Vec<String> = match plain_url {
-        Some(plain) => vec![url, plain],
-        None => vec![url],
-    };
-    let last_attempt = attempts.len() - 1;
-    let mut connected = None;
-    for (index, attempt) in attempts.into_iter().enumerate() {
-        let mut request = match attempt.into_client_request() {
-            Ok(request) => request,
-            Err(_) => {
-                let _ = events.send(ContinuousAsrEvent::Failed(AsrError::Provider));
-                return;
-            }
-        };
-        match HeaderValue::from_str(&format!("Bearer {credential}")) {
-            Ok(mut value) => {
-                value.set_sensitive(true);
-                request.headers_mut().insert("Authorization", value);
-            }
-            Err(_) => {
-                let _ = events.send(ContinuousAsrEvent::Failed(AsrError::NotAuthenticated));
-                return;
-            }
-        }
-        match tokio::time::timeout(
-            CONNECT_TIMEOUT,
-            tokio_tungstenite::connect_async_tls_with_config(
-                request,
-                None,
-                false,
-                Some(tls_connector()),
-            ),
-        )
-        .await
-        {
-            Ok(Ok((socket, response))) => {
-                info!(
-                    "dictation.asr: provider=deepgram mode=continuous phase=connect state=ready status={} diarize_dropped={}",
-                    response.status().as_u16(),
-                    index > 0
-                );
-                let _ = events.send(ContinuousAsrEvent::Connected);
-                connected = Some(socket);
-                break;
-            }
-            Ok(Err(error)) => {
-                let failure = map_handshake_error(&error);
-                let status = match &error {
-                    tokio_tungstenite::tungstenite::Error::Http(response) => {
-                        response.status().as_u16()
-                    }
-                    _ => 0,
-                };
-                warn!(
-                    "dictation.asr: provider=deepgram mode=continuous phase=connect state=failed code={} status={status}",
-                    failure.category()
-                );
-                // Only a parameter-shaped rejection is worth re-dialling. A
-                // credential the provider refused fails identically without
-                // diarization, and retrying it would just burn the budget.
-                if index < last_attempt && matches!(failure, AsrError::Provider) {
-                    continue;
-                }
-                let _ = events.send(ContinuousAsrEvent::Failed(failure));
-                return;
-            }
-            Err(_) => {
-                warn!(
-                    "dictation.asr: provider=deepgram mode=continuous phase=connect state=failed code=network status=0"
-                );
-                let _ = events.send(ContinuousAsrEvent::Failed(AsrError::Network));
-                return;
-            }
-        }
-    }
-    drop(credential);
-    let Some(socket) = connected else {
-        let _ = events.send(ContinuousAsrEvent::Failed(AsrError::Provider));
-        return;
-    };
-
-    let (mut sink, mut stream) = socket.split();
-    let mut accumulator = TranscriptAccumulator::new();
-    let mut keepalive = tokio::time::interval(Duration::from_secs(5));
-    let mut last_audio_at = Instant::now();
-    let mut audio_started_at_ms = None;
-    let mut turn_metadata = ContinuousTurnMetadata::default();
-    keepalive.tick().await;
-    loop {
-        tokio::select! {
-            command = commands.recv() => {
-                match command {
-                    Some(Command::Audio { bytes, captured_at_ms }) => {
-                        last_audio_at = Instant::now();
-                        if audio_started_at_ms.is_none() {
-                            audio_started_at_ms = captured_at_ms;
-                        }
-                        if sink.send(Message::Binary(bytes.into())).await.is_err() {
-                            let _ = events.send(ContinuousAsrEvent::Failed(AsrError::Network));
-                            break;
-                        }
-                    }
-                    Some(Command::Close) | None => {
-                        let _ = sink
-                            .send(Message::Text(r#"{"type":"CloseStream"}"#.into()))
-                            .await;
-                        break;
-                    }
-                    Some(Command::Finalize) => {}
-                }
-            }
-            _ = keepalive.tick() => {
-                if last_audio_at.elapsed() < Duration::from_secs(3) {
-                    continue;
-                }
-                if sink
-                    .send(Message::Text(r#"{"type":"KeepAlive"}"#.into()))
-                    .await
-                    .is_err()
-                {
-                    let _ = events.send(ContinuousAsrEvent::Failed(AsrError::Network));
-                    break;
-                }
-            }
-            incoming = stream.next() => {
-                match incoming {
-                    Some(Ok(Message::Text(payload))) => {
-                        match interpret_continuous(&payload, &mut accumulator, &mut turn_metadata) {
-                            ContinuousInterpretation::Partial => {
-                                let _ = events.send(ContinuousAsrEvent::Partial(
-                                    turn_metadata.transcript(accumulator.displayed(), audio_started_at_ms),
-                                ));
-                            }
-                            ContinuousInterpretation::Final => {
-                                let final_text = accumulator.finalized();
-                                if !final_text.is_empty() {
-                                    let _ = events.send(ContinuousAsrEvent::Final(
-                                        turn_metadata.transcript(final_text, audio_started_at_ms),
-                                    ));
-                                }
-                                accumulator = TranscriptAccumulator::new();
-                                turn_metadata = ContinuousTurnMetadata::default();
-                            }
-                            ContinuousInterpretation::Failed => {
-                                let _ = events.send(ContinuousAsrEvent::Failed(AsrError::Provider));
-                                break;
-                            }
-                            ContinuousInterpretation::Ignored => {}
-                        }
-                    }
-                    Some(Ok(Message::Close(_))) | None => {
-                        let _ = events.send(ContinuousAsrEvent::Failed(AsrError::Network));
-                        break;
-                    }
-                    Some(Ok(_)) => {}
-                    Some(Err(_)) => {
-                        let _ = events.send(ContinuousAsrEvent::Failed(AsrError::Network));
-                        break;
-                    }
-                }
-            }
-        }
-    }
-}
-
 /// A handshake failure that names the credential as the cause has to be told
 /// apart from a network one, because only the first is worth re-minting for.
 fn map_handshake_error(error: &tokio_tungstenite::tungstenite::Error) -> AsrError {
@@ -912,8 +601,6 @@ struct Word {
     end: Option<f64>,
     #[serde(default)]
     confidence: Option<f64>,
-    #[serde(default)]
-    speaker: Option<u32>,
 }
 
 #[derive(serde::Deserialize)]
@@ -934,10 +621,6 @@ struct ServerFrame {
     /// and nothing else, ends the utterance.
     #[serde(default)]
     from_finalize: bool,
-    /// Provider endpointing marks a completed spoken turn with this field.
-    /// Dictation ignores it; the continuous interview path consumes it.
-    #[serde(default)]
-    speech_final: bool,
     /// On the Metadata frame: the provider's own handle for this stream.
     #[serde(default)]
     request_id: Option<String>,
@@ -1000,96 +683,6 @@ fn interpret_frame(
         }
         "Error" => Interpretation::Failed,
         _ => Interpretation::Ignored,
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ContinuousInterpretation {
-    Partial,
-    Final,
-    Failed,
-    Ignored,
-}
-
-#[derive(Default)]
-struct ContinuousTurnMetadata {
-    speakers: BTreeSet<u32>,
-    latest_word_end_s: Option<f64>,
-}
-
-impl ContinuousTurnMetadata {
-    fn include(&mut self, alternative: &Alternative) {
-        for word in &alternative.words {
-            if let Some(speaker) = word.speaker {
-                self.speakers.insert(speaker);
-            }
-            if let Some(end) = word.end.filter(|end| end.is_finite() && *end >= 0.0) {
-                self.latest_word_end_s = Some(
-                    self.latest_word_end_s
-                        .map_or(end, |current| current.max(end)),
-                );
-            }
-        }
-    }
-
-    fn transcript(
-        &self,
-        text: String,
-        audio_started_at_ms: Option<u64>,
-    ) -> super::ContinuousTranscript {
-        let speaker_overlap = self.speakers.len() > 1;
-        let speaker_id = if speaker_overlap {
-            None
-        } else {
-            self.speakers.iter().next().copied()
-        };
-        let final_word_at_ms = audio_started_at_ms.zip(self.latest_word_end_s).map(
-            |(started_at_ms, end_s)| {
-                started_at_ms.saturating_add((end_s * 1_000.0).round() as u64)
-            },
-        );
-        super::ContinuousTranscript {
-            text,
-            speaker_id,
-            speaker_overlap,
-            final_word_at_ms,
-        }
-    }
-}
-
-fn interpret_continuous(
-    payload: &str,
-    accumulator: &mut TranscriptAccumulator,
-    metadata: &mut ContinuousTurnMetadata,
-) -> ContinuousInterpretation {
-    let Ok(frame) = serde_json::from_str::<ServerFrame>(payload) else {
-        return ContinuousInterpretation::Ignored;
-    };
-    match frame.kind.as_str() {
-        "Results" => {
-            let alternative = frame
-                .channel
-                .as_ref()
-                .and_then(|channel| channel.alternatives.first());
-            let transcript = alternative
-                .map(|alternative| alternative.transcript.as_str())
-                .unwrap_or("");
-            if frame.is_final || frame.speech_final {
-                accumulator.push_settled(transcript);
-                if let Some(alternative) = alternative {
-                    metadata.include(alternative);
-                }
-            } else {
-                accumulator.push_interim(transcript);
-            }
-            if frame.speech_final {
-                ContinuousInterpretation::Final
-            } else {
-                ContinuousInterpretation::Partial
-            }
-        }
-        "Error" => ContinuousInterpretation::Failed,
-        _ => ContinuousInterpretation::Ignored,
     }
 }
 

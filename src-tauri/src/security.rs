@@ -116,13 +116,13 @@ pub enum Operation {
     CaptureScreen,
     CaptureTurnScreen,
     CaptureChatScreen,
-    CaptureInterviewScreen,
     CaptureRegion,
     CaptureGuide,
     PointAt,
     DesktopControl,
     ArmScreenSight,
     StartMeetingCapture,
+    /// The interview preparation slots and the prep export (interview.rs).
     StartInterviewHacker,
     QueueSnapshot,
     ReadSegment,
@@ -250,14 +250,6 @@ impl SecurityState {
             // attachment on, with the frame shown before it is sent.
             // Guide still excludes it, same as the other capture modes.
             Operation::CaptureChatScreen => {
-                if self.guide_armed {
-                    return Err(Denied::ModeConflict);
-                }
-            }
-            // Interview Companion has no global armed mode. Its explicit
-            // one-shot button is the authorizing gesture, and the capture
-            // command separately requires a live Interview Companion session.
-            Operation::CaptureInterviewScreen => {
                 if self.guide_armed {
                     return Err(Denied::ModeConflict);
                 }
@@ -626,7 +618,6 @@ pub fn session_changed(app: &AppHandle, signed_in: bool, uid: Option<String>) {
     }
     if transition.revoked {
         crate::meeting::request_stop(app, "signed_out");
-        crate::interview::request_stop(app, "signed_out");
         // A browser task acting for account A must not keep acting once B is
         // (or nobody is) signed in.
         crate::agent_browser::request_stop(app, "signed_out");
@@ -662,11 +653,6 @@ pub fn session_changed(app: &AppHandle, signed_in: bool, uid: Option<String>) {
     // its cap. Deleting here destroyed data that existed nowhere else (2026-10-05).
     // The local chat transcript is per-account.
     crate::chat_cache::retain_only_for_session(app, session_uid.clone());
-    // Stored interview sessions are uid-scoped on every read and uid-bound in
-    // every AAD, so like dictation history below this does not delete the other
-    // account's interviews; it only ages out their rows and clips past 90 days.
-    // The backend never holds these transcripts, so a delete here is permanent.
-    crate::interview_store::retain_only_for_session(app, session_uid.clone());
     // Preparations are per-account too, and the reviewed brief has to be in
     // the Rust slot before either window asks for it, so the same boundary
     // that ages out the other account's rows also hydrates this one's.
@@ -813,11 +799,10 @@ mod tests {
         s
     }
 
-    const GATED_OPS: [Operation; 18] = [
+    const GATED_OPS: [Operation; 17] = [
         Operation::CaptureScreen,
         Operation::CaptureTurnScreen,
         Operation::CaptureChatScreen,
-        Operation::CaptureInterviewScreen,
         Operation::CaptureRegion,
         Operation::CaptureGuide,
         Operation::PointAt,

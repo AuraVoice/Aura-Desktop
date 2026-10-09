@@ -193,9 +193,6 @@ export interface MeetingCaptureState {
 interface MeetingCaptureInputs {
   uid: string | null;
   appHidden: boolean;
-  /** The Interview Companion is running, so a capture started now is an
-   * interview and the claim says so; the note then carries a debrief. */
-  interviewLive?: boolean;
 }
 
 /**
@@ -212,7 +209,7 @@ interface MeetingCaptureInputs {
  * and a Record press, whose outcome the card reports.
  */
 export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureState {
-  const { uid, appHidden, interviewLive = false } = inputs;
+  const { uid, appHidden } = inputs;
 
   const [recording, setRecording] = useState(false);
   const [paused, setPaused] = useState(false);
@@ -227,8 +224,6 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
   uidRef.current = uid;
   const appHiddenRef = useRef(appHidden);
   appHiddenRef.current = appHidden;
-  const interviewLiveRef = useRef(interviewLive);
-  interviewLiveRef.current = interviewLive;
   const identityEpochRef = useRef(0);
 
   const recordingRef = useRef(false);
@@ -366,7 +361,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
               endTime,
               installationId: runtimeStatus.installationId,
               runtimeInstanceId: runtimeStatus.runtimeInstanceId,
-              kind: interviewLiveRef.current ? "interview" : "auto",
+              kind: "auto",
             });
             if (!isCurrent()) return "skipped";
             claimsRef.current.set(eventId, claim);

@@ -151,7 +151,6 @@ fn handle_downloaded(app: &AppHandle, update: Update, bytes: Vec<u8>, auto_insta
     if auto_install
         && !overlay::is_voice_active(app)
         && !meeting::is_capture_active(app)
-        && !crate::interview::is_active(app)
         && !crate::agent_browser::is_active(app)
     {
         info!("update check: installing v{} at startup", update.version);
@@ -209,10 +208,6 @@ pub fn install_pending_update(app: &AppHandle) -> Result<bool, String> {
     }
     if meeting::is_capture_active(app) {
         info!("install_pending_update: meeting capture active, deferring install");
-        return Ok(false);
-    }
-    if crate::interview::is_active(app) {
-        info!("install_pending_update: Interview Companion active, deferring install");
         return Ok(false);
     }
     if crate::agent_browser::is_active(app) {

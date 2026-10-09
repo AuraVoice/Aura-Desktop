@@ -9,8 +9,6 @@ import {
   CHAT_REQUESTED,
   CHAT_TOGGLE_REQUESTED,
   END_VOICE_SESSION,
-  INTERVIEW_CARD_KEY,
-  OPEN_INTERVIEW_HACKER_REQUESTED,
   OPEN_NOTIFICATIONS_REQUESTED,
   OVERLAY_CHANGED,
   START_VOICE_REQUESTED,
@@ -46,21 +44,6 @@ import { ActionApprovalCard } from "./ActionApprovalCard";
 import { usePendingActions } from "./usePendingActions";
 import { PENDING_ACTION_TOOLS, type PendingActionTool } from "../lib/pendingActions";
 import { useInterviewContext } from "./interview/useInterviewContext";
-import {
-  isInterviewCaptureActive,
-  useInterviewHacker,
-} from "./interview/useInterviewHacker";
-import {
-  InterviewHackerCard,
-  InterviewHackerControlBar,
-  InterviewHotkeyMenu,
-  INTERVIEW_HOTKEY_MENU_SLOT_HEIGHT,
-  INTERVIEW_HACKER_SLOT_HEIGHT,
-  INTERVIEW_HACKER_PITCH_SLOT_HEIGHT,
-  INTERVIEW_HACKER_PREFLIGHT_SLOT_HEIGHT,
-  INTERVIEW_HACKER_BRIEF_MENU_SLOT_HEIGHT,
-  INTERVIEW_HACKER_LONG_ANSWER_SLOT_HEIGHT,
-} from "./interview/InterviewHackerCard";
 import {
   InterviewContextCard,
   INITIAL_INTERVIEW_CONTEXT_SLOT_HEIGHT,
@@ -138,26 +121,6 @@ export function OverlayRoot() {
   const chatEnabled = user !== null;
   const voice = useVoiceBar();
   const [voiceStartupSlow, setVoiceStartupSlow] = useState(false);
-  const interviewHacker = useInterviewHacker(user !== null);
-  const showInterviewHacker = interviewHacker.phase !== "idle";
-  const [interviewHackerHidden, setInterviewHackerHidden] = useState(false);
-  const interviewHackerPhase = interviewHacker.phase;
-  const dismissInterviewHacker = interviewHacker.dismiss;
-  const [interviewKeysMenuOpen, setInterviewKeysMenuOpen] = useState(false);
-  const closeInterviewKeysMenu = useCallback(() => setInterviewKeysMenuOpen(false), []);
-  useEffect(() => {
-    if (!showInterviewHacker) {
-      setInterviewHackerHidden(false);
-      setInterviewKeysMenuOpen(false);
-    }
-  }, [showInterviewHacker]);
-  // Ctrl+Alt+B: the same toggle as the control bar's Hide button. The other
-  // card keys are the hook's; this state lives here.
-  useTauriEvent<{ action: string }>(INTERVIEW_CARD_KEY, ({ action }) => {
-    if (action !== "toggleHide") return;
-    setInterviewHackerHidden((hidden) => !hidden);
-    setInterviewKeysMenuOpen(false);
-  }, "OverlayRoot: interview card key");
   useScreenSight(voice.room, voice.status);
   // Ctrl+Alt+M. Mounted here rather than inside useVoiceBar because the mode
   // outlives any one call: it persists, and it rides the next token.
@@ -187,7 +150,7 @@ export function OverlayRoot() {
     }
   }, [voice.status]);
   useStatusPillEvents();
-  const visibleChatOpen = chatEnabled && chatOpen && !showInterviewHacker;
+  const visibleChatOpen = chatEnabled && chatOpen;
   const chatOpenRef = useRef(visibleChatOpen);
   chatOpenRef.current = visibleChatOpen;
   const screenCapture = useChatScreenCapture(visibleChatOpen, generalSettings.chatScreenshots);
@@ -411,21 +374,18 @@ export function OverlayRoot() {
   const meetingCapture = useMeetingCapture({
     uid: user?.uid ?? null,
     appHidden: presentation !== "bar",
-    // A capture started while the companion is live is an interview, and the
-    // claim says so up front so the note comes back as a debrief.
-    interviewLive: showInterviewHacker,
   });
   // Daily drain of the dictation sharing queue. Mounted here rather than in
   // the dashboard because the overlay is the window that is always alive;
   // the dashboard is built on demand and would only upload while open.
   // dictationSharingActive is the only thing that may decide this: the two
   // toggles mean nothing without the consent version they were recorded under.
-  // Busy holds uploads off the network while a call, a meeting recording or an
-  // interview is live, since a catch-up drain can now run in the daytime.
+  // Busy holds uploads off the network while a call or a meeting recording is
+  // live, since a catch-up drain can now run in the daytime.
   useDictationUpload(
     user?.uid ?? null,
     dictationSharingActive(generalSettings),
-    callLive || meetingCapture.recording || interviewHacker.phase !== "idle",
+    callLive || meetingCapture.recording,
   );
   // Circle to ask: holds the crop from the region gesture for the preview chip.
   const regionCapture = useRegionCapture(user !== null);
@@ -471,7 +431,7 @@ export function OverlayRoot() {
     signedIn: user !== null,
     uid: user?.uid ?? null,
     appHidden: presentation !== "bar",
-    busy: callLive || showInterviewHacker || meetingCapture.recording,
+    busy: callLive || meetingCapture.recording,
   });
   const [inboxOpen, setInboxOpen] = useState(false);
   // Swarm memory lives on this computer; a report notice is the cue to pull what the
@@ -489,15 +449,13 @@ export function OverlayRoot() {
   const showVoiceNotice =
     user !== null
     && voiceNoticeMessage !== null
-    && !showInterviewHacker
     && !showInterviewContext;
   // An approval card outranks chat and every card below it: the user just asked
   // for this post, and it expires if it waits behind anything. It never covers
-  // a live Interview Companion or the job-description box that session asked for.
+  // the job-description box a live Interview Mode session asked for.
   const showApprovalCard =
     user !== null
     && pendingActions.current !== null
-    && !showInterviewHacker
     && !showInterviewContext;
   const [approvalCardHeight, setApprovalCardHeight] = useState(INITIAL_DRAFT_SLOT_HEIGHT);
   const lowerCardsHidden = visibleChatOpen || showApprovalCard;
@@ -507,15 +465,12 @@ export function OverlayRoot() {
   const showBrowserTask =
     user !== null
     && (browserTask.live || browserTask.approval !== null || browserTask.result !== null)
-    && !showInterviewHacker
     && !showInterviewContext
     && !showVoiceNotice
     && !showDraftCard;
 
-  // Slot priority (CLAUDE.md): active Interview Companion > chat > voice recovery
-  // > draft > inbox > update > daily catch-up. The live companion must keep its capture
-  // indicator and stop control visible; outside that explicit session, chat
-  // keeps its existing priority because the user may be mid-sentence.
+  // Slot priority (CLAUDE.md): chat > voice recovery > draft > inbox > update >
+  // daily catch-up. Chat keeps its priority because the user may be mid-sentence.
   // The interview paste box sits directly under chat and above everything else:
   // a live voice session has just told the user out loud to look at it, so a
   // draft or an update banner taking the slot would leave that line unanswered.
@@ -525,8 +480,8 @@ export function OverlayRoot() {
   // The "Record this meeting?" card sits under the interview surfaces and the
   // draft: it is a 15 s question, so it must not queue behind the inbox or a
   // banner, and a draft only exists during a voice call, where the prompt is
-  // suppressed anyway. The hook already hides itself for a live call, a live
-  // Interview Companion, an active capture, or a non-notch presentation.
+  // suppressed anyway. The hook already hides itself for a live call, an active
+  // capture, or a non-notch presentation.
   const meetingPrompt = useMeetingPrompt({
     uid: user?.uid ?? null,
     ownsRuntime: meetingCapture.ownsRuntime,
@@ -535,14 +490,12 @@ export function OverlayRoot() {
     presentation,
     dictationHold,
     callLive,
-    interviewLive: showInterviewHacker,
     chatOpen: visibleChatOpen,
     recordCall: meetingCapture.recordCall,
   });
   const showMeetingPrompt =
     user !== null
     && meetingPrompt.visible
-    && !showInterviewHacker
     && !showInterviewContext
     && !showVoiceNotice
     && !showDraftCard
@@ -553,7 +506,6 @@ export function OverlayRoot() {
   const meetingPromptOnScreen =
     showMeetingPrompt
     || (meetingPromptPresence.leaving
-      && !showInterviewHacker
       && !showInterviewContext
       && !showVoiceNotice
       && !showDraftCard
@@ -564,7 +516,6 @@ export function OverlayRoot() {
   const showScreenContextConsent =
     user !== null
     && screenContextRequested
-    && !showInterviewHacker
     && !showInterviewContext
     && !showVoiceNotice
     && !showDraftCard
@@ -577,7 +528,6 @@ export function OverlayRoot() {
   const showRegionPreview =
     user !== null
     && regionCapture.preview !== null
-    && !showInterviewHacker
     && !showInterviewContext
     && !showVoiceNotice
     && !showDraftCard
@@ -587,7 +537,6 @@ export function OverlayRoot() {
   const showInbox =
     user !== null
     && inboxOpen
-    && !showInterviewHacker
     && !showVoiceNotice
     && !showDraftCard
     && !showInterviewContext
@@ -599,7 +548,6 @@ export function OverlayRoot() {
     user !== null
     && (updateReady.version !== null || updateReady.updatedNotice !== null)
     && !callLive
-    && !showInterviewHacker
     && !showInterviewContext
     && !showVoiceNotice
     && !showDraftCard
@@ -611,7 +559,6 @@ export function OverlayRoot() {
   const showCallbackCard =
     user !== null
     && callbackCard.visible
-    && !showInterviewHacker
     && !showInterviewContext
     && !showVoiceNotice
     && !showDraftCard
@@ -621,28 +568,7 @@ export function OverlayRoot() {
     && !showRegionPreview
     && !showInbox
     && !showUpdateBanner;
-  // The opening pitch needs room the resting card does not have, so the slot
-  // grows while it is expanded and returns when it auto-collapses.
-  // A walkthrough script is roughly twice a normal answer, and the thread
-  // scrolls, so this is headroom for reading it without scrolling mid-call
-  // rather than a hard requirement.
-  const interviewLongAnswer = interviewHacker.answerIntent === "project_walkthrough"
-    && (interviewHacker.drafting || interviewHacker.answer.trim() !== "");
-  const interviewHackerHeight = interviewHacker.pitch !== null && interviewHacker.pitchExpanded
-    ? INTERVIEW_HACKER_PITCH_SLOT_HEIGHT
-    : interviewLongAnswer
-      ? INTERVIEW_HACKER_LONG_ANSWER_SLOT_HEIGHT
-    : interviewHacker.briefMenuOpen
-      ? INTERVIEW_HACKER_BRIEF_MENU_SLOT_HEIGHT
-      : interviewHacker.phase === "preflight"
-        ? INTERVIEW_HACKER_PREFLIGHT_SLOT_HEIGHT
-        : INTERVIEW_HACKER_SLOT_HEIGHT;
-  // The hotkey menu hangs below the control bar, so while it is open the slot
-  // is at least its height, collapsed card included.
-  const interviewKeysMenuHeight = interviewKeysMenuOpen ? INTERVIEW_HOTKEY_MENU_SLOT_HEIGHT : 0;
-  const slotHeight = showInterviewHacker
-    ? interviewHackerHidden ? interviewKeysMenuHeight : Math.max(interviewHackerHeight, interviewKeysMenuHeight)
-    : showInterviewContext
+  const slotHeight = showInterviewContext
       ? interviewSlotHeight
       : showApprovalCard
         ? approvalCardHeight
@@ -681,7 +607,7 @@ export function OverlayRoot() {
 
   useEffect(() => {
     let cancelled = false;
-    invoke("set_slot_height", { height: appliedSlotHeight, centered: showInterviewHacker })
+    invoke("set_slot_height", { height: appliedSlotHeight })
       .then(() => {
         if (!cancelled && appliedSlotHeight === null) {
           return invoke("dismiss_idle_bar");
@@ -691,7 +617,7 @@ export function OverlayRoot() {
     return () => {
       cancelled = true;
     };
-  }, [appliedSlotHeight, showInterviewHacker]);
+  }, [appliedSlotHeight]);
 
   // The subtitle used to be the only place notices surfaced. With it gone,
   // route the ones that matter - an actionable voice error, the voice shortcut
@@ -733,8 +659,8 @@ export function OverlayRoot() {
   }, [unreadCount]);
 
   // The separate dictation HUD is Aura's persistent resting pill. The larger
-  // main waveform is only a live voice surface and must not remain after chat,
-  // Interview Companion, or another temporary slot closes. Clear the retired
+  // main waveform is only a live voice surface and must not remain after chat
+  // or another temporary slot closes. Clear the retired
   // preference in native state as well so an existing enabled value cannot
   // keep the main bar visible during this process.
   useEffect(() => {
@@ -749,20 +675,6 @@ export function OverlayRoot() {
     OPEN_NOTIFICATIONS_REQUESTED,
     () => setInboxOpen(true),
     "OverlayRoot: listen open-notifications-requested",
-  );
-
-  // Tray entry point for the explicit preflight. It closes chat so the
-  // microphone/call source labels cannot be hidden beneath the higher-priority
-  // composer while the user is deciding whether to start capture.
-  const openInterviewPreflight = interviewHacker.openPreflight;
-  useTauriEvent(
-    OPEN_INTERVIEW_HACKER_REQUESTED,
-    () => {
-      setChatOpen(false);
-      setInboxOpen(false);
-      openInterviewPreflight();
-    },
-    "OverlayRoot: listen open-interview-hacker-requested",
   );
 
   // Tray "Capture now" item. Same hand-off shape as the notifications item
@@ -959,15 +871,6 @@ export function OverlayRoot() {
         setChatHistoryOpen(false);
         return;
       }
-      // Escape must never kill a live capture, but it stays the way out of the
-      // preflight, the error state, and the reflection card - those suppress
-      // chat and every other slot surface, so without this they are inescapable.
-      if (showInterviewHacker) {
-        if (!isInterviewCaptureActive(interviewHackerPhase)) {
-          dismissInterviewHacker();
-        }
-        return;
-      }
       setChatOpen(false);
       void endSession();
       invoke("dismiss_bar").catch((err) =>
@@ -981,30 +884,18 @@ export function OverlayRoot() {
     endSession,
     visibleChatOpen,
     chatHistoryOpen,
-    showInterviewHacker,
-    interviewHackerPhase,
-    dismissInterviewHacker,
   ]);
-
-  // Active capture always keeps a visible native indicator and stop control.
-  useEffect(() => {
-    if (!showInterviewHacker || presentation !== "hidden") return;
-    invoke("summon_bar").catch((err) =>
-      logError("OverlayRoot: keep Interview Companion visible", err),
-    );
-  }, [presentation, showInterviewHacker]);
 
   // A click on the overlay borrows the foreground from the app the user was
   // working in (WebView2 needs it to deliver the click at all); this gives it
   // back once the click is handled, so their caret and typing resume. Rust
   // owns the hand-back (win_focus::yield_focus, a no-op on macOS where the
   // panel never took focus). Kept for anything the user types into or steers
-  // with keys: text fields, open menus and dialogs, and the whole Interview
-  // Companion card. The Panel is excluded in Rust as well.
+  // with keys: text fields, open menus and dialogs, and the Interview Mode
+  // context card. The Panel is excluded in Rust as well.
   useEffect(() => {
     if (!user || presentation === "panel") return;
     const KEEPS_FOCUS =
-      ".interview-hacker-card, .interview-hacker-control-bar, .interview-hacker-brief-menu-surface, " +
       '.interview-context-card, [role="menu"], [role="dialog"], [role="listbox"]';
     const CLICK_ONLY_INPUTS = ["button", "submit", "reset", "checkbox", "radio", "file", "range"];
     const isEditable = (el: Element | null) =>
@@ -1054,8 +945,6 @@ export function OverlayRoot() {
     <div
       className={`notch-column notch-column-${notchEdge}${
         appliedSlotHeight !== null ? " notch-column-with-draft" : ""
-      }${showInterviewHacker ? " notch-column-interview" : ""
-      }${showInterviewHacker && interviewHackerHidden ? " notch-column-interview-collapsed" : ""
       }`}
     >
       {showApprovalCard && (
@@ -1084,10 +973,7 @@ export function OverlayRoot() {
           onHeightChange={setChatSlotHeight}
         />
       )}
-      {!lowerCardsHidden &&showInterviewHacker && !interviewHackerHidden && (
-        <InterviewHackerCard hacker={interviewHacker} />
-      )}
-      {!lowerCardsHidden &&!showInterviewHacker && showInterviewContext && (
+      {!lowerCardsHidden && showInterviewContext && (
         <InterviewContextCard
           card={interviewContext}
           onHeightChange={setInterviewSlotHeight}
@@ -1131,7 +1017,6 @@ export function OverlayRoot() {
         />
       )}
       {!lowerCardsHidden
-        && !showInterviewHacker
         && !showInterviewContext
         && !showVoiceNotice
         && showDraftCard && (
@@ -1170,36 +1055,15 @@ export function OverlayRoot() {
         />
       )}
       {!lowerCardsHidden &&showCallbackCard && <CallbackCard card={callbackCard} />}
-      {showInterviewHacker ? (
-        <>
-        <InterviewHackerControlBar
-          expanded={!interviewHackerHidden}
-          onToggle={() => setInterviewHackerHidden((hidden) => !hidden)}
-          answerMode={interviewHacker.answerMode}
-          onAnswerModeChange={interviewHacker.setAnswerMode}
-          keysMenuOpen={interviewKeysMenuOpen}
-          onKeysMenuToggle={() => setInterviewKeysMenuOpen((open) => !open)}
-          onStop={
-            isInterviewCaptureActive(interviewHacker.phase) || interviewHacker.phase === "error"
-              ? interviewHacker.stop
-              : ["ended", "reflecting", "reflection"].includes(interviewHacker.phase)
-                ? interviewHacker.dismissReflection
-                : interviewHacker.dismiss
-          }
-        />
-        {interviewKeysMenuOpen && <InterviewHotkeyMenu onClose={closeInterviewKeysMenu} />}
-        </>
-      ) : (
-        <NotchBar
-          key={presentation}
-          voice={voice}
-          edge={notchEdge}
-          dragHandlers={notchMove.dragHandlers}
-          guideArmed={guide.armed}
-          guideActive={guide.active}
-          outputMuted={outputMode.muted}
-        />
-      )}
+      <NotchBar
+        key={presentation}
+        voice={voice}
+        edge={notchEdge}
+        dragHandlers={notchMove.dragHandlers}
+        guideArmed={guide.armed}
+        guideActive={guide.active}
+        outputMuted={outputMode.muted}
+      />
     </div>
   );
 }

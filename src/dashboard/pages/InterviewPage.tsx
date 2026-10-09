@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { invoke } from "@tauri-apps/api/core";
 import {
   AlertTriangle,
   ArrowRight,
@@ -9,7 +8,6 @@ import {
   Building2,
   CheckCircle2,
   ClipboardPaste,
-  Download,
   FileText,
   History,
   Loader2,
@@ -44,8 +42,6 @@ import {
 } from "../../lib/interviewPolicy";
 import {
   InterviewBriefError,
-  InterviewReflectionError,
-  createInterviewReflection,
   streamInterviewBrief,
   streamInterviewCompanyResearch,
   streamInterviewPrep,
@@ -73,19 +69,7 @@ import {
   type InterviewWorkspace,
   type InterviewWorkspaceRecord,
 } from "../../lib/interviewWorkspace";
-import {
-  interviewSessionAudioUrl,
-  listInterviewSessions,
-  loadInterviewSession,
-  deleteInterviewSession,
-  clearInterviewSessions,
-  saveInterviewReflection,
-  type InterviewSessionSummary,
-  type InterviewSessionDetail,
-  type StoredReflection,
-} from "../../lib/interviewSessions";
 import { logError } from "../../lib/log";
-import { shortDateTime } from "../format";
 import { useAuth } from "../../state/AuthProvider";
 import "./InterviewPage.css";
 
@@ -103,7 +87,7 @@ const EMPTY_INPUT: InterviewPreparationInput = {
   answerLength: "balanced",
 };
 
-type InterviewPageTab = "current" | "preparation" | "sessions";
+type InterviewPageTab = "current" | "preparation";
 
 const UPDATED_AT_FORMATTER = new Intl.DateTimeFormat(undefined, {
   month: "short",
@@ -1401,411 +1385,6 @@ function InterviewHistoryPanel({
   );
 }
 
-const ROUND_LABEL: Record<string, string> = Object.fromEntries(
-  ROUND_KIND_OPTIONS.map((option) => [option.value, option.label]),
-);
-
-function sessionDurationMinutes(session: InterviewSessionSummary): number {
-  return Math.max(0, Math.round((session.endedAtMs - session.startedAtMs) / 60_000));
-}
-
-/** Past interview rounds, read from the local encrypted store. Unlike the
- * Preparation tab (saved briefs), these are the actual transcripts and answers
- * from sessions the user ran. Local-only: the backend never held them. */
-function ReflectionList({ title, items }: { title: string; items: string[] }) {
-  if (items.length === 0) return null;
-  return (
-    <>
-      <h5>{title}</h5>
-      <ul>{items.map((item) => <li key={item}>{item}</li>)}</ul>
-    </>
-  );
-}
-
-/** Same markdown the overlay writes, so a reflection downloaded here and one
- *  downloaded from the card are byte-identical. */
-function reflectionMarkdown(reflection: StoredReflection): string {
-  const section = (title: string, items: string[]) =>
-    items.length > 0
-      ? `\n## ${title}\n\n${items.map((item) => `- ${item}`).join("\n")}\n`
-      : "";
-  return `# Interview reflection\n\n${reflection.summary}\n`
-    + section("Strengths", reflection.strengths)
-    + section("Improve next time", reflection.improvements)
-    + section("Follow-up actions", reflection.followUpActions);
-}
-
-function downloadReflection(reflection: StoredReflection): void {
-  void invoke<{ path: string }>("save_interview_reflection", {
-    markdown: reflectionMarkdown(reflection),
-  }).catch((error) => logError("InterviewPage: download reflection", error));
-}
-
-/** Reflect on a session that is already saved. The card is the only other
- *  place Reflect exists, and it is gone once closed, so a session whose
- *  reflection failed (or was never asked for) had no way to get one. */
-function ReflectSessionButton({
-  uid,
-  detail,
-  onReflected,
-}: {
-  uid: string;
-  detail: InterviewSessionDetail;
-  onReflected: (reflection: StoredReflection) => void;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const reflect = () => {
-    setBusy(true);
-    setError(null);
-    createInterviewReflection({
-      sessionId: detail.sessionId,
-      startedAtMs: detail.startedAtMs,
-      endedAtMs: detail.endedAtMs,
-      // Stored turns keep one timestamp on the card's own session clock, which
-      // is all the reflection reads besides source and text.
-      turns: detail.turns.map((turn) => ({
-        sessionId: detail.sessionId,
-        epoch: 1,
-        turnId: String(turn.seq),
-        source: turn.source,
-        startMs: turn.atMs,
-        endMs: turn.atMs,
-        text: turn.text,
-        isFinal: true,
-      })),
-      exchanges: detail.exchanges.map(({ question, answer }) => ({ question, answer })),
-      brief: null,
-    })
-      .then(async (reflection) => {
-        await saveInterviewReflection(uid, detail.sessionId, reflection);
-        onReflected(reflection);
-      })
-      .catch((cause) => {
-        logError("InterviewPage: reflect on session", cause);
-        setError(cause instanceof InterviewReflectionError && cause.rejected
-          ? "Aura could not send this transcript for a reflection."
-          : "Aura could not reach its reflection service. Try again in a moment.");
-      })
-      .finally(() => setBusy(false));
-  };
-
-  return (
-    <div className="db-interview-session-block db-interview-reflection">
-      <div className="db-interview-reflection-head">
-        <h4>Reflection</h4>
-        <button
-          type="button"
-          className="db-interview-reflection-download"
-          disabled={busy}
-          onClick={reflect}
-        >
-          {busy
-            ? <Loader2 size={14} className="db-interview-spin" aria-hidden />
-            : <Sparkles size={14} aria-hidden />}
-          {busy ? "Reflecting..." : "Reflect"}
-        </button>
-      </div>
-      {error
-        ? <p role="alert">{error}</p>
-        : <p>What went well, what to sharpen, and what to do next, from this transcript.</p>}
-    </div>
-  );
-}
-
-/** Lazy on purpose. Loading a session's audio decrypts and decodes every chunk
- *  of it, so doing that for each row as the list renders would cost a whole
- *  history's worth of work to show players nobody pressed. The fetch happens on
- *  the click, and the object URL is revoked when the row unmounts. */
-function InterviewAudioPlayer({ uid, sessionId }: { uid: string; sessionId: string }) {
-  const [url, setUrl] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (url) URL.revokeObjectURL(url);
-    };
-  }, [url]);
-
-  if (url) {
-    return <audio className="db-interview-audio" controls src={url} preload="none" />;
-  }
-  return (
-    <div className="db-interview-audio-load">
-      <button
-        type="button"
-        disabled={loading}
-        onClick={() => {
-          setLoading(true);
-          setError(null);
-          interviewSessionAudioUrl(uid, sessionId)
-            .then(setUrl)
-            .catch((cause: unknown) => {
-              // The recording can be gone while the row is still here: retention
-              // evicts clips and keeps transcripts. Say which it is rather than
-              // offering a retry that cannot help.
-              setError(typeof cause === "string" ? cause : "Recording unavailable.");
-            })
-            .finally(() => setLoading(false));
-        }}
-      >
-        {loading ? "Loading recording..." : "Play recording"}
-      </button>
-      {error && <p role="alert">{error}</p>}
-    </div>
-  );
-}
-
-function InterviewSessionsPanel({ uid }: { uid: string | null }) {
-  const [sessions, setSessions] = useState<InterviewSessionSummary[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [detail, setDetail] = useState<InterviewSessionDetail | null>(null);
-  const [detailOpen, setDetailOpen] = useState(false);
-  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
-  const [confirmingClear, setConfirmingClear] = useState(false);
-
-  useEffect(() => {
-    if (!uid) {
-      setSessions([]);
-      setLoading(false);
-      return;
-    }
-    let active = true;
-    setLoading(true);
-    listInterviewSessions(uid)
-      .then((rows) => {
-        if (active) setSessions(rows);
-      })
-      .catch((error) => logError("InterviewPage: list sessions", error))
-      .finally(() => {
-        if (active) setLoading(false);
-      });
-    return () => {
-      active = false;
-    };
-  }, [uid]);
-
-  const openDetail = (sessionId: string) => {
-    if (!uid) return;
-    setDetailOpen(true);
-    setDetail(null);
-    loadInterviewSession(uid, sessionId)
-      .then((loaded) => setDetail(loaded))
-      .catch((error) => logError("InterviewPage: load session", error));
-  };
-
-  const removeSession = (sessionId: string) => {
-    if (!uid) return;
-    setPendingDeleteId(null);
-    setSessions((current) => current.filter((row) => row.sessionId !== sessionId));
-    deleteInterviewSession(uid, sessionId).catch((error) =>
-      logError("InterviewPage: delete session", error),
-    );
-  };
-
-  const clearAll = () => {
-    if (!uid) return;
-    setConfirmingClear(false);
-    setSessions([]);
-    clearInterviewSessions(uid).catch((error) =>
-      logError("InterviewPage: clear sessions", error),
-    );
-  };
-
-  const detailTitle = detail
-    ? `${detail.company?.trim() || "Interview"}${detail.role ? ` · ${detail.role}` : ""}`
-    : "Interview session";
-
-  return (
-    <section
-      id="interview-sessions-panel"
-      className="db-interview-history ph-no-capture"
-      role="tabpanel"
-      aria-labelledby="interview-sessions-tab"
-    >
-      <div className="db-interview-section-head">
-        <div>
-          <span className="db-interview-eyebrow">Past rounds</span>
-          <h2>Interview sessions</h2>
-          <p>The transcript and answers from each session you ran, kept on this device. Last 25 sessions or 90 days.</p>
-        </div>
-        {sessions.length > 0 && (
-          confirmingClear ? (
-            <div className="db-interview-delete-confirm" role="alert">
-              <p>Delete every stored session on this device?</p>
-              <div>
-                <button type="button" onClick={() => setConfirmingClear(false)}>Cancel</button>
-                <button type="button" className="is-danger" onClick={clearAll}>
-                  <Trash2 size={13} aria-hidden />
-                  Delete all
-                </button>
-              </div>
-            </div>
-          ) : (
-            <button type="button" className="db-interview-delete-button" onClick={() => setConfirmingClear(true)}>
-              <Trash2 size={15} aria-hidden />
-              Delete all
-            </button>
-          )
-        )}
-      </div>
-
-      {loading ? (
-        <div className="db-interview-history-empty">
-          <Loader2 size={22} className="db-interview-spin" aria-hidden />
-          <div><strong>Loading sessions...</strong></div>
-        </div>
-      ) : sessions.length === 0 ? (
-        <div className="db-interview-history-empty">
-          <History size={22} aria-hidden />
-          <div>
-            <strong>No sessions yet</strong>
-            <span>Run Interview Companion and stop it, and the round will appear here.</span>
-          </div>
-        </div>
-      ) : (
-        <div className="db-interview-history-grid">
-          {sessions.map((session) => {
-            const isConfirmingDelete = pendingDeleteId === session.sessionId;
-            return (
-              <article key={session.sessionId} className="db-interview-history-card">
-                <div className="db-interview-history-card-top">
-                  <span className="db-interview-company-icon"><Building2 size={17} aria-hidden /></span>
-                  <span className="db-interview-history-status">
-                    {ROUND_LABEL[session.roundKind] ?? session.roundKind}
-                  </span>
-                </div>
-                <div className="db-interview-history-copy">
-                  <h3>{session.company?.trim() || "Interview"}</h3>
-                  <p>{session.role?.trim() || "Role not recorded"}</p>
-                </div>
-                <div className="db-interview-history-meta">
-                  <span>{shortDateTime(new Date(session.startedAtMs).toISOString())}</span>
-                  <span>{session.exchangeCount} answers</span>
-                  <span>{sessionDurationMinutes(session)} min</span>
-                  {session.hasReflection && <span>Reflection</span>}
-                  {session.hasAudio && <span>Recording</span>}
-                </div>
-
-                {session.hasAudio && uid && (
-                  <InterviewAudioPlayer uid={uid} sessionId={session.sessionId} />
-                )}
-
-                {isConfirmingDelete ? (
-                  <div className="db-interview-delete-confirm" role="alert">
-                    <p>Delete this session's transcript from this device?</p>
-                    <div>
-                      <button type="button" onClick={() => setPendingDeleteId(null)}>Cancel</button>
-                      <button type="button" className="is-danger" onClick={() => removeSession(session.sessionId)}>
-                        <Trash2 size={13} aria-hidden />
-                        Delete
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="db-interview-history-actions">
-                    <button type="button" className="db-interview-open-button" onClick={() => openDetail(session.sessionId)}>
-                      Open transcript
-                      <ArrowRight size={14} aria-hidden />
-                    </button>
-                    <button
-                      type="button"
-                      className="db-interview-delete-button"
-                      aria-label="Delete session"
-                      title="Delete session"
-                      onClick={() => setPendingDeleteId(session.sessionId)}
-                    >
-                      <Trash2 size={15} aria-hidden />
-                    </button>
-                  </div>
-                )}
-              </article>
-            );
-          })}
-        </div>
-      )}
-
-      <DetailModal open={detailOpen} title={detailTitle} onClose={() => setDetailOpen(false)}>
-        {!detail ? (
-          <div className="db-interview-session-detail-loading">
-            <Loader2 size={20} className="db-interview-spin" aria-hidden />
-            Loading transcript...
-          </div>
-        ) : (
-          <div className="db-interview-session-detail">
-            {!detail.reflection && detail.turns.length > 0 && uid && (
-              <ReflectSessionButton
-                key={detail.sessionId}
-                uid={uid}
-                detail={detail}
-                onReflected={(reflection) => {
-                  setDetail((current) => current?.sessionId === detail.sessionId
-                    ? { ...current, reflection, reflectionAtMs: Date.now() }
-                    : current);
-                  setSessions((current) => current.map((row) => row.sessionId === detail.sessionId
-                    ? { ...row, hasReflection: true }
-                    : row));
-                }}
-              />
-            )}
-            {detail.reflection && (
-              <div className="db-interview-session-block db-interview-reflection">
-                <div className="db-interview-reflection-head">
-                  <h4>Reflection</h4>
-                  <button
-                    type="button"
-                    className="db-interview-reflection-download"
-                    onClick={() => downloadReflection(detail.reflection!)}
-                  >
-                    <Download size={14} aria-hidden />
-                    Download
-                  </button>
-                </div>
-                <p>{detail.reflection.summary}</p>
-                <ReflectionList title="Strengths" items={detail.reflection.strengths} />
-                <ReflectionList title="Improve next time" items={detail.reflection.improvements} />
-                <ReflectionList title="Follow-up actions" items={detail.reflection.followUpActions} />
-              </div>
-            )}
-            {detail.exchanges.length > 0 && (
-              <div className="db-interview-session-block">
-                <h4>Questions and answers</h4>
-                {detail.exchanges.map((exchange) => (
-                  <div key={`ex-${exchange.seq}`} className="db-interview-session-qa">
-                    <p className="db-interview-session-q">{exchange.question}</p>
-                    <p className="db-interview-session-a">
-                      {exchange.unverified && (
-                        <span className="db-interview-session-unverified">Not from brief</span>
-                      )}
-                      {exchange.answer}
-                    </p>
-                  </div>
-                ))}
-              </div>
-            )}
-            {detail.turns.length > 0 && (
-              <div className="db-interview-session-block">
-                <h4>Full transcript</h4>
-                {detail.turns.map((turn) => (
-                  <p
-                    key={`turn-${turn.seq}`}
-                    className={`db-interview-session-turn is-${turn.source}`}
-                  >
-                    <span>{turn.source === "candidate" ? "You" : "Interviewer"}</span>
-                    {turn.text}
-                  </p>
-                ))}
-              </div>
-            )}
-          </div>
-        )}
-      </DetailModal>
-    </section>
-  );
-}
-
 export function InterviewPage() {
   const { user } = useAuth();
   const uid = user?.uid ?? null;
@@ -2317,7 +1896,6 @@ export function InterviewPage() {
         tabs={[
           { value: "current", label: "Current interview", Icon: BriefcaseBusiness },
           { value: "preparation", label: "Preparation", Icon: FileText, count: history.length },
-          { value: "sessions", label: "Sessions", Icon: History },
         ]}
         value={stage.tab}
         onChange={stage.switchTab}
@@ -2328,9 +1906,7 @@ export function InterviewPage() {
       <div className={`db-tab-stage is-${stage.transition}`}>
       {error && <div className="db-interview-error">{error}</div>}
 
-      {stage.renderedTab === "sessions" ? (
-        <InterviewSessionsPanel uid={uid} />
-      ) : stage.renderedTab === "preparation" ? (
+      {stage.renderedTab === "preparation" ? (
         <InterviewHistoryPanel
           interviews={history}
           activeInterviewId={workspace.activeInterviewId}

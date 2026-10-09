@@ -51,7 +51,6 @@ export interface MeetingPromptInputs {
   presentation: OverlayPresentation;
   dictationHold: boolean;
   callLive: boolean;
-  interviewLive: boolean;
   chatOpen: boolean;
   recordCall: (
     call: AmbientCallPayload,
@@ -100,9 +99,8 @@ export function matchEvent(events: UpcomingMeeting[], now: number): UpcomingMeet
  * would outlive the call (native Zoom calls all share a key) and a restart
  * mid-call asking once more is the better failure.
  *
- * Suppression is deferral, never a decision: a live voice call, a running
- * Interview Companion, an active capture, or a presentation other than the
- * hidden/bar pair hides the card, and it returns with a fresh clock once the
+ * Suppression is deferral, never a decision: a live voice call, an active
+ * capture, or a presentation other than the hidden/bar pair hides the card, and it returns with a fresh clock once the
  * suppressor lifts if the call is still there. A dictation hold or an open
  * chat only pauses the clock, because the card is still mounted underneath.
  */
@@ -115,7 +113,6 @@ export function useMeetingPrompt(inputs: MeetingPromptInputs): MeetingPromptStat
     presentation,
     dictationHold,
     callLive,
-    interviewLive,
     chatOpen,
     recordCall,
   } = inputs;
@@ -304,7 +301,6 @@ export function useMeetingPrompt(inputs: MeetingPromptInputs): MeetingPromptStat
     uid === null
     || recording
     || callLive
-    || interviewLive
     || (presentation !== "hidden" && presentation !== "bar");
 
   useEffect(() => {

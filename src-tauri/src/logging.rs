@@ -59,7 +59,7 @@ pub fn install_panic_hook() {
 fn panicking_thread_handles_speech() -> bool {
     matches!(
         std::thread::current().name(),
-        Some("aura-dictation" | "aura-interview")
+        Some("aura-dictation")
     )
 }
 

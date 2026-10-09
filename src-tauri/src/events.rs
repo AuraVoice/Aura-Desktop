@@ -73,16 +73,6 @@ pub const MEETING_CALL_GONE: &str = "meeting-call-gone";
 pub const MEETING_CALL_REKEYED: &str = "meeting-call-rekeyed";
 
 // interview.rs
-pub const INTERVIEW_HACKER_STATUS: &str = "interview-hacker-status";
-pub const INTERVIEW_HACKER_TRANSCRIPT: &str = "interview-hacker-transcript";
-/// The Screen Sight hotkey pressed while an interview is live. Fires the
-/// interview's own one-shot capture rather than the voice arming toggle: a
-/// silent AI interview has no speech to arm anything for, and reaching the
-/// overlay with the mouse can blur the interview window.
-pub const INTERVIEW_SCREEN_SIGHT_REQUESTED: &str = "interview-screen-sight-requested";
-/// The other Interview Companion card keys (hotkeys.rs CARD_KEYS):
-/// `{ action: "queue" | "answerNow" | "toggleHide" | "scroll", dy }`.
-pub const INTERVIEW_CARD_KEY: &str = "interview-card-key";
 pub const INTERVIEW_BRIEF_UPDATED: &str = "interview-brief-updated";
 pub const INTERVIEW_RESUME_UPDATED: &str = "interview-resume-updated";
 
@@ -97,7 +87,6 @@ pub const BROWSER_TASK_APPROVAL: &str = "browser-task-approval";
 // tray.rs
 pub const OPEN_NOTIFICATIONS_REQUESTED: &str = "open-notifications-requested";
 pub const CAPTURE_NOW_REQUESTED: &str = "capture-now-requested";
-pub const OPEN_INTERVIEW_HACKER_REQUESTED: &str = "open-interview-hacker-requested";
 
 // updater.rs, toast.rs, connector_oauth.rs, dashboard.rs, status_pill.rs
 pub const UPDATE_READY: &str = "update-ready";

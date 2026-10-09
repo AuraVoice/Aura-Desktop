@@ -1,6 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::str::FromStr;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -89,129 +88,6 @@ const SPECS: [HotkeySpec; 6] = [
     HotkeySpec { id: "signOut", label: "Sign out", default_accelerator: "Control+Alt+KeyQ" },
 ];
 
-/// What one Interview Companion card key does. These keys are not in SPECS:
-/// they are held only while the card is on screen (`set_card_keys`), are not
-/// rebindable, and give their keys back the moment the card closes. The arrows
-/// are VS Code's add-cursor and JetBrains' Back/Forward keys, so holding them
-/// all session would break both editors.
-#[derive(Clone, Copy, PartialEq)]
-enum CardKey {
-    Nudge(f64, f64),
-    Scroll(f64),
-    Send,
-    Queue,
-    AnswerNow,
-    ToggleHide,
-}
-
-struct CardKeySpec {
-    shift: bool,
-    key: Code,
-    action: CardKey,
-    /// Shown in the card's hotkey menu. Rows sharing a label are one row there.
-    label: &'static str,
-}
-
-/// How far one Ctrl+Alt+Arrow press moves the card, in logical px.
-const NUDGE_STEP: f64 = 50.0;
-/// How far one Ctrl+Alt+Shift+Up/Down press scrolls the answer, in CSS px.
-const SCROLL_STEP: f64 = 240.0;
-const MOVE_LABEL: &str = "Move the card (hold to glide)";
-
-/// Menu order: the keys used most during an answer first.
-const CARD_KEYS: [CardKeySpec; 10] = [
-    CardKeySpec { shift: false, key: Code::KeyS, action: CardKey::Send, label: "Send your screen and anything typed" },
-    CardKeySpec { shift: false, key: Code::KeyH, action: CardKey::Queue, label: "Add a screenshot to the next send" },
-    CardKeySpec { shift: false, key: Code::Enter, action: CardKey::AnswerNow, label: "Answer now" },
-    CardKeySpec { shift: false, key: Code::KeyB, action: CardKey::ToggleHide, label: "Hide or show the card" },
-    CardKeySpec { shift: true, key: Code::ArrowUp, action: CardKey::Scroll(-SCROLL_STEP), label: "Scroll the answer (hold to keep going)" },
-    CardKeySpec { shift: true, key: Code::ArrowDown, action: CardKey::Scroll(SCROLL_STEP), label: "Scroll the answer (hold to keep going)" },
-    CardKeySpec { shift: false, key: Code::ArrowLeft, action: CardKey::Nudge(-NUDGE_STEP, 0.0), label: MOVE_LABEL },
-    CardKeySpec { shift: false, key: Code::ArrowUp, action: CardKey::Nudge(0.0, -NUDGE_STEP), label: MOVE_LABEL },
-    CardKeySpec { shift: false, key: Code::ArrowRight, action: CardKey::Nudge(NUDGE_STEP, 0.0), label: MOVE_LABEL },
-    CardKeySpec { shift: false, key: Code::ArrowDown, action: CardKey::Nudge(0.0, NUDGE_STEP), label: MOVE_LABEL },
-];
-
-fn card_shortcut(spec: &CardKeySpec) -> Shortcut {
-    let mods = if spec.shift {
-        Modifiers::CONTROL | Modifiers::ALT | Modifiers::SHIFT
-    } else {
-        Modifiers::CONTROL | Modifiers::ALT
-    };
-    Shortcut::new(Some(mods), spec.key)
-}
-
-fn card_spec_for(shortcut: &Shortcut) -> Option<&'static CardKeySpec> {
-    CARD_KEYS.iter().find(|spec| card_shortcut(spec) == *shortcut)
-}
-
-/// What React does with a card key. Send keeps its own event
-/// (INTERVIEW_SCREEN_SIGHT_REQUESTED), shared with the Screen Sight binding.
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct CardKeyEvent {
-    action: &'static str,
-    dy: f64,
-}
-
-fn emit_card_key(app: &AppHandle, action: &'static str, dy: f64) {
-    if let Err(e) = app.emit(crate::events::INTERVIEW_CARD_KEY, CardKeyEvent { action, dy }) {
-        log::error!("hotkeys: emit interview card key {action} failed: {e}");
-    }
-}
-
-/// Holding a move or scroll key keeps going. MOD_NOREPEAT means the OS never
-/// repeats the press, so Aura drives the repeat itself from Pressed until
-/// Released (global-hotkey polls for the release every 50 ms on Windows). Any
-/// new press or release bumps the generation, which ends the running repeat.
-static CARD_HOLD: AtomicU64 = AtomicU64::new(0);
-/// Matches a keyboard's own repeat delay, so a quick tap is one clean step.
-const HOLD_REPEAT_DELAY: Duration = Duration::from_millis(350);
-/// Per 16 ms tick, about 600 px a second.
-const NUDGE_REPEAT_EVERY: Duration = Duration::from_millis(16);
-const NUDGE_REPEAT_STEP: f64 = 10.0;
-/// Slower than the glide: each tick is a smooth scroll in the webview.
-const SCROLL_REPEAT_EVERY: Duration = Duration::from_millis(120);
-/// A release that never arrives must not keep going forever.
-const HOLD_REPEAT_CAP: Duration = Duration::from_secs(15);
-
-/// One repeat step of a held card key.
-type HoldTick = Box<dyn Fn(&AppHandle) + Send>;
-
-fn start_card_hold(app: &AppHandle, action: CardKey) {
-    let generation = CARD_HOLD.fetch_add(1, Ordering::Relaxed) + 1;
-    let (every, tick): (Duration, HoldTick) = match action {
-        CardKey::Nudge(dx, dy) => {
-            overlay::nudge_centered_slot(app, dx, dy);
-            let (step_x, step_y) = (dx / NUDGE_STEP * NUDGE_REPEAT_STEP, dy / NUDGE_STEP * NUDGE_REPEAT_STEP);
-            (NUDGE_REPEAT_EVERY, Box::new(move |app| overlay::nudge_centered_slot(app, step_x, step_y)))
-        }
-        CardKey::Scroll(dy) => {
-            emit_card_key(app, "scroll", dy);
-            (SCROLL_REPEAT_EVERY, Box::new(move |app| emit_card_key(app, "scroll", dy / 2.0)))
-        }
-        _ => return,
-    };
-    let app = app.clone();
-    let spawned = std::thread::Builder::new()
-        .name("aura-card-hold".to_string())
-        .spawn(move || {
-            std::thread::sleep(HOLD_REPEAT_DELAY);
-            let started = Instant::now();
-            while CARD_HOLD.load(Ordering::Relaxed) == generation && started.elapsed() < HOLD_REPEAT_CAP {
-                tick(&app);
-                std::thread::sleep(every);
-            }
-        });
-    if let Err(e) = spawned {
-        log::error!("hotkeys: could not start the interview card key repeat: {e}");
-    }
-}
-
-fn stop_card_hold() {
-    CARD_HOLD.fetch_add(1, Ordering::Relaxed);
-}
-
 struct HotkeyRuntime {
     bindings: BTreeMap<String, Shortcut>,
     voice_binding: Option<Shortcut>,
@@ -219,7 +95,6 @@ struct HotkeyRuntime {
     chat_enabled: bool,
     testing: BTreeMap<String, (String, Instant)>,
     test_registered: BTreeSet<String>,
-    card_registered: Vec<Shortcut>,
 }
 
 pub struct HotkeyState(Mutex<HotkeyRuntime>);
@@ -243,7 +118,6 @@ impl Default for HotkeyState {
             chat_enabled: false,
             testing: BTreeMap::new(),
             test_registered: BTreeSet::new(),
-            card_registered: Vec::new(),
         }))
     }
 }
@@ -403,15 +277,6 @@ fn validate_shortcut(shortcut: Shortcut) -> Result<(), String> {
 /// saying "another Aura action". `skip_id` is the binding being edited, which
 /// must not count as a conflict with itself.
 fn conflicting_label(runtime: &HotkeyRuntime, candidate: Shortcut, skip_id: &str) -> Option<String> {
-    // Refused even while no interview is open: a binding on one of these would
-    // silently stop working the moment the card appears and takes the key.
-    // Screen Sight may sit on Ctrl+Alt+S (it is its default); anything else
-    // would be swallowed by the card whenever it is up.
-    if let Some(spec) = card_spec_for(&candidate) {
-        if !(spec.action == CardKey::Send && skip_id == "screenSight") {
-            return Some(format!("Interview Companion's \"{}\"", spec.label));
-        }
-    }
     if skip_id != "voice" && runtime.voice_binding == Some(candidate) {
         return Some(VOICE_LABEL.to_string());
     }
@@ -788,63 +653,6 @@ pub fn set_chat_enabled(app: &AppHandle, enabled: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// Holds the Interview Companion card keys (CARD_KEYS) exactly while its card
-/// is on screen. Called from overlay::set_slot_height, the one place the card
-/// appears and disappears. A key another app already owns is logged and
-/// skipped so the others still work, and is retried on the next call. Send is
-/// skipped when Screen Sight is itself bound to Ctrl+Alt+S: that binding's own
-/// registration already delivers the press, and `handle` routes it to Send.
-pub fn set_card_keys(app: &AppHandle, enabled: bool) {
-    if !enabled {
-        stop_card_hold();
-    }
-    let state = app.state::<HotkeyState>();
-    let mut runtime = state.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    for spec in &CARD_KEYS {
-        let shortcut = card_shortcut(spec);
-        let held = runtime.card_registered.contains(&shortcut);
-        if enabled && !held {
-            if runtime.bindings.values().any(|binding| *binding == shortcut) {
-                continue;
-            }
-            match app.global_shortcut().register(shortcut) {
-                Ok(()) => runtime.card_registered.push(shortcut),
-                Err(e) => log::warn!("hotkeys: could not register interview card key {shortcut} ({e}); another app holds it"),
-            }
-        } else if !enabled && held {
-            if let Err(e) = app.global_shortcut().unregister(shortcut) {
-                log::error!("hotkeys: could not release interview card key {shortcut}: {e}");
-            }
-            runtime.card_registered.retain(|registered| *registered != shortcut);
-        }
-    }
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct CardHotkeyView {
-    keys: Vec<String>,
-    label: String,
-    registered: bool,
-}
-
-/// The card's hotkey menu. `registered` is the live truth, so a key another app
-/// took shows as taken rather than as a key that silently does nothing.
-#[tauri::command]
-pub fn interview_card_hotkeys(state: tauri::State<'_, HotkeyState>) -> Vec<CardHotkeyView> {
-    let runtime = state.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    CARD_KEYS.iter().map(|spec| {
-        let shortcut = card_shortcut(spec);
-        let via_binding = runtime.bindings.iter()
-            .any(|(id, binding)| *binding == shortcut && runtime.registered.contains(id));
-        CardHotkeyView {
-            keys: keys_for(shortcut),
-            label: spec.label.to_string(),
-            registered: runtime.card_registered.contains(&shortcut) || via_binding,
-        }
-    }).collect()
-}
-
 fn cleanup_test_registrations(app: &AppHandle, runtime: &mut HotkeyRuntime) {
     let orphaned: Vec<String> = runtime.test_registered.iter()
         .filter(|id| !runtime.testing.values().any(|(action, _)| action == *id))
@@ -882,20 +690,6 @@ pub fn intercept_voice_test(app: &AppHandle) -> bool {
 }
 
 pub fn handle(app: &AppHandle, shortcut: &Shortcut) {
-    // Card keys act only while the card shows. Otherwise fall through: Screen
-    // Sight's own binding may be Ctrl+Alt+S and must still toggle.
-    if let Some(spec) = card_spec_for(shortcut) {
-        if overlay::interview_card_showing(app) {
-            match spec.action {
-                CardKey::Nudge(..) | CardKey::Scroll(_) => start_card_hold(app, spec.action),
-                CardKey::Send => emit_interview_send(app),
-                CardKey::Queue => emit_card_key(app, "queue", 0.0),
-                CardKey::AnswerNow => emit_card_key(app, "answerNow", 0.0),
-                CardKey::ToggleHide => emit_card_key(app, "toggleHide", 0.0),
-            }
-            return;
-        }
-    }
     let state = app.state::<HotkeyState>();
     let action = {
         let mut runtime = state.0.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -919,34 +713,10 @@ pub fn handle(app: &AppHandle, shortcut: &Shortcut) {
             if let Err(e) = dashboard::toggle_dashboard_window(app) { log::error!("hotkeys: toggle dashboard failed: {e}"); }
         }
         Some("signOut") => overlay::sign_out_requested(app),
-        Some("screenSight") => {
-            // During an interview this key means "look at my screen NOW", not
-            // "arm screen context for the next spoken voice turn". The latter
-            // is meaningless in an interview and is useless in one with no
-            // audio at all, where this is the only trigger that does not need
-            // the mouse on the overlay.
-            if crate::interview::is_active(app) || overlay::interview_card_showing(app) {
-                emit_interview_send(app);
-            } else {
-                security::toggle_screen_sight(app);
-            }
-        }
+        Some("screenSight") => security::toggle_screen_sight(app),
         Some("guide") => guide::toggle(app),
         Some("outputMute") => overlay::request_output_mute_toggle(app),
         _ => {}
-    }
-}
-
-fn emit_interview_send(app: &AppHandle) {
-    if let Err(e) = app.emit(crate::events::INTERVIEW_SCREEN_SIGHT_REQUESTED, ()) {
-        log::error!("hotkeys: emit interview screen sight failed: {e}");
-    }
-}
-
-/// Only the card's move and scroll keys care about release: it ends their repeat.
-pub fn handle_release(shortcut: &Shortcut) {
-    if card_spec_for(shortcut).is_some() {
-        stop_card_hold();
     }
 }
 

@@ -43,12 +43,6 @@ pub(crate) const NOTCH_CROSS: f64 = 29.0;
 // via set_slot_height). On Top/Bottom the card grows the window along its height; on
 // Left/Right it sits beside the notch and grows the window along its width.
 const CARD_CROSS: f64 = 380.0;
-const INTERVIEW_HACKER_WIDTH: f64 = 720.0;
-// Must agree with InterviewHackerCard.css (.interview-hacker-control-bar
-// width/height) and NotchBar.css's 52px interview grid rows + 8px row-gap.
-const INTERVIEW_CONTROL_WIDTH: f64 = 324.0;
-const INTERVIEW_CONTROL_HEIGHT: f64 = 52.0;
-const INTERVIEW_CONTROL_GAP: f64 = 8.0;
 // Gap between the notch and an open card (matches the CSS grid gap).
 pub(crate) const NOTCH_GAP: f64 = 6.0;
 const SETUP_WIDTH: f64 = 600.0;
@@ -174,8 +168,6 @@ pub struct OverlayState {
     // booleans collapsed into this single field once the priority tiebreak
     // moved entirely into OverlayRoot.tsx.
     slot_height: Option<f64>,
-    centered_slot: bool,
-    centered_slot_anchor: Option<(f64, f64)>,
     user_center: Option<(f64, f64)>,
     notch_edge: NotchEdge,
     // What was last successfully applied to the real window. Written only
@@ -207,8 +199,6 @@ impl Default for OverlayState {
             onboarding_step: OnboardingStep::Welcome,
             voice_active: false,
             slot_height: None,
-            centered_slot: false,
-            centered_slot_anchor: None,
             user_center: None,
             notch_edge: NotchEdge::default(),
             applied: None,
@@ -230,7 +220,6 @@ struct AppliedBounds {
     presentation: OverlayPresentation,
     variant: PanelVariant,
     slot_height: Option<f64>,
-    centered_slot: bool,
     notch_edge: NotchEdge,
     dictation_hold: bool,
 }
@@ -242,7 +231,6 @@ impl OverlayState {
             presentation: self.presentation,
             variant: self.panel_variant,
             slot_height: self.slot_height,
-            centered_slot: self.centered_slot,
             notch_edge: self.notch_edge,
             dictation_hold: self.dictation_hold,
         }
@@ -721,17 +709,14 @@ pub(crate) fn bar_size(edge: NotchEdge, slot: Option<f64>) -> LogicalSize<f64> {
 
 /// How far the Bar window reaches inward from its docked edge, notch plus any
 /// open slot card. The dictation HUD steps aside by this rather than by the
-/// resting notch alone: a chat composer, draft, or Interview Companion card
-/// grows the bar inward from the SAME edge, and a fixed notch-sized offset
-/// would put the HUD on top of it.
+/// resting notch alone: a chat composer or a draft card grows the bar inward
+/// from the SAME edge, and a fixed notch-sized offset would put the HUD on top
+/// of it.
 pub(crate) fn bar_cross_extent(app: &AppHandle) -> f64 {
     let Some(handle) = state_handle(app) else {
         return NOTCH_CROSS;
     };
     let state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
-    if state.centered_slot {
-        return NOTCH_CROSS;
-    }
     let size = bar_size(state.notch_edge, state.slot_height);
     if state.notch_edge.is_vertical() {
         size.width
@@ -795,8 +780,6 @@ fn default_companion_position(window: &WebviewWindow) -> LogicalPosition<f64> {
 /// reentrancy note at the top of the function).
 struct PositionSnapshot {
     presentation: OverlayPresentation,
-    centered_slot: bool,
-    centered_slot_anchor: Option<(f64, f64)>,
     notch_edge: NotchEdge,
     user_center: Option<(f64, f64)>,
     slot_height: Option<f64>,
@@ -810,16 +793,6 @@ fn position_for(
     // The notch docks to one of four screen edges (persisted as an edge, not a
     // position). A card grows the window inward from that edge. The notch ignores
     // the companion's persisted drag center entirely.
-    if snap.presentation == OverlayPresentation::Bar && snap.centered_slot {
-        let (work_pos, work_size) = active_display_work_area(window);
-        return snap.centered_slot_anchor.map_or_else(
-            || LogicalPosition::new(
-                work_pos.x + (work_size.width - size.width) / 2.0,
-                work_pos.y,
-            ),
-            |(center_x, top_y)| LogicalPosition::new(center_x - size.width / 2.0, top_y),
-        );
-    }
     if snap.presentation == OverlayPresentation::Bar {
         let (work_pos, work_size) = active_display_work_area(window);
         return bar_position(snap.notch_edge, work_pos, work_size, size);
@@ -848,9 +821,6 @@ fn position_for(
 
 fn size_for(state: &OverlayState) -> LogicalSize<f64> {
     match (state.presentation, state.panel_variant) {
-        (OverlayPresentation::Bar, _) if state.centered_slot => {
-            centered_slot_size(state.slot_height)
-        }
         (OverlayPresentation::Bar, _) => bar_size(state.notch_edge, state.slot_height),
         (OverlayPresentation::Companion, _) => LogicalSize::new(
             COMPANION_WIDTH,
@@ -865,15 +835,6 @@ fn size_for(state: &OverlayState) -> LogicalSize<f64> {
         }
         _ => LogicalSize::new(COMPANION_WIDTH, COMPANION_HEIGHT),
     }
-}
-
-fn centered_slot_size(slot: Option<f64>) -> LogicalSize<f64> {
-    let slot_height = slot.unwrap_or(0.0);
-    LogicalSize::new(
-        if slot_height > 0.0 { INTERVIEW_HACKER_WIDTH } else { INTERVIEW_CONTROL_WIDTH },
-        INTERVIEW_CONTROL_HEIGHT
-            + if slot_height > 0.0 { INTERVIEW_CONTROL_GAP + slot_height } else { 0.0 },
-    )
 }
 
 pub fn snapshot(app: &AppHandle) -> OverlaySnapshot {
@@ -935,7 +896,6 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
         let presentation = state.presentation;
         let panel_variant = state.panel_variant;
         let slot_height = state.slot_height;
-        let centered_slot = state.centered_slot;
         let notch_edge = state.notch_edge;
         let dictation_hold = state.dictation_hold;
         drop(state);
@@ -949,7 +909,6 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
                 presentation,
                 variant: panel_variant,
                 slot_height,
-                centered_slot,
                 notch_edge,
                 dictation_hold,
             });
@@ -966,7 +925,6 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
     let presentation = state.presentation;
     let panel_variant = state.panel_variant;
     let slot_height = state.slot_height;
-    let centered_slot = state.centered_slot;
     let notch_edge = state.notch_edge;
     let dictation_hold = state.dictation_hold;
     // Every visible presentation, the Bar included, hides the dictation HUD.
@@ -983,8 +941,6 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
     let size = size_for(&state);
     let snapshot = PositionSnapshot {
         presentation,
-        centered_slot,
-        centered_slot_anchor: state.centered_slot_anchor,
         notch_edge,
         user_center: state.user_center,
         slot_height,
@@ -1046,7 +1002,6 @@ fn apply_result(app: &AppHandle) -> Result<(), String> {
             presentation,
             variant: panel_variant,
             slot_height,
-            centered_slot,
             notch_edge,
             dictation_hold,
         });
@@ -1490,84 +1445,11 @@ pub fn set_panel_variant(app: &AppHandle, variant: PanelVariant) {
 
 /// The draft slot's extra height, driven by React. The height is remembered
 /// across a temporary pointing takeover.
-pub fn set_slot_height(app: &AppHandle, height: Option<f64>, centered: bool) {
-    let mut centered_slot = false;
+pub fn set_slot_height(app: &AppHandle, height: Option<f64>) {
     if let Some(handle) = state_handle(app) {
-        let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
-        state.slot_height = height;
-        state.centered_slot = centered && height.is_some();
-        centered_slot = state.centered_slot;
+        handle.0.lock().unwrap_or_else(|e| e.into_inner()).slot_height = height;
     }
     apply(app);
-    crate::hotkeys::set_card_keys(app, centered_slot);
-}
-
-/// Whether the Interview Companion card (expanded or collapsed) is the Bar's
-/// slot right now. While it is, Ctrl+Alt+S means Send rather than Screen Sight.
-pub fn interview_card_showing(app: &AppHandle) -> bool {
-    state_handle(app).is_some_and(|handle| {
-        let state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
-        state.presentation == OverlayPresentation::Bar && state.centered_slot
-    })
-}
-
-/// One Ctrl+Alt+Arrow step for the Interview Companion card (hotkeys.rs
-/// CARD_KEYS). Starts from the real window position, so a drag in between is
-/// respected, and stays inside the work area of the monitor the card is on;
-/// crossing monitors is still a drag. Moves the window directly because a
-/// position change is not part of the `applied` cache, so apply() would no-op.
-pub fn nudge_centered_slot(app: &AppHandle, dx: f64, dy: f64) {
-    let (Some(handle), Some(window)) = (state_handle(app), main_window(app)) else {
-        return;
-    };
-    let size = {
-        let state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
-        if state.presentation != OverlayPresentation::Bar
-            || !state.centered_slot
-            || state.effectively_hidden()
-            || state.applying_bounds
-        {
-            return;
-        }
-        size_for(&state)
-    };
-    let (Ok(position), Ok(Some(monitor))) = (window.outer_position(), window.current_monitor())
-    else {
-        warn!("overlay: nudge skipped, window position or monitor unavailable");
-        return;
-    };
-    let scale = monitor.scale_factor();
-    let current = position.to_logical::<f64>(scale);
-    let (work_pos, work_size) = work_area_within(
-        monitor.position().to_logical::<f64>(scale),
-        monitor.size().to_logical::<f64>(scale),
-        scale,
-    );
-    let max_x = (work_pos.x + work_size.width - size.width).max(work_pos.x);
-    let max_y = (work_pos.y + work_size.height - size.height).max(work_pos.y);
-    let target = LogicalPosition::new(
-        (current.x + dx).clamp(work_pos.x, max_x),
-        (current.y + dy).clamp(work_pos.y, max_y),
-    );
-    // Same reentrancy rule as apply_result: set_position can deliver WM_MOVE
-    // into capture_user_position on this thread before it returns, so no guard
-    // is held across it, and applying_bounds keeps that move from reading as a
-    // drag.
-    handle.0.lock().unwrap_or_else(|e| e.into_inner()).applying_bounds = true;
-    let result = window.set_position(target);
-    handle.0.lock().unwrap_or_else(|e| e.into_inner()).applying_bounds = false;
-    match result {
-        // Written only after the move landed, so a failed move never leaves
-        // the anchor pointing somewhere the window is not.
-        Ok(()) => {
-            handle
-                .0
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .centered_slot_anchor = Some((target.x + size.width / 2.0, target.y));
-        }
-        Err(e) => warn!("overlay: nudge set_position failed: {e}"),
-    }
 }
 
 pub fn set_onboarding_step(app: &AppHandle, step: OnboardingStep) {
@@ -1588,7 +1470,7 @@ pub fn capture_user_position(app: &AppHandle, x: f64, y: f64) {
     let Some(handle) = state_handle(app) else {
         return;
     };
-    let (centered_slot_anchor, user_center) = {
+    let position = {
         let state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
         if state.applying_bounds
             || matches!(
@@ -1598,37 +1480,21 @@ pub fn capture_user_position(app: &AppHandle, x: f64, y: f64) {
         {
             return;
         }
-        let size = size_for(&state);
+        // The docked Bar is positioned from its edge, never from a drag.
         if state.presentation == OverlayPresentation::Bar {
-            if state.centered_slot {
-                (Some((x + size.width / 2.0, y)), None)
-            } else {
-                return;
-            }
-        } else {
-            // With the slot open, user_center keeps meaning the owl base center,
-            // so dragging while a card shows cannot shift the owl when it closes.
-            let center = if slot_showing(state.presentation, state.slot_height) {
-                (
-                    x + size.width / 2.0,
-                    y + state.slot_height.unwrap_or(0.0) + COMPANION_HEIGHT / 2.0,
-                )
-            } else {
-                (x + size.width / 2.0, y + size.height / 2.0)
-            };
-            (None, Some(center))
+            return;
         }
-    };
-    if let Some(anchor) = centered_slot_anchor {
-        handle
-            .0
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .centered_slot_anchor = Some(anchor);
-        return;
-    }
-    let Some(position) = user_center else {
-        return;
+        let size = size_for(&state);
+        // With the slot open, user_center keeps meaning the owl base center,
+        // so dragging while a card shows cannot shift the owl when it closes.
+        if slot_showing(state.presentation, state.slot_height) {
+            (
+                x + size.width / 2.0,
+                y + state.slot_height.unwrap_or(0.0) + COMPANION_HEIGHT / 2.0,
+            )
+        } else {
+            (x + size.width / 2.0, y + size.height / 2.0)
+        }
     };
     handle
         .0

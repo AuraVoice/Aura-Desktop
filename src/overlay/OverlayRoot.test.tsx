@@ -6,6 +6,12 @@ vi.stubGlobal("window", {
   addEventListener: vi.fn(),
   removeEventListener: vi.fn(),
 });
+// The focus hand-back listens on document for the overlay's lifetime.
+vi.stubGlobal("document", {
+  addEventListener: vi.fn(),
+  removeEventListener: vi.fn(),
+  querySelector: vi.fn(() => null),
+});
 
 const mocks = vi.hoisted(() => ({
   user: { uid: "user-1" } as { uid: string } | null,
@@ -68,6 +74,7 @@ vi.mock("./DraftCard", () => ({
 vi.mock("./useCallbackCard", () => ({
   useCallbackCard: () => ({ visible: false, reset: vi.fn() }),
 }));
+vi.mock("../state/useSwarmMemorySync", () => ({ useSwarmMemorySync: () => {} }));
 
 import { OverlayRoot } from "./OverlayRoot";
 
@@ -125,7 +132,6 @@ describe("OverlayRoot meeting background services", () => {
     expect(mocks.useMeetingCapture).toHaveBeenCalledWith({
       uid: "user-1",
       appHidden: true,
-      interviewLive: false,
     });
     expect(mocks.useMeetingPrompt).toHaveBeenCalledWith({
       uid: "user-1",
@@ -135,7 +141,6 @@ describe("OverlayRoot meeting background services", () => {
       presentation: "hidden",
       dictationHold: false,
       callLive: false,
-      interviewLive: false,
       chatOpen: false,
       recordCall,
     });
@@ -172,7 +177,7 @@ describe("OverlayRoot meeting background services", () => {
     expect(text).not.toContain("Check now");
     expect(text).not.toContain("Still checking");
     expect(text).toContain('"children":["draft"]');
-    expect(mocks.invoke).toHaveBeenCalledWith("set_slot_height", { height: 180, centered: false });
+    expect(mocks.invoke).toHaveBeenCalledWith("set_slot_height", { height: 180 });
     // Guide opens silent on the cold path; the Realtime bridge is for chat summons.
     expect(mocks.startSession).toHaveBeenCalledWith("guide");
     expect(mocks.startBridgedSession).not.toHaveBeenCalled();
@@ -192,6 +197,6 @@ describe("OverlayRoot meeting background services", () => {
     });
 
     expect(mocks.guideStop).toHaveBeenCalled();
-    expect(mocks.invoke).toHaveBeenCalledWith("set_slot_height", { height: null, centered: false });
+    expect(mocks.invoke).toHaveBeenCalledWith("set_slot_height", { height: null });
   });
 });
