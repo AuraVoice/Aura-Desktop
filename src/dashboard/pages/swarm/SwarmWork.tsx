@@ -1,4 +1,12 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ComponentType, type ReactNode } from "react";
+import {
+  GitHubBrandIcon,
+  GmailBrandIcon,
+  GoogleCalendarBrandIcon,
+  GoogleClassroomBrandIcon,
+  NotionBrandIcon,
+  XBrandIcon,
+} from "../../components/connectorBrandIcons";
 import {
   approvePendingAction,
   fetchPendingAction,
@@ -9,10 +17,10 @@ import {
 import { openPath } from "@tauri-apps/plugin-opener";
 import { FORMAT_LABEL, saveDocumentDraft, type DocumentFormat } from "../../../lib/swarmDocumentFile";
 import type { SwarmManager, SwarmMessage, SwarmRoundMember, SwarmRoundView, SwarmSessionView } from "../../../lib/swarmApi";
-import { mapRoundMember, proposeDraft, SwarmRequestError, TERMINAL_SESSION_STATES } from "../../../lib/swarmApi";
+import { list, mapRoundMember, num, proposeDraft, str, strings, SwarmRequestError, TERMINAL_SESSION_STATES } from "../../../lib/swarmApi";
 import { SwarmOrb } from "./SwarmOrb";
 import type { OrbState, OrbTone } from "./swarmOrbRenderer";
-import { thinkingLine } from "./swarmThinking";
+import { SWARM_CAPABILITIES, thinkingLine } from "./swarmThinking";
 import { SwarmMarkdown } from "./SwarmMarkdown";
 import {
   BlockGlyph,
@@ -40,32 +48,22 @@ import {
 
 type Json = Record<string, unknown>;
 
-export const CONNECTOR_LABEL: Record<string, string> = {
-  gmail: "Gmail",
-  google_calendar: "Google Calendar",
-  google_classroom: "Google Classroom",
-  github: "GitHub",
-  x: "X",
-  notion: "Notion",
+/** Every connector a manager can be granted: its name and brand mark, in one table so a new
+ * connector cannot get a label without an icon (or the reverse). */
+export const SWARM_CONNECTORS: Record<string, { label: string; Icon: ComponentType<{ size?: number; className?: string }> }> = {
+  gmail: { label: "Gmail", Icon: GmailBrandIcon },
+  google_calendar: { label: "Google Calendar", Icon: GoogleCalendarBrandIcon },
+  google_classroom: { label: "Google Classroom", Icon: GoogleClassroomBrandIcon },
+  github: { label: "GitHub", Icon: GitHubBrandIcon },
+  x: { label: "X", Icon: XBrandIcon },
+  notion: { label: "Notion", Icon: NotionBrandIcon },
 };
 
-const CAPABILITY_COPY: Record<string, string> = {
-  "web.search": "Searched the web",
-  "web.read": "Read a page",
-  "gmail.search": "Searched Gmail",
-  "gmail.read": "Read an email",
-  "calendar.events": "Checked the calendar",
-  "classroom.due": "Checked Classroom",
-  "github.activity": "Checked GitHub",
-  "x.bookmarks": "Searched X bookmarks",
-  "notion.recent": "Checked Notion",
-  "github.repos": "Listed repositories",
-  "github.tree": "Listed files",
-  "github.file": "Read a file",
-  "github.search": "Searched the code",
-  "github.issues": "Checked issues",
-};
+export const CONNECTOR_LABEL: Record<string, string> = Object.fromEntries(
+  Object.entries(SWARM_CONNECTORS).map(([id, c]) => [id, c.label]),
+);
 
+/** Picked by family rather than per id, so a new read in a known family gets its mark. */
 function CapabilityGlyph({ id, size = 15 }: { id: string; size?: number }) {
   if (id === "web.search") return <SeekGlyph size={size} />;
   if (id === "web.read") return <LeafGlyph size={size} />;
@@ -76,22 +74,6 @@ function CapabilityGlyph({ id, size = 15 }: { id: string; size?: number }) {
   if (id === "x.bookmarks") return <KeepGlyph size={size} />;
   if (id === "notion.recent") return <BlockGlyph size={size} />;
   return <SparkGlyph size={size} />;
-}
-
-function str(value: unknown): string {
-  return typeof value === "string" ? value : "";
-}
-
-function num(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
-}
-
-function list(value: unknown): Json[] {
-  return Array.isArray(value) ? value.filter((v) => v && typeof v === "object").map((v) => v as Json) : [];
-}
-
-function strings(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
 }
 
 const PHASE_COPY: Record<string, string> = {
@@ -424,7 +406,7 @@ function StepRow({
   const action = str(data.action);
   const ok = data.ok === true;
   const connector = str(data.connector);
-  const label = capability ? CAPABILITY_COPY[capability] ?? "Used a tool" : action === "finish" ? "Finished its part" : "Step";
+  const label = capability ? SWARM_CAPABILITIES[capability]?.done ?? "Used a tool" : action === "finish" ? "Finished its part" : "Step";
   const sub = str(data.subagent_title);
   const why = row.count === 1 ? str(data.why) || row.step.text : "";
   const gap = Boolean(capability) && !ok;

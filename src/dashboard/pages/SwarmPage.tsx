@@ -36,15 +36,17 @@ import {
   type SwarmSessionView,
   type SwarmState,
   type SwarmWatchInput,
+  MAX_REPO_SCOPES,
 } from "../../lib/swarmApi";
 import { useDashboardResource } from "../useDashboardResource";
 import { deleteManagerMemory, ingestSessionViews, recallMemory, sweepFinishedSessions } from "../../lib/swarmMemory";
 import { SwarmChannels } from "./swarm/SwarmChannels";
 import { SwarmRoster as SwarmRosterPanel } from "./swarm/SwarmRoster";
 import { DocumentExtractionError, extractDocument } from "../../lib/documentText";
-import { MAX_IMAGE_BYTES, prepareAttachment, resolveMimeType, SUPPORTED_IMAGE_MIME } from "../../lib/chatAttachments";
-import { MAX_ATTACHMENTS, SwarmStream, type ChannelView, type ComposerDoc } from "./swarm/SwarmStream";
+import { ATTACHMENT_ERRORS, MAX_ATTACHMENTS, MAX_IMAGE_BYTES, prepareAttachment, resolveMimeType, SUPPORTED_IMAGE_MIME } from "../../lib/chatAttachments";
+import { SwarmStream, type ChannelView, type ComposerDoc } from "./swarm/SwarmStream";
 import { hasActionableDraft } from "./swarm/SwarmWork";
+import { usePollWalk } from "./swarm/usePollWalk";
 import {
   channelItems,
   displayName,
@@ -73,8 +75,6 @@ const LEGACY_KEY = "aura.swarm-sandbox.v1";
 const CHANNEL_KEY = "aura.swarm-sandbox.channel";
 const SEEN_KEY = "aura.swarm.seen";
 const RAIL_KEY = "aura.swarm.rail-collapsed";
-const POLL_MS = 2_500;
-const POLL_BACKOFF_MS = 15_000;
 // How long a new message, manager or Supervisor counts as "just arrived" for motion.
 const FRESH_MS = 1600;
 
@@ -245,7 +245,7 @@ function attachErrorCopy(error: unknown, roster: SwarmRoster): string {
       case "doc_kind_unsupported":
         return "Only PDF, Word (.docx), text files and images.";
       case "image_too_large":
-        return "Image must be under 5 MB.";
+        return `${ATTACHMENT_ERRORS.imageTooLarge}.`;
       case "image_kind_unsupported":
         return "Only JPEG, PNG, WebP or GIF images.";
       case "image_unreadable":
@@ -479,56 +479,24 @@ export function SwarmPage() {
   const waitingCount = state.waiting.reduce((sum, w) => sum + w.count, 0);
   const waitingIds = useMemo(() => new Set(state.waiting.filter((w) => w.count > 0).map((w) => w.managerId)), [state.waiting]);
 
-  // The Research page's loop: 2.5 s while anything runs, 15 s after an error, nothing
-  // while the window is hidden or offline. A changed revision pulls that DM.
-  const [pollError, setPollError] = useState(false);
-  useEffect(() => {
-    if (liveIds.length === 0) return;
-    // A re-armed effect must not leave the old loop walking its ids, and a slow request
-    // must not let the interval start a second walk on top of it.
-    let disposed = false;
-    let running = false;
-    const tick = async () => {
-      if (running || document.visibilityState !== "visible" || !navigator.onLine) return;
-      running = true;
-      let failed = false;
-      let ended = false;
-      try {
-        for (const id of liveIds) {
-          if (disposed) break;
-          try {
-            const view = await getSession(id, sessions[id]?.stateRevision);
-            if (disposed) break;
-            if (!view) continue;
-            // A Stop or an answer may already have stored a newer view than this poll's.
-            setSessions((prev) => (prev[id] && prev[id].stateRevision > view.stateRevision ? prev : { ...prev, [id]: view }));
-            void pull(managerChannel(view.managerId), true);
-            if (TERMINAL_SESSION_STATES.has(view.state)) {
-              ended = true;
-              // What the run learned goes into the manager's memory on this computer.
-              void ingestSessionViews([view]).catch(() => undefined);
-            }
-          } catch {
-            failed = true;
-          }
-        }
-        // A walk cut short by a re-arm still reloads for a session it saw end; the new
-        // walk no longer asks about that session.
-        if (!disposed) setPollError(failed);
-        if (ended) reloadState();
-      } finally {
-        running = false;
-      }
-    };
-    const timer = window.setInterval(() => void tick(), pollError ? POLL_BACKOFF_MS : POLL_MS);
-    void tick();
-    return () => {
-      disposed = true;
-      window.clearInterval(timer);
-    };
-    // `sessions` is read for the rev only; re-arming on every view change would double-poll.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveIds.join(","), pollError, pull, reloadState]);
+  // Sessions to poll each tick; a changed revision stores the view and pulls that DM.
+  // The revision asked about is the newest this page holds (sessionsRef), never the one
+  // the loop armed with, or every tick after the first change refetched a full view.
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
+  const pollError = usePollWalk(liveIds, {
+    fetchOne: (id, signal) => getSession(id, sessionsRef.current[id]?.stateRevision, signal),
+    onView: (id, view) => {
+      // A Stop or an answer may already have stored a newer view than this poll's.
+      setSessions((prev) => (prev[id] && prev[id].stateRevision >= view.stateRevision ? prev : { ...prev, [id]: view }));
+      void pull(managerChannel(view.managerId), true);
+      if (!TERMINAL_SESSION_STATES.has(view.state)) return false;
+      // What the run learned goes into the manager's memory on this computer.
+      void ingestSessionViews([view]).catch(() => undefined);
+      return true;
+    },
+    onEnded: reloadState,
+  });
 
   // #group rounds: the Supervisor's answer lands in #group after the last member ends, a
   // write nothing else re-fetches #group for. Poll each unfinished round this tab knows of
@@ -548,57 +516,28 @@ export function SwarmPage() {
     for (const [id, view] of Object.entries(rounds)) if (view.state === "done") ids.delete(id);
     return [...ids].filter(Boolean);
   }, [groupRoundIds, rounds, sessions]);
-  const [roundPollError, setRoundPollError] = useState(false);
-  useEffect(() => {
-    if (liveRoundIds.length === 0) return;
-    // Every round that finishes re-arms this effect; without `disposed` each re-arm left
-    // the previous walk running, so requests grew with the square of the rounds.
-    let disposed = false;
-    let running = false;
-    const tick = async () => {
-      if (running || document.visibilityState !== "visible" || !navigator.onLine) return;
-      running = true;
-      let finished = false;
-      let failed = false;
-      try {
-        for (const id of liveRoundIds) {
-          if (disposed) break;
-          try {
-            const view = await getRound(id, rounds[id]?.stateRevision);
-            if (disposed) break;
-            if (!view) continue;
-            setRounds((prev) => ({ ...prev, [id]: view }));
-            if (view.state === "done") finished = true;
-          } catch (err) {
-            // A round that no longer exists (reset, another account) stops being asked about;
-            // anything else is a blip the next tick retries, after the same backoff as sessions.
-            if (err instanceof SwarmRequestError && err.status === 404) {
-              setRounds((prev) => ({ ...prev, [id]: { roundId: id, state: "done", stateRevision: 0, members: [] } }));
-            } else {
-              failed = true;
-            }
-          }
-        }
-        // The round that finished is what re-armed this effect, and the new walk no longer
-        // asks about it, so this walk still pulls #group for it.
-        if (!disposed) setRoundPollError(failed);
-        if (finished) {
-          await pull("group", true);
-          reloadState();
-        }
-      } finally {
-        running = false;
-      }
-    };
-    const timer = window.setInterval(() => void tick(), roundPollError ? POLL_BACKOFF_MS : POLL_MS);
-    void tick();
-    return () => {
-      disposed = true;
-      window.clearInterval(timer);
-    };
-    // `rounds` is read for the rev only, as with sessions above.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveRoundIds.join(","), roundPollError, pull, reloadState]);
+  const roundsRef = useRef(rounds);
+  roundsRef.current = rounds;
+  const roundPollError = usePollWalk(liveRoundIds, {
+    fetchOne: (id, signal) => getRound(id, roundsRef.current[id]?.stateRevision, signal),
+    onView: (id, view) => {
+      // As with sessions: a Stop may already have stored a newer view than this poll's.
+      setRounds((prev) => (prev[id] && prev[id].stateRevision >= view.stateRevision ? prev : { ...prev, [id]: view }));
+      return view.state === "done";
+    },
+    // A round that no longer exists (reset, another account) stops being asked about;
+    // anything else is a blip the next tick retries after the backoff.
+    onError: (id, err) => {
+      if (!(err instanceof SwarmRequestError && err.status === 404)) return false;
+      setRounds((prev) => ({ ...prev, [id]: { roundId: id, state: "done", stateRevision: 0, members: [] } }));
+      return true;
+    },
+    // The finished round's answer lands in #group, which nothing else re-fetches.
+    onEnded: async () => {
+      await pull("group", true);
+      reloadState();
+    },
+  });
 
   // Keyed on this channel's array alone: pull() keeps every other channel's reference.
   const channelMessages = messages[liveChannel];
@@ -773,19 +712,23 @@ export function SwarmPage() {
   /** Each file is read here, then its text goes on the shelf; the chip says which step failed.
    * An image is shrunk here and read once by the server instead, since there is no text in it. */
   const attach = (files: File[]) => {
-    const room = MAX_ATTACHMENTS - attachments.length;
-    for (const file of files.slice(0, Math.max(0, room))) {
+    const room = Math.max(0, MAX_ATTACHMENTS - attachmentsRef.current.length);
+    if (files.length > room) setError(`${ATTACHMENT_ERRORS.tooMany}. ${room === 0 ? "Remove one to add another." : `Only the first ${room} ${room === 1 ? "was" : "were"} added.`}`);
+    for (const file of files.slice(0, room)) {
       const key = clientId();
       const image = SUPPORTED_IMAGE_MIME.has(resolveMimeType(file));
       const name = image ? imageName(file) : file.name;
-      setAttachments((prev) => [...prev, { key, name, status: "reading", docId: "", error: "", image }]);
+      const chip: ComposerDoc = { key, name, status: "reading", docId: "", error: "", image };
+      // Counted now, not at the next render, so a second paste in the same frame sees it.
+      attachmentsRef.current = [...attachmentsRef.current, chip];
+      setAttachments((prev) => [...prev, chip]);
       const settle = (patch: Partial<ComposerDoc>) =>
         setAttachments((prev) => prev.map((a) => (a.key === key ? { ...a, ...patch } : a)));
       void (async () => {
         try {
           if (image) {
             if (file.size > MAX_IMAGE_BYTES) {
-              settle({ status: "failed", error: "Image must be under 5 MB." });
+              settle({ status: "failed", error: `${ATTACHMENT_ERRORS.imageTooLarge}.` });
               return;
             }
             const prepared = await prepareAttachment(file);
@@ -887,7 +830,7 @@ export function SwarmPage() {
     });
 
   const setRepoScope = (managerId: string, repos: string[]) =>
-    void withPending(() => setGrants(managerId, state.grants[managerId] ?? [], repos.slice(0, 3)));
+    void withPending(() => setGrants(managerId, state.grants[managerId] ?? [], repos.slice(0, MAX_REPO_SCOPES)));
 
   // "Act without asking" for one write tool: the only caller that sends the policy, so a
   // connector toggle above can never change it (setGrants leaves it out).

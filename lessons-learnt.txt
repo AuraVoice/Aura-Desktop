@@ -2559,3 +2559,34 @@ Justification: a mirror overlay is correct only if the top layer is invisible AN
 has identical advance width. Any style on the mirror that changes width (weight, letter spacing,
 horizontal padding) breaks the caret even when the colour bug is fixed.
 ================================================================================
+2026-10-09: Swarm stuttered after pasting an image because a memo never held
+Problem: right after pasting a screenshot into the Swarm composer, hovering over the thread lagged
+and the page felt shaky.
+Issue: when the image upload settled, setDocShelf invalidated the thread's rows memo, which is
+expected. The cost was that SwarmMarkdown is memo()'d but SwarmStream passed it an inline
+`(url) => live.current.onOpenSource(url)` on every rebuild, so the memo never matched and every say
+message and report summary in the channel was re-parsed by react-markdown + remark-gfm, along with
+a fresh `[remarkGfm]` array each render. The same rebuild also runs on every changed session poll.
+The image work itself (decode, resize, base64) was native and off the JS thread all along.
+Solution: one useCallback openSource reading live.current, and REMARK_PLUGINS at module scope, the
+way ChatSlot's wrapper already did. Composer chips got a min-height so the thumb no longer grows it
+a second time. The same sweep fixed a rounds poll that overwrote a newer Stop view (sessions already
+guarded by stateRevision) and chips drawn for mentions mentionsIn would not target.
+Justification: a memo is only as good as its least stable prop. A function prop on a memoized
+component must come from useCallback or a ref; when two wrappers of the same library exist, the
+tuning in one does not reach the other.
+================================================================================
+2026-10-09: Swarm session poll asked about a revision captured when the loop started
+Problem: while a manager worked, the Swarm page refetched every session's full view, re-pulled its
+DM and rebuilt the whole thread every 2.5 s, even when nothing had changed.
+Issue: the poll effect read `sessions[id]?.stateRevision` from its closure, and deliberately did not
+re-arm on `sessions` changes (to avoid double polling). So after the first change, every tick asked
+"anything newer than revision R?" with the R from arm time; the server answered with a full view
+each time, the page stored a new object, and every downstream memo rebuilt. The rounds loop, a hand
+copy of the same code, had the same stale read and additionally no newer-view guard.
+Solution: both loops now run through one usePollWalk hook whose callbacks are read through a ref,
+and fetchOne reads the revision from a ref holding the latest views. A same-or-older revision keeps
+the stored object. Re-arms abort the in-flight request through AbortSignal.
+Justification: an effect that intentionally omits a dependency must read that value through a ref,
+or the omission silently freezes it. Two copies of a loop meant a fix in one never reached the other.
+================================================================================

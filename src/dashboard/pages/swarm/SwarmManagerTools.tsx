@@ -8,10 +8,12 @@ import type {
   SwarmWatchInput,
   SwarmWatchKind,
 } from "../../../lib/swarmApi";
+import { MAX_REPO_SCOPES } from "../../../lib/swarmApi";
 import { CONNECTOR_LABEL } from "./SwarmWork";
 import { BeaconGlyph, CycleGlyph, DartGlyph, DismissGlyph, KeepGlyph, SparkGlyph } from "./SwarmGlyphs";
 import { exportMemory, forgetMemory, importMemory, listMemory, type MemoryRow, type MemoryRowType } from "../../../lib/swarmMemory";
 import { displayName } from "./swarmThread";
+import { relativeTime } from "../../format";
 
 /** A manager's two controls: which connectors it may read (on when the account is connected
  * and the manager asked for it, one switch each) and its routines. A routine fires with the laptop closed, so nothing is scheduled until
@@ -480,7 +482,7 @@ export function AutoApproveSwitches({
               disabled={pending}
               className={`db-swarm-grant${on ? " is-on" : ""}`}
               onClick={() => {
-                const scopes = on ? others : [...others, scope].slice(0, 3);
+                const scopes = on ? others : [...others, scope].slice(0, MAX_REPO_SCOPES);
                 onSet(tool, scopes.length ? { scopes, dailyLimit: limit } : null);
               }}
             >
@@ -504,14 +506,6 @@ const MEMORY_TYPE_LABEL: Record<MemoryRowType, string> = {
   reported: "Already told you",
 };
 const MEMORY_TYPE_ORDER: MemoryRowType[] = ["preference", "thread", "fact", "outcome", "reported"];
-
-function memoryAge(updatedAtMs: number): string {
-  const days = Math.floor((Date.now() - updatedAtMs) / 86_400_000);
-  if (days <= 0) return "today";
-  if (days === 1) return "yesterday";
-  if (days < 30) return `${days}d ago`;
-  return `${Math.floor(days / 30)}mo ago`;
-}
 
 /** What this manager remembers, read from the sealed store on this computer when the
  * section opens. Forget tombstones a row here and drops the server's last envelope
@@ -618,7 +612,7 @@ export function MemoryList({
                         </i>
                       )}
                       {row.source === "user_stated" && <span>you said</span>}
-                      <span>{memoryAge(row.updatedAtMs)}</span>
+                      <span>{relativeTime(row.updatedAtMs, true)}</span>
                     </span>
                     <button type="button" className="db-swarm-icon-btn is-small" aria-label="Forget" title="Forget" disabled={busy} onClick={() => void forget(row)}>
                       <DismissGlyph size={13} />

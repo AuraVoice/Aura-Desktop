@@ -5,11 +5,11 @@
 // manager can read and cite "page 2". A Word file goes through mammoth's HTML output
 // rather than its raw text, because the headings and bullets it keeps are what let a
 // manager find a section and rewrite the file without flattening it.
+import { MAX_DOCUMENT_BYTES } from "./chatAttachments";
 import { extractPdfPages } from "./resumeText";
 
 /** Equal to juno-backend swarm/docs.py MAX_DOC_CHARS: the server keeps no more than this. */
 export const DOCUMENT_MAX_CHARS = 150_000;
-export const DOCUMENT_MAX_BYTES = 10 * 1024 * 1024;
 export const DOCUMENT_ACCEPT = ".pdf,.docx,.txt,.md,application/pdf,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document";
 
 export type DocumentKind = "pdf" | "docx" | "txt" | "md";
@@ -96,7 +96,7 @@ export async function extractDocument(file: File): Promise<ExtractedDocument> {
   if (!["pdf", "docx", "txt", "md", "markdown"].includes(extension)) {
     throw new DocumentExtractionError(`${file.name} isn't a PDF, Word (.docx) or text file.`);
   }
-  if (file.size > DOCUMENT_MAX_BYTES) {
+  if (file.size > MAX_DOCUMENT_BYTES) {
     throw new DocumentExtractionError(`${file.name} is over 10 MB.`);
   }
   const kind: DocumentKind = extension === "markdown" ? "md" : (extension as DocumentKind);

@@ -101,6 +101,7 @@ export function bodyAfterTitle(text: string | null | undefined): string {
 let dayKeyFormat: Intl.DateTimeFormat | undefined;
 let dayHeadingFormat: Intl.DateTimeFormat | undefined;
 let timeOfDayFormat: Intl.DateTimeFormat | undefined;
+let weekdayDateFormat: Intl.DateTimeFormat | undefined;
 
 function asDate(value: string | number | Date): Date | null {
   const date = value instanceof Date ? value : new Date(value);
@@ -135,6 +136,14 @@ export function timeOfDay(value: string | number | Date): string {
   if (!date) return DASH;
   timeOfDayFormat ??= new Intl.DateTimeFormat([], { hour: "numeric", minute: "2-digit" });
   return timeOfDayFormat.format(date).toLowerCase();
+}
+
+/** A chat day separator's date ("Thursday, Oct 9"). */
+export function weekdayDate(value: string | number | Date): string {
+  const date = asDate(value);
+  if (!date) return DASH;
+  weekdayDateFormat ??= new Intl.DateTimeFormat([], { weekday: "long", month: "short", day: "numeric" });
+  return weekdayDateFormat.format(date);
 }
 
 /** Byte sizes for storage figures ("41 MB"). */

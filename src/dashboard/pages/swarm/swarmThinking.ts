@@ -6,23 +6,24 @@ import type { SwarmManager, SwarmMessage, SwarmSessionView } from "../../../lib/
  * it are the real record; this line is just "what now".
  * No React, no DOM, no clock. */
 
-/** Present tense twin of SwarmWork's past tense CAPABILITY_COPY: what the manager is doing
- * with the result of the step that just finished. */
-const AFTER_STEP: Record<string, string> = {
-  "web.search": "Reading what the web search turned up",
-  "web.read": "Taking notes from the page it read",
-  "gmail.search": "Reading what Gmail turned up",
-  "gmail.read": "Reading that email closely",
-  "calendar.events": "Going through the calendar",
-  "classroom.due": "Going through Classroom deadlines",
-  "github.activity": "Going through GitHub activity",
-  "github.repos": "Going through your repositories",
-  "github.tree": "Going through the file list",
-  "github.file": "Reading through that file",
-  "github.search": "Going through the code matches",
-  "github.issues": "Going through the issues",
-  "x.bookmarks": "Going through X bookmarks",
-  "notion.recent": "Going through recent Notion pages",
+/** Every read a manager can run, in one table: `done` labels a finished step in the run
+ * card (SwarmWork), `doing` is this live row's line for what it does with that result.
+ * A new capability gets both or neither. */
+export const SWARM_CAPABILITIES: Record<string, { done: string; doing: string }> = {
+  "web.search": { done: "Searched the web", doing: "Reading what the web search turned up" },
+  "web.read": { done: "Read a page", doing: "Taking notes from the page it read" },
+  "gmail.search": { done: "Searched Gmail", doing: "Reading what Gmail turned up" },
+  "gmail.read": { done: "Read an email", doing: "Reading that email closely" },
+  "calendar.events": { done: "Checked the calendar", doing: "Going through the calendar" },
+  "classroom.due": { done: "Checked Classroom", doing: "Going through Classroom deadlines" },
+  "github.activity": { done: "Checked GitHub", doing: "Going through GitHub activity" },
+  "github.repos": { done: "Listed repositories", doing: "Going through your repositories" },
+  "github.tree": { done: "Listed files", doing: "Going through the file list" },
+  "github.file": { done: "Read a file", doing: "Reading through that file" },
+  "github.search": { done: "Searched the code", doing: "Going through the code matches" },
+  "github.issues": { done: "Checked issues", doing: "Going through the issues" },
+  "x.bookmarks": { done: "Searched X bookmarks", doing: "Going through X bookmarks" },
+  "notion.recent": { done: "Checked Notion", doing: "Going through recent Notion pages" },
 };
 
 const GOAL_MAX = 48;
@@ -58,7 +59,7 @@ export function thinkingLine(session: SwarmSessionView, latestStep: SwarmMessage
     case "acting": {
       if (!latestStep) return goal ? `Starting on '${goal}'` : "Taking a first look";
       if (latestStep.data.ok === false) return "Working around a source it could not read";
-      const base = AFTER_STEP[stepString(latestStep, "capability_id")] ?? "Reading what the last step turned up";
+      const base = SWARM_CAPABILITIES[stepString(latestStep, "capability_id")]?.doing ?? "Reading what the last step turned up";
       return goal ? `${base} for '${goal}'` : base;
     }
     case "reporting": {

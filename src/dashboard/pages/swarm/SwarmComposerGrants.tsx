@@ -1,16 +1,9 @@
-import { useEffect, useRef, useState, type ComponentType } from "react";
-import type { SwarmRoster } from "../../../lib/swarmApi";
+import { useEffect, useRef, useState } from "react";
+import { MAX_REPO_SCOPES, type SwarmRoster } from "../../../lib/swarmApi";
 import { ConnectorReauthorizationRequiredError, GitHubRateLimitedError, fetchGitHubRepos, type GitHubRepos } from "../../../lib/connectors";
 import { useOutsideClick } from "../../components/useOutsideClick";
-import {
-  GitHubBrandIcon,
-  GmailBrandIcon,
-  GoogleCalendarBrandIcon,
-  GoogleClassroomBrandIcon,
-  NotionBrandIcon,
-  XBrandIcon,
-} from "../../components/connectorBrandIcons";
-import { CONNECTOR_LABEL } from "./SwarmWork";
+import { GitHubBrandIcon } from "../../components/connectorBrandIcons";
+import { CONNECTOR_LABEL, SWARM_CONNECTORS } from "./SwarmWork";
 import { AddGlyph, DismissGlyph, LockGlyph, WebGlyph } from "./SwarmGlyphs";
 import type { ChannelView } from "./SwarmStream";
 
@@ -29,19 +22,10 @@ import type { ChannelView } from "./SwarmStream";
  * at most three per manager, with "+" beside them until the third. The scope is stored
  * on the grants doc and the planner and step prompts name those repositories first. */
 
-const MAX_REPOS = 3;
-
-const CONNECTOR_ICON: Record<string, ComponentType<{ size?: number; className?: string }>> = {
-  gmail: GmailBrandIcon,
-  google_calendar: GoogleCalendarBrandIcon,
-  google_classroom: GoogleClassroomBrandIcon,
-  github: GitHubBrandIcon,
-  x: XBrandIcon,
-  notion: NotionBrandIcon,
-};
+const MAX_REPOS = MAX_REPO_SCOPES;
 
 function ConnectorIcon({ connector }: { connector: string }) {
-  const Icon = CONNECTOR_ICON[connector];
+  const Icon = SWARM_CONNECTORS[connector]?.Icon;
   return Icon ? <Icon size={14} className="db-swarm-scope-icon" /> : <WebGlyph size={14} className="db-swarm-scope-icon" />;
 }
 

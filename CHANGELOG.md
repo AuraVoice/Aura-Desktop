@@ -20,6 +20,16 @@ was started and read like commit subjects rather than release notes.
 
 - Selecting text in the chat card now copies it right away, no Ctrl+C needed. Ctrl+C works there too now. Before, the selection showed up but the copy went to whatever app you were in before.
 - Tagging a manager with @ in the Swarm message box no longer turns the rest of your message into a doubled, smeared blur, and the cursor stays where you are typing.
+- Swarm no longer stutters after you paste an image into a message, and the message box grows once instead of twice while the image loads.
+- Pressing Stop on a #group round no longer briefly flips back to running.
+- An @name in a Swarm message is only highlighted when that manager will actually get the message, so "foo@Sam" or a fifth name no longer looks addressed.
+- Attaching more than 5 files to a Swarm message now tells you so, instead of quietly leaving the extras out.
+- Long Swarm channels stay fast: only the messages near what you are reading are drawn, so months of history no longer slow the page down.
+- While a manager is working, Swarm no longer refetches and redraws the whole conversation every few seconds when nothing has changed.
+
+### Changed
+
+- A Swarm manager's memory now shows how old each item is the same way the rest of the dashboard does ("3h ago", "2d ago", then the date).
 
 ## [0.17.0] - 2026-10-08
 

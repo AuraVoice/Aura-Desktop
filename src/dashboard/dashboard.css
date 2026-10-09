@@ -9155,6 +9155,12 @@
   padding: 14px 0 10px;
   animation: db-swarm-channel-in 180ms var(--sw-out) both;
 }
+/* The virtualised message list (SwarmStream): a box as tall as every row together, with
+   only the rows near the viewport mounted inside it. Each row is a flex column like the
+   pane, so a day separator's margins and a system pill's auto margins lay out as they did
+   unvirtualised, and count toward the measured height. */
+.db-swarm-vlist { position: relative; flex: none; width: 100%; }
+.db-swarm-vrow { position: absolute; top: 0; left: 0; width: 100%; display: flex; flex-direction: column; }
 @keyframes db-swarm-channel-in {
   from { opacity: 0; transform: translateY(3px); }
   to { opacity: 1; transform: none; filter: none; }
@@ -9854,6 +9860,9 @@
 .db-swarm-attachments,
 .db-swarm-files { display: flex; flex-wrap: wrap; gap: 6px; }
 .db-swarm-attachments { margin: 0; padding: 10px 12px; border-bottom: 1px solid var(--sw-divider); }
+/* Tall enough for the 22px image thumb from the start, so the composer does not grow a second
+   time when a pasted image's preview replaces the file glyph. */
+.db-swarm-attachments .db-swarm-file { min-height: 32px; }
 .db-swarm-files { margin-top: 6px; }
 .db-swarm-file {
   display: inline-flex;

@@ -368,15 +368,17 @@ function obj(value: unknown): Json {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? (value as Json) : {};
 }
 
-function str(value: unknown): string {
+// The readers below are shared with the Swarm views (SwarmWork.tsx reads report and step
+// payloads with them), so a malformed field is handled one way everywhere.
+export function str(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
-function num(value: unknown): number {
+export function num(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
-function strings(value: unknown): string[] {
+export function strings(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
 }
 
@@ -384,8 +386,10 @@ function numbers(value: unknown): number[] {
   return Array.isArray(value) ? value.filter((v): v is number => typeof v === "number") : [];
 }
 
-function list(value: unknown): Json[] {
-  return Array.isArray(value) ? value.map(obj) : [];
+/** The objects in an array. A stray string or null is dropped, never mapped to an empty
+ * record that would render as a blank row or a message with no id. */
+export function list(value: unknown): Json[] {
+  return Array.isArray(value) ? value.filter((v) => v !== null && typeof v === "object" && !Array.isArray(v)).map(obj) : [];
 }
 
 function ms(value: unknown): number {
@@ -789,8 +793,12 @@ export async function answerSession(sessionId: string, text: string): Promise<Sw
   );
 }
 
+/** Repositories one manager can be pointed at, and one write can auto-approve in. The
+ * backend caps both at three; every picker and setGrants call slices to this. */
+export const MAX_REPO_SCOPES = 3;
+
 /** Replace one manager's grants. The repo scope rides along so a connector toggle never
- * silently drops the repositories the user picked; the backend caps it at three.
+ * silently drops the repositories the user picked; the backend caps it at MAX_REPO_SCOPES.
  * `autoApprove` is sent only when the user changed it: left out, the backend keeps the
  * stored policy, so a connector toggle can never switch "act without asking" off or on. */
 export async function setGrants(

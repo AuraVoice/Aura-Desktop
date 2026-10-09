@@ -1,7 +1,8 @@
-import { Fragment, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import type { SwarmDecision, SwarmDoc, SwarmManager, SwarmRoster, SwarmRoundView, SwarmSessionView } from "../../../lib/swarmApi";
 import { DOCUMENT_ACCEPT } from "../../../lib/documentText";
-import { IMAGE_ACCEPT } from "../../../lib/chatAttachments";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { IMAGE_ACCEPT, MAX_ATTACHMENTS } from "../../../lib/chatAttachments";
 import { SwarmAvatar } from "./SwarmAvatar";
 import { SwarmOrb } from "./SwarmOrb";
 import { BuddyAvatar } from "../../../components/BuddyAvatar";
@@ -39,6 +40,7 @@ import {
   hueOf,
   managerChannel,
   mentionCandidates,
+  mentionsIn,
   roleLabel,
   timeLabel,
   type Author,
@@ -64,10 +66,14 @@ function withMentions(text: string, roster: SwarmRoster, extra: { id: string; na
   for (const m of extra) if (m.name && !labels.has(m.name.toLowerCase())) labels.set(m.name.toLowerCase(), m.id);
   const names = [...labels.keys()].filter(Boolean).sort((a, b) => b.length - a.length);
   if (names.length === 0) return text;
-  const pattern = new RegExp(`@(${names.map(escapeRegExp).join("|")})(?![\\p{L}\\p{N}])`, "giu");
+  // mentionsIn decides who a send targets; a chip is drawn only for those, so "foo@Sam" or a
+  // fifth name never looks addressed when it is not. `extra` is what the server recorded.
+  const targeted = new Set([...mentionsIn(text, roster), ...extra.map((m) => m.id)]);
+  const pattern = new RegExp(`(?<=^|\\s)@(${names.map(escapeRegExp).join("|")})(?![\\p{L}\\p{N}])`, "giu");
   const out: ReactNode[] = [];
   let last = 0;
   for (const match of text.matchAll(pattern)) {
+    if (!targeted.has(labels.get(match[1].toLowerCase()) ?? "")) continue;
     const at = match.index ?? 0;
     if (at > last) out.push(text.slice(last, at));
     out.push(<span key={at} className="db-swarm-mention">{match[0]}</span>);
@@ -106,8 +112,6 @@ const STARTERS = [
     text: "I'm a student this semester: track every deadline from Google Classroom, build study plans before exams and quiz me on weak topics.",
   },
 ];
-
-export const MAX_ATTACHMENTS = 5;
 
 export interface ComposerDoc {
   key: string;
@@ -480,6 +484,9 @@ export function SwarmStream(props: Props) {
   useLayoutEffect(() => {
     live.current = props;
   });
+  // One function for every link in the thread. An inline arrow per row was a new prop on
+  // each rebuild, which defeated SwarmMarkdown's memo and re-parsed the whole channel.
+  const openSource = useCallback((url: string) => live.current.onOpenSource(url), []);
 
   // Follow live content only at the bottom; each channel keeps its reading position.
   useLayoutEffect(() => {
@@ -552,14 +559,16 @@ export function SwarmStream(props: Props) {
     const files = Array.from(event.clipboardData.files);
     if (!files.length || event.clipboardData.getData("text/plain").trim()) return;
     event.preventDefault();
-    if (canAttach) props.onAttach(files);
+    // Past the cap still goes through: the page says "Max 5" rather than ignoring the paste.
+    if (!readOnly && !busy) props.onAttach(files);
   };
 
   const onDrop = (event: DragEvent<HTMLFormElement>) => {
     const files = Array.from(event.dataTransfer.files);
     if (!files.length) return;
     event.preventDefault();
-    if (canAttach) props.onAttach(files);
+    // Past the cap still goes through: the page says "Max 5" rather than ignoring the paste.
+    if (!readOnly && !busy) props.onAttach(files);
   };
 
   const mention = useMentionPicker(props.roster, text, props.onText, composerRef);
@@ -684,7 +693,7 @@ export function SwarmStream(props: Props) {
                     {item.author.name !== roleLabel(item.author, props.roster) && <span className={`db-swarm-role is-${item.author.role}`}>{roleLabel(item.author, props.roster)}</span>}
                     {item.at > 0 && <time>{timeLabel(item.at)}</time>}
                   </div>}
-                  {item.kind === "say" && <SwarmMarkdown className="db-swarm-text" text={item.text} onOpenLink={(url) => live.current.onOpenSource(url)} />}
+                  {item.kind === "say" && <SwarmMarkdown className="db-swarm-text" text={item.text} onOpenLink={openSource} />}
                   {item.kind === "working" && (
                     <WorkingEmbed
                       at={item.at}
@@ -714,7 +723,7 @@ export function SwarmStream(props: Props) {
                       granted={props.grants[item.author.id] ?? []}
                       draftActions={props.sessions[item.message.sessionId]?.draftActions ?? {}}
                       onGrant={(managerId, connector) => live.current.onGrant(managerId, connector)}
-                      onOpenSource={(url) => live.current.onOpenSource(url)}
+                      onOpenSource={openSource}
                       answerable={item.key === lastKey}
                       onReply={(value) => live.current.onReply(item.author.id, value)}
                     />
@@ -754,7 +763,7 @@ export function SwarmStream(props: Props) {
         </Fragment>
       );
     });
-  }, [items, props.fresh, props.grants, props.roster, props.sessions, props.stopping, props.rounds, props.openDrafts, props.freeAnswers, props.youName, props.docShelf, view, busy]);
+  }, [items, props.fresh, props.grants, props.roster, props.sessions, props.stopping, props.rounds, props.openDrafts, props.freeAnswers, props.youName, props.docShelf, view, busy, openSource]);
 
   const placeholder = readOnly
     ? "Read only"
@@ -764,6 +773,34 @@ export function SwarmStream(props: Props) {
   const showSkeleton = props.loading && items.length === 0 && !busyHere;
   const needsYou = props.waiting.reduce((sum, w) => sum + (w.count > 0 ? 1 : 0), 0);
   const showHero = view.kind === "group" && items.length === 0 && !busyHere && !showSkeleton;
+
+  // Only the rows near the viewport are mounted, so a channel that has run for months
+  // costs what one screen does: rows off screen never parse their markdown or keep their
+  // timers. The intro rides as the first row so the list starts at the pane's top.
+  // Heights start as estimates and measureElement corrects each after paint; sizes are
+  // cached by message key, so switching channels and back keeps them.
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const [listTop, setListTop] = useState(0);
+  const hasIntro = view.kind === "activity" || (view.kind === "manager" && Boolean(view.author));
+  const lead = hasIntro ? 1 : 0;
+  const virtualizer = useVirtualizer({
+    count: showSkeleton || showHero ? 0 : items.length + lead,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: (index) => (index < lead ? 150 : 96),
+    overscan: 8,
+    getItemKey: (index) => (index < lead ? `intro-${channelKey}` : items[index - lead]?.key ?? index),
+    // Where the list starts inside the scroller: the pane's top padding, plus any space
+    // above it while a short thread is pushed to the bottom.
+    scrollMargin: listTop,
+  });
+  const totalSize = virtualizer.getTotalSize();
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    const el = scrollRef.current;
+    if (!list || !el) return;
+    const top = list.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
+    setListTop((prev) => (Math.abs(prev - top) < 1 ? prev : top));
+  }, [channelKey, totalSize, showSkeleton, showHero]);
 
   return (
     <section className="db-swarm-stream" aria-label={view.kind === "manager" ? `Direct messages with ${view.name}` : `#${view.name}`}>
@@ -827,8 +864,19 @@ export function SwarmStream(props: Props) {
             <GroupHero onStarter={(starter) => { props.onText(starter); composerRef.current?.focus(); }} />
           ) : (
             <>
-              <ChannelIntro view={view} />
-              {rows}
+              <div ref={listRef} className="db-swarm-vlist" style={{ height: totalSize }}>
+                {virtualizer.getVirtualItems().map((row) => (
+                  <div
+                    key={row.key}
+                    ref={virtualizer.measureElement}
+                    data-index={row.index}
+                    className="db-swarm-vrow"
+                    style={{ transform: `translateY(${row.start - virtualizer.options.scrollMargin}px)` }}
+                  >
+                    {row.index < lead ? <ChannelIntro view={view} /> : rows[row.index - lead]}
+                  </div>
+                ))}
+              </div>
               {readOnly && items.length === 0 && <p className="db-swarm-empty-line">Nothing has happened yet.</p>}
             </>
           )}

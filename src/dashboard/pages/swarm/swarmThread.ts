@@ -3,6 +3,7 @@
  * backend or touches storage, so every view of the same state agrees. */
 
 import {
+  list,
   mapDecision,
   type SwarmDecision,
   type SwarmImportMessage,
@@ -11,6 +12,7 @@ import {
   type SwarmRoster,
   type SwarmUsage,
 } from "../../../lib/swarmApi";
+import { localDateKey, timeOfDay, weekdayDate } from "../../format";
 
 /** The sandbox thread as it sat in localStorage before the swarm moved server-side.
  * Kept only to flatten it into the one-time import. */
@@ -193,6 +195,11 @@ function decisionsOf(message: SwarmMessage): SwarmDecision[] {
   return Array.isArray(raw) ? raw.map((d) => mapDecision((d ?? {}) as Record<string, unknown>)) : [];
 }
 
+/** The `{ id, name }` rows of a user message's docs or mentions; any malformed row is dropped. */
+function idNamePairs(value: unknown): { id: string; name: string }[] {
+  return list(value).flatMap((row) => (typeof row.id === "string" && typeof row.name === "string" ? [{ id: row.id, name: row.name }] : []));
+}
+
 /** Everything one channel shows, oldest first. */
 export function channelItems(messages: SwarmMessage[], roster: SwarmRoster): StreamItem[] {
   const backer = frontDoorAuthor(roster);
@@ -215,19 +222,9 @@ export function channelItems(messages: SwarmMessage[], roster: SwarmRoster): Str
     const speaker = m.authorKind === "manager" ? managerAuthor(roster, m.authorId) : backer;
     if (m.authorKind === "user") {
       // Files sent with the message (swarm/docs.py): names only, the text stays on the server.
-      const docs = Array.isArray(m.data.docs)
-        ? (m.data.docs as unknown[]).flatMap((d) => {
-            const row = d && typeof d === "object" ? (d as Record<string, unknown>) : {};
-            return typeof row.id === "string" && typeof row.name === "string" ? [{ id: row.id, name: row.name }] : [];
-          })
-        : [];
+      const docs = idNamePairs(m.data.docs);
       // Managers the user named with "@" (persisted.py): the stream styles exactly these.
-      const mentions = Array.isArray(m.data.mentions)
-        ? (m.data.mentions as unknown[]).flatMap((d) => {
-            const row = d && typeof d === "object" ? (d as Record<string, unknown>) : {};
-            return typeof row.id === "string" && typeof row.name === "string" ? [{ id: row.id, name: row.name }] : [];
-          })
-        : [];
+      const mentions = idNamePairs(m.data.mentions);
       items.push({ key, kind: "user", text: m.text, at: m.at, docs, mentions });
       asked = { text: m.text, docs };
       continue;
@@ -307,19 +304,21 @@ export function findManager(roster: SwarmRoster, id: string): SwarmManager | und
   return roster.managers.find((m) => m.id === id);
 }
 
+// Both run two or three times per row on every rebuild, so they go through format.ts's
+// cached formatters; toLocale*String builds a new Intl formatter on every call.
 export function timeLabel(at?: number): string {
   if (!at) return "";
-  return new Date(at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  // The stream reads like a chat ("11:37 AM"); the shared formatter lowercases for lists.
+  return timeOfDay(at).toUpperCase();
 }
 
 export function dayLabel(at: number): string {
-  const day = new Date(at);
+  const day = localDateKey(at);
   const today = new Date();
-  const yesterday = new Date();
-  yesterday.setDate(today.getDate() - 1);
-  if (day.toDateString() === today.toDateString()) return "Today";
-  if (day.toDateString() === yesterday.toDateString()) return "Yesterday";
-  return day.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
+  if (day === localDateKey(today)) return "Today";
+  today.setDate(today.getDate() - 1);
+  if (day === localDateKey(today)) return "Yesterday";
+  return weekdayDate(at);
 }
 
 /** The old sandbox thread as plain lines for the one-time import: who said it, where. */

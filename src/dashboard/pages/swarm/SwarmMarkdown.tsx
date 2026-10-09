@@ -6,6 +6,8 @@ import remarkGfm from "remark-gfm";
  * quotes. Model text is untrusted, so raw HTML and images are dropped, and a link is a
  * button that opens through the caller (openUrl) because the webview ignores target. */
 
+// Module scope, as in ChatSlot: a fresh array each render makes react-markdown rebuild its processor.
+const REMARK_PLUGINS = [remarkGfm];
 const ALLOWED = ["p", "ul", "ol", "li", "strong", "em", "code", "pre", "blockquote", "a", "br", "del", "h1", "h2", "h3", "h4"];
 
 function SwarmMarkdownImpl({ text, onOpenLink, className = "" }: { text: string; onOpenLink?: (url: string) => void; className?: string }) {
@@ -26,7 +28,7 @@ function SwarmMarkdownImpl({ text, onOpenLink, className = "" }: { text: string;
   };
   return (
     <div className={`db-swarm-md ${className}`.trim()}>
-      <Markdown remarkPlugins={[remarkGfm]} skipHtml allowedElements={ALLOWED} unwrapDisallowed components={components}>
+      <Markdown remarkPlugins={REMARK_PLUGINS} skipHtml allowedElements={ALLOWED} unwrapDisallowed components={components}>
         {text}
       </Markdown>
     </div>
