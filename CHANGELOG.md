@@ -16,6 +16,8 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+## [0.17.1] - 2026-10-09
+
 ### Fixed
 
 - Selecting text in the chat card now copies it right away, no Ctrl+C needed. Ctrl+C works there too now. Before, the selection showed up but the copy went to whatever app you were in before.
