@@ -2532,3 +2532,30 @@ honestly its outcome is labelled. Every one of the eight issues was harness, not
 was fixed as the class (conversation, failure cause, outcome label, cap accounting, taint
 ordering, read depth, asking, budget) rather than as this one conversation.
 ================================================================================
+2026-10-09: text selected in the chat card could never be copied
+Problem: dragging across a chat reply highlighted the text, but Ctrl+C copied nothing, every time.
+Issue: the 2026-10-07 focus hand-back in OverlayRoot.tsx returns the foreground to the user's
+previous app on every pointerup that does not leave focus in an editable field. A drag-select
+ends on a message bubble, activeElement is <body>, so the overlay gave the keyboard away the
+moment the selection was made. Ctrl+C then went to the other app; ChatSlot's onCopy never fired.
+Nothing logged an error because every step "worked".
+Solution: the pointerup check also keeps focus while a non-empty, non-collapsed selection exists.
+The next click collapses the selection and the hand-back runs as before.
+Justification: "is the user about to use the keyboard here" is wider than "is an input focused".
+A selection is the one non-input state where the next keystroke (Ctrl+C) belongs to the overlay.
+================================================================================
+2026-10-09: tagging a Swarm manager smeared the composer text into a doubled blur
+Problem: after an @mention in the Swarm message box, every following word drew twice, offset
+further along each line, and the caret sat in the wrong place.
+Issue: the composer colours mentions with a mirror div under a textarea whose text is meant to
+be transparent. `.db-swarm-composer-field textarea { color: transparent }` and the later
+`.db-swarm-composer textarea { color: var(--sw-text) }` have equal specificity, so the later rule
+won and both copies always rendered. It went unnoticed because they overlap exactly until the
+mirror's metrics differ, and its mention was font-weight 650, wider than the textarea's regular
+glyphs, so everything after the tag drifted right.
+Solution: scoped the transparent rule under .db-swarm-composer so it outranks the visible one,
+and the mirror's mention inherits the weight instead of bolding.
+Justification: a mirror overlay is correct only if the top layer is invisible AND every glyph
+has identical advance width. Any style on the mirror that changes width (weight, letter spacing,
+horizontal padding) breaks the caret even when the colour bug is fixed.
+================================================================================

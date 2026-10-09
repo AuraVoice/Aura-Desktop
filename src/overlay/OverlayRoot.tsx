@@ -911,6 +911,12 @@ export function OverlayRoot() {
       requestAnimationFrame(() => {
         if (isEditable(document.activeElement)) return;
         if (document.querySelector('[role="menu"], [role="dialog"]')) return;
+        // A drag that selected text is the user about to press Ctrl+C. Handing
+        // the foreground back now sends that keystroke to their other app, so
+        // the copy silently never happens. The next click collapses the
+        // selection and yields as usual.
+        const selection = window.getSelection();
+        if (selection && !selection.isCollapsed && selection.toString().trim()) return;
         invoke("overlay_yield_focus").catch((err) =>
           logError("OverlayRoot: give focus back", err),
         );

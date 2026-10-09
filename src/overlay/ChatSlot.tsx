@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { ChangeEvent, ClipboardEvent, CSSProperties } from "react";
+import type { ChangeEvent, ClipboardEvent, CSSProperties, PointerEvent } from "react";
 import { currentMonitor } from "@tauri-apps/api/window";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { BuddyAvatar } from "../components/BuddyAvatar";
@@ -423,6 +423,19 @@ function copySelectionAsPlainText(event: ClipboardEvent<HTMLDivElement>) {
   if (!text) return;
   event.preventDefault();
   event.clipboardData.setData("text/plain", text);
+}
+
+/** Copy on select: releasing a drag (or a double-click) over the transcript puts
+ * the selection on the clipboard straight away, no Ctrl+C. Goes through the
+ * Tauri plugin for the same reason CodeCopyButton does: the overlay may not
+ * hold focus, and navigator.clipboard wants a focused document. */
+function copySelectionOnRelease(event: PointerEvent<HTMLDivElement>) {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed) return;
+  if (!event.currentTarget.contains(selection.anchorNode)) return;
+  const text = selection.toString();
+  if (!text.trim()) return;
+  writeText(text).catch((err) => logError("ChatSlot: copy selection", err));
 }
 
 function localCalendarDay(date: Date): number {
@@ -1119,6 +1132,7 @@ export function ChatSlot({
           <div
             className="chat-slot-transcript"
             onCopy={copySelectionAsPlainText}
+            onPointerUp={copySelectionOnRelease}
             // The overlay surface is a deep drag region; opting the transcript
             // out is what lets a drag across replies select text instead of
             // moving the window. Buttons inside stay unselectable via CSS.

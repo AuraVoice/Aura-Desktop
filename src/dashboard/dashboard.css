@@ -9753,8 +9753,11 @@
 .db-swarm-text .db-swarm-mention { padding: 1px 6px; box-shadow: none; }
 /* The composer's mirror: identical metrics to the textarea so every glyph lines up. */
 .db-swarm-composer-field { position: relative; flex: 1; min-width: 0; display: grid; }
-.db-swarm-composer-field textarea { grid-area: 1 / 1; position: relative; z-index: 1; color: transparent; caret-color: var(--sw-text); }
-.db-swarm-composer-field textarea:disabled { color: var(--sw-text); }
+/* Scoped under .db-swarm-composer so it outranks `.db-swarm-composer textarea` below, which
+ * sets a visible colour; at equal specificity that later rule won and both copies of the
+ * text showed, doubling into a smear wherever the mirror's metrics differed. */
+.db-swarm-composer .db-swarm-composer-field textarea { grid-area: 1 / 1; position: relative; z-index: 1; color: transparent; caret-color: var(--sw-text); }
+.db-swarm-composer .db-swarm-composer-field textarea:disabled { color: var(--sw-text); }
 .db-swarm-composer-mirror {
   grid-area: 1 / 1;
   overflow: hidden;
@@ -9768,6 +9771,9 @@
   overflow-wrap: anywhere;
   pointer-events: none;
 }
+/* Bold glyphs are wider than the textarea's regular ones, so a bold mention here pushes
+ * every later character, and the caret, out of line. Colour and halo carry it instead. */
+.db-swarm-composer-mirror .db-swarm-mention { font-weight: inherit; }
 /* The message just sent, before the server's copy arrives. */
 .db-swarm-msg.is-pending { opacity: 0.55; }
 .db-swarm-msg.is-pending:hover { background: transparent; }

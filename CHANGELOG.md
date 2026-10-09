@@ -16,6 +16,11 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+- Selecting text in the chat card now copies it right away, no Ctrl+C needed. Ctrl+C works there too now. Before, the selection showed up but the copy went to whatever app you were in before.
+- Tagging a manager with @ in the Swarm message box no longer turns the rest of your message into a doubled, smeared blur, and the cursor stays where you are typing.
+
 ## [0.17.0] - 2026-10-08
 
 ### Changed
