@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { FileText } from "lucide-react";
 import { getDrafts, type RawDraft } from "../../lib/dashboardApi";
 import { useDashboardResource } from "../useDashboardResource";
@@ -27,9 +27,12 @@ function draftToCard(draft: RawDraft): CardModel {
   };
 }
 
-export function DraftsPanel() {
+export function DraftsPanel({ openId = null }: { openId?: string | null }) {
   const res = useDashboardResource<RawDraft[]>("drafts", (signal) => getDrafts(signal));
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(openId);
+  useEffect(() => {
+    if (openId) setSelected(openId);
+  }, [openId]);
 
   const drafts = useMemo(() => res.data ?? [], [res.data]);
   const models = useMemo(() => drafts.map(draftToCard), [drafts]);

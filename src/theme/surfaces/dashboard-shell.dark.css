@@ -84,8 +84,8 @@
   box-shadow: 0 0 0 1px rgba(46, 224, 196, 0.14);
 }
 /* The one teal on an active row is its icon; the chip itself stays charcoal. */
-:root[data-theme="dark"] .db-nav-item-active .db-nav-icon:not(.db-nav-help-icon-discord),
-:root[data-theme="dark"] .db-nav-item-active:hover .db-nav-icon:not(.db-nav-help-icon-discord) {
+:root[data-theme="dark"] .db-nav-item-active .db-nav-icon,
+:root[data-theme="dark"] .db-nav-item-active:hover .db-nav-icon {
   color: var(--dk-accent);
 }
 /* The light pill's white gloss washes out white ink, so dark drops the gloss and
@@ -96,20 +96,6 @@
   --aura-pill-fill: rgba(150, 104, 18, 0.62);
   --aura-pill-text: #fff;
   background: var(--aura-pill-fill);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 1px 3px rgba(0, 0, 0, 0.4);
-}
-:root[data-theme="dark"] .db-nav-item-help[data-phase="discord"]:hover:not(.db-nav-item-active) {
-  background: rgba(88, 101, 242, 0.16);
-}
-:root[data-theme="dark"] .db-nav-item-help {
-  --discord: #8891ff;
-}
-:root[data-theme="dark"] .db-nav-help-word {
-  --word-shine: #a3aaff;
-}
-:root[data-theme="dark"] .db-nav-item-active .db-nav-help-word {
-  --word-ink: #fff;
-  --word-shine: #9ff0e2;
 }
 
 /* ── Main area: plain matte black. The teal corner glows it used to carry are
@@ -171,23 +157,6 @@
 /* ── Shared glass: panels, briefing, stat cards ── */
 :root[data-theme="dark"] .db-link:hover {
   background: var(--dk-accent-soft);
-}
-:root[data-theme="dark"] .db-today-briefing {
-  border-color: var(--dk-glass-border);
-  background: var(--dk-glass-fill);
-  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
-}
-:root[data-theme="dark"] .db-today-briefing-head {
-  border-bottom-color: var(--dk-divider);
-}
-:root[data-theme="dark"] .db-today-briefing-grid > button + button {
-  border-left-color: var(--dk-divider);
-}
-:root[data-theme="dark"] .db-today-briefing-grid > button:hover {
-  background: var(--dk-glass-hover);
-}
-:root[data-theme="dark"] .db-today-briefing-grid > button:focus-visible {
-  outline-color: var(--dk-accent-ring);
 }
 :root[data-theme="dark"] .db-card {
   border-color: var(--dk-glass-border);

@@ -1,86 +1,122 @@
 /* Dark overrides for dashboard-home. Owned by src/theme/themes.css; read its header first.
    Every rule is prefixed :root[data-theme="dark"] and twins each state it touches. */
 
-/* ── Home hero ──
-   The shell sheet lifts --db-teal-deep-a/b to mint for text, so the hero sets its
-   own charcoal gradient here instead of reading those tokens. Teal is only a faint
-   glow in one corner, so the card reads black, not green. */
-:root[data-theme="dark"] .db-hero {
-  background: var(--dk-surface);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+/* ── Home ──
+   Matte, per themes.css: flat fill, hairline border, no gradient, no sheen.
+   The light sheet's calm rules (one radius, no shadow, no motion) need no twin. */
+:root[data-theme="dark"] .db-home-chip {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-home-chip:hover {
+  background: var(--dk-surface-2);
+}
+:root[data-theme="dark"] .db-home-chip:focus-visible {
+  outline-color: var(--dk-accent-ring);
+}
+:root[data-theme="dark"] .db-home-chip.is-warn {
+  border-color: transparent;
+  background: rgba(240, 182, 90, 0.12);
+  color: #f0b65a;
+}
+:root[data-theme="dark"] .db-home-chip.is-warn:hover {
+  background: rgba(240, 182, 90, 0.18);
+}
+:root[data-theme="dark"] .db-home-chip.is-warn .db-home-chip-dot {
+  background: #f0b65a;
 }
 
-/* White pills keep working on the dark hero, but their mint token text would
-   not, so every pill gets a white fill with black ink. */
-:root[data-theme="dark"] .db-hero-cta {
+:root[data-theme="dark"] .db-home-action,
+:root[data-theme="dark"] .db-home-panel {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+}
+:root[data-theme="dark"] .db-home-action:hover {
+  background: var(--dk-surface-2);
+}
+:root[data-theme="dark"] .db-home-action:focus-visible {
+  outline-color: var(--dk-accent-ring);
+}
+:root[data-theme="dark"] .db-home-action.is-teal .db-home-action-glyph { color: var(--dk-accent); }
+:root[data-theme="dark"] .db-home-action.is-violet .db-home-action-glyph { color: #a493ff; }
+:root[data-theme="dark"] .db-home-action.is-cyan .db-home-action-glyph { color: #5cc8f0; }
+:root[data-theme="dark"] .db-home-action.is-ember .db-home-action-glyph { color: #ff8a50; }
+
+:root[data-theme="dark"] .db-home-keys kbd {
+  border-color: var(--dk-border-strong);
+  background: var(--dk-surface-2);
+  color: var(--dk-text-dim);
+}
+
+:root[data-theme="dark"] .db-home-count {
+  background: var(--dk-accent-soft);
+  color: var(--dk-accent-text);
+}
+:root[data-theme="dark"] .db-home-row {
+  border-top-color: var(--dk-divider);
+}
+:root[data-theme="dark"] .db-home-rows > .db-home-row:first-child {
+  border-top-color: transparent;
+}
+:root[data-theme="dark"] button.db-home-row:hover {
+  background: var(--dk-hover);
+}
+:root[data-theme="dark"] button.db-home-row:focus-visible {
+  outline-color: var(--dk-accent-ring);
+}
+:root[data-theme="dark"] .db-home-row-tag.is-teal { background: var(--dk-accent-soft); color: var(--dk-accent); }
+:root[data-theme="dark"] .db-home-row-tag.is-violet { background: rgba(164, 147, 255, 0.12); color: #a493ff; }
+:root[data-theme="dark"] .db-home-row-tag.is-cyan { background: rgba(92, 200, 240, 0.12); color: #5cc8f0; }
+:root[data-theme="dark"] .db-home-row-tag.is-ember { background: rgba(255, 138, 80, 0.12); color: #ff8a50; }
+
+:root[data-theme="dark"] .db-home-pill {
+  border-color: var(--dk-border-strong);
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-home-pill:hover {
+  background: var(--dk-hover);
+}
+:root[data-theme="dark"] .db-home-pill:focus-visible {
+  outline-color: var(--dk-accent-ring);
+}
+:root[data-theme="dark"] .db-home-pill.is-primary {
+  border-color: transparent;
   background: #f5f5f5;
   color: #0a0a0b;
 }
-:root[data-theme="dark"] .db-hero-cta:hover {
+:root[data-theme="dark"] .db-home-pill.is-primary:hover {
   background: #e2e2e4;
 }
-
-/* ── Hotkey guide ── */
-:root[data-theme="dark"] .db-hero-keycaps kbd {
-  border-color: rgba(255, 255, 255, 0.14);
-  border-bottom-color: rgba(0, 0, 0, 0.5);
+:root[data-theme="dark"] .db-home-skeleton span {
   background: var(--dk-surface-2);
-  box-shadow:
-    0 5px 0 #050505,
-    0 7px 13px rgba(0, 0, 0, 0.45),
-    inset 0 1px 0 rgba(255, 255, 255, 0.1);
-  color: var(--dk-text);
-  animation-name: db-key-press-dark;
-}
-:root[data-theme="dark"] .db-hero-keycaps.unavailable kbd {
-  animation-name: none;
-}
-@media (prefers-reduced-motion: reduce) {
-  :root[data-theme="dark"] .db-hero-keycaps kbd {
-    animation-name: none;
-  }
-}
-@keyframes db-key-press-dark {
-  0%, 10%, 100% {
-    box-shadow:
-      0 5px 0 #050505,
-      0 7px 13px rgba(0, 0, 0, 0.45),
-      inset 0 1px 0 rgba(255, 255, 255, 0.1);
-    transform: translateY(0);
-  }
-  4%, 7% {
-    box-shadow:
-      0 2px 0 #050505,
-      0 3px 6px rgba(0, 0, 0, 0.4),
-      inset 0 1px 0 rgba(255, 255, 255, 0.1);
-    transform: translateY(3px);
-  }
-}
-:root[data-theme="dark"] .db-hero-hotkey-actions button {
-  background: #f5f5f5;
-  color: #0a0a0b;
-  box-shadow: 0 5px 14px rgba(0, 0, 0, 0.4);
-}
-:root[data-theme="dark"] .db-hero-hotkey-actions button:hover {
-  box-shadow: 0 7px 18px rgba(0, 0, 0, 0.48);
-}
-:root[data-theme="dark"] .db-hero-hotkey-actions .db-hero-hotkey-next {
-  color: rgba(255, 255, 255, 0.62);
 }
 
-/* ── Up next ── */
-:root[data-theme="dark"] .db-hero-up-next {
-  border-color: rgba(255, 255, 255, 0.1);
-  background: rgba(0, 0, 0, 0.22);
-  box-shadow: var(--dk-glass-inset);
+:root[data-theme="dark"] .db-home-cal-day,
+:root[data-theme="dark"] .db-home-cal-event,
+:root[data-theme="dark"] .db-home-cal-more {
+  border-color: var(--dk-divider);
 }
-:root[data-theme="dark"] .db-hero-up-next button {
+:root[data-theme="dark"] .db-home-cal-event:first-child {
+  border-top-color: transparent;
+}
+:root[data-theme="dark"] .db-home-cal-date {
+  border-color: var(--dk-border-strong);
+  background: var(--dk-surface-2);
+}
+:root[data-theme="dark"] .db-home-cal-month {
   background: #f5f5f5;
   color: #0a0a0b;
 }
-:root[data-theme="dark"] .db-hero-up-next-actions .db-hero-up-next-secondary {
-  background: transparent;
-  color: #fff;
+:root[data-theme="dark"] .db-home-cal-bar {
+  background: var(--dk-border-strong);
+}
+:root[data-theme="dark"] .db-home-cal-event.is-soon .db-home-cal-bar {
+  background: var(--dk-text);
+}
+
+:root[data-theme="dark"] .db-home-insight:focus-visible {
+  outline-color: var(--dk-accent-ring);
 }
 
 /* ── Trial banner ── */

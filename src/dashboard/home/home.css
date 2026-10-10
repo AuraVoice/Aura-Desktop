@@ -1,0 +1,522 @@
+/* Home page. Light rules here; dark twins live in
+   src/theme/surfaces/dashboard-home.dark.css.
+   Calm on purpose (2026-10-09): three text sizes (13 / 14 / 16), two weights
+   (400 / 600), one 12px radius, 1px outlines, no shadows, and nothing moves
+   at rest. Hover changes the background and nothing else. The page has two
+   shapes: action tiles, and panels of HomeRow rows. */
+
+/* ── Header + status chips ── */
+.db-home-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px 20px;
+}
+.db-home-greeting {
+  margin: 0;
+  font-family: var(--font-title, system-ui, sans-serif);
+  font-size: 16px;
+  font-weight: 600;
+  text-wrap: balance;
+}
+.db-home-date {
+  margin: 2px 0 0;
+  color: var(--db-text-mute);
+  font-size: 13px;
+}
+.db-home-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.db-home-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border: 1px solid rgba(63, 86, 78, 0.14);
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
+  color: var(--db-text-dim);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 400;
+  cursor: pointer;
+}
+.db-home-chip:hover {
+  background: rgba(255, 255, 255, 0.95);
+}
+.db-home-chip:focus-visible {
+  outline: 2px solid var(--db-teal);
+  outline-offset: 2px;
+}
+.db-home-chip-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--db-teal);
+}
+.db-home-chip.is-warn {
+  border-color: transparent;
+  background: rgba(183, 121, 31, 0.12);
+  color: #8a5a12;
+}
+.db-home-chip.is-warn:hover {
+  background: rgba(183, 121, 31, 0.18);
+}
+.db-home-chip.is-warn .db-home-chip-dot {
+  background: #b7791f;
+}
+.db-home-chip.is-neutral .db-home-chip-dot {
+  background: var(--db-text-mute);
+}
+
+/* ── Quick actions ── */
+.db-home-actions {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 12px;
+}
+.db-home-action {
+  position: relative;
+  contain: layout paint;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(63, 86, 78, 0.14);
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
+  color: var(--db-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.db-home-action:hover {
+  background: rgba(255, 255, 255, 0.95);
+}
+.db-home-action:focus-visible {
+  outline: 2px solid var(--db-teal);
+  outline-offset: 2px;
+}
+.db-home-action-glyph {
+  align-self: center;
+  width: 20px;
+  height: 20px;
+}
+.db-home-action.is-teal .db-home-action-glyph { color: #0f9f88; }
+.db-home-action.is-violet .db-home-action-glyph { color: #7259d6; }
+.db-home-action.is-cyan .db-home-action-glyph { color: #1b8fb8; }
+.db-home-action.is-ember .db-home-action-glyph { color: #d4612f; }
+.db-home-action-text {
+  display: flex;
+  align-self: stretch;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  text-align: center;
+}
+.db-home-action-name {
+  font-size: 14px;
+  font-weight: 600;
+}
+.db-home-action-desc {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--db-text-dim);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Shortcut keys appear only while the tile is pointed at or focused. They sit
+   in the corner opposite the glyph so showing them moves nothing. */
+.db-home-keys {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 3px;
+  visibility: hidden;
+}
+.db-home-action:hover .db-home-keys,
+.db-home-action:focus-visible .db-home-keys {
+  visibility: visible;
+}
+.db-home-keys kbd {
+  padding: 1px 6px;
+  border: 1px solid rgba(63, 86, 78, 0.16);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.85);
+  color: var(--db-text-dim);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+
+/* ── Panels and rows (Needs you, Up next, Jump back in) ── */
+.db-home-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+.db-home-panel {
+  contain: layout paint;
+  padding: 16px 16px 8px;
+  border: 1px solid rgba(63, 86, 78, 0.14);
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
+}
+.db-home-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.db-home-panel-head h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-family: var(--font-title, system-ui, sans-serif);
+  font-size: 16px;
+  font-weight: 600;
+}
+.db-home-panel-head .db-link {
+  font-size: 13px;
+  font-weight: 600;
+}
+.db-home-count {
+  padding: 0 8px;
+  border-radius: 12px;
+  background: rgba(30, 200, 176, 0.14);
+  color: var(--db-teal-deep-a);
+  font-family: var(--font-body, system-ui, sans-serif);
+  font-size: 13px;
+  font-weight: 600;
+}
+.db-home-rows {
+  display: flex;
+  flex-direction: column;
+}
+.db-home-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 8px;
+  border: 0;
+  border-top: 1px solid rgba(63, 86, 78, 0.1);
+  border-radius: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.db-home-rows > .db-home-row:first-child {
+  border-top-color: transparent;
+}
+button.db-home-row {
+  cursor: pointer;
+}
+button.db-home-row:hover {
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.6);
+}
+button.db-home-row:focus-visible {
+  border-radius: 12px;
+  outline: 2px solid var(--db-teal);
+  outline-offset: -2px;
+}
+.db-home-row-tag {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+}
+.db-home-row-tag.is-teal { background: rgba(15, 159, 136, 0.12); color: #0f9f88; }
+.db-home-row-tag.is-violet { background: rgba(114, 89, 214, 0.12); color: #7259d6; }
+.db-home-row-tag.is-cyan { background: rgba(27, 143, 184, 0.12); color: #1b8fb8; }
+.db-home-row-tag.is-ember { background: rgba(212, 97, 47, 0.12); color: #d4612f; }
+.db-home-row-text {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+.db-home-row-title {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.db-home-row-sub {
+  overflow: hidden;
+  color: var(--db-text-dim);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.db-home-row-meta {
+  color: var(--db-text-mute);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.db-home-row-actions {
+  display: flex;
+  gap: 6px;
+}
+.db-home-pill {
+  padding: 5px 12px;
+  border: 1px solid rgba(63, 86, 78, 0.16);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--db-text-dim);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.db-home-pill:hover {
+  background: rgba(255, 255, 255, 0.6);
+}
+.db-home-pill.is-primary {
+  border-color: transparent;
+  background: var(--db-text);
+  color: #fff;
+}
+.db-home-pill.is-primary:hover {
+  background: #33383f;
+}
+.db-home-pill:focus-visible {
+  outline: 2px solid var(--db-teal);
+  outline-offset: 2px;
+}
+.db-home-pill:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.db-home-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 20px 8px;
+  color: var(--db-text-dim);
+  font-size: 13px;
+  text-align: center;
+}
+.db-home-empty strong {
+  color: var(--db-text);
+  font-size: 14px;
+  font-weight: 600;
+}
+.db-home-empty .db-home-pill {
+  margin-top: 10px;
+}
+.db-home-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 8px 8px 14px;
+}
+.db-home-skeleton span {
+  height: 34px;
+  border-radius: 12px;
+  background: rgba(63, 86, 78, 0.07);
+}
+
+/* ── Up next: today's agenda, drawn like a calendar ──
+   Neutral ink only; the accent never marks an event. */
+.db-home-cal-day {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 0 12px;
+  border-bottom: 1px solid rgba(63, 86, 78, 0.1);
+}
+.db-home-cal-date {
+  display: flex;
+  overflow: hidden;
+  width: 48px;
+  flex-direction: column;
+  flex-shrink: 0;
+  border: 1px solid rgba(63, 86, 78, 0.14);
+  border-radius: 12px;
+  background: #fff;
+  text-align: center;
+}
+.db-home-cal-month {
+  padding: 2px 0;
+  background: var(--db-text);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+}
+.db-home-cal-num {
+  padding: 4px 0 6px;
+  color: var(--db-text);
+  font-size: 16px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.db-home-cal-day-text {
+  display: flex;
+  flex-direction: column;
+}
+.db-home-cal-weekday {
+  font-size: 14px;
+  font-weight: 600;
+}
+.db-home-cal-summary {
+  color: var(--db-text-dim);
+  font-size: 13px;
+}
+.db-home-cal-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.db-home-cal-event {
+  display: grid;
+  grid-template-columns: 64px 3px minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid rgba(63, 86, 78, 0.1);
+}
+.db-home-cal-event:first-child {
+  border-top-color: transparent;
+}
+.db-home-cal-time {
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.db-home-cal-end {
+  color: var(--db-text-mute);
+  font-weight: 400;
+}
+.db-home-cal-bar {
+  border-radius: 12px;
+  background: rgba(63, 86, 78, 0.22);
+}
+.db-home-cal-event.is-soon .db-home-cal-bar {
+  background: var(--db-text);
+}
+.db-home-cal-body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+}
+.db-home-cal-title {
+  display: -webkit-box;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.db-home-cal-detail {
+  overflow: hidden;
+  color: var(--db-text-dim);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.db-home-cal-countdown {
+  color: var(--db-text-mute);
+  font-size: 13px;
+}
+.db-home-cal-event.is-soon .db-home-cal-countdown {
+  color: var(--db-text);
+  font-weight: 600;
+}
+.db-home-cal-event .db-home-pill {
+  align-self: center;
+}
+.db-home-cal-more {
+  margin: 0;
+  padding: 8px 0 6px;
+  border-top: 1px solid rgba(63, 86, 78, 0.1);
+  color: var(--db-text-mute);
+  font-size: 13px;
+}
+
+/* ── Insights, stacked beside Jump back in ──
+   Reuses the shared .db-card stat card (dashboard.css) as-is, by request. The
+   cards and their icon animations are the one place on Home that moves at
+   rest (Varun's call, 2026-10-09). */
+.db-home-insights {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.db-home-insight {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  color: var(--db-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.db-home-insight:focus-visible {
+  outline: 2px solid var(--db-teal);
+  outline-offset: 2px;
+}
+.db-home-insight .db-card-head {
+  width: 100%;
+}
+
+/* A live fire: the outer flame stretches and leans on one clock, the pale core
+   on a faster one, both anchored at the base so the tips lick upward. */
+.db-flame-outer,
+.db-flame-core {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+}
+.db-flame-outer {
+  animation: db-flame-dance 1.6s ease-in-out infinite;
+}
+.db-flame-core {
+  animation: db-flame-core 1.1s ease-in-out infinite;
+}
+@keyframes db-flame-dance {
+  0%, 100% { transform: scale(1, 1) skewX(0deg); }
+  20% { transform: scale(0.97, 1.07) skewX(-3deg); }
+  45% { transform: scale(1.02, 0.96) skewX(2deg); }
+  70% { transform: scale(0.98, 1.05) skewX(-1.5deg); }
+}
+@keyframes db-flame-core {
+  0%, 100% { transform: scale(1, 1); opacity: 1; }
+  35% { transform: scale(0.88, 1.12); opacity: 0.85; }
+  65% { transform: scale(1.06, 0.92); opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .db-flame-outer,
+  .db-flame-core {
+    animation: none;
+  }
+}
+
+@media (max-width: 1100px) {
+  .db-home-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 900px) {
+  .db-home-split { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 560px) {
+  .db-home-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

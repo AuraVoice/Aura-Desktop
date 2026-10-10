@@ -20,9 +20,10 @@ function isHistoryTab(value: string | null | undefined): value is HistoryTab {
   return HISTORY_TABS.some((tab) => tab.value === value);
 }
 
-/** Route to the History page with the given section open. */
-export function historyPath(tab: HistoryTab): string {
-  return `/history?tab=${tab}`;
+/** Route to the History page with the given section open, and optionally one
+ * conversation or draft opened in its detail view. */
+export function historyPath(tab: HistoryTab, itemId?: string | null): string {
+  return itemId ? `/history?tab=${tab}&id=${encodeURIComponent(itemId)}` : `/history?tab=${tab}`;
 }
 
 function rememberedTab(): HistoryTab {
@@ -48,6 +49,7 @@ function rememberTab(tab: HistoryTab) {
 export function HistoryPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const paramTab = searchParams.get("tab");
+  const paramId = searchParams.get("id");
   const [initialTab] = useState<HistoryTab>(() => (isHistoryTab(paramTab) ? paramTab : rememberedTab()));
   const stage = useTabStage<HistoryTab>(initialTab);
 
@@ -61,6 +63,14 @@ export function HistoryPage() {
     // stage.switchTab is recreated every render; only the param matters here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paramTab]);
+
+  // The panel picks `id` up when it renders; drop it from the URL after that so
+  // closing the item and following the same link again still reopens it.
+  useEffect(() => {
+    if (paramId && isHistoryTab(paramTab) && stage.renderedTab === paramTab) {
+      setSearchParams({ tab: paramTab }, { replace: true });
+    }
+  }, [paramId, paramTab, stage.renderedTab, setSearchParams]);
 
   const select = (tab: HistoryTab) => {
     stage.switchTab(tab);
@@ -88,9 +98,9 @@ export function HistoryPage() {
           {stage.renderedTab === "saved" ? (
             <SavedPanel />
           ) : stage.renderedTab === "drafts" ? (
-            <DraftsPanel />
+            <DraftsPanel openId={paramId} />
           ) : (
-            <ConversationsPanel />
+            <ConversationsPanel openId={paramId} />
           )}
         </div>
       </div>

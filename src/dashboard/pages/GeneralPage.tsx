@@ -235,14 +235,8 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
               onChange={(value) => void update("dailyCatchUp", value)}
             />
             <ToggleRow
-              label="Daily briefing"
-              description="Build a Today view from meetings, drafts, saved items, and activity."
-              checked={settings.dailyBriefing}
-              onChange={(value) => void update("dailyBriefing", value)}
-            />
-            <ToggleRow
-              label="Calendar in briefing"
-              description="Include connected Google Calendar events in Today."
+              label="Calendar on Home"
+              description="Show your next Google Calendar events on the Home page."
               checked={settings.calendarInBriefing}
               onChange={(value) => void update("calendarInBriefing", value)}
             />

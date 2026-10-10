@@ -16,6 +16,13 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+### Changed
+
+- Home is now a launchpad instead of a welcome banner. Start a voice call, open chat, dictate, or jump to Meetings, Research and Swarm from one row of tiles, each showing its shortcut. A Needs you list shows posts waiting for your OK (approve them right there) and this week's meeting action items. Up next lists your calendar with a Join button when a call is about to start, and Jump back in opens your latest conversation, draft, saved item and meeting directly. The weekly stats are now one line at the bottom that opens Insights.
+- Links from Home now open the exact conversation, draft or meeting instead of just the page it lives on.
+- Home and the sidebar are calmer. Nothing moves unless you point at it: the Beta tags no longer flash, Get help no longer flips to Join Discord, and menu items no longer jump on hover. Text uses fewer sizes, every list on Home has the same simple row layout, and the shortcut for each action shows when you hover its tile.
+- The Daily briefing setting is gone, since Home now shows that information. "Calendar in briefing" is now "Calendar on Home".
+
 ## [0.17.1] - 2026-10-09
 
 ### Fixed

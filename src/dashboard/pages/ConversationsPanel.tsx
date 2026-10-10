@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Archive, AudioLines } from "lucide-react";
 import {
   getHistorySessions,
@@ -41,14 +41,18 @@ function archiveToCard(archive: HistoryArchive): CardModel {
   };
 }
 
-export function ConversationsPanel() {
-  const [range, setRange] = useState<RangeKey>("3d");
+export function ConversationsPanel({ openId = null }: { openId?: string | null }) {
+  // A Home link can point at a conversation older than the default window.
+  const [range, setRange] = useState<RangeKey>(openId ? "30d" : "3d");
   const since = sinceFromRange(range);
   const res = useDashboardResource<HistorySessions>(
     `history:${range}`,
     (signal) => getHistorySessions(since, signal),
   );
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(openId);
+  useEffect(() => {
+    if (openId) setSelected(openId);
+  }, [openId]);
 
   const sessions = res.data?.sessions ?? [];
   const archive = res.data?.archive ?? null;
@@ -94,7 +98,7 @@ export function ConversationsPanel() {
       )}
 
       <DetailModal
-        open={selected != null}
+        open={selected === ARCHIVE_ID || selectedSession != null}
         title={
           selected === ARCHIVE_ID
             ? "Earlier history"

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { openPath } from "@tauri-apps/plugin-opener";
+import { useSearchParams } from "react-router-dom";
 import {
   ArrowLeft,
   Download,
@@ -763,13 +764,28 @@ function LocalRecoverySection({
   );
 }
 
+/** Route to the Meetings page with one meeting open (Home links use this). */
+export function meetingPath(meetingId: string): string {
+  return `/meetings?id=${encodeURIComponent(meetingId)}`;
+}
+
 export function MeetingsPage() {
   const res = useDashboardResource<MeetingDoc[]>(
     "meetings",
     (signal) => getMeetings(signal),
   );
   const local = useLocalRecordings();
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const paramId = searchParams.get("id");
+  const [selectedId, setSelectedIdState] = useState<string | null>(paramId);
+  // An unknown or deleted id simply matches nothing and the list shows.
+  useEffect(() => {
+    if (paramId) setSelectedIdState(paramId);
+  }, [paramId]);
+  const setSelectedId = (id: string | null) => {
+    setSelectedIdState(id);
+    if (!id && paramId) setSearchParams({}, { replace: true });
+  };
   const [pendingMeetingDelete, setPendingMeetingDelete] = useState<MeetingDoc | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
