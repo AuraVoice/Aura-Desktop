@@ -12,8 +12,9 @@
 //! key and answers with ONE action), run that action through the guard
 //! (guard.rs: refs must exist, risky targets pause for the user) and then
 //! through the browser, record a trace line, checkpoint the encrypted row
-//! (store.rs), and repeat until the model says done, a cap trips, or the user
-//! stops it. Code owns every part of the control flow; the model only fills
+//! (store.rs), and repeat until the model says done, the task stops reaching
+//! anything new (agent_governor.rs), or the user stops it. There is no step
+//! or time cap: spend is bounded by a check-in the user answers. Code owns every part of the control flow; the model only fills
 //! in the next action (section 9.1).
 //!
 //! Authorization is `Operation::StartBrowserTask`, NOT `DesktopControl`: the
@@ -39,7 +40,11 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::dictation::scoped_token::ScopedToken;
-use crate::events::{BROWSER_TASK_APPROVAL as APPROVAL_EVENT, BROWSER_TASK_STATUS as STATUS_EVENT};
+use crate::agent_governor::{self, Governor, Verdict};
+use crate::events::{
+    BROWSER_TASK_APPROVAL as APPROVAL_EVENT, BROWSER_TASK_CHECKIN as CHECKIN_EVENT,
+    BROWSER_TASK_STATUS as STATUS_EVENT,
+};
 use crate::security::{self, Operation};
 use guard::{Action, Gate};
 use store::TraceEntry;
@@ -49,9 +54,12 @@ use store::TraceEntry;
 /// the webview to learn where the backend lives.
 const API_BASE_URL: &str = "https://juno-backend-620715294422.us-central1.run.app";
 
-/// Hard stop: whatever was found so far is saved, marked partial (section 4).
-const STEP_CAP: u32 = 40;
-const WALL_CLOCK_LIMIT: Duration = Duration::from_secs(5 * 60);
+/// How long a spend check-in waits for an answer before the task ends with
+/// what it found. Long on purpose: the user stepped away, the task did not fail.
+const CHECKIN_WAIT: Duration = Duration::from_secs(30 * 60);
+/// Mirrors quota.py PER_STEP_ESTIMATE_MICROUSD: what a step is counted at when
+/// the response carries no cost (a malformed step, an older backend).
+const PER_STEP_ESTIMATE_MICROUSD: u64 = 60_000;
 /// The approval card's window. No answer means no.
 const APPROVAL_WAIT: Duration = Duration::from_secs(60);
 /// Two refusals in a row: the model has no other route to the goal.
@@ -63,6 +71,18 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(25);
 
 static TOKEN: Mutex<ScopedToken> = Mutex::new(ScopedToken::new("agent_browser.credential"));
+
+/// The same Firebase ID token, for the desktop Operator's step calls: one
+/// credential pump feeds both agents, so neither can outlive a sign-out the
+/// other noticed.
+pub(crate) fn usable_credential() -> Option<String> {
+    TOKEN.lock().unwrap_or_else(|e| e.into_inner()).usable()
+}
+
+/// Drops the shared token after a 401, for whichever agent saw it.
+pub(crate) fn clear_credential() {
+    TOKEN.lock().unwrap_or_else(|e| e.into_inner()).clear();
+}
 
 pub enum RuntimeCommand {
     Stop,
@@ -106,6 +126,16 @@ struct ApprovalPayload {
     task_id: String,
     epoch: u64,
     description: String,
+    url: String,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckinPayload {
+    task_id: String,
+    epoch: u64,
+    spent_microusd: u64,
+    steps: u32,
     url: String,
 }
 
@@ -704,7 +734,7 @@ fn run_worker_loop(
         started.elapsed().as_millis()
     );
 
-    let outcome = drive(app, spec, commands, trace, &cdp, &page, &mut visibility, started);
+    let outcome = drive(app, spec, commands, trace, &cdp, &page, &mut visibility);
 
     // Cleanup in a fixed order: a polite close, then the hard kill.
     let _ = cdp.call(None, "Browser.close", json!({}));
@@ -723,7 +753,6 @@ fn drive(
     cdp: &cdp::CdpClient,
     page: &cdp::Page,
     visibility: &mut Visibility<'_>,
-    started: Instant,
 ) -> Outcome {
     let mut notes = String::new();
     let mut history: Vec<Value> = Vec::new();
@@ -740,16 +769,14 @@ fn drive(
     let mut step: u32 = 0;
     let mut retried_503 = false;
     let mut dialogs: Vec<cdp::Event> = Vec::new();
+    let mut governor = Governor::default();
+    // The step whose resulting state was last shown to the governor, so a
+    // transport retry (no new action) is never counted as a stall.
+    let mut observed_step: Option<u32> = None;
 
     loop {
         if matches!(drain_commands(commands, visibility), Drained::Stop) {
             return Outcome::stopped();
-        }
-        if step >= STEP_CAP {
-            return Outcome::partial("step_cap", notes.clone());
-        }
-        if started.elapsed() >= WALL_CLOCK_LIMIT {
-            return Outcome::partial("time_cap", notes.clone());
         }
         let step_started = Instant::now();
 
@@ -789,6 +816,45 @@ fn drive(
         } else {
             ""
         };
+        // Where the task is now: the page, what is on it, and how far down the
+        // agent has read. A state never seen before in this task is progress.
+        if observed_step != Some(step) {
+            observed_step = Some(step);
+            let state = agent_governor::fingerprint(&(
+                info.url.as_str(),
+                full_text.as_str(),
+                page_offset,
+                info.scroll_y,
+                read_mode,
+            ));
+            if governor.observe(state) == Verdict::Stuck {
+                info!("agent_browser: stuck after {} actions with nothing new", governor.stall());
+                return Outcome::partial("stuck", notes.clone());
+            }
+        }
+        let stall_note = if governor.needs_nudge() {
+            let recent: Vec<String> = history
+                .iter()
+                .rev()
+                .take(governor.stall() as usize)
+                .rev()
+                .map(|entry| {
+                    format!(
+                        "{} {} -> {}",
+                        entry.get("action").and_then(Value::as_str).unwrap_or("?"),
+                        entry.get("ref").and_then(Value::as_str).unwrap_or(""),
+                        entry.get("result").and_then(Value::as_str).unwrap_or(""),
+                    )
+                })
+                .collect();
+            format!(
+                "your last {} actions reached nothing new ({}). Try a different approach, or finish with done or blocked.",
+                governor.stall(),
+                recent.join("; ")
+            )
+        } else {
+            String::new()
+        };
         let snapshot_text = format!(
             "{mode_line}SCROLL: y={}/{} viewport={}\nLAST_ACTION: {}\n{}",
             info.scroll_y, info.scroll_height, info.viewport_height, last_action_line, chunk
@@ -798,7 +864,6 @@ fn drive(
             Some(token) => token,
             None => return Outcome::failed("no_credential"),
         };
-        let remaining_ms = WALL_CLOCK_LIMIT.saturating_sub(started.elapsed()).as_millis() as u64;
         let body = json!({
             "task_id": spec.task_id,
             "step": step,
@@ -806,8 +871,7 @@ fn drive(
             "page": { "url": info.url, "title": info.title, "snapshot": snapshot_text, "truncated": truncated },
             "history": history.iter().rev().take(HISTORY_KEEP).rev().collect::<Vec<_>>(),
             "notes": notes,
-            "remaining_steps": STEP_CAP.saturating_sub(step),
-            "remaining_ms": remaining_ms,
+            "stall_note": stall_note,
         });
         let model_started = Instant::now();
         let response = tauri::async_runtime::block_on(request_step(token, body));
@@ -820,8 +884,10 @@ fn drive(
             Err(StepError::Terminal(code)) => return Outcome::failed(code),
             Err(StepError::Malformed(shape)) => {
                 // Counted as a step, fed back as history, so the next call
-                // sees what was wrong instead of repeating it.
+                // sees what was wrong instead of repeating it. The backend
+                // already paid for the model call.
                 step += 1;
+                governor.add_spend(PER_STEP_ESTIMATE_MICROUSD);
                 history.push(json!({ "step": step, "action": "invalid", "result": format!("malformed:{shape}") }));
                 last_action_line = format!("your last action was malformed ({shape}); choose again");
                 reuse_tree = true;
@@ -852,6 +918,11 @@ fn drive(
         let tokens_in = response.pointer("/usage/input_tokens").and_then(Value::as_u64).unwrap_or(0);
         let tokens_out = response.pointer("/usage/output_tokens").and_then(Value::as_u64).unwrap_or(0);
         let model = response.pointer("/usage/model").and_then(Value::as_str).unwrap_or("").to_string();
+        let cost = response
+            .pointer("/usage/cost_microusd")
+            .and_then(Value::as_u64)
+            .unwrap_or(PER_STEP_ESTIMATE_MICROUSD);
+        let checkin_due = governor.add_spend(cost);
         step += 1;
 
         // The gate, in code, before anything touches the browser.
@@ -1057,5 +1128,44 @@ fn drive(
             warn!("agent_browser: checkpoint failed: {error}");
         }
         emit_progress(app, spec.epoch, "running", step, &url_after);
+
+        if checkin_due {
+            info!(
+                "agent_browser: spend check-in step={step} spent_microusd={}",
+                governor.spent_microusd()
+            );
+            emit_progress(app, spec.epoch, "awaiting_checkin", step, &url_after);
+            let _ = app.emit(
+                CHECKIN_EVENT,
+                CheckinPayload {
+                    task_id: spec.task_id.clone(),
+                    epoch: spec.epoch,
+                    spent_microusd: governor.spent_microusd(),
+                    steps: step,
+                    url: url_after.clone(),
+                },
+            );
+            let deadline = Instant::now() + CHECKIN_WAIT;
+            loop {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    return Outcome::partial("checkin_timeout", notes.clone());
+                }
+                match commands.recv_timeout(remaining) {
+                    Ok(RuntimeCommand::Approve(true)) => break,
+                    Ok(RuntimeCommand::Approve(false)) | Ok(RuntimeCommand::Stop) => return Outcome::stopped(),
+                    Ok(RuntimeCommand::Watch) => {
+                        let next = !visibility.visible;
+                        visibility.apply(next);
+                    }
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        return Outcome::partial("checkin_timeout", notes.clone());
+                    }
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return Outcome::stopped(),
+                }
+            }
+            governor.extend();
+            emit_progress(app, spec.epoch, "running", step, &url_after);
+        }
     }
 }

@@ -54,6 +54,12 @@ pub(crate) struct CapturedFrame {
 }
 
 impl CapturedFrame {
+    /// The bare JPEG, for a caller that sends the frame itself (the desktop
+    /// Operator's `screen.look`) rather than handing it to the webview.
+    pub(crate) fn into_jpeg(self) -> Vec<u8> {
+        self.jpeg_bytes
+    }
+
     fn into_response(self) -> Response {
         Response::new(self.payload)
     }

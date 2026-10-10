@@ -179,7 +179,7 @@ pub fn capture(
 /// An element belonging to Aura itself. Compared by process id rather than by
 /// window handle so it covers the overlay, the dashboard and any future window
 /// without anyone remembering to add it to a list.
-pub(super) fn is_own_process(element: &IUIAutomationElement) -> bool {
+pub(crate) fn is_own_process(element: &IUIAutomationElement) -> bool {
     unsafe { element.CurrentProcessId() }
         .map(|pid| pid as u32 == std::process::id())
         .unwrap_or(false)
@@ -483,7 +483,7 @@ fn synthesized_id(
 /// UIA_CONTROLTYPE_ID values are a stable, documented, contiguous block
 /// starting at 50000. Mapped to the names the model already reasons about
 /// rather than raw numbers.
-pub(super) fn role_name(control_type: i32) -> &'static str {
+pub(crate) fn role_name(control_type: i32) -> &'static str {
     match control_type {
         50000 => "Button",
         50001 => "Calendar",

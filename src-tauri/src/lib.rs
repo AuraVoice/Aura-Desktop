@@ -23,6 +23,9 @@
 #![cfg_attr(not(windows), allow(dead_code, unused_imports))]
 
 mod agent_browser;
+mod agent_governor;
+mod agent_operator;
+mod app_catalog;
 mod audio_ducking;
 mod audio_capture;
 mod auth_cache;
@@ -55,6 +58,7 @@ mod macos_install;
 mod macos_window;
 mod meeting;
 mod microphone_permission;
+mod native_ui;
 mod overlay;
 mod redact;
 /// Same gate as `dictation`: it shares that module's chord state machine, and
@@ -413,6 +417,8 @@ pub fn run() {
         .manage(hotkeys::HotkeyState::default())
         .manage(interview::InterviewHandle::default())
         .manage(agent_browser::BrowserAgentHandle::default())
+        .manage(agent_operator::OperatorHandle::default())
+        .manage(native_ui::NativeUi::start())
         .manage(security::SecurityHandle::default())
         .manage(guide::GuideRuntimeHandle::default())
         .manage(guide::GuideCaptureHandle::default())
@@ -611,6 +617,15 @@ pub fn run() {
             agent_browser::browser_tasks_list,
             agent_browser::browser_task_load,
             agent_browser::browser_task_delete,
+            agent_operator::desktop_task_start,
+            agent_operator::desktop_task_stop,
+            agent_operator::desktop_task_approve,
+            agent_operator::desktop_task_status,
+            agent_operator::desktop_task_consent,
+            agent_operator::set_desktop_task_consent,
+            agent_operator::desktop_tasks_list,
+            agent_operator::desktop_task_load,
+            agent_operator::desktop_task_delete,
             dictation::polish_commands::dictation_polish_settings,
             dictation::polish_commands::dictation_set_polish_settings,
             dictation::polish_commands::dictation_set_polish_credential,
@@ -712,6 +727,7 @@ pub fn run() {
             // security state and sweep a browser a crash may have left
             // holding the agent profile.
             agent_browser::on_startup(app.handle());
+            agent_operator::on_startup(app.handle());
 
             // Regular so the app has a Dock icon and a Cmd+Tab entry to
             // navigate back to, which the menu bar item alone did not give
@@ -871,6 +887,8 @@ pub fn run() {
                 // the Job Object guarantees it; this is the polite close and
                 // the macOS path.
                 agent_browser::kill_for_shutdown(app);
+                // A desktop task must not keep clicking in a closing app.
+                agent_operator::kill_for_shutdown(app);
                 // A deliberate exit; the next launch must not count it as a
                 // crash (telemetry::startup_marker).
                 telemetry::startup_marker::clean_exit(app);

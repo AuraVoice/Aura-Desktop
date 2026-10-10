@@ -16,6 +16,20 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-10-10
+
+### Added
+
+- Desktop tasks from Swarm (Windows). Ask in #group for something on your own computer, like "find everything Zoom can do with recordings and transcripts" or "turn on dark mode in Settings", and Swarm shows a card you can edit and Start. Buddy then works the way a coding agent does in a terminal: it reads files and app settings with commands, searches and reads the web, and opens an app and clicks through it only when nothing else will do. The report lands right in the channel. Read-only commands run on their own; it shows you the exact command before anything that changes your PC, asks once before reading each new website, never types a password or acts in a sign-in or security prompt, and pauses the moment you touch the mouse or keyboard. Every $1 it spends, it asks whether to keep going.
+- Copy a meeting's notes as Markdown with one click, or save them, the transcript as text, or subtitles (.vtt) to Downloads, Aura Documents.
+- Pause a meeting recording from the Aura icon in the system tray (menu bar on a Mac) and resume when you're ready. Nothing said while paused is kept.
+- Edit any section of a meeting's notes, such as a wrong action item, before you share them. The AI version is kept and you can restore it.
+- Ask Aura about a past meeting: Ask Aura opens chat with that meeting's notes and transcript attached, so you can ask things like "was my name mentioned?"
+- Notes now fit the kind of conversation: lectures get the key points taught and any assignments, stand-ups get blockers, and one-on-ones get feedback and agreements. Choose "Regenerate as" to rewrite a note as a different kind.
+- Longer meetings get chapters. Click one to jump to that point in the transcript.
+- Pin up to 3 meeting notes to keep them past the 7 days notes are normally kept, and get a heads-up a day before an unpinned note is deleted.
+- Keep private meetings out of Meeting Notes: under Settings, Data and privacy, Private meetings, add words like "therapy" or "payroll", and any meeting whose title contains one is skipped and never transcribed.
+- The "Record this call?" card reminds you to tell everyone on the call you're recording, since Aura records without joining as a bot.
 ### Changed
 
 - Home is now a launchpad instead of a welcome banner. Start a voice call, open chat, dictate, or jump to Meetings, Research and Swarm from one row of tiles, each showing its shortcut. A Needs you list shows posts waiting for your OK (approve them right there) and this week's meeting action items. Up next lists your calendar with a Join button when a call is about to start, and Jump back in opens your latest conversation, draft, saved item and meeting directly. The weekly stats are now one line at the bottom that opens Insights.
@@ -23,6 +37,14 @@ was started and read like commit subjects rather than release notes.
 - Home and the sidebar are calmer. Nothing moves unless you point at it: the Beta tags no longer flash, Get help no longer flips to Join Discord, and menu items no longer jump on hover. Text uses fewer sizes, every list on Home has the same simple row layout, and the shortcut for each action shows when you hover its tile.
 - The notification bell and the minimize, maximize and close buttons at the top right are spaced out like standard Windows title bar buttons, so they are easier to hit.
 - The Daily briefing setting is gone, since Home now shows that information. "Calendar in briefing" is now "Calendar on Home".
+- Browser tasks no longer stop at 40 steps or 5 minutes. Buddy keeps going as long as each step reaches something new. If it keeps hitting the same wall, it tries another route, then stops and saves what it found. Every $1 it spends, it pauses and asks whether to keep going.
+- Swarm managers no longer stop at 20 steps per task or 30 minutes per run. They keep reading while they find new things, and one that repeats itself is told to try another way before it stops. Every $1 a run spends, the manager asks whether to keep going or write up what it has; a scheduled run or a watch writes up at that point instead.
+
+### Fixed
+
+- A desktop task keeps working while you type, move the mouse or dictate. It only waits for you before it clicks, types or switches windows in your apps.
+- Opening any Swarm chat now shows its latest message right away, every time. It no longer opens on the first message or partway up and then scrolls down.
+- Bolt no longer turns into a big dark bubble in the corner of your screen after you hide him and restart Aura. He also comes back on time when "Hide until tomorrow" or "Hide for an hour" runs out, even if Aura was restarted in between.
 
 ## [0.17.1] - 2026-10-09
 

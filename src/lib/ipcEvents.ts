@@ -77,12 +77,25 @@ export const REGION_CANCELLED = "region-cancelled";
 // agent_browser/mod.rs
 export const BROWSER_TASK_STATUS = "browser-task-status";
 export const BROWSER_TASK_APPROVAL = "browser-task-approval";
+export const BROWSER_TASK_CHECKIN = "browser-task-checkin";
+// The desktop Operator's twins (agent_operator/mod.rs), same payload shapes.
+export const OPERATOR_TASK_STATUS = "operator-task-status";
+export const OPERATOR_TASK_APPROVAL = "operator-task-approval";
+export const OPERATOR_TASK_CHECKIN = "operator-task-checkin";
 
 // JS-originated (no Rust twin)
 export const START_VOICE_REQUESTED = "start-voice-requested";
 export const DESKTOP_ONBOARDING_COMPLETED = "desktop-onboarding-completed";
 export const DESKTOP_NOTIFICATION_LOCAL = "desktop-notification-local";
 export const TELEMETRY_CONSENT_CHANGED = "telemetry-consent-changed";
+/** The dashboard's "Ask Aura" on a meeting: hands the overlay a text file to
+ * attach to the chat composer, then summons chat. Payload: ChatAttachRequest. */
+export const CHAT_ATTACH_REQUESTED = "chat-attach-requested";
+
+export interface ChatAttachRequest {
+  fileName: string;
+  text: string;
+}
 
 // Shared payload types for events consumed in more than one place, so every
 // listener agrees with the Rust struct rather than re-typing the shape.
@@ -210,6 +223,7 @@ export type BrowserTaskPhase =
   | "launching"
   | "running"
   | "awaiting_approval"
+  | "awaiting_checkin"
   | "done"
   | "partial"
   | "failed"
@@ -223,6 +237,8 @@ export interface BrowserTaskStatusPayload {
   brief: string | null;
   steps: number;
   url: string | null;
+  /** Desktop tasks only: the executable stem of the window being worked in. */
+  app?: string | null;
   reason: string | null;
   answer: string | null;
   sources: string[];
@@ -235,4 +251,17 @@ export interface BrowserTaskApprovalPayload {
   epoch: number;
   description: string;
   url: string;
+}
+
+// Mirrors agent_browser/mod.rs CheckinPayload: the task crossed a spend mark
+// (agent_governor.rs) and waits for Keep going or Stop.
+export interface BrowserTaskCheckinPayload {
+  taskId: string;
+  epoch: number;
+  spentMicrousd: number;
+  steps: number;
+  url: string;
+  /** Desktop tasks only: "spend" for the $1 check-in, "user_input" when the
+   * person touched the mouse or keyboard mid-task. Browser check-ins omit it. */
+  reason?: string;
 }

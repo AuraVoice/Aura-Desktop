@@ -6,12 +6,14 @@ import { logError } from "../lib/log";
 import { useTauriEvent } from "../lib/useTauriEvent";
 import {
   CAPTURE_NOW_REQUESTED,
+  CHAT_ATTACH_REQUESTED,
   CHAT_REQUESTED,
   CHAT_TOGGLE_REQUESTED,
   END_VOICE_SESSION,
   OPEN_NOTIFICATIONS_REQUESTED,
   OVERLAY_CHANGED,
   START_VOICE_REQUESTED,
+  type ChatAttachRequest,
 } from "../lib/ipcEvents";
 import { useVoiceBar } from "./useVoiceBar";
 import { useNotchGesture } from "./useNotchGesture";
@@ -24,6 +26,7 @@ import { useMeetings } from "./useMeetings";
 import { useDictationCredential } from "./useDictationCredential";
 import { usePolishCredential } from "./usePolishCredential";
 import { useMeetingCapture } from "./useMeetingCapture";
+import { useMeetingExpiryWarnings } from "./useMeetingExpiryWarnings";
 import { useMeetingPrompt } from "./useMeetingPrompt";
 import {
   MeetingPromptCard,
@@ -114,6 +117,10 @@ export function OverlayRoot() {
   }, [user]);
   const [chatHistoryOpen, setChatHistoryOpen] = useState(false);
   const [chatFocusNonce, setChatFocusNonce] = useState(0);
+  // A file another window asked the composer to attach (the dashboard's "Ask
+  // Aura" on a meeting). Held here because ChatSlot only exists while chat is
+  // open, and the request can land just before summon_chat opens it.
+  const [chatSeed, setChatSeed] = useState<(ChatAttachRequest & { nonce: number }) | null>(null);
   // Signed in is the whole gate. /chat needs a Firebase token, so a signed-out
   // composer could not send anything anyway. What keeps the cold lane safe is
   // the server-enforced surface allowlist that hard-excludes send_email and
@@ -364,14 +371,31 @@ export function OverlayRoot() {
     appHidden: presentation !== "bar",
     room: voice.room,
   });
+  // The one live desktop task (agent_operator), on the same card. Only one of
+  // the two is drawn at a time; the desktop task wins while it has anything to
+  // show, because its Stop is the only way to take the cursor back.
+  const desktopTask = useBrowserTask({
+    uid: user?.uid ?? null,
+    appHidden: presentation !== "bar",
+    room: null,
+    kind: "desktop",
+  });
+  const agentTask =
+    desktopTask.live || desktopTask.approval !== null || desktopTask.checkin !== null || desktopTask.result !== null
+      ? desktopTask
+      : browserTask;
   // The result card reports its measured height; null until it has, and
   // again whenever a different result arrives, so the constant guess never
   // outlives the content it guessed for.
   const [browserTaskMeasured, setBrowserTaskMeasured] = useState<number | null>(null);
   useEffect(() => {
     setBrowserTaskMeasured(null);
-  }, [browserTask.result]);
+  }, [agentTask.result]);
   const meetingCapture = useMeetingCapture({
+    uid: user?.uid ?? null,
+    appHidden: presentation !== "bar",
+  });
+  useMeetingExpiryWarnings({
     uid: user?.uid ?? null,
     appHidden: presentation !== "bar",
   });
@@ -464,7 +488,7 @@ export function OverlayRoot() {
   // control, so neither may queue behind the inbox or a banner.
   const showBrowserTask =
     user !== null
-    && (browserTask.live || browserTask.approval !== null || browserTask.result !== null)
+    && (agentTask.live || agentTask.approval !== null || agentTask.result !== null)
     && !showInterviewContext
     && !showVoiceNotice
     && !showDraftCard;
@@ -577,7 +601,7 @@ export function OverlayRoot() {
         : showDraftCard
           ? draftCardHeight
           : showBrowserTask
-            ? (browserTaskMeasured ?? browserTaskSlotHeight(browserTask))
+            ? (browserTaskMeasured ?? browserTaskSlotHeight(agentTask))
           : meetingPromptOnScreen
             ? MEETING_PROMPT_HEIGHT
             : showScreenContextConsent
@@ -746,6 +770,15 @@ export function OverlayRoot() {
     "OverlayRoot: listen chat-requested",
   );
 
+  useTauriEvent<ChatAttachRequest>(
+    CHAT_ATTACH_REQUESTED,
+    (request) => {
+      if (!chatEnabled || !request?.text) return;
+      setChatSeed({ ...request, nonce: Date.now() });
+    },
+    "OverlayRoot: listen chat-attach-requested",
+  );
+
   const resetCallbackCard = callbackCard.reset;
   useEffect(() => {
     if (!user) {
@@ -786,6 +819,9 @@ export function OverlayRoot() {
       void openDashboardWindow("/agents", notification.resourceId, "research");
     } else if (notification.action === "view_browser_task") {
       void openDashboardWindow("/agents", notification.resourceId, "computer");
+    } else if (notification.action === "view_desktop_task") {
+      // Desktop tasks start from a Swarm Start card in #group, which shows the result.
+      void openDashboardWindow("/agents", "group", "swarm");
     } else if (notification.action === "view_swarm_channel") {
       void openDashboardWindow("/agents", notification.resourceId, "swarm");
     }
@@ -960,6 +996,8 @@ export function OverlayRoot() {
         <ChatSlot
           messages={chat.messages}
           focusNonce={chatFocusNonce}
+          seedAttachment={chatSeed}
+          onSeedAttached={() => setChatSeed(null)}
           screen={screenCapture.state}
           onNewConversation={chat.newConversation}
           onClose={dismissChatOverlay}
@@ -1033,7 +1071,7 @@ export function OverlayRoot() {
             onPost={postDraft}
           />
         )}
-      {!lowerCardsHidden && showBrowserTask && <BrowserTaskCard task={browserTask} onHeightChange={setBrowserTaskMeasured} />}
+      {!lowerCardsHidden && showBrowserTask && <BrowserTaskCard task={agentTask} onHeightChange={setBrowserTaskMeasured} />}
       {!lowerCardsHidden &&meetingPromptOnScreen && (
         <MeetingPromptCard prompt={meetingPrompt} leaving={meetingPromptPresence.leaving} />
       )}

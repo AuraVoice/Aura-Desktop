@@ -83,7 +83,34 @@ export interface TranscriptTurn {
   endS?: number;
 }
 
-export type MeetingKind = "meeting" | "interview";
+export type MeetingKind = "meeting" | "interview" | "lecture" | "one_on_one" | "standup";
+
+export const MEETING_KINDS: readonly MeetingKind[] = [
+  "meeting",
+  "interview",
+  "lecture",
+  "one_on_one",
+  "standup",
+];
+
+/** A part of the meeting the note model marked, snapped server-side onto the
+ *  start of a real turn. Only notes with timed turns over ~10 minutes have any. */
+export interface MeetingChapter {
+  title: string;
+  startS: number;
+}
+
+/** The user's own version of the note's editable sections. The AI note stays
+ *  beside it; deleting this restores it. */
+export interface EditedNote {
+  summary: string;
+  decisions: string[];
+  actionItems: string[];
+  openQuestions: string[];
+  keyPoints: string[];
+  blockers: string[];
+  editedAt: string;
+}
 
 /** One question from an interview, how it was actually answered, and what to
  * do differently next time. Only an "interview" note carries these. */
@@ -106,6 +133,11 @@ export interface MeetingNote {
   /** Notes published before kinds shipped read as plain meetings. */
   kind: MeetingKind;
   debrief: DebriefItem[];
+  /** Concepts taught; a "lecture" note fills these. */
+  keyPoints: string[];
+  /** What is stopping people; a "standup" note fills these. */
+  blockers: string[];
+  chapters: MeetingChapter[];
 }
 
 export type MeetingStatus =
@@ -150,6 +182,10 @@ export interface MeetingDoc {
   createdAt: string;
   updatedAt: string;
   note: MeetingNote | null;
+  /** When the note is deleted. Null for Pro and for pinned notes. */
+  expiresAt: string | null;
+  pinned: boolean;
+  editedNote: EditedNote | null;
 }
 
 /** Reads a 402 body defensively, same discipline as voice.ts's parseCapDenial:
@@ -524,11 +560,26 @@ function turnSeconds(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
+const strings = (value: unknown): string[] =>
+  Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+
+function parseEditedNote(raw: unknown): EditedNote | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const row = raw as Record<string, unknown>;
+  return {
+    summary: typeof row.summary === "string" ? row.summary : "",
+    decisions: strings(row.decisions),
+    actionItems: strings(row.action_items),
+    openQuestions: strings(row.open_questions),
+    keyPoints: strings(row.key_points),
+    blockers: strings(row.blockers),
+    editedAt: typeof row.edited_at === "string" ? row.edited_at : "",
+  };
+}
+
 function parseNote(raw: unknown): MeetingNote | null {
   if (typeof raw !== "object" || raw === null) return null;
   const row = raw as Record<string, unknown>;
-  const strings = (value: unknown): string[] =>
-    Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
   const transcript = Array.isArray(row.transcript)
     && row.transcript.every((turn) => {
       if (typeof turn !== "object" || turn === null) return false;
@@ -554,7 +605,7 @@ function parseNote(raw: unknown): MeetingNote | null {
     language: typeof row.language === "string" ? row.language : "",
     oneSided: row.one_sided === true,
     partial: row.partial === true,
-    kind: row.kind === "interview" ? "interview" : "meeting",
+    kind: MEETING_KINDS.includes(row.kind as MeetingKind) ? row.kind as MeetingKind : "meeting",
     debrief: Array.isArray(row.debrief)
       ? row.debrief.flatMap((item) => {
           const entry = item as Record<string, unknown> | null;
@@ -563,6 +614,17 @@ function parseNote(raw: unknown): MeetingNote | null {
             && typeof entry.answered === "string"
             && typeof entry.improve === "string"
             ? [{ question: entry.question, answered: entry.answered, improve: entry.improve }]
+            : [];
+        })
+      : [],
+    keyPoints: strings(row.key_points),
+    blockers: strings(row.blockers),
+    chapters: Array.isArray(row.chapters)
+      ? row.chapters.flatMap((item) => {
+          const entry = item as Record<string, unknown> | null;
+          const startS = entry ? turnSeconds(entry.start_s) : undefined;
+          return entry && typeof entry.title === "string" && startS !== undefined
+            ? [{ title: entry.title, startS }]
             : [];
         })
       : [],
@@ -636,6 +698,9 @@ export function parseMeetingDoc(raw: unknown): MeetingDoc | null {
     createdAt: typeof row.created_at === "string" ? row.created_at : "",
     updatedAt: typeof row.updated_at === "string" ? row.updated_at : "",
     note: parseNote(row.note),
+    expiresAt: typeof row.expires_at === "string" ? row.expires_at : null,
+    pinned: row.pinned === true,
+    editedNote: parseEditedNote(row.edited_note),
   };
 }
 
@@ -656,6 +721,131 @@ export async function deleteMeeting(meetingId: string): Promise<void> {
   if (!response.ok && response.status !== 404) {
     throw new Error(`Meeting deletion failed (${response.status})`);
   }
+}
+
+/** A refused or failed meeting action, carrying the backend's own reason so the
+ *  page can say why (pin_limit_reached, regenerate_truncated, ...). A network
+ *  failure or timeout is `network`. */
+export class MeetingActionError extends Error {
+  readonly code: string;
+  readonly status: number;
+  readonly retryable: boolean;
+  /** The offending keyword on an exclude-keyword refusal. */
+  readonly keyword: string | null;
+
+  constructor(code: string, status: number, retryable: boolean, keyword: string | null = null) {
+    super(`Meeting action refused: ${code} (${status})`);
+    this.name = "MeetingActionError";
+    this.code = code;
+    this.status = status;
+    this.retryable = retryable;
+    this.keyword = keyword;
+  }
+}
+
+async function meetingAction(
+  path: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<unknown> {
+  let response: Response;
+  try {
+    response = await authFetchWithTimeout(path, init, timeoutMs);
+  } catch (err) {
+    if (err instanceof AuthRequiredError) throw err;
+    throw new MeetingActionError(err instanceof TimeoutError ? "timeout" : "network", 0, true);
+  }
+  if (response.ok) return response.json();
+  let detail: Record<string, unknown> = {};
+  try {
+    const body = (await response.json()) as { detail?: unknown };
+    if (typeof body?.detail === "object" && body.detail !== null) {
+      detail = body.detail as Record<string, unknown>;
+    }
+  } catch {
+    // A body that is not JSON keeps the status as the only evidence.
+  }
+  throw new MeetingActionError(
+    typeof detail.code === "string" ? detail.code : `http_${response.status}`,
+    response.status,
+    detail.retryable === true || response.status >= 500,
+    typeof detail.keyword === "string" ? detail.keyword : null,
+  );
+}
+
+function jsonInit(method: string, body?: unknown): RequestInit {
+  return body === undefined
+    ? { method }
+    : { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+}
+
+function meetingOrThrow(raw: unknown): MeetingDoc {
+  const meeting = parseMeetingDoc(raw);
+  if (!meeting) throw new MeetingActionError("malformed_response", 200, true);
+  return meeting;
+}
+
+const MEETING_ACTION_TIMEOUT_MS = 15_000;
+/** Regenerate runs a full note model call while the request is open. */
+const MEETING_REGENERATE_TIMEOUT_MS = 120_000;
+
+export async function setMeetingPinned(meetingId: string, pinned: boolean): Promise<MeetingDoc> {
+  return meetingOrThrow(await meetingAction(
+    `/meetings/${encodeURIComponent(meetingId)}/pin`,
+    jsonInit("POST", { pinned }),
+    MEETING_ACTION_TIMEOUT_MS,
+  ));
+}
+
+export async function saveEditedNote(
+  meetingId: string,
+  edited: Omit<EditedNote, "editedAt">,
+): Promise<MeetingDoc> {
+  return meetingOrThrow(await meetingAction(
+    `/meetings/${encodeURIComponent(meetingId)}/edited-note`,
+    jsonInit("PUT", {
+      summary: edited.summary,
+      decisions: edited.decisions,
+      action_items: edited.actionItems,
+      open_questions: edited.openQuestions,
+      key_points: edited.keyPoints,
+      blockers: edited.blockers,
+    }),
+    MEETING_ACTION_TIMEOUT_MS,
+  ));
+}
+
+export async function restoreAiNote(meetingId: string): Promise<MeetingDoc> {
+  return meetingOrThrow(await meetingAction(
+    `/meetings/${encodeURIComponent(meetingId)}/edited-note`,
+    jsonInit("DELETE"),
+    MEETING_ACTION_TIMEOUT_MS,
+  ));
+}
+
+export async function regenerateMeetingNote(
+  meetingId: string,
+  kind: MeetingKind,
+): Promise<MeetingDoc> {
+  return meetingOrThrow(await meetingAction(
+    `/meetings/${encodeURIComponent(meetingId)}/regenerate`,
+    jsonInit("POST", { kind }),
+    MEETING_REGENERATE_TIMEOUT_MS,
+  ));
+}
+
+export async function getExcludeKeywords(): Promise<string[]> {
+  const data = await meetingAction("/meetings/settings", jsonInit("GET"), MEETING_ACTION_TIMEOUT_MS);
+  return strings((data as { exclude_keywords?: unknown })?.exclude_keywords);
+}
+
+export async function putExcludeKeywords(keywords: string[]): Promise<string[]> {
+  const data = await meetingAction(
+    "/meetings/settings",
+    jsonInit("PUT", { exclude_keywords: keywords }),
+    MEETING_ACTION_TIMEOUT_MS,
+  );
+  return strings((data as { exclude_keywords?: unknown })?.exclude_keywords);
 }
 
 /** Ambient-surface read (null on every failure), like fetchUpcomingMeetings:

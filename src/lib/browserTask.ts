@@ -129,6 +129,11 @@ export function browserTaskFailureMessage(code: string | null | undefined): stri
       return "You have used this month's browser task steps.";
     case "browser_agent_project_cap":
       return "Browser tasks are paused for today. Try again tomorrow.";
+    case "stuck":
+      return "Buddy kept hitting the same wall, tried other routes, and saved what it found.";
+    case "checkin_timeout":
+      return "Buddy paused to ask whether to keep going, heard nothing for 30 minutes, and saved what it found.";
+    // Older rows, from before tasks ran without a step or time limit.
     case "step_cap":
       return "Buddy reached its step limit and saved what it found.";
     case "time_cap":

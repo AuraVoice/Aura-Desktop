@@ -154,6 +154,28 @@
   -webkit-box-orient: vertical;
 }
 
+/* The exact command a desktop task asks to run: four lines, then an ellipsis,
+ * at a fixed 72px so BROWSER_TASK_APPROVAL_COMMAND_HEIGHT stays exact. */
+.browser-task-command {
+  flex: none;
+  box-sizing: border-box;
+  height: 72px;
+  margin: 0;
+  padding: 6px 9px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.07);
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+  line-height: 15px;
+  color: rgba(255, 255, 255, 0.9);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+}
+
 .browser-task-actions {
   display: flex;
   justify-content: flex-end;

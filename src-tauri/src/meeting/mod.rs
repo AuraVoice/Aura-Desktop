@@ -417,6 +417,7 @@ pub async fn start_meeting_capture(
                 return Err("a meeting capture is already active".to_string());
             }
             let finalization = FinalizationSignal::default();
+            USER_PAUSED.store(false, std::sync::atomic::Ordering::Relaxed);
             let stop_tx = audio::spawn_engine(
                 app.clone(),
                 queue::CaptureRunRef {
@@ -1092,9 +1093,34 @@ pub(crate) fn record_segment(
     Ok(())
 }
 
-/// Engine's pause/resume notifications (session lock). Keeps the managed
-/// state's `paused` mirror fresh for `capture_status`.
-pub(crate) fn notify_paused(app: &AppHandle, paused: bool) {
+/// The tray's Pause recording. Only one capture runs at a time, so one flag
+/// is enough; the engine ORs it with the screen lock and takes exactly the
+/// lock's path (close the segment, discard while paused, fresh clocks on
+/// resume), so nothing said while paused is ever written or uploaded. Paused
+/// time still counts toward the cap, as locked time does. Cleared when a
+/// capture starts and when it finalizes, so it never carries into the next.
+static USER_PAUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn user_paused() -> bool {
+    USER_PAUSED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Flip Pause from the tray. A no-op with no live capture; the engine picks
+/// the change up on its next tick and reports it through `notify_paused`.
+pub fn toggle_user_pause(app: &AppHandle) {
+    let handle = app.state::<MeetingCaptureHandle>();
+    let guard = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+    if guard.is_none() {
+        return;
+    }
+    let was = USER_PAUSED.fetch_xor(true, std::sync::atomic::Ordering::Relaxed);
+    info!("meeting: user {} the recording", if was { "resumed" } else { "paused" });
+}
+
+/// Engine's pause/resume notifications (session lock or the tray's Pause).
+/// Keeps the managed state's `paused` mirror fresh for `capture_status`.
+pub(crate) fn notify_paused(app: &AppHandle, paused: bool, reason: &str) {
+    crate::tray::set_paused(app, paused);
     let handle = app.state::<MeetingCaptureHandle>();
     let payload = {
         let mut guard = handle.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -1110,7 +1136,7 @@ pub(crate) fn notify_paused(app: &AppHandle, paused: bool) {
                     event_id: Some(active.event_id.clone()),
                     started_at_ms: Some(active.started_at_ms),
                     paused,
-                    reason: if paused { "paused_lock" } else { "resumed" }.to_string(),
+                    reason: reason.to_string(),
                 })
             }
             None => None,
@@ -1175,6 +1201,7 @@ pub(crate) fn finalize_capture(
         let mut guard = handle.0.lock().unwrap_or_else(|e| e.into_inner());
         *guard = None;
     }
+    USER_PAUSED.store(false, std::sync::atomic::Ordering::Relaxed);
     crate::tray::set_recording(app, false);
     info!(
         "meeting: capture finished meeting={meeting_id} run={capture_run_id} fence={capture_fence} reason={final_reason}"

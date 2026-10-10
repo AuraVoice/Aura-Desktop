@@ -36,12 +36,14 @@ export const CAPABILITY_LABEL: Record<SwarmDecision["capability"], string> = {
   none: "",
   buddy_chat: "Buddy chat",
   computer_task: "Computer tab",
+  desktop_task: "Desktop task",
   research_run: "Research run",
   interview_brief: "Interview Companion brief",
 };
 
 /** Where a "not a swarm job" sends you: the dashboard route of the feature that does it.
- * Buddy chat has no page of its own (you are already talking to Aura), so no button. */
+ * Buddy chat has no page of its own (you are already talking to Aura), so no button, and
+ * a desktop task starts from its own card in the channel (DesktopTaskStart). */
 export const CAPABILITY_PATH: Partial<Record<SwarmDecision["capability"], { path: string; label: string }>> = {
   computer_task: { path: "/agents?tab=computer", label: "Open the Computer tab" },
   research_run: { path: "/agents?tab=research", label: "Open Research" },

@@ -7035,6 +7035,200 @@
     transform: rotate(360deg);
   }
 }
+/* Ready-note toolbar: copy, ask, edit, pin, then the overflow menu. */
+.db-meeting-tags {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.db-meeting-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-top: 16px;
+}
+.db-meeting-actions .db-secondary-btn,
+.db-meeting-action-status .db-secondary-btn,
+.db-meeting-action-status .db-primary-btn,
+.db-meeting-editor-actions .db-secondary-btn,
+.db-meeting-editor-actions .db-primary-btn {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 6px 13px;
+  font-size: 12px;
+}
+.db-meeting-actions .db-secondary-btn.is-active {
+  border-color: color-mix(in srgb, var(--db-teal, #2fb3a3) 45%, transparent);
+  background: color-mix(in srgb, var(--db-teal, #2fb3a3) 12%, transparent);
+  color: var(--db-teal-deep-a);
+}
+.db-meeting-action-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  margin: 14px 0 0;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--db-text) 4%, transparent);
+  color: var(--db-text);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.db-meeting-action-status.is-error {
+  background: rgba(205, 63, 63, 0.08);
+  color: #a33232;
+}
+.db-meeting-spin {
+  animation: db-meeting-spin 1.2s linear infinite;
+}
+.db-meeting-chapters {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.db-meeting-chapter {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  gap: 12px;
+  padding: 6px 8px;
+  margin-left: -8px;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--db-text);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.45;
+  text-align: left;
+  cursor: pointer;
+}
+.db-meeting-chapter:hover,
+.db-meeting-chapter:focus-visible {
+  background: color-mix(in srgb, var(--db-text) 5%, transparent);
+}
+.db-meeting-chapter time {
+  flex: none;
+  min-width: 44px;
+  color: var(--db-teal-deep-a);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 650;
+}
+.db-meeting-turn {
+  transition: box-shadow 0.4s ease;
+}
+.db-meeting-turn.is-flash {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--db-teal, #2fb3a3) 55%, transparent);
+}
+.db-meeting-editor .db-meeting-section {
+  display: block;
+}
+.db-meeting-editor-hint {
+  margin: 0;
+  color: var(--db-text-dim);
+  font-size: 13px;
+}
+.db-meeting-editor-field {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--db-text) 14%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--db-text) 3%, transparent);
+  color: var(--db-text);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.55;
+  resize: vertical;
+  scrollbar-width: thin;
+}
+.db-meeting-editor-field:focus {
+  border-color: color-mix(in srgb, var(--db-teal, #2fb3a3) 60%, transparent);
+  outline: none;
+}
+.db-meeting-editor-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+/* Settings > Data and privacy > Private meetings. */
+.db-setting-row.db-skip-words > span:first-child {
+  flex: 1;
+  gap: 8px;
+}
+.db-skip-words-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.db-skip-word {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 4px 3px 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--db-text) 6%, transparent);
+  color: var(--db-text);
+  font-size: 12px;
+  font-weight: 600;
+}
+.db-skip-word button {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: none;
+  color: var(--db-text-dim);
+  cursor: pointer;
+}
+.db-skip-word button:hover:not(:disabled),
+.db-skip-word button:focus-visible {
+  background: color-mix(in srgb, var(--db-text) 10%, transparent);
+  color: var(--db-text);
+}
+.db-skip-words-add {
+  display: flex;
+  gap: 8px;
+  max-width: 420px;
+}
+.db-skip-words-input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid color-mix(in srgb, var(--db-text) 14%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--db-text) 3%, transparent);
+  color: var(--db-text);
+  font: inherit;
+  font-size: 13px;
+}
+.db-skip-words-input:focus {
+  border-color: color-mix(in srgb, var(--db-teal, #2fb3a3) 60%, transparent);
+  outline: none;
+}
+.db-skip-words-add .db-secondary-btn {
+  height: 32px;
+  border-radius: 999px;
+  padding: 0 14px;
+}
+.db-skip-words-error {
+  color: #a33232;
+  font-size: 12px;
+}
 /* Draft body with an in-corner copy icon */
 .db-draft-body {
   position: relative;
@@ -8570,6 +8764,9 @@
   padding: 14px 0 10px;
   animation: db-swarm-channel-in 180ms var(--sw-out) both;
 }
+/* A channel that just opened stays hidden while SwarmStream pins it to its latest message,
+   and its fade-in waits for the reveal, so it never appears mid-thread and scrolls. */
+.db-swarm-channel-pane.is-settling { visibility: hidden; animation: none; }
 /* The virtualised message list (SwarmStream): a box as tall as every row together, with
    only the rows near the viewport mounted inside it. Each row is a flex column like the
    pane, so a day separator's margins and a system pill's auto margins lay out as they did
@@ -8868,6 +9065,46 @@
   transition: border-color 160ms var(--sw-out), box-shadow 160ms var(--sw-out);
 }
 .db-swarm-free-answer input:focus { border-color: var(--sw-accent); box-shadow: 0 0 0 3px var(--sw-accent-soft); }
+
+/* A desktop_task decision's Start card (DesktopTaskStart): the brief to edit, then the
+   live step, then the report. Only --sw-* tokens, so dark needs no twin. */
+.db-swarm-desktop.is-live::before { background: var(--sw-accent); }
+.db-swarm-desktop.is-stopped { --sw-av: var(--sw-warn); --sw-av-soft: var(--sw-warn-soft); }
+.db-swarm-desktop.is-stopped::before { background: var(--sw-warn); }
+.db-swarm-desktop-input {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 10px;
+  resize: vertical;
+  min-height: 64px;
+  max-height: 200px;
+  border: 1px solid var(--sw-field-border);
+  background: var(--sw-field);
+  color: var(--sw-text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+  padding: 8px 12px;
+  border-radius: 10px;
+  outline: none;
+  transition: border-color 160ms var(--sw-out), box-shadow 160ms var(--sw-out);
+}
+.db-swarm-desktop-input::-webkit-scrollbar { width: 0; height: 0; }
+.db-swarm-desktop-input:focus { border-color: var(--sw-accent); box-shadow: 0 0 0 3px var(--sw-accent-soft); }
+.db-swarm-desktop .db-swarm-choice { display: inline-flex; align-items: center; gap: 6px; }
+.db-swarm-choice.is-primary { border-color: var(--sw-accent-ring); background: var(--sw-active); }
+.db-swarm-embed p.db-swarm-desktop-brief { color: var(--sw-text); }
+.db-swarm-embed p.db-swarm-desktop-error { display: flex; align-items: center; gap: 6px; color: var(--sw-warn); }
+.db-swarm-embed p.db-swarm-desktop-meta { font-size: 12px; }
+.db-swarm-desktop-answer { margin-top: 8px; font-size: 13.5px; color: var(--sw-text); }
+.db-swarm-desktop-spin { animation: db-swarm-desktop-spin 1.1s linear infinite; }
+@keyframes db-swarm-desktop-spin { to { transform: rotate(360deg); } }
+.db-swarm-desktop-trace { margin-top: 8px; font-size: 12px; color: var(--sw-dim); }
+.db-swarm-desktop-trace summary { cursor: pointer; width: max-content; }
+.db-swarm-desktop-trace summary:focus-visible { outline: 2px solid var(--sw-accent); outline-offset: 2px; border-radius: 3px; }
+.db-swarm-desktop-trace ol { margin: 6px 0 0; padding-left: 20px; display: grid; gap: 2px; }
+.db-swarm-desktop-trace li span + span::before { content: " · "; }
 
 /* Typing: the front door's orb, and a clock once it takes a while. */
 .db-swarm-typing {

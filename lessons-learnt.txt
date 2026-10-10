@@ -2590,3 +2590,70 @@ the stored object. Re-arms abort the in-flight request through AbortSignal.
 Justification: an effect that intentionally omits a dependency must read that value through a ref,
 or the omission silently freezes it. Two copies of a loop meant a fix in one never reached the other.
 ================================================================================
+2026-10-10: Desktop Operator could not see the Settings window its own click opened
+Problem: asked to survey Zoom's recording settings, the Operator launched Zoom, clicked Settings,
+saw "no visible change", clicked it again, waited, and only found the Settings window after a
+window listing. The user stopped it there. The browser agent on the same brief clicked Sign In 4
+times and a footer link 6 times before ending on login_required.
+Issue: native_ui::list_windows drops owned windows, and an app's Settings or dialog is usually
+owned by its main window; the loop also kept walking the old target hwnd, since a new top-level
+window is not a UIA child of the one that opened it. On the browser side, the governor's
+fingerprint hashes the whole page text, so a page with rotating content counts every repeat click
+as progress and the stall note never fires. Underneath both: "find out what this app can do" was
+sent to agents that can only click, when the answer lives in config files and vendor docs.
+Solution: list_windows_with_owned(pid) lists the target process's owned windows, and a click, key
+or Enter diffs that process's windows and moves into a new one ("opened ..." in the history). The
+Operator now works command-first (run_command gated by PowerShell's own parser, web_search,
+fetch_url with a per-host approval) and starts from a Swarm desktop_task Start card. The browser
+fingerprint is NOT fixed yet.
+Justification: an action's result is "ok" when the input was delivered, not when it did anything;
+every agent loop needs a signal for what changed (a new window, a new URL), and a reading job
+should never be handed to an agent whose only verbs are clicks.
+================================================================================
+2026-10-10: A desktop task routed to a Swarm manager ran as a web-only session with no Start card
+Problem: "Investigate Zoom desktop app, go through Settings..." sent in #group with a manager
+(Parity Mapper) already hired got "On it, I'll go through Zoom desktop Settings" from that
+manager, a Desktop task chip, and no Start card. The manager has no hands on the PC, so the run
+could only search the web while claiming it would open Zoom.
+Issue: the classifier may set a capability on a route ("a built-in feature would do the work for
+that manager"), and it chose route + desktop_task because the manager's card covered the topic.
+A route always starts a manager session (rounds.plan_members), and SwarmStream draws
+DesktopTaskStart only on not_swarm, so neither the Operator nor an honest decline happened.
+Solution: sandbox._apply turns any route carrying desktop_task into not_swarm with no target,
+so no session starts and the existing Start card draws; the classifier rule now says desktop_task
+is always not_swarm (prompt swarm-sandbox-13).
+Justification: "PC work is never a manager's" was a prompt rule only; the model followed the
+capability half and not the decision half. The guard is code at the one place decisions are
+applied, the same way the agents' safety gates are.
+================================================================================
+2026-10-10: Bolt drew as a big dark bubble in the desktop corner after a snooze ran out
+Problem: with "Sit on the desktop" on, the corner showed a large dark rounded blob instead of
+Bolt. The store held companion_snoozed_until for 8:00 AM, set before a relaunch at 1:28 AM, and
+the log has no dictation.hud line at all after that launch.
+Issue: place_window re-read companion_mode() live, while React lays out from the companion bit
+stamped into the last emitted HudUpdate. set_hovered and set_overlay_suppressed place without
+emitting. The snooze wake-up is a sleeping std::thread that only exists in the process that set
+it, so after a relaunch the expiry flipped companion_mode silently; the next hover sized the
+window for Bolt (220x92) while React still drew the pill, whose radius-999 near-black surface
+fills 100% of the window.
+Solution: place_window sizes from last_update().companion, the value React is rendering, so
+geometry only changes together with an emit. snoozed() re-arms the wake-up (schedule_wake) when
+it reads a persisted snooze that is still in the future, so Bolt returns on time after a restart.
+Justification: two reads of one setting on two sides of the IPC boundary will disagree the
+moment either can change without the other being told. Size from the stamped copy, and treat
+any timer as process state that a relaunch has to rebuild from what was persisted.
+================================================================================
+2026-10-10: Swarm chats opened on their first message instead of the latest
+Problem: opening a manager's chat in Swarm showed the top of the thread, and going back to that
+channel later kept landing at the top.
+Issue: since the list was virtualised (9752757), useVirtualizer's first attach runs
+_scrollToOffset(initialOffset) in @tanstack/virtual-core (index.js:480), and initialOffset
+defaults to 0. Its layout effect runs after SwarmStream's own scroll-to-bottom effect, so it
+reset the scroller to the top; the resulting scroll event set following=false and saved
+{ top: 0 } for the channel, so later visits restored the top too.
+Solution: initialOffset reads the scroller's current scrollTop, so the virtualizer adopts the
+position the channel effect already chose instead of replacing it.
+Justification: a virtualiser owns the scroll position the moment it attaches. Any code that
+positions the same scroller first has to hand its position over through initialOffset, or the
+library's default silently wins.
+================================================================================

@@ -29,6 +29,7 @@ import {
 import { CONNECTOR_LABEL, QuestionEmbed, ReportEmbed, RoundEmbed, RoundReplyEmbed, WorkingEmbed } from "./SwarmWork";
 import { useMentionPicker } from "./SwarmMentionPicker";
 import { SwarmMarkdown } from "./SwarmMarkdown";
+import { DesktopTaskStart } from "./DesktopTaskStart";
 import { ComposerGrants } from "./SwarmComposerGrants";
 import {
   CAPABILITY_LABEL,
@@ -422,6 +423,7 @@ function DecisionMessage({
       {d.reason && <p className="db-swarm-text">{d.reason}</p>}
       {d.note && <p className="db-swarm-note">{d.note}</p>}
       {hired && <HiredEmbed manager={hired} />}
+      {declined && d.capability === "desktop_task" && <DesktopTaskStart itemKey={item.key} initialBrief={d.text || item.asked.text} />}
       {(feature || ongoing) && (
         <div className="db-swarm-choice-row">
           {feature && (
@@ -471,9 +473,12 @@ export function SwarmStream(props: Props) {
   const { view, items, busy, busyHere, error, text, composerRef } = props;
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const channelKey = view.kind === "manager" ? `m-${view.manager?.id}` : view.kind;
-  const scrollPositions = useRef<Record<string, { top: number; following: boolean }>>({});
   const previousChannel = useRef("");
   const following = useRef(true);
+  // True while a freshly opened channel is pinned to its bottom. The pane stays invisible
+  // meanwhile, so the chat appears already on its latest message instead of scrolling there.
+  const [settling, setSettling] = useState(true);
+  const settlingRef = useRef(true);
   const [showJump, setShowJump] = useState(false);
   const readOnly = view.kind === "activity";
   // Who answers what you send: the manager in its DM, the point of contact in #group.
@@ -488,14 +493,14 @@ export function SwarmStream(props: Props) {
   // each rebuild, which defeated SwarmMarkdown's memo and re-parsed the whole channel.
   const openSource = useCallback((url: string) => live.current.onOpenSource(url), []);
 
-  // Follow live content only at the bottom; each channel keeps its reading position.
+  // Every channel opens on its latest message; after that, live content is followed only
+  // while the reader is at the bottom.
   useLayoutEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
     if (previousChannel.current !== channelKey) {
-      const saved = scrollPositions.current[channelKey];
-      following.current = saved?.following ?? true;
-      el.scrollTop = following.current ? el.scrollHeight : saved?.top ?? 0;
+      following.current = true;
+      el.scrollTop = el.scrollHeight;
       previousChannel.current = channelKey;
     } else if (following.current) {
       el.scrollTop = el.scrollHeight;
@@ -517,9 +522,10 @@ export function SwarmStream(props: Props) {
 
   const onScroll = () => {
     const el = scrollRef.current;
-    if (!el) return;
+    // Scrolls while settling are rows being measured and the pin answering them, never the
+    // reader; letting them count is what left a chat stranded mid-thread.
+    if (!el || settlingRef.current) return;
     following.current = el.scrollHeight - el.clientHeight - el.scrollTop < 64;
-    scrollPositions.current[channelKey] = { top: el.scrollTop, following: following.current };
     setShowJump(!following.current);
   };
 
@@ -528,7 +534,6 @@ export function SwarmStream(props: Props) {
     if (!el) return;
     following.current = true;
     el.scrollTop = el.scrollHeight;
-    scrollPositions.current[channelKey] = { top: el.scrollTop, following: true };
     setShowJump(false);
   };
 
@@ -792,6 +797,10 @@ export function SwarmStream(props: Props) {
     // Where the list starts inside the scroller: the pane's top padding, plus any space
     // above it while a short thread is pushed to the bottom.
     scrollMargin: listTop,
+    // On first attach the virtualizer scrolls to this offset, 0 by default, which undid
+    // the jump to the latest message above and opened every chat on its first message.
+    // Keep whatever position the channel effect already set.
+    initialOffset: () => scrollRef.current?.scrollTop ?? 0,
   });
   const totalSize = virtualizer.getTotalSize();
   useLayoutEffect(() => {
@@ -801,6 +810,38 @@ export function SwarmStream(props: Props) {
     const top = list.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop;
     setListTop((prev) => (Math.abs(prev - top) < 1 ? prev : top));
   }, [channelKey, totalSize, showSkeleton, showHero]);
+
+  // Row heights start as estimates and the real ones land over the next few frames, each
+  // moving the bottom. Pin to it every frame until it holds still, then reveal the pane.
+  // Reruns when the skeleton gives way to the loaded messages.
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    settlingRef.current = true;
+    setSettling(true);
+    following.current = true;
+    const started = performance.now();
+    let stable = 0;
+    let frame = 0;
+    const pin = () => {
+      const bottom = Math.max(0, el.scrollHeight - el.clientHeight);
+      if (Math.abs(el.scrollTop - bottom) > 1) {
+        el.scrollTop = bottom;
+        stable = 0;
+      } else {
+        stable += 1;
+      }
+      if (stable >= 3 || performance.now() - started > 600) {
+        settlingRef.current = false;
+        setSettling(false);
+        setShowJump(false);
+        return;
+      }
+      frame = requestAnimationFrame(pin);
+    };
+    pin();
+    return () => cancelAnimationFrame(frame);
+  }, [channelKey, showSkeleton]);
 
   return (
     <section className="db-swarm-stream" aria-label={view.kind === "manager" ? `Direct messages with ${view.name}` : `#${view.name}`}>
@@ -857,7 +898,7 @@ export function SwarmStream(props: Props) {
       {props.banner}
       <div className="db-swarm-history">
       <div className={`db-swarm-scroll${showHero ? " is-hero" : ""}`} ref={scrollRef} onScroll={onScroll}>
-        <div key={channelKey} className="db-swarm-channel-pane">
+        <div key={channelKey} className={`db-swarm-channel-pane${settling ? " is-settling" : ""}`}>
           {showSkeleton ? (
             <StreamSkeleton />
           ) : showHero ? (

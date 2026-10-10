@@ -20,6 +20,7 @@ export const notifications = {
   viewResearch: "Read the brief",
   answerResearchQuestion: "Answer the question",
   viewBrowserTask: "See what Buddy found",
+  viewDesktopTask: "See what Buddy did",
   viewSwarmChannel: "Open the report",
 
   // Generic, privacy-safe toast copy. The meeting title, insights, action

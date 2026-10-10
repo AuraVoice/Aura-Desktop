@@ -41,6 +41,8 @@ export const meetingPrompt = {
   starting: "Starting...",
   capReached: "Monthly meeting limit reached.",
   failed: "Couldn't start recording.",
+  // Aura records without joining as a bot, so nobody else on the call is told.
+  consentNote: "Let everyone on the call know you're recording.",
 } as const;
 
 export const meetingNotes = {
@@ -89,6 +91,84 @@ export const meetingNotes = {
   buildingInsights: "Building your meeting insights.",
   processing: "Processing your meeting.",
   retryNow: "Retry now",
+
+  // Meetings page detail
+  keyPointsHeading: "Key points",
+  blockersHeading: "Blockers",
+  openQuestionsHeading: "Open questions",
+  chaptersHeading: "Chapters",
+  copyNotes: "Copy notes",
+  copied: "Copied",
+  askAura: "Ask Aura",
+  edit: "Edit",
+  save: "Save",
+  saving: "Saving...",
+  cancel: "Cancel",
+  editedTag: "Edited",
+  editHint: "One item per line. The AI version is kept, and you can restore it.",
+  restoreAi: "Restore AI version",
+  exportMarkdown: "Export as Markdown",
+  exportText: "Export transcript as text",
+  exportSubtitles: "Export subtitles (.vtt)",
+  savedTo: (path: string) => `Saved to ${path}`,
+  regenerateAs: (kind: string) => `Regenerate as ${kind}`,
+  regenerating: (kind: string) => `Rewriting these notes as ${kind}. This can take a minute.`,
+  regenerateReplacesEdits: "Regenerating replaces your edits with a new AI version.",
+  pin: "Pin",
+  pinned: "Pinned",
+  pinnedMeta: "Pinned, kept until you delete it",
+  expiresIn: (days: number) =>
+    days <= 0 ? "Deleted later today" : days === 1 ? "Deleted tomorrow" : `Deleted in ${days} days`,
+  pinHint: "Notes are deleted 7 days after they're ready. Pin up to 3 to keep them.",
+} as const;
+
+/** Display names for each note kind. */
+export const meetingKindLabels: Record<string, string> = {
+  meeting: "Meeting",
+  interview: "Interview",
+  lecture: "Lecture",
+  one_on_one: "One-on-one",
+  standup: "Stand-up",
+};
+
+/** Why a meeting action was refused, keyed by the backend's detail.code. */
+const actionFailureCopy: Record<string, string> = {
+  pin_limit_reached: "You can pin 3 notes. Unpin one first.",
+  meeting_expired: "This note has already been deleted.",
+  meeting_not_found: "This note no longer exists.",
+  meeting_not_ready: "This note isn't ready yet.",
+  no_transcript: "There's no transcript to rewrite these notes from.",
+  regenerate_in_progress: "These notes are already being rewritten.",
+  regenerate_truncated: "This meeting is too long to rewrite in one pass.",
+  regenerate_failed: "Aura couldn't rewrite these notes. Try again in a moment.",
+  summary_too_long: "The summary is too long. Keep it under 4,000 characters.",
+  timeout: "Aura took too long to answer. Try again.",
+  network: "Aura couldn't reach the server. Check your connection and try again.",
+  exclude_keyword_too_short: "Each word needs at least 3 characters.",
+  exclude_keyword_too_long: "Each entry can be at most 40 characters.",
+  exclude_keywords_too_many: "You can add up to 20 words.",
+  settings_unavailable: "Aura couldn't load these settings. Try again in a moment.",
+};
+
+export function meetingActionFailureCopy(code: string): string {
+  if (actionFailureCopy[code]) return actionFailureCopy[code];
+  if (/_too_many$/.test(code)) return "That section has too many items. Keep it to 30.";
+  if (/_item_too_long$/.test(code)) return "One item is too long. Keep each under 500 characters.";
+  return "Aura couldn't do that. Try again.";
+}
+
+/** Settings > Data and privacy > Private meetings. */
+export const meetingSettingsCopy = {
+  heading: "Private meetings",
+  description: "Keep chosen meetings out of Meeting Notes.",
+  skipLabel: "Skip meetings whose title contains",
+  skipHint:
+    "A recording whose meeting title contains one of these words is skipped and never transcribed. Only the title is checked.",
+  addPlaceholder: "Add a word, then press Enter",
+  add: "Add",
+  remove: (keyword: string) => `Remove ${keyword}`,
+  empty: "No words yet.",
+  saved: "Saved",
 } as const;
 
 const failureCopy: Record<string, string> = {
@@ -100,7 +180,8 @@ const failureCopy: Record<string, string> = {
   audio_rejected: "Aura could not read this recording.",
   transcription_unavailable: "Transcription is taking longer than expected.",
   insight_generation_failed: "Aura could not build insights for this recording.",
-  excluded_sensitive: "This meeting was skipped by your private-meeting rules.",
+  excluded_sensitive:
+    "This meeting was skipped because its title contains one of your words under Settings, Data and privacy, Private meetings.",
   processing_timeout: "Processing did not finish in time.",
 };
 

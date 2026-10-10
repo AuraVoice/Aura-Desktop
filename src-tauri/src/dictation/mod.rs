@@ -60,7 +60,7 @@ pub(crate) mod scoped_token;
 pub mod history;
 pub mod share;
 mod hud;
-mod insert;
+pub(crate) mod insert;
 mod usage;
 mod keystore;
 pub mod polish;

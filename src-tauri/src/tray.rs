@@ -11,6 +11,7 @@ const OPEN_BUDDY: &str = "open_buddy";
 const OPEN_DASHBOARD: &str = "open_dashboard";
 const OPEN_NOTIFICATIONS: &str = "open_notifications";
 const CAPTURE_NOW: &str = "capture_now";
+const PAUSE_RECORDING: &str = "pause_recording";
 const SIGN_OUT: &str = "sign_out";
 const AUTOSTART: &str = "autostart";
 const VERSION: &str = "version";
@@ -48,6 +49,11 @@ pub struct NotificationsMenuItem(pub MenuItem<Wry>);
 /// static label here left a running recording with no reachable stop.
 pub struct CaptureMenuItem(pub MenuItem<Wry>);
 
+/// Handle to "Pause recording", which sits under the capture item and is only
+/// enabled while a capture is live. `set_paused` relabels it to "Resume
+/// recording" and the tooltip to match.
+pub struct PauseMenuItem(pub MenuItem<Wry>);
+
 pub fn build(app: &AppHandle) -> tauri::Result<()> {
     let open_buddy = MenuItem::with_id(app, OPEN_BUDDY, "Talk to Buddy", true, None::<&str>)?;
     let open_dashboard =
@@ -59,6 +65,8 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     // the OPEN_NOTIFICATIONS shape: Rust only fires the intent.
     let capture_now_item =
         MenuItem::with_id(app, CAPTURE_NOW, "Capture now", true, None::<&str>)?;
+    let pause_item =
+        MenuItem::with_id(app, PAUSE_RECORDING, "Pause recording", false, None::<&str>)?;
     let sign_out_item = MenuItem::with_id(app, SIGN_OUT, "Sign out", true, None::<&str>)?;
     // Checked from the real launch-at-login state, not the persisted intent -
     // build runs right after apply_startup_policy, and reality is what the
@@ -94,6 +102,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             &open_dashboard,
             &notifications_item,
             &capture_now_item,
+            &pause_item,
             &autostart_item,
             &version_item,
             &update_item,
@@ -106,6 +115,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     app.manage(AutostartMenuItem(autostart_item));
     app.manage(NotificationsMenuItem(notifications_item));
     app.manage(CaptureMenuItem(capture_now_item));
+    app.manage(PauseMenuItem(pause_item));
 
     // The menu bar gets its own asset rather than the app icon. tray-icon
     // normalises every icon to 18 points tall and scales the width to match,
@@ -177,6 +187,9 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             // Same entry point the sign-out shortcut uses: it revokes the native command
             // surface BEFORE asking the webview to sign out, so a stalled JS leg
             // still leaves the sensitive commands locked.
+            // Pause is native end to end: the engine reads the flag directly and
+            // reports the transition back through set_paused.
+            PAUSE_RECORDING => crate::meeting::toggle_user_pause(app),
             SIGN_OUT => overlay::sign_out_requested(app),
             AUTOSTART => autostart::toggle(app),
             VERSION => {} // disabled label item, not clickable
@@ -211,6 +224,14 @@ pub fn set_recording(app: &AppHandle, active: bool) {
             error!("tray: failed to relabel capture item: {e}");
         }
     }
+    if let Some(item) = app.try_state::<PauseMenuItem>() {
+        if let Err(e) = item.0.set_text("Pause recording") {
+            error!("tray: failed to relabel pause item: {e}");
+        }
+        if let Err(e) = item.0.set_enabled(active) {
+            error!("tray: failed to toggle pause item: {e}");
+        }
+    }
     let Some(handle) = app.try_state::<TrayHandle>() else {
         return;
     };
@@ -220,6 +241,24 @@ pub fn set_recording(app: &AppHandle, active: bool) {
         None
     };
     if let Err(e) = handle.0.set_tooltip(tooltip) {
+        error!("tray: failed to set recording tooltip: {e}");
+    }
+}
+
+/// A live capture paused or resumed (tray Pause or the screen lock). Only
+/// called while recording, so the tooltip stays a recording indicator.
+pub fn set_paused(app: &AppHandle, paused: bool) {
+    if let Some(item) = app.try_state::<PauseMenuItem>() {
+        let label = if paused { "Resume recording" } else { "Pause recording" };
+        if let Err(e) = item.0.set_text(label) {
+            error!("tray: failed to relabel pause item: {e}");
+        }
+    }
+    let Some(handle) = app.try_state::<TrayHandle>() else {
+        return;
+    };
+    let tooltip = if paused { "Recording paused" } else { "Recording meeting..." };
+    if let Err(e) = handle.0.set_tooltip(Some(tooltip)) {
         error!("tray: failed to set recording tooltip: {e}");
     }
 }

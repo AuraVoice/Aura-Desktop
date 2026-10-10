@@ -136,6 +136,19 @@
 :root[data-theme="dark"] .db-meeting-retry-error {
   color: var(--dk-danger);
 }
+:root[data-theme="dark"] .db-meeting-actions .db-secondary-btn.is-active,
+:root[data-theme="dark"] .db-meeting-actions .db-secondary-btn.is-active:hover:not(:disabled) {
+  border-color: var(--dk-accent-ring);
+  background: var(--dk-accent-soft);
+  color: var(--dk-accent-text);
+}
+:root[data-theme="dark"] .db-skip-words-error {
+  color: var(--dk-danger);
+}
+:root[data-theme="dark"] .db-meeting-action-status.is-error {
+  background: var(--dk-danger-soft, rgba(239, 99, 99, 0.12));
+  color: var(--dk-danger);
+}
 
 /* ── Copy button ── */
 :root[data-theme="dark"] .db-copy-compact {

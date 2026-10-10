@@ -49,7 +49,7 @@ mod focus_verdict;
 #[cfg(windows)]
 mod span;
 #[cfg(windows)]
-mod tree;
+pub(crate) mod tree;
 #[cfg(windows)]
 mod worker;
 

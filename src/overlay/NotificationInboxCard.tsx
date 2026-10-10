@@ -112,6 +112,8 @@ function actionLabel(action: StoredNotification["action"]): string | null {
       return copy.answerResearchQuestion;
     case "view_browser_task":
       return copy.viewBrowserTask;
+    case "view_desktop_task":
+      return copy.viewDesktopTask;
     case "view_swarm_channel":
       return copy.viewSwarmChannel;
     default:

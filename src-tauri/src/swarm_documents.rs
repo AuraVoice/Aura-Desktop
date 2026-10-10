@@ -1,6 +1,7 @@
-//! Saves a document a Swarm manager drafted (a resume, a cover letter, a plan) into
-//! `Downloads/Aura Documents`. The bytes are built in the webview (`src/lib/swarmDocumentFile.ts`)
-//! from the draft the user just read; this side only owns where they land.
+//! Saves a document a Swarm manager drafted (a resume, a cover letter, a plan), or a meeting's
+//! notes and transcript exported from the Meetings page, into `Downloads/Aura Documents`.
+//! The bytes are built in the webview (`src/lib/swarmDocumentFile.ts`, `src/lib/meetingExport.ts`)
+//! from what the user just read; this side only owns where they land.
 //!
 //! Never overwrites: a name that already exists becomes "name (2).docx", "name (3).docx", so
 //! saving twice, or saving a revision of a file the user keeps in that folder, can never
@@ -14,7 +15,7 @@ use tauri::{AppHandle, Manager};
 
 const FOLDER: &str = "Aura Documents";
 const MAX_BYTES: usize = 8 * 1024 * 1024;
-const EXTENSIONS: [&str; 3] = ["docx", "pdf", "txt"];
+const EXTENSIONS: [&str; 5] = ["docx", "pdf", "txt", "md", "vtt"];
 
 #[derive(Serialize)]
 pub struct SavedDocument {
@@ -51,7 +52,7 @@ pub async fn save_swarm_document(
 ) -> Result<SavedDocument, String> {
     let extension = extension.to_ascii_lowercase();
     if !EXTENSIONS.contains(&extension.as_str()) {
-        return Err("Only Word, PDF and text files can be saved.".to_string());
+        return Err("Only Word, PDF, text, Markdown and subtitle files can be saved.".to_string());
     }
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(data_base64.as_bytes())

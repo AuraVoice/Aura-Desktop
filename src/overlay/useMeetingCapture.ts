@@ -836,6 +836,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
         recordingRef.current = payload.active;
         setRecording(payload.active);
         setPaused(payload.active && payload.paused);
+        if (payload.reason === "paused_user") trackEvent("meeting_paused", {});
         if (!payload.active) {
           const leftEvent = activeEventRef.current;
           const leftApp = activeCallAppRef.current;

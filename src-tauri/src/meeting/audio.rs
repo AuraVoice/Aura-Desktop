@@ -323,10 +323,12 @@ fn engine_thread(
                 super::notify_device_rebound(&app);
             }
         }
-        // 4. Session lock transitions.
+        // 4. Session lock and tray Pause transitions. Both take the same path:
+        //    a user pause is a lock the user chose.
         let locked = super::session::is_locked();
-        if locked != paused {
-            paused = locked;
+        let want_paused = locked || super::user_paused();
+        if want_paused != paused {
+            paused = want_paused;
             if paused {
                 // Close the running segment at the lock boundary; the locked
                 // span simply doesn't exist in the audio timeline.
@@ -356,7 +358,12 @@ fn engine_thread(
                 loop_state.reset_clock();
                 segment_start_ms = timeline_base_ms + capture_epoch.elapsed().as_millis() as i64;
             }
-            super::notify_paused(&app, paused);
+            let reason = match (paused, locked) {
+                (false, _) => "resumed",
+                (true, true) => "paused_lock",
+                (true, false) => "paused_user",
+            };
+            super::notify_paused(&app, paused, reason);
         }
         // 5. Pump both channels (locked = drain-and-discard). A detected
         //    clock discontinuity taints the segment like a re-bind does.

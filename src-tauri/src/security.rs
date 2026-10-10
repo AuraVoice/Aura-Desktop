@@ -85,6 +85,9 @@ pub struct SecurityState {
     /// Same reasoning as the flag above: the authorization decision lives
     /// here, AppHandle-free, so it cannot read the store per call.
     browser_task_consented: bool,
+    /// Mirror of the desktop Operator's persisted opt-in
+    /// (`agent_operator/consent.rs`), for the same reason as the flag above.
+    operator_task_consented: bool,
     guide_epoch: u64,
     /// A screen frame was actually captured (and authorized) during the
     /// current voice session - the precondition for `point_at`, since a
@@ -136,6 +139,12 @@ pub enum Operation {
     StartBrowserTask,
     /// Write a document a Swarm manager drafted into Downloads/Aura Documents.
     SaveDocument,
+    /// Run commands, read the web, read, click and type in other applications'
+    /// windows, and launch any installed app, for a desktop task the USER
+    /// started. Signed in plus the one-time opt-in, and never a live-call
+    /// requirement for the same reason as StartBrowserTask. No model holds this
+    /// as a tool: only `agent_operator::start` asks for it, from a Swarm Start card.
+    OperatorTask,
 }
 
 /// Proof of a successful `authorize` call, carrying the auth epoch it was
@@ -191,6 +200,7 @@ pub enum Denied {
     ScreenContextDisabled,
     ScreenSightOff,
     BrowserTaskNotEnabled,
+    OperatorTaskNotEnabled,
 }
 
 impl fmt::Display for Denied {
@@ -206,6 +216,7 @@ impl fmt::Display for Denied {
             Denied::ScreenContextDisabled => "denied: screen context sharing is off in settings",
             Denied::ScreenSightOff => "denied: screen sight is switched off",
             Denied::BrowserTaskNotEnabled => "denied: browser tasks are not enabled in settings",
+            Denied::OperatorTaskNotEnabled => "denied: desktop tasks are not enabled in settings",
         };
         f.write_str(reason)
     }
@@ -333,6 +344,11 @@ impl SecurityState {
             Operation::StartBrowserTask => {
                 if !self.browser_task_consented {
                     return Err(Denied::BrowserTaskNotEnabled);
+                }
+            }
+            Operation::OperatorTask => {
+                if !self.operator_task_consented {
+                    return Err(Denied::OperatorTaskNotEnabled);
                 }
             }
         }
@@ -497,6 +513,10 @@ impl SecurityState {
         self.browser_task_consented = accepted;
     }
 
+    pub fn set_operator_task_consent(&mut self, accepted: bool) {
+        self.operator_task_consented = accepted;
+    }
+
     pub fn set_voice_screen_context(&mut self, enabled: bool) {
         self.voice_screen_context_enabled = enabled;
         // Switching the setting back on in Settings is a fresh, newer opt-in.
@@ -587,6 +607,25 @@ pub fn set_browser_task_consent(app: &AppHandle, accepted: bool) {
     }
 }
 
+/// Mirrors the desktop Operator's persisted opt-in (`agent_operator/consent.rs`).
+pub fn set_operator_task_consent(app: &AppHandle, accepted: bool) {
+    if let Some(handle) = handle(app) {
+        let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        state.set_operator_task_consent(accepted);
+    }
+}
+
+/// Whether the user has explicitly switched Screen Sight off. The desktop
+/// Operator respects it for its window screenshots: the task still runs, on
+/// the control tree alone, and says so.
+pub fn screen_sight_off(app: &AppHandle) -> bool {
+    let Some(handle) = handle(app) else {
+        return true;
+    };
+    let state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+    state.screen_sight_switched_off()
+}
+
 /// Records a successful, authorized screen capture (enables PointAt).
 pub fn note_capture(app: &AppHandle) {
     if let Some(handle) = handle(app) {
@@ -621,6 +660,8 @@ pub fn session_changed(app: &AppHandle, signed_in: bool, uid: Option<String>) {
         // A browser task acting for account A must not keep acting once B is
         // (or nobody is) signed in.
         crate::agent_browser::request_stop(app, "signed_out");
+        // The same for a desktop task: it acts in this account's name.
+        crate::agent_operator::request_stop(app, "signed_out");
         crate::interview::clear_preparation(app);
         crate::meeting::stop_all_join_watches(app);
         crate::meeting::stop_ambient_watch_native(app);
@@ -660,6 +701,7 @@ pub fn session_changed(app: &AppHandle, signed_in: bool, uid: Option<String>) {
     // Browser task rows (brief, answer, trace) are per-account and exist
     // nowhere else; same boundary, same reason.
     crate::agent_browser::store::retain_only_for_session(app, session_uid.as_deref());
+    crate::agent_operator::store::retain_only_for_session(app, session_uid.as_deref());
     // Swarm manager memory rows are per-account and exist nowhere else either;
     // only decay runs over the other account's rows, nothing is deleted.
     crate::swarm_memory::store::retain_only_for_session(app, session_uid.as_deref());

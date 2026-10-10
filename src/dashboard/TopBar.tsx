@@ -101,6 +101,10 @@ export function NotificationBell({ notifications }: { notifications?: DashboardN
         const row = notifications?.inbox.find((item) => item.notificationId === activation.notificationId);
         setNotifOpen(false);
         navigate(browserTaskDestination(row?.resourceId));
+      } else if (activation.action === "view_desktop_task") {
+        setNotifOpen(false);
+        // Desktop tasks start from a Swarm Start card in #group, which shows the result.
+        navigate(swarmDestination("group"));
       } else if (activation.action === "view_swarm_channel") {
         const row = notifications?.inbox.find((item) => item.notificationId === activation.notificationId);
         setNotifOpen(false);
@@ -161,6 +165,9 @@ export function NotificationBell({ notifications }: { notifications?: DashboardN
     } else if (row.action === "view_browser_task") {
       setNotifOpen(false);
       navigate(browserTaskDestination(row.resourceId));
+    } else if (row.action === "view_desktop_task") {
+      setNotifOpen(false);
+      navigate(swarmDestination("group"));
     } else if (row.action === "view_swarm_channel") {
       setNotifOpen(false);
       navigate(swarmDestination(row.resourceId));

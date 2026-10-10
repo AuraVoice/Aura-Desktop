@@ -4,8 +4,13 @@ import type { Room } from "livekit-client";
 import { useTauriEvent } from "../lib/useTauriEvent";
 import {
   BROWSER_TASK_APPROVAL,
+  BROWSER_TASK_CHECKIN,
   BROWSER_TASK_STATUS,
+  OPERATOR_TASK_APPROVAL,
+  OPERATOR_TASK_CHECKIN,
+  OPERATOR_TASK_STATUS,
   type BrowserTaskApprovalPayload,
+  type BrowserTaskCheckinPayload,
   type BrowserTaskStatusPayload,
 } from "../lib/ipcEvents";
 import {
@@ -15,36 +20,100 @@ import {
   stopBrowserTask,
   watchBrowserTask,
 } from "../lib/browserTask";
+import {
+  approveDesktopTask,
+  desktopTaskFailureMessage,
+  desktopTaskStatus,
+  stopDesktopTask,
+} from "../lib/desktopTask";
 import { notifyLocal } from "../lib/desktopNotifications";
+import type { DesktopNotificationType, NotificationAction } from "../lib/desktopNotificationContract";
 import { logError } from "../lib/log";
 
 /**
- * The overlay's view of the one live browser task (src-tauri/src/agent_browser).
- *
- * Rust emits `browser-task-status` on every phase change and step and
- * `browser-task-approval` when the guard pauses on a risky click. This hook
- * folds those into what the slot card needs: a running chip, an approval
- * question, or a result. It is also the ONE producer of the task's
+ * The overlay's view of one live agent task: the browser agent
+ * (src-tauri/src/agent_browser) or the desktop Operator
+ * (src-tauri/src/agent_operator). Both emit the same three events under their
+ * own names: status on every phase change and step, approval when the guard
+ * pauses on a risky action, and check-in when the task crosses a spend mark
+ * (and, for the Operator, when the person touches the mouse or keyboard
+ * mid-task). This hook folds those into what the slot card needs: a running
+ * chip, a question, or a result. It is also the ONE producer of the task's
  * notifications, through the desktop broker, so a finished task toasts once
  * and lands in the inbox like every other event.
  */
 
-const LIVE_PHASES = new Set(["starting", "launching", "running", "awaiting_approval"]);
+export type AgentTaskKind = "browser" | "desktop";
+
+const LIVE_PHASES = new Set(["starting", "launching", "running", "awaiting_approval", "awaiting_checkin"]);
 /** How long a result card stays in the slot before it folds away on its own. */
 const RESULT_LINGER_MS = 60_000;
 
+interface KindConfig {
+  statusEvent: string;
+  approvalEvent: string;
+  checkinEvent: string;
+  status: () => Promise<BrowserTaskStatusPayload>;
+  stop: () => Promise<unknown>;
+  approve: (allow: boolean) => Promise<void>;
+  /** Only Aura's own browser can be shown and hidden. */
+  watch: (() => Promise<void>) | null;
+  failureMessage: (code: string | null | undefined) => string;
+  types: { ready: DesktopNotificationType; partial: DesktopNotificationType; failed: DesktopNotificationType };
+  action: NotificationAction;
+  noun: string;
+  /** Voice can start a browser task, so a live call hears how it ended. */
+  publishToCall: boolean;
+}
+
+const KINDS: Record<AgentTaskKind, KindConfig> = {
+  browser: {
+    statusEvent: BROWSER_TASK_STATUS,
+    approvalEvent: BROWSER_TASK_APPROVAL,
+    checkinEvent: BROWSER_TASK_CHECKIN,
+    status: browserTaskStatus,
+    stop: stopBrowserTask,
+    approve: approveBrowserTask,
+    watch: watchBrowserTask,
+    failureMessage: browserTaskFailureMessage,
+    types: { ready: "browser_task_ready", partial: "browser_task_partial", failed: "browser_task_failed" },
+    action: "view_browser_task",
+    noun: "browser task",
+    publishToCall: true,
+  },
+  desktop: {
+    statusEvent: OPERATOR_TASK_STATUS,
+    approvalEvent: OPERATOR_TASK_APPROVAL,
+    checkinEvent: OPERATOR_TASK_CHECKIN,
+    status: desktopTaskStatus,
+    stop: stopDesktopTask,
+    approve: approveDesktopTask,
+    watch: null,
+    failureMessage: desktopTaskFailureMessage,
+    types: { ready: "desktop_task_ready", partial: "desktop_task_partial", failed: "desktop_task_failed" },
+    action: "view_desktop_task",
+    noun: "desktop task",
+    publishToCall: false,
+  },
+};
+
 export interface BrowserTaskState {
+  kind: AgentTaskKind;
   /** The latest status while a task is live, else null. */
   status: BrowserTaskStatusPayload | null;
   live: boolean;
   approval: BrowserTaskApprovalPayload | null;
+  /** Set while the task waits at a check-in; Keep going is `approve(true)`. */
+  checkin: BrowserTaskCheckinPayload | null;
   /** The terminal payload, held for the result card until dismissed. */
   result: BrowserTaskStatusPayload | null;
   watching: boolean;
+  canWatch: boolean;
   stop: () => void;
   approve: (allow: boolean) => void;
   watch: () => void;
   dismissResult: () => void;
+  failureMessage: (code: string | null | undefined) => string;
 }
 
 /** Tells a live Buddy call how the task ended, so Buddy can read it out
@@ -72,14 +141,18 @@ export function useBrowserTask({
   uid,
   appHidden,
   room,
+  kind = "browser",
 }: {
   uid: string | null;
   appHidden: boolean;
   /** The live voice room, when there is one. */
   room: Room | null;
+  kind?: AgentTaskKind;
 }): BrowserTaskState {
+  const config = KINDS[kind];
   const [status, setStatus] = useState<BrowserTaskStatusPayload | null>(null);
   const [approval, setApproval] = useState<BrowserTaskApprovalPayload | null>(null);
+  const [checkin, setCheckin] = useState<BrowserTaskCheckinPayload | null>(null);
   const [result, setResult] = useState<BrowserTaskStatusPayload | null>(null);
   const [watching, setWatching] = useState(false);
   const appHiddenRef = useRef(appHidden);
@@ -92,16 +165,17 @@ export function useBrowserTask({
   // Hydrate: the overlay can mount (or remount) while a task is running.
   useEffect(() => {
     let cancelled = false;
-    browserTaskStatus()
+    config
+      .status()
       .then((payload) => {
         if (cancelled) return;
         setStatus(LIVE_PHASES.has(payload.phase) ? payload : null);
       })
-      .catch((err) => logError("useBrowserTask: status", err));
+      .catch((err) => logError(`useBrowserTask(${kind}): status`, err));
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [config, kind]);
 
   const summon = useCallback(() => {
     // The notch may be hidden; the card has to be seen. summon_bar never
@@ -110,16 +184,18 @@ export function useBrowserTask({
   }, []);
 
   useTauriEvent<BrowserTaskStatusPayload>(
-    BROWSER_TASK_STATUS,
+    config.statusEvent,
     (payload) => {
       if (LIVE_PHASES.has(payload.phase)) {
         setStatus(payload);
         setResult(null);
         if (payload.phase !== "awaiting_approval") setApproval(null);
+        if (payload.phase !== "awaiting_checkin") setCheckin(null);
         return;
       }
       setStatus(null);
       setApproval(null);
+      setCheckin(null);
       setWatching(false);
       if (payload.phase === "idle") return;
       // A user Stop needs no card and no toast: they were looking at it.
@@ -130,7 +206,7 @@ export function useBrowserTask({
       setResult(payload);
       summon();
       const liveRoom = roomRef.current;
-      if (liveRoom && liveRoom.state === "connected") {
+      if (config.publishToCall && liveRoom && liveRoom.state === "connected") {
         publishDesktopResult(liveRoom, payload).catch((err) =>
           logError("useBrowserTask: publish desktop.result", err),
         );
@@ -139,44 +215,53 @@ export function useBrowserTask({
       if (!owner || !payload.taskId) return;
       const type =
         payload.phase === "done"
-          ? "browser_task_ready"
+          ? config.types.ready
           : payload.phase === "partial"
-            ? "browser_task_partial"
-            : "browser_task_failed";
+            ? config.types.partial
+            : config.types.failed;
       const title =
         payload.phase === "done"
-          ? "Buddy finished a browser task"
+          ? `Buddy finished a ${config.noun}`
           : payload.phase === "partial"
             ? "Buddy stopped early"
-            : "A browser task did not finish";
+            : `A ${config.noun} did not finish`;
       const answer = (payload.answer ?? "").trim();
       const body = answer
         ? answer.length > 140 ? `${answer.slice(0, 137)}...` : answer
-        : browserTaskFailureMessage(payload.reason);
+        : config.failureMessage(payload.reason);
       void notifyLocal(
         {
           type,
           severity: payload.phase === "done" ? "success" : payload.phase === "partial" ? "warning" : "error",
           title,
           body,
-          dedupKey: `browser_task:${payload.taskId}:${payload.phase}`,
-          action: "view_browser_task",
+          dedupKey: `${kind}_task:${payload.taskId}:${payload.phase}`,
+          action: config.action,
           resourceId: payload.taskId,
           toastPolicy: "when_hidden",
         },
         { appHidden: appHiddenRef.current, ownerUid: owner },
       );
     },
-    "useBrowserTask: status",
+    `useBrowserTask(${kind}): status`,
   );
 
   useTauriEvent<BrowserTaskApprovalPayload>(
-    BROWSER_TASK_APPROVAL,
+    config.approvalEvent,
     (payload) => {
       setApproval(payload);
       summon();
     },
-    "useBrowserTask: approval",
+    `useBrowserTask(${kind}): approval`,
+  );
+
+  useTauriEvent<BrowserTaskCheckinPayload>(
+    config.checkinEvent,
+    (payload) => {
+      setCheckin(payload);
+      summon();
+    },
+    `useBrowserTask(${kind}): checkin`,
   );
 
   // The result folds away on its own; the row in History keeps it.
@@ -187,27 +272,37 @@ export function useBrowserTask({
   }, [result]);
 
   const stop = useCallback(() => {
-    stopBrowserTask().catch((err) => logError("useBrowserTask: stop", err));
-  }, []);
-  const approve = useCallback((allow: boolean) => {
-    setApproval(null);
-    approveBrowserTask(allow).catch((err) => logError("useBrowserTask: approve", err));
-  }, []);
+    config.stop().catch((err) => logError(`useBrowserTask(${kind}): stop`, err));
+  }, [config, kind]);
+  const approve = useCallback(
+    (allow: boolean) => {
+      setApproval(null);
+      setCheckin(null);
+      config.approve(allow).catch((err) => logError(`useBrowserTask(${kind}): approve`, err));
+    },
+    [config, kind],
+  );
   const watch = useCallback(() => {
+    const toggle = config.watch;
+    if (!toggle) return;
     setWatching((current) => !current);
-    watchBrowserTask().catch((err) => logError("useBrowserTask: watch", err));
-  }, []);
+    toggle().catch((err) => logError(`useBrowserTask(${kind}): watch`, err));
+  }, [config, kind]);
   const dismissResult = useCallback(() => setResult(null), []);
 
   return {
+    kind,
     status,
     live: status !== null,
     approval,
+    checkin,
     result,
     watching,
+    canWatch: config.watch !== null,
     stop,
     approve,
     watch,
     dismissResult,
+    failureMessage: config.failureMessage,
   };
 }

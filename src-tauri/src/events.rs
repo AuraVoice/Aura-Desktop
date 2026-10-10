@@ -83,6 +83,16 @@ pub const BROWSER_TASK_STATUS: &str = "browser-task-status";
 /// The guard paused on a risky click; the card asks and answers with
 /// `browser_task_approve`. Sixty seconds, default no.
 pub const BROWSER_TASK_APPROVAL: &str = "browser-task-approval";
+/// The task crossed a spend check-in (agent_governor.rs). The card asks
+/// whether to keep going; `browser_task_approve(true)` continues, Stop ends it.
+pub const BROWSER_TASK_CHECKIN: &str = "browser-task-checkin";
+
+// agent_operator/mod.rs: the desktop Operator's twins of the three above.
+// The check-in also fires when the person touches the mouse or keyboard
+// mid-task (`reason: "user_input"`); `desktop_task_approve(true)` resumes.
+pub const OPERATOR_TASK_STATUS: &str = "operator-task-status";
+pub const OPERATOR_TASK_APPROVAL: &str = "operator-task-approval";
+pub const OPERATOR_TASK_CHECKIN: &str = "operator-task-checkin";
 
 // tray.rs
 pub const OPEN_NOTIFICATIONS_REQUESTED: &str = "open-notifications-requested";

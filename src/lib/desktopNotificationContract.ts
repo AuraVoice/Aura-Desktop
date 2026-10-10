@@ -33,6 +33,9 @@ export const NOTIFICATION_TYPES = [
   "meeting_ready",
   "meeting_needs_attention",
   "meeting_upload_pending",
+  // Local-only, produced by useMeetingExpiryWarnings a day before an unpinned
+  // note's retention runs out.
+  "meeting_expiring",
   "update_ready",
   "auth_required",
   "generic",
@@ -49,6 +52,11 @@ export const NOTIFICATION_TYPES = [
   "browser_task_ready",
   "browser_task_partial",
   "browser_task_failed",
+  // Local-only, produced by useBrowserTask({ kind: "desktop" }) when a desktop
+  // Operator task ends. Same broker guarantees as the browser task's.
+  "desktop_task_ready",
+  "desktop_task_partial",
+  "desktop_task_failed",
   // Swarm session outcomes (juno-backend services/swarm/runner.py _notify). Listed
   // for the same reason as the research types: an unlisted type is dropped.
   "swarm_report_ready",
@@ -75,6 +83,8 @@ export const ACTIONS = [
   "view_research",
   "answer_research_question",
   "view_browser_task",
+  // resource_id is a desktop task id; it opens Swarm's #group, where its Start card shows the result.
+  "view_desktop_task",
   // resource_id is the Swarm channel (m:<manager_id>), opened on the Agents page.
   "view_swarm_channel",
 ] as const;

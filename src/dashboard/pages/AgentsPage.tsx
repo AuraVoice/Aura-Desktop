@@ -86,7 +86,13 @@ export function AgentsPage() {
           id={`agents-${stage.renderedTab}-panel`}
           aria-labelledby={`agents-${stage.renderedTab}-tab`}
         >
-          {stage.renderedTab === "computer" ? <BrowserAgentPage /> : stage.renderedTab === "swarm" ? <SwarmPage /> : <ResearchPage />}
+          {stage.renderedTab === "computer" ? (
+            <BrowserAgentPage />
+          ) : stage.renderedTab === "swarm" ? (
+            <SwarmPage />
+          ) : (
+            <ResearchPage />
+          )}
         </div>
       </div>
     </div>

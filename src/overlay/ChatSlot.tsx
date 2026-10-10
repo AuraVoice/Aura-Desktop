@@ -354,6 +354,10 @@ interface ChatSlotProps {
   /** Bumped every time the chat hotkey fires, including while the slot is
    * already open, so the composer takes the caret back. */
   focusNonce: number;
+  /** A text file another window asked to attach (the dashboard's "Ask Aura"
+   * on a meeting). Each nonce is attached once, then reported back. */
+  seedAttachment?: { nonce: number; fileName: string; text: string } | null;
+  onSeedAttached?: () => void;
   screen: ChatScreenState;
   /** Buddy's face for the thinking row, or null to show plain dots. */
   companionAvatar: CompanionAvatarId | null;
@@ -802,6 +806,8 @@ export function ChatSlot({
   limitReached,
   lane,
   focusNonce,
+  seedAttachment,
+  onSeedAttached,
   screen,
   companionAvatar,
   onHeightChange,
@@ -827,6 +833,19 @@ export function ChatSlot({
   });
   const trimmedMessage = message.trim();
   const attachments = useChatAttachments();
+  // The attachment hook validates and encodes the file like a picked one, so
+  // an oversized transcript is refused with the usual message under the
+  // composer rather than failing at send.
+  const seededNonceRef = useRef<number | null>(null);
+  const addAttachmentFiles = attachments.addFiles;
+  useEffect(() => {
+    if (!seedAttachment || seededNonceRef.current === seedAttachment.nonce) return;
+    seededNonceRef.current = seedAttachment.nonce;
+    addAttachmentFiles([
+      new File([seedAttachment.text], seedAttachment.fileName, { type: "text/plain" }),
+    ]);
+    onSeedAttached?.();
+  }, [seedAttachment, addAttachmentFiles, onSeedAttached]);
   // Sent with every message and remembered on this machine; mobile keeps the
   // same level per account (see ChatEffortPopover.tsx).
   const [effort, setEffortState] = useState<ChatEffort>(readStoredEffort);

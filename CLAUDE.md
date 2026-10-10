@@ -331,8 +331,13 @@ Rules an edit could break:
   deployed env var first. It is a budget value on purpose, never a feature flag.
 - **Every safety gate is code on the desktop** (`guard.rs`): a click or a type only on a ref from the
   LAST snapshot, a pause with default-no on anything that reads submit/buy/pay/apply/send/sign up,
-  http(s) only, 40 steps, 5 minutes. The prompt asks the model to avoid these; the guard is what
-  stops them. Do not move a gate into the prompt.
+  http(s) only. The prompt asks the model to avoid these; the guard is what stops them. Do not move
+  a gate into the prompt.
+- **No step or time cap, in any agent loop** (Varun's call, 2026-10-09). `agent_governor.rs` ends a
+  task only when it stops reaching new states (a stall note to the model at 3, `stuck` at 6) and
+  pauses at every $1 spent for the user's Keep going or Stop; Swarm does the same in `runner.py`
+  (`_checkin_due`). Do not reintroduce a step budget or a wall clock to stop a runaway: the
+  check-in is the backstop.
 - **Authorization is `Operation::StartBrowserTask`, never `DesktopControl`**: the latter requires a
   live voice call and a task must outlive the call that started it. Sign-out stops it.
 - **The task store has its own key file** (`agent-browser/key.bin`); it never borrows the meeting or
@@ -342,6 +347,61 @@ Rules an edit could break:
   hold that opens with an address word, and `browser_task` acts only on `addressed = yes`. Raising
   the cap for every hold, or dropping the addressed gate, reintroduces "typed a to-do item started
   a browser".
+
+## Desktop Operator: acts in the user's own apps, only on a task they started
+
+`src-tauri/src/agent_operator/` (the loop, `guard.rs`, its own store and opt-in) works
+command-first, the way a coding agent works in a terminal: `run_command` (PowerShell, `shell.rs`),
+then `web_search` / `fetch_url` (`web.rs`), and only then `src-tauri/src/native_ui/` (reads a
+whole window, clicks, types, scrolls), one action per `POST /agent/desktop-step` on juno-backend.
+There is no Desktop tab (removed 2026-10-10, Varun's call): it starts from the Start card a Swarm
+`desktop_task` decision shows in #group (`swarm/DesktopTaskStart.tsx`), stamped `origin`
+"swarm:<item key>", which is how that card finds its run and report again. Plan and rationale in
+`future-features.txt`, "OPERATOR HANDS + DYNAMIC STEPPING". Rules an edit could break:
+
+- **Only when asked.** `Operation::OperatorTask` is the only grant, `agent_operator::start` (from
+  the Swarm Start card) is its only caller, and the ticket is rechecked before EVERY action. A
+  Swarm decision only DRAWS the card; the user's tap starts the task. Never add click, type,
+  command or launch-any-app to a chat, voice or Swarm manager tool list.
+- **Reading an app is not clicking through it.** The prompt (`services/desktop_agent/prompt.py`)
+  orders commands and config files, then vendor docs, then the app's window. The first Zoom run
+  launched Zoom and clicked Settings to answer "what can Zoom do"; do not reorder that.
+- **The command gate is PowerShell's own parser, never a regex over the text.** `shell::scan`
+  runs `Parser::ParseInput` (nothing executes) and reports every command name, redirection,
+  method call, dynamic invocation and non-variable assignment, including inside script blocks
+  and strings. `guard.rs` lets a command run unasked only when all of it is on
+  `READ_ONLY_COMMANDS` / `READ_ONLY_METHODS` and it touches no `sensitive_path` (credentials,
+  browser profiles, Aura's keys, `env:`, UNC paths). Everything else shows the exact command; a
+  command that does not parse never runs.
+- **Websites are approved once per task, per host.** `fetch_url` never follows a redirect to
+  another host and refuses private addresses; that is the leak gate against a page steering the
+  task into sending what it read somewhere new. `web_search` goes through
+  `/agent/desktop-search`, under the same wallet and step allowance as a step.
+- **A window the action opened becomes the target.** A click, key or Enter diffs the target
+  process's windows, owned ones included (`native_ui::list_windows_with_owned`), and moves into
+  a new one; the history says `opened "<title>"`. Without it the Operator kept re-reading the
+  window Zoom's Settings opened from.
+- **`native_ui` is not `uia`.** `uia/` reads only and promises never to invoke a pattern, and its
+  worker serves dictation's 120 ms focus probe. Acting lives in `native_ui/` on its own
+  `aura-operator-ui` thread; do not merge the two workers.
+- **A real click before a pattern, and never through Aura.** UIA Invoke can block until the dialog
+  it opened closes, so an on-screen element gets a SendInput click, hit-tested first to be the
+  target's own process. Patterns are for elements the mouse cannot reach.
+- **The guard is code** (`agent_operator/guard.rs`): refs only from the last snapshot, no typing
+  into a password field, no acting in sign-in, UAC, Windows Security or password-manager windows,
+  approval for anything that reads as send/buy/delete/sign out, for closing chords, for every
+  keystroke into a terminal window, and the command and website gates above. `launch_app` takes only an exact installed-app catalog name
+  (`app_catalog.rs`, shared with dictation), never a path or command.
+- **The person wins the cursor.** Aura injects nothing while the model thinks, so a
+  `GetLastInputInfo` change in that window is the user: before an action that takes the screen
+  (click, type, key, scroll, focus, launch; never a command, fetch or search) the task pauses on a check-in card
+  (`reason: "user_input"`) and acts on a fresh view after Resume.
+- **`PROJECT_DESKTOP_AGENT_DAILY_COST_CAP_MICROUSD` is the off switch** ($5/day in `deploy.sh`, 0 by
+  default refuses every step). The chain is Haiku 5.5, MiMo-V2.6-Flash, Sonnet 5.5
+  (`TIER_DESKTOP_STEP*`); Haiku 5.5 is in `_ANTHROPIC_ALWAYS_THINKING_PREFIXES` because its docs
+  never offer `thinking: disabled`.
+- **Windows only for now.** `native_ui/unsupported.rs` answers `unsupported_platform` off Windows;
+  the macOS AX backend is plan phase P5.
 
 ## Aura Swarm: managers read, writes are approvals, the wallet is the off switch
 
@@ -359,6 +419,11 @@ Rules an edit could break:
   tool, per scope, under a daily cap, and only for tools in `actions.AUTO_APPROVE_TARGETS`;
   a public post never joins that set. `setGrants` sends the policy only from its own switch,
   so a connector toggle can never change it.
+- **Anything on the user's own PC is `desktop_task`, never a manager or `computer_task`.**
+  Managers have no hands on this machine and Aura's browser has none of the user's sign-ins,
+  so the classifier routes "find out what this app I have can do" to the `desktop_task` card
+  (`capabilities.py`, `prompts.py`). The decision only draws a Start card; the run and its
+  report live in the Operator's local store, so other devices see the decision alone.
 - **Watches are a class, never a site** (`watches.py`, `SwarmManagerTools.tsx` `WatchList`).
   A new kind of job is a brief, a grant, a watch and a policy. If one needs code, the class
   is missing a row (an extractor kind, a read row, an approval tool), and the row is what

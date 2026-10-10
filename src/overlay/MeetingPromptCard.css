@@ -158,6 +158,19 @@
   text-overflow: ellipsis;
 }
 
+/* Aura joins no call as a bot, so nobody else is told it is recording. The
+ * -6px pulls the 10px column gap down to 4px above this line only. */
+.meeting-prompt-consent {
+  margin: -6px 0 0;
+  height: 15px;
+  line-height: 15px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.6);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .meeting-prompt-actions {
   display: flex;
   justify-content: flex-end;

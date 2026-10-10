@@ -63,6 +63,7 @@ vi.mock("./useGuideMode", () => ({ useGuideMode: mocks.useGuideMode }));
 vi.mock("./useUpdateReady", () => ({ useUpdateReady: mocks.useUpdateReady }));
 vi.mock("./useMeetings", () => ({ useMeetings: mocks.useMeetings }));
 vi.mock("./useMeetingCapture", () => ({ useMeetingCapture: mocks.useMeetingCapture }));
+vi.mock("./useMeetingExpiryWarnings", () => ({ useMeetingExpiryWarnings: vi.fn() }));
 vi.mock("./useMeetingPrompt", () => ({ useMeetingPrompt: mocks.useMeetingPrompt }));
 vi.mock("./useOnboardingTail", () => ({ useOnboardingTail: mocks.useOnboardingTail }));
 vi.mock("./OnboardingTail", () => ({ OnboardingTail: () => <div>tail</div> }));

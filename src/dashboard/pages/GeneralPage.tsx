@@ -32,6 +32,8 @@ import {
   SettingsSection,
 } from "../components/SettingsPageLayout";
 import { AppearancePicker } from "../components/AppearancePicker";
+import { meetingSettingsCopy } from "../../lib/meetingCopy";
+import { MeetingSkipWords } from "./MeetingSkipWords";
 
 function ToggleRow({
   label,
@@ -536,6 +538,13 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
                 onChange={(value) => void updateImprovementChoice("improveActions", value)}
               />
             </div>
+          </SettingsSection>
+
+          <SettingsSection
+            title={meetingSettingsCopy.heading}
+            description={meetingSettingsCopy.description}
+          >
+            <MeetingSkipWords />
           </SettingsSection>
 
           <SettingsSection

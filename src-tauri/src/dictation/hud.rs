@@ -247,6 +247,11 @@ fn snoozed(app: &AppHandle) -> bool {
                 .and_then(|value| value.as_u64())
                 .unwrap_or(0);
             *slot = Some(stored);
+            // The wake-up thread from `snooze_until` died with the process that
+            // set it; without a new one Bolt never comes back on his own.
+            if stored > now_ms() {
+                schedule_wake(app, stored);
+            }
             stored
         }
     };
@@ -265,6 +270,10 @@ pub fn snooze_until(app: &AppHandle, until_ms: u64) {
     }
     MENU_OPEN.store(false, Ordering::Relaxed);
     refresh_placement(app);
+    schedule_wake(app, until_ms);
+}
+
+fn schedule_wake(app: &AppHandle, until_ms: u64) {
     let wake = until_ms.saturating_sub(now_ms());
     let handle = app.clone();
     std::thread::spawn(move || {
@@ -902,7 +911,11 @@ fn voice_notch_shares_display(
 /// sibling app's overlay (see CLAUDE.md).
 fn place_window(app: &AppHandle, window: &tauri::WebviewWindow, target: isize, phase: HudPhase, has_caption: bool) {
     let edge = overlay::snapshot(app).notch_edge;
-    let companion = companion_mode(app);
+    // The stamped value React is rendering, never a fresh read: hover and the
+    // overlay un-suppress place without emitting, so a live read that flipped
+    // (a snooze running out) sized the window for Bolt while React still drew
+    // the pill, stretched into a big dark bubble.
+    let companion = last_update().companion;
     let size = surface_size(edge, phase, has_caption, companion);
     // At rest the companion stays on the display he was last dropped on; a
     // hold still takes him to the display of the window it is typing into.

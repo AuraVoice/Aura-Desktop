@@ -332,8 +332,8 @@ export function WorkingEmbed({
         </span>
         {session && <Elapsed since={session.createdAt} />}
         {session && (
-          <span className="db-swarm-run-budget" title="Model decisions used of this session's limit">
-            step {session.decisionsUsed} of {session.maxDecisions}
+          <span className="db-swarm-run-budget" title="Model decisions so far. It keeps going while it finds new things, and asks before spending past each dollar">
+            step {session.decisionsUsed}
           </span>
         )}
         {session && (
@@ -461,6 +461,9 @@ export function QuestionEmbed({ message, open }: { message: SwarmMessage; open: 
 const STOP_REASON_COPY: Record<string, string> = {
   missing_access: "Some accounts it needed are not connected to this manager.",
   no_progress: "It kept finding the same things, so it stopped.",
+  checkin_stopped: "You asked it to stop and write up what it had.",
+  checkin_timeout: "It asked whether to keep going, heard nothing for 30 minutes, and wrote up what it had.",
+  spend_checkin: "It reached its $1 check-in, and a scheduled run has nobody to ask, so it wrote up what it had.",
   decision_cap: "It used all its steps for this run.",
   lane_failed: "One part kept failing and was dropped.",
   incomplete: "Some sources could not be read.",

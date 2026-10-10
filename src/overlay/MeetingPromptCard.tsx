@@ -16,8 +16,9 @@ import "./MeetingPromptCard.css";
 
 /** Must fit the rendered CSS (Rust grows the window by exactly this many
  * logical px): the 11px inset that leaves room for the corner X, 12px
- * padding, the 24px header, a 10px gap, the 28px action row, 12px padding. */
-export const MEETING_PROMPT_HEIGHT = 97;
+ * padding, the 24px header, a 4px gap, the 15px consent line, a 10px gap,
+ * the 28px action row, 12px padding. */
+export const MEETING_PROMPT_HEIGHT = 116;
 /** Kept equal to the .meeting-prompt-leaving animation duration. */
 export const MEETING_PROMPT_EXIT_MS = 200;
 
@@ -101,6 +102,8 @@ export function MeetingPromptCard({
             </span>
             <span className="meeting-prompt-title">{title}</span>
           </div>
+          {/* In every status, so the card never changes height under the slot. */}
+          <p className="meeting-prompt-consent">{copy.consentNote}</p>
           {answering ? (
             <div className="meeting-prompt-actions">
               <button

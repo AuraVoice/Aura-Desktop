@@ -26,6 +26,7 @@ export type SwarmCapability =
   | "none"
   | "buddy_chat"
   | "computer_task"
+  | "desktop_task"
   | "research_run"
   | "interview_brief";
 
@@ -336,7 +337,6 @@ export interface SwarmSessionView {
   question: string;
   lanes: SwarmLane[];
   decisionsUsed: number;
-  maxDecisions: number;
   sources: number;
   /** The #group round this session answers for, or empty. */
   roundId: string;
@@ -456,7 +456,7 @@ export function mapRoster(wire: unknown): SwarmRoster {
   };
 }
 
-const CAPABILITIES: readonly string[] = ["none", "buddy_chat", "computer_task", "research_run", "interview_brief"];
+const CAPABILITIES: readonly string[] = ["none", "buddy_chat", "computer_task", "desktop_task", "research_run", "interview_brief"];
 
 function isDecisionKind(value: string): value is SwarmDecisionKind {
   return (DECISION_KINDS as readonly string[]).includes(value);
@@ -606,7 +606,6 @@ function mapSession(raw: Json): SwarmSessionView {
       note: str(l.note),
     })),
     decisionsUsed: num(raw.decisions_used),
-    maxDecisions: num(raw.max_decisions) || 12,
     sources: num(raw.sources),
     roundId: str(raw.round_id),
     draftActions: Object.fromEntries(

@@ -37,22 +37,86 @@ import { shortDateTime } from "../format";
 import { useDashboardUser } from "../useDashboardUser";
 
 /**
- * The Background Browser Agent's page. In Phase A this is the harness: the
- * one place a task can be started by hand, watched, stopped, and read back
- * with its trace (per-step action, URL, milliseconds, tokens). Those trace
- * numbers are what decide whether the voice entry ships (future-features.txt,
- * section 5.1). Everything here is local: the rows come from the encrypted
- * store in Rust, never from the backend.
+ * The Agents page's Computer tab: the Background Browser Agent. A brief box,
+ * the live run, and a library of past tasks read back with their trace
+ * (per-step action, where, milliseconds, tokens). Everything here is local:
+ * the rows come from the agent's own encrypted store in Rust, never from the
+ * backend. The desktop Operator starts from Swarm instead (DesktopTaskStart).
  */
 
-const LIVE_PHASES = new Set(["starting", "launching", "running", "awaiting_approval"]);
+export type AgentTaskKind = "browser";
 
-const examples = [
-  "Compare the monthly price of Cursor, Windsurf and Claude Code Pro from their pricing pages.",
-  "Find three software engineering internships in Seattle posted this week and list their deadlines.",
-  "Find the three most cited 2026 arXiv papers on speculative decoding and summarize each.",
-  "What is the current price of the Dell U2723QE on dell.com?",
-];
+const LIVE_PHASES = new Set(["starting", "launching", "running", "awaiting_approval", "awaiting_checkin"]);
+
+interface PageKind {
+  statusEvent: string;
+  status: () => Promise<BrowserTaskStatusPayload>;
+  start: (brief: string) => Promise<BrowserTaskStatusPayload>;
+  stop: () => Promise<unknown>;
+  watch: (() => Promise<void>) | null;
+  list: (uid: string) => Promise<BrowserTaskSummary[]>;
+  load: (uid: string, taskId: string) => Promise<BrowserTaskDetail | null>;
+  remove: (uid: string, taskId: string) => Promise<void>;
+  loadConsent: () => Promise<boolean>;
+  setConsent: (accepted: boolean) => Promise<boolean>;
+  failureMessage: (code: string | null | undefined) => string;
+  examples: string[];
+  Icon: typeof Globe2;
+  copy: {
+    consentHeading: string;
+    consentBody: string;
+    consentButton: string;
+    eyebrow: string;
+    heading: string;
+    body: string;
+    hint: string;
+    starting: string;
+    emptyHeading: string;
+    emptyBody: string;
+    withdraw: string;
+    whereColumn: string;
+    deleteBody: string;
+  };
+}
+
+const PAGE_KINDS: Record<AgentTaskKind, PageKind> = {
+  browser: {
+    statusEvent: BROWSER_TASK_STATUS,
+    status: browserTaskStatus,
+    start: (brief) => startBrowserTask(brief, "dashboard"),
+    stop: stopBrowserTask,
+    watch: watchBrowserTask,
+    list: listBrowserTasks,
+    load: loadBrowserTask,
+    remove: deleteBrowserTask,
+    loadConsent: loadBrowserTaskConsent,
+    setConsent: setBrowserTaskConsent,
+    failureMessage: browserTaskFailureMessage,
+    examples: [
+      "Compare the monthly price of Cursor, Windsurf and Claude Code Pro from their pricing pages.",
+      "Find three software engineering internships in Seattle posted this week and list their deadlines.",
+      "Find the three most cited 2026 arXiv papers on speculative decoding and summarize each.",
+      "What is the current price of the Dell U2723QE on dell.com?",
+    ],
+    Icon: Globe2,
+    copy: {
+      consentHeading: "Buddy can use its own separate browser to do web tasks for you",
+      consentBody:
+        "It never sees your Chrome, your tabs or your passwords. It opens a separate browser with an empty profile, works through the task one step at a time, and pauses to ask before anything that would buy, send, sign up or apply. You can watch it or stop it at any point.",
+      consentButton: "Turn on browser tasks",
+      eyebrow: "Browser Agent",
+      heading: "What should Buddy go and do?",
+      body: "Buddy opens its own browser, works through the task, and comes back with an answer and the pages it used.",
+      hint: "Public pages only. Buddy never logs in, pays or submits on its own.",
+      starting: "Opening a browser",
+      emptyHeading: "No browser tasks yet",
+      emptyBody: "Start one above. Every finished task, its answer, its sources and its step-by-step trace stay here on this computer.",
+      withdraw: "Turn off browser tasks",
+      whereColumn: "Page",
+      deleteBody: "The brief, answer, sources and trace are removed from this computer.",
+    },
+  },
+};
 
 function stateLabel(task: { state: string; failureCode: string | null; partial: boolean }): string {
   switch (task.state) {
@@ -87,9 +151,11 @@ function briefTitle(brief: string): string {
 const HistoryRow = memo(function HistoryRow({
   task,
   onOpen,
+  showSources,
 }: {
   task: BrowserTaskSummary;
   onOpen: (taskId: string) => void;
+  showSources: boolean;
 }) {
   const icon =
     task.state === "done" ? <CheckCircle2 size={19} /> : task.state === "running" ? <LoaderCircle size={19} /> : <CircleAlert size={19} />;
@@ -101,18 +167,20 @@ const HistoryRow = memo(function HistoryRow({
         <strong>{briefTitle(task.brief)}</strong>
         <small>{shortDateTime(new Date(task.endedAtMs || task.startedAtMs).toISOString())} · {task.steps} steps · {task.origin}</small>
       </span>
-      <span className="db-research-history-source-count"><Globe2 size={14} /> {task.sourceCount} sources</span>
+      {showSources && <span className="db-research-history-source-count"><Globe2 size={14} /> {task.sourceCount} sources</span>}
       <ChevronRight size={17} />
     </button>
   );
 });
 
 function TaskDetailView({
+  kind,
   uid,
   taskId,
   onBack,
   onDeleted,
 }: {
+  kind: PageKind;
   uid: string;
   taskId: string;
   onBack: () => void;
@@ -121,16 +189,17 @@ function TaskDetailView({
   const [detail, setDetail] = useState<BrowserTaskDetail | null | undefined>(undefined);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const reload = useCallback(() => {
-    loadBrowserTask(uid, taskId)
+    kind
+      .load(uid, taskId)
       .then(setDetail)
       .catch((err) => {
         logError("BrowserAgentPage: load", err);
         setDetail(null);
       });
-  }, [uid, taskId]);
+  }, [kind, uid, taskId]);
   useEffect(reload, [reload]);
   // A live task's row changes on every step; follow it.
-  useTauriEvent<BrowserTaskStatusPayload>(BROWSER_TASK_STATUS, (payload) => {
+  useTauriEvent<BrowserTaskStatusPayload>(kind.statusEvent, (payload) => {
     if (payload.taskId === taskId) reload();
   });
 
@@ -175,7 +244,7 @@ function TaskDetailView({
       {(detail.state === "done" || detail.state === "partial") && (
         <section className="db-browser-agent-answer">
           <span className="db-research-section-kicker">{detail.state === "done" ? "Answer" : "What Buddy found before it stopped"}</span>
-          {detail.state === "partial" && detail.failureCode && <p className="db-browser-agent-reason">{browserTaskFailureMessage(detail.failureCode)}</p>}
+          {detail.state === "partial" && detail.failureCode && <p className="db-browser-agent-reason">{kind.failureMessage(detail.failureCode)}</p>}
           <p>{detail.answer || "No answer was written down."}</p>
           {detail.sources.length > 0 && (
             <ul className="db-browser-agent-sources">
@@ -193,7 +262,7 @@ function TaskDetailView({
       {(detail.state === "failed" || detail.state === "stopped") && (
         <section className="db-browser-agent-fail">
           <CircleAlert size={16} />
-          <p>{detail.state === "stopped" ? "You stopped this task" : browserTaskFailureMessage(detail.failureCode)}</p>
+          <p>{detail.state === "stopped" ? "You stopped this task" : kind.failureMessage(detail.failureCode)}</p>
           {detail.answer && <p className="db-browser-agent-fail-answer">{detail.answer}</p>}
         </section>
       )}
@@ -205,7 +274,7 @@ function TaskDetailView({
         ) : (
           <table>
             <thead>
-              <tr><th>#</th><th>Action</th><th>Ref</th><th>Result</th><th>Page</th><th>ms</th><th>In</th><th>Out</th></tr>
+              <tr><th>#</th><th>Action</th><th>Ref</th><th>Result</th><th>{kind.copy.whereColumn}</th><th>ms</th><th>In</th><th>Out</th></tr>
             </thead>
             <tbody>
               {detail.trace.map((entry) => (
@@ -214,7 +283,7 @@ function TaskDetailView({
                   <td>{entry.action}</td>
                   <td>{entry.refId || ""}</td>
                   <td>{entry.result}</td>
-                  <td title={entry.url}>{entry.url ? hostOf(entry.url) : ""}</td>
+                  <td title={entry.url}>{entry.url ? (kind.watch ? hostOf(entry.url) : entry.url) : ""}</td>
                   <td>{entry.ms}</td>
                   <td>{entry.tokensIn}</td>
                   <td>{entry.tokensOut}</td>
@@ -231,14 +300,15 @@ function TaskDetailView({
           <div>
             <Trash2 size={22} />
             <h2 id="browser-task-delete-title">Delete this task?</h2>
-            <p>The brief, answer, sources and trace are removed from this computer.</p>
+            <p>{kind.copy.deleteBody}</p>
             <span>
               <button type="button" className="db-research-secondary" onClick={() => setConfirmDelete(false)}>Keep it</button>
               <button
                 type="button"
                 className="db-research-danger"
                 onClick={() => {
-                  deleteBrowserTask(uid, taskId)
+                  kind
+                    .remove(uid, taskId)
                     .then(onDeleted)
                     .catch((err) => logError("BrowserAgentPage: delete", err));
                 }}
@@ -253,7 +323,9 @@ function TaskDetailView({
   );
 }
 
-export function BrowserAgentPage() {
+export function BrowserAgentPage({ kind: kindName = "browser" }: { kind?: AgentTaskKind } = {}) {
+  const kind = PAGE_KINDS[kindName];
+  const examples = kind.examples;
   const user = useDashboardUser();
   const uid = user?.uid ?? "";
   const [searchParams, setSearchParams] = useSearchParams();
@@ -268,22 +340,23 @@ export function BrowserAgentPage() {
   const [exampleIndex, setExampleIndex] = useState(0);
 
   useEffect(() => {
-    loadBrowserTaskConsent().then(setConsent).catch((err) => {
+    kind.loadConsent().then(setConsent).catch((err) => {
       logError("BrowserAgentPage: consent", err);
       setConsent(false);
     });
-    browserTaskStatus()
+    kind
+      .status()
       .then((payload) => setLive(LIVE_PHASES.has(payload.phase) ? payload : null))
       .catch((err) => logError("BrowserAgentPage: status", err));
-  }, []);
+  }, [kind]);
 
   const reloadTasks = useCallback(() => {
     if (!uid) return;
-    listBrowserTasks(uid).then(setTasks).catch((err) => logError("BrowserAgentPage: list", err));
-  }, [uid]);
+    kind.list(uid).then(setTasks).catch((err) => logError("BrowserAgentPage: list", err));
+  }, [kind, uid]);
   useEffect(reloadTasks, [reloadTasks]);
 
-  useTauriEvent<BrowserTaskStatusPayload>(BROWSER_TASK_STATUS, (payload) => {
+  useTauriEvent<BrowserTaskStatusPayload>(kind.statusEvent, (payload) => {
     const isLive = LIVE_PHASES.has(payload.phase);
     setLive(isLive ? payload : null);
     if (!isLive) {
@@ -298,7 +371,7 @@ export function BrowserAgentPage() {
     if (brief.length > 0) return;
     const timer = setInterval(() => setExampleIndex((index) => (index + 1) % examples.length), 4500);
     return () => clearInterval(timer);
-  }, [brief]);
+  }, [brief, examples.length]);
 
   // Keep `?tab=`: this panel lives inside the Agents page, whose tab is the
   // other search param, and replacing the whole set would bounce the user.
@@ -318,6 +391,7 @@ export function BrowserAgentPage() {
   if (selectedId && uid) {
     return (
       <TaskDetailView
+        kind={kind}
         uid={uid}
         taskId={selectedId}
         onBack={closeTask}
@@ -335,7 +409,7 @@ export function BrowserAgentPage() {
     setStarting(true);
     setStartError("");
     try {
-      const status = await startBrowserTask(brief.trim(), "dashboard");
+      const status = await kind.start(brief.trim());
       setLive(status);
       setBrief("");
       reloadTasks();
@@ -349,12 +423,14 @@ export function BrowserAgentPage() {
   };
 
   const acceptConsent = () => {
-    setBrowserTaskConsent(true)
+    kind
+      .setConsent(true)
       .then(setConsent)
       .catch((err) => logError("BrowserAgentPage: consent accept", err));
   };
   const withdrawConsent = () => {
-    setBrowserTaskConsent(false)
+    kind
+      .setConsent(false)
       .then(setConsent)
       .catch((err) => logError("BrowserAgentPage: consent withdraw", err));
   };
@@ -365,12 +441,12 @@ export function BrowserAgentPage() {
         <section className="db-research-command db-browser-agent-consent">
           <div className="db-research-command-copy">
             <span className="db-research-eyebrow">Before the first task</span>
-            <h1>Buddy can use its own separate browser to do web tasks for you</h1>
-            <p>It never sees your Chrome, your tabs or your passwords. It opens a separate browser with an empty profile, works through the task one step at a time, and pauses to ask before anything that would buy, send, sign up or apply. You can watch it or stop it at any point.</p>
+            <h1>{kind.copy.consentHeading}</h1>
+            <p>{kind.copy.consentBody}</p>
           </div>
           <div className="db-research-composer-col">
             <div className="db-browser-agent-consent-actions">
-              <button type="button" className="db-research-primary" onClick={acceptConsent}><ShieldCheck size={17} /> Turn on browser tasks</button>
+              <button type="button" className="db-research-primary" onClick={acceptConsent}><ShieldCheck size={17} /> {kind.copy.consentButton}</button>
             </div>
           </div>
         </section>
@@ -379,9 +455,9 @@ export function BrowserAgentPage() {
       {consent && (
         <section className="db-research-command">
           <div className="db-research-command-copy">
-            <span className="db-research-eyebrow">Browser Agent</span>
-            <h1>What should Buddy go and do?</h1>
-            <p>Buddy opens its own browser, works through the task, and comes back with an answer and the pages it used.</p>
+            <span className="db-research-eyebrow">{kind.copy.eyebrow}</span>
+            <h1>{kind.copy.heading}</h1>
+            <p>{kind.copy.body}</p>
           </div>
           <div className="db-research-composer-col">
             <form onSubmit={submit}>
@@ -395,9 +471,9 @@ export function BrowserAgentPage() {
                 disabled={live !== null}
               />
               <div className="db-research-composer-foot">
-                <span>{live ? "One task at a time. Stop the current one to start another." : "Public pages only. Buddy never logs in, pays or submits on its own."}</span>
+                <span>{live ? "One task at a time. Stop the current one to start another." : kind.copy.hint}</span>
                 <button type="submit" className="db-research-primary" disabled={starting || !brief.trim() || live !== null}>
-                  {starting ? <LoaderCircle size={17} /> : <Globe2 size={17} />} {starting ? "Starting" : "Start task"}
+                  {starting ? <LoaderCircle size={17} /> : <kind.Icon size={17} />} {starting ? "Starting" : "Start task"}
                 </button>
               </div>
             </form>
@@ -413,22 +489,24 @@ export function BrowserAgentPage() {
           <div className="db-research-active-run db-browser-agent-live">
             <span className="db-research-active-symbol"><LoaderCircle size={20} /></span>
             <span>
-              <span className="db-browser-agent-state">{live.phase === "awaiting_approval" ? "Waiting for your answer in the overlay" : live.phase === "running" ? `Step ${live.steps}` : "Opening a browser"}</span>
+              <span className="db-browser-agent-state">{live.phase === "awaiting_approval" || live.phase === "awaiting_checkin" ? "Waiting for your answer in the overlay" : live.phase === "running" ? `Step ${live.steps}` : kind.copy.starting}</span>
               <strong>{briefTitle(live.brief ?? "")}</strong>
-              <small>{live.url ? hostOf(live.url) : "Starting up"}</small>
+              <small>{live.url ? hostOf(live.url) : live.app ? live.app : "Starting up"}</small>
             </span>
             <span className="db-browser-agent-live-actions">
-              <button
-                type="button"
-                className="db-research-secondary"
-                onClick={() => {
-                  setWatching((current) => !current);
-                  watchBrowserTask().catch((err) => logError("BrowserAgentPage: watch", err));
-                }}
-              >
-                {watching ? <EyeOff size={15} /> : <Eye size={15} />} {watching ? "Hide" : "Watch"}
-              </button>
-              <button type="button" className="db-research-danger" onClick={() => stopBrowserTask().catch((err) => logError("BrowserAgentPage: stop", err))}>
+              {kind.watch && (
+                <button
+                  type="button"
+                  className="db-research-secondary"
+                  onClick={() => {
+                    setWatching((current) => !current);
+                    kind.watch?.().catch((err) => logError("BrowserAgentPage: watch", err));
+                  }}
+                >
+                  {watching ? <EyeOff size={15} /> : <Eye size={15} />} {watching ? "Hide" : "Watch"}
+                </button>
+              )}
+              <button type="button" className="db-research-danger" onClick={() => kind.stop().catch((err) => logError("BrowserAgentPage: stop", err))}>
                 <Square size={14} /> Stop
               </button>
             </span>
@@ -439,13 +517,13 @@ export function BrowserAgentPage() {
       <section className="db-research-history">
         <div className="db-research-section-head">
           <div><span className="db-research-section-kicker">Library</span><h2>Past tasks</h2></div>
-          {consent && <button type="button" className="db-browser-agent-withdraw" onClick={withdrawConsent}>Turn off browser tasks</button>}
+          {consent && <button type="button" className="db-browser-agent-withdraw" onClick={withdrawConsent}>{kind.copy.withdraw}</button>}
         </div>
         {historyTasks.length === 0 && activeTasks.length === 0 ? (
-          <EmptyState Icon={Globe2} heading="No browser tasks yet" copy="Start one above. Every finished task, its answer, its sources and its step-by-step trace stay here on this computer." />
+          <EmptyState Icon={kind.Icon} heading={kind.copy.emptyHeading} copy={kind.copy.emptyBody} />
         ) : (
           <div className="db-research-history-list">
-            {historyTasks.map((task) => <HistoryRow key={task.taskId} task={task} onOpen={openTask} />)}
+            {historyTasks.map((task) => <HistoryRow key={task.taskId} task={task} onOpen={openTask} showSources={kind.watch !== null} />)}
           </div>
         )}
       </section>
