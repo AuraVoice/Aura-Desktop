@@ -179,12 +179,14 @@
   min-width: 0;
   flex: 1;
 }
+/* Windows caption spacing: every control, the bell included, centres in its
+   own 46px column, so the buttons sit a full slot apart instead of bunched. */
 .db-window-controls {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 25px;
   margin-left: auto;
-  padding: 0 12px;
+  padding: 0 12.5px 0 21.5px;
 }
 .db-window-controls button {
   display: grid;
