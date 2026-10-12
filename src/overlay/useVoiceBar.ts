@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Room, RoomEvent, Track, type RemoteParticipant, type RemoteTrack } from "livekit-client";
+import {
+  Room,
+  RoomEvent,
+  Track,
+  type Participant,
+  type RemoteParticipant,
+  type RemoteTrack,
+} from "livekit-client";
 import { invoke } from "@tauri-apps/api/core";
 import { validateAgentDataMessage } from "../lib/agentData";
 import { fetchVoiceToken, VoiceCapError, type VoiceSessionMode } from "../lib/voice";
@@ -35,7 +42,18 @@ export type VoiceSessionStatus =
 // an endless spinner - direct port of the two timers `voice_session_service`
 // drives, which is where `agent_join_timeout`/`agent_silent` actually
 // originate (they're client-generated, not sent by the backend).
-const AGENT_JOIN_TIMEOUT_MS = 7_000;
+// A healthy agent reaches a ready lk.agent.state about 2 s after the room opens
+// (prod, 2026-10-11). Presence alone is not ready: an ended call's agent stays in
+// its room until every user leaves.
+const AGENT_JOIN_TIMEOUT_MS = 5_000;
+const READY_AGENT_STATES = new Set(["listening", "thinking", "speaking"]);
+
+function isReadyAgent(participant: Participant): boolean {
+  return (
+    participant.isAgent &&
+    READY_AGENT_STATES.has(participant.attributes["lk.agent.state"] ?? "")
+  );
+}
 const SILENCE_WATCHDOG_MS = 15_000;
 // Realtime is the fast first-turn leg, but it must never delay the normal voice
 // path when its session mint or WebRTC negotiation is unhealthy. LiveKit is warmed
@@ -335,7 +353,7 @@ export function useVoiceBar() {
     (activeRoom: Room) => {
       if (didAgentJoinRef.current || joinWatchdogRef.current) return;
       const existingAgent = Array.from(activeRoom.remoteParticipants.values()).find(
-        (participant) => participant.isAgent,
+        isReadyAgent,
       );
       if (existingAgent) {
         handleAgentJoined(existingAgent, "microphone-ready");
@@ -488,7 +506,7 @@ export function useVoiceBar() {
           "useVoiceBar: ParticipantConnected",
           `identity=${participant.identity} sid=${participant.sid} isAgent=${participant.isAgent}`,
         );
-        if (participant.isAgent) {
+        if (isReadyAgent(participant) && !didAgentJoinRef.current) {
           handleAgentJoined(participant, "participant-connected");
         }
       } catch (err) {
@@ -512,6 +530,9 @@ export function useVoiceBar() {
         const agentState = changedAttributes["lk.agent.state"];
         if (agentState === undefined) return;
         logInfo("useVoiceBar: ParticipantAttributesChanged", `lk.agent.state=${agentState}`);
+        if (isReadyAgent(participant) && !didAgentJoinRef.current) {
+          handleAgentJoined(participant as RemoteParticipant, "agent-ready");
+        }
         if (agentState === "thinking" || agentState === "speaking") {
           pokeSilenceWatchdog();
         }
@@ -725,8 +746,8 @@ export function useVoiceBar() {
         setStatus("ready");
         trackEvent("voice_session_started", { room: roomName, tokenMs, connectMs });
 
-        const existingAgent = Array.from(newRoom.remoteParticipants.values()).find((p) => p.isAgent);
-        if (existingAgent) {
+        const existingAgent = Array.from(newRoom.remoteParticipants.values()).find(isReadyAgent);
+        if (existingAgent && !didAgentJoinRef.current) {
           // The agent was already in the room before our connect() resolved -
           // ParticipantConnected never fires retroactively for it (confirmed
           // empirically), so the live-join listener above would never catch it.
