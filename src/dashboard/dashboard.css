@@ -10746,7 +10746,6 @@ span.db-swarm-routine-main { cursor: default; }
 .sw-g-leaf .sw-lines { stroke-dasharray: 1; }
 .db-swarm-step:hover .sw-g-mail .sw-flap,
 .db-swarm-step:hover .sw-g-day .sw-node,
-.db-swarm-step:hover .sw-g-course .sw-node,
 .db-swarm-step:hover .sw-g-branch .sw-node,
 .db-swarm-step:hover .sw-g-keep .sw-node,
 .db-swarm-step:hover .sw-g-block .sw-node { animation: db-swarm-g-breathe 1.4s ease-in-out infinite; }

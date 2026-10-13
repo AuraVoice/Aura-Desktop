@@ -382,7 +382,7 @@ export function strings(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
 }
 
-function numbers(value: unknown): number[] {
+export function numbers(value: unknown): number[] {
   return Array.isArray(value) ? value.filter((v): v is number => typeof v === "number") : [];
 }
 

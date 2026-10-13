@@ -223,6 +223,8 @@ function errorCopy(error: unknown, roster: SwarmRoster): string {
         return "This account already has a Swarm, so the sandbox team was not brought over.";
       case "unavailable":
         return "The model is unavailable right now. Try again in a minute.";
+      case "routine_limit":
+        return "You have 10 schedules. Delete one on the Team card first.";
     }
     // A bare 404 means the route itself is missing (a backend without Swarm), not a lost record.
     if (error.status === 404 && !error.reason) return "Swarm isn't available on the server yet, so nothing was sent. Nothing was lost.";
@@ -946,6 +948,8 @@ export function SwarmPage() {
           onOpenChannel={select}
           onAnswerSession={(id, value) => void answerManager(id, value)}
           grants={state.grants}
+          routines={state.routines}
+          onSaveRoutine={saveRoutine}
           onGrant={(managerId, connector) => toggleGrant(managerId, connector, true)}
           grantable={state.grantable}
           repoScopes={repoScopes}

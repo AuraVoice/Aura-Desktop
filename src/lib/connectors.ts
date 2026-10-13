@@ -50,13 +50,12 @@ export interface AccountConnectorStatus {
   bookmarkCount: number | null;
 }
 
-export type AccountConnectorName = "google_classroom" | "github" | "linkedin" | "x";
+export type AccountConnectorName = "github" | "linkedin" | "x";
 
 export const ACCOUNT_CONNECTOR_NAMES: readonly AccountConnectorName[] = [
   "github",
   "linkedin",
   "x",
-  "google_classroom",
 ];
 
 export interface ConnectorsCatalog {
@@ -67,8 +66,6 @@ export interface ConnectorsCatalog {
 }
 
 export class ConnectorReauthorizationRequiredError extends Error {}
-/** A school admin has not allowed Aura to read Google Classroom. */
-export class ConnectorBlockedError extends Error {}
 /** GitHub's per-user API budget ran out; a retry in a minute helps. */
 export class GitHubRateLimitedError extends Error {}
 
@@ -91,14 +88,12 @@ const TRUSTED_AUTH_HOSTS: Record<ConnectorName, string> = {
   google_calendar: "accounts.google.com",
   gmail: "accounts.google.com",
   notion: "api.notion.com",
-  google_classroom: "accounts.google.com",
   github: "github.com",
   linkedin: "www.linkedin.com",
   x: "x.com",
 };
 
 const ACCOUNT_CONNECTOR_PATHS: Record<AccountConnectorName, string> = {
-  google_classroom: "google-classroom",
   github: "github",
   linkedin: "linkedin",
   x: "x",
@@ -213,7 +208,6 @@ export function parseConnectorsCatalog(raw: unknown): ConnectorsCatalog {
     gmail: parseGmailStatus(gmail),
     notion: parseNotionStatus(notion),
     accounts: {
-      google_classroom: parseAccountStatus(data.google_classroom),
       github: parseAccountStatus(data.github),
       linkedin: parseAccountStatus(data.linkedin),
       x: parseAccountStatus(data.x),
@@ -236,12 +230,6 @@ async function readConnectorStatus<Raw, Status>(
       throw new ConnectorReauthorizationRequiredError("reauthorization_required");
     }
     throw new Error(`${action} failed (409)`);
-  }
-  if (response.status === 403) {
-    const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
-    if (body?.error === "school_blocked") {
-      throw new ConnectorBlockedError("school_blocked");
-    }
   }
   if (!response.ok) {
     throw new Error(`${action} failed (${response.status})`);

@@ -710,7 +710,11 @@ fn drive(
                             return Outcome::failed(code);
                         }
                         snapshot = Snapshot::default();
-                        full_text = format!("(This window could not be read: {code}.)");
+                        full_text = if code == "window_not_responding" {
+                            "(This window is not responding right now. Wait, or work another way.)".to_string()
+                        } else {
+                            format!("(This window could not be read: {code}.)")
+                        };
                         page_offset = 0;
                     }
                 }

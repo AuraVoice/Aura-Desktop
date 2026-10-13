@@ -29,7 +29,7 @@ Approving this document approves these product choices, not implementation:
 | Recovery sweep | Exists | `research/sweep.py:run_sweep` L96, scheduler slot `minute % 5 == 4` | New `_run_swarm_sweep` at `minute % 5 == 3` |
 | Spend ledger and project wallet | Exists | `research/ledger.py` `reserve_project_spend` L357, `settle_project_receipt` L500, fails closed; `research/usage.py:normalize_provider_usage` L231 | Reuse with `PROJECT_SWARM_DAILY_COST_CAP_MICROUSD` |
 | Tool calling | Partial | `model_provider.chain()` L1130 takes no tools; tools only on Anthropic `balanced`/`expert`, which cannot hop providers with tools (L1338) | Code-owned loop: the model returns a typed `StepDecision`, code runs it (the browser agent's pattern, `handlers/agent.py:handle_step` L111) |
-| Read capabilities | Exist | `agents/data_fetchers/brave_search.py:brave_search` L159; `research/tiered_reader.py:TieredPageReader` L67 behind `research/url_policy.evaluate_url` L147; gmail `list_recent_messages` L193 / `get_message` L233; calendar `query_events` L625; classroom `list_due_work` L170; github `activity` L174; x `search_bookmarks` L207 (billed via `x_budget.py`); notion `recent_pages` L43; research `engine.start` | Wrap each as a registry row |
+| Read capabilities | Exist | `agents/data_fetchers/brave_search.py:brave_search` L159; `research/tiered_reader.py:TieredPageReader` L67 behind `research/url_policy.evaluate_url` L147; gmail `list_recent_messages` L193 / `get_message` L233; calendar `query_events` L625; github `activity` L174; x `search_bookmarks` L207 (billed via `x_budget.py`); notion `recent_pages` L43; research `engine.start` | Wrap each as a registry row |
 | Recurrence | Exists | `services/rituals.py` (weekdays + local time + tz, deterministic occurrence ids, `arm_next_occurrence` L171); `/scheduler/tick` every minute (`handlers/scheduler.py:handle_scheduler_tick` L629) | Same model for `swarm_routines` |
 | Approvals | Exists, not used here | `services/pending_actions.py` `propose` L171, `approve` L302; desktop `ActionApprovalCard.tsx` | Stage 4 (action intents) |
 | Desktop outbox | Exists | `notifications/desktop_outbox.py` `NOTIFICATION_TYPES` L62, `ACTIONS` L78 (unknown action raises); desktop allowlists in `desktopNotificationContract.ts` L32/L65; `supported_actions` heartbeat (`useDesktopNotifications.ts` 189-216) | Four swarm types and `view_swarm_channel` in both repos |
@@ -73,11 +73,12 @@ Job Hunt, Silicon Brief and a student's Semester manager differ only in brief, g
 | `gmail.search` | `list_recent_messages` | query, days | gmail | 3 |
 | `gmail.read` | `get_message` | message_id | gmail | 12 (effectively none) |
 | `calendar.events` | `query_events` | from, to | google_calendar | 2 |
-| `classroom.due` | `list_due_work` | days | google_classroom | 1 |
 | `github.activity` | github `activity` | repo?, days | github | 2 |
 | `x.bookmarks` | `search_bookmarks` | query | x | 1 |
 | `notion.recent` | `recent_pages` | days | notion | 1 |
 | `aura.research` | research `engine.start` | question | none | 3 |
+
+A `classroom.due` row (Google Classroom `list_due_work`) shipped and was removed on 2026-10-13 pending Google verification; the Classroom scopes are not configured on the OAuth client.
 
 Each row carries a pydantic args model, a result trimmer (≤1.5 KB into the scratchpad), a timeout (30 s), a trust label (web or connector) and its grant requirement. The registry is the only thing the step prompt lists; an unknown id or invalid args is a failed attempt, never an exception. There is no write row, so a prompt-injected page can at worst pollute a report.
 
@@ -182,7 +183,7 @@ From the design doc's "later as jobs" column: 12 model decisions, the capability
 | 2 | Job seeker | DM "notes for this JD: <url>" | web.read | Gap list against the stated profile; a resume-edit draft (inert) |
 | 3 | Learner | Silicon Brief 08:00 | search, read | One sourced insight with citations, not repeating the last 5 topics |
 | 4 | Freelancer | UGC routine, Mondays | web.search, x.bookmarks | 10 founder prospects and pitch drafts (inert) |
-| 5 | Student | "plan my week" to a Semester manager | classroom.due, calendar.events | A due-date plan; `partial` with a reconnect hint if Classroom is missing |
+| 5 | Student | "plan my week" to a Semester manager | calendar.events | A due-date plan; `partial` with a reconnect hint if Calendar is missing |
 | 6 | Vibe coder | DM Ship "what changed this week" | github.activity | A digest by repo; an empty week says so plainly |
 | 7 | Any | Front-door route to an existing manager | per brief | Session runs in that DM; #group shows a crosspost |
 | 8 | Any | Connector revoked mid-week | gmail | `gaps` entry and reconnect hint, never a silent empty report |

@@ -426,6 +426,15 @@ Rules an edit could break:
   attributes the write to Aura: the idempotency key rides in an HTML comment
   (`_run_create_issue`). This holds for every manager and every write target, not the one
   competitor watch that surfaced it.
+- **A schedule is offered, never set, by a manager.** The report's `schedule_proposal`
+  becomes a card (`ScheduleProposal` in `SwarmManagerTools.tsx`); only the user's tap writes
+  the routine, through the same `PUT /swarm/routines/{id}` the Team card uses, under
+  `sc-<session id>` so a second tap edits that routine. A scheduled run never offers one
+  (`_schedule_proposal` drops it for `origin == "routine"`), and every manager prompt carries
+  its real schedules (`store.schedules_for`), so it never invents who has to enable one.
+  In #group the router's `routine` rides on `DecisionOut.routine` to the routed session
+  (`schedule_ask`) and a hire's `suggested_routines` render the same card; never write it
+  back as a card label, which posted "routine added" for a schedule that never ran.
 - **Anything on the user's own PC is `desktop_task`, never a manager or `computer_task`.**
   Managers have no hands on this machine and Aura's browser has none of the user's sign-ins,
   so the classifier routes "find out what this app I have can do" to the `desktop_task` card

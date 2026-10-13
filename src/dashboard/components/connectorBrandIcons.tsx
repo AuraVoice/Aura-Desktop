@@ -99,18 +99,6 @@ export function XBrandIcon({ size = 22, className }: BrandIconProps) {
   );
 }
 
-export function GoogleClassroomBrandIcon({ size = 24, className }: BrandIconProps) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden className={className}>
-      <rect x="2" y="4" width="20" height="16" rx="2" fill="#0f9d58" />
-      <rect x="4" y="6" width="16" height="12" rx="1" fill="#57bb8a" />
-      <circle cx="12" cy="10.5" r="1.8" fill="#fff" />
-      <path fill="#fff" d="M8.8 15.5c.4-1.6 1.7-2.5 3.2-2.5s2.8.9 3.2 2.5H8.8Z" />
-      <rect x="14" y="18" width="5" height="1.4" rx=".7" fill="#fff" />
-    </svg>
-  );
-}
-
 export function NotionBrandIcon({ size = 24, className }: BrandIconProps) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" aria-hidden className={className}>

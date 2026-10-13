@@ -4,7 +4,6 @@ const KNOWN_CONNECTORS: ReadonlySet<string> = new Set<ConnectorName>([
   "google_calendar",
   "gmail",
   "notion",
-  "google_classroom",
   "github",
   "linkedin",
   "x",

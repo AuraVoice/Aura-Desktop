@@ -1,6 +1,8 @@
-# Aura Integrations Wave 2: GitHub, Job Pipeline, LinkedIn, X, Google Classroom
+# Aura Integrations Wave 2: GitHub, Job Pipeline, LinkedIn, X
 
-Status: code-complete for all five phases on 2026-09-14, not yet deployed or verified against live provider accounts. Source proof only: backend imports, the six new tools pass the MCP canonical-contract check, the job feeds were fetched live, and the desktop type-checks.
+**Removed:** Google Classroom was removed on 2026-10-13 pending Google verification: the OAuth client may request only the scopes configured in the Cloud Console (gmail.readonly, gmail.send, calendar.events), and the Classroom scopes are not among them. The Classroom rows and sections below are kept as the original plan only; nothing in either repo ships them.
+
+Status: code-complete for phases 1 to 4 on 2026-09-14 (phase 5, Classroom, was built and later removed), not yet deployed or verified against live provider accounts. Source proof only: backend imports, the six new tools pass the MCP canonical-contract check, the job feeds were fetched live, and the desktop type-checks.
 
 **As built, and where it differs from the plan below:**
 - **Approval is click-only.** Voice and chat can put an approval card up but can never approve it; "yes, post it" does nothing by design. Use-case 12 below is superseded.
@@ -12,7 +14,7 @@ Status: code-complete for all five phases on 2026-09-14, not yet deployed or ver
 - **The approval card outranks chat** in the notch slot and yields only to a live Interview Companion and its paste box.
 - **Not built:** a scheduled bookmark sweep for every user, a Post button on the dashboard Drafts page, and Vercel/Supabase.
 
-**Before any of it works in production:** create the GitHub App (user-to-server tokens with expiry, callback `/connectors/oauth/github/callback`, Setup URL `/connectors/github/installed` with Redirect on update, webhook off, permissions Contents read, Actions read, Pull requests read, Metadata read; read-only since 2026-09-22, so no Issues write and no `create_github_issue`), the LinkedIn app (Sign In with LinkedIn using OpenID Connect + Share on LinkedIn), the X app (OAuth 2.0, confidential client, pay-per-use billing), add the two Classroom scopes to the Google consent screen, then add these Secret Manager secrets and wire them in `deploy.sh`: GitHub, LinkedIn and X client ids and secrets, plus env vars `GITHUB_APP_SLUG` and the three `*_REDIRECT_URI`s.
+**Before any of it works in production:** create the GitHub App (user-to-server tokens with expiry, callback `/connectors/oauth/github/callback`, Setup URL `/connectors/github/installed` with Redirect on update, webhook off, permissions Contents read, Actions read, Pull requests read, Metadata read; read-only since 2026-09-22, so no Issues write and no `create_github_issue`), the LinkedIn app (Sign In with LinkedIn using OpenID Connect + Share on LinkedIn), the X app (OAuth 2.0, confidential client, pay-per-use billing), then add these Secret Manager secrets and wire them in `deploy.sh`: GitHub, LinkedIn and X client ids and secrets, plus env vars `GITHUB_APP_SLUG` and the three `*_REDIRECT_URI`s.
 
 ## Context
 
@@ -42,7 +44,7 @@ Decisions from you (2026-09-14):
 | 2 | **Job pipeline** (public job-board feeds from Greenhouse, Lever, Ashby, Workable, SmartRecruiters) | Job seekers, students hunting internships | Full job description, location and pay from the posting URL on screen | Save to a tracker (Aura's own store, optionally Notion) | Free, no auth | None. One company per call, and it is not a search API. | Low |
 | 3 | **LinkedIn** (Sign In + Share on LinkedIn) | Job seekers, students | Name, headline and photo only | Publish a `linkedin_post` draft | Free | Self-serve, no review. 150 requests/member/day. No automated or bulk posting. | Low |
 | 4 | **X** | Vibe coders (building in public), job seekers | Bookmarks and likes into memory | Publish a `tweet` draft | $0.001 per read, $0.015 per post ($0.20 with a link) | Pay-per-use billing account | Low to medium |
-| 5 | **Google Classroom** | Students whose school uses it | Courses, coursework due dates and announcements for the user | None in v1 (the student turns work in on Classroom itself) | Free | Sensitive scopes on the unverified Google project; school admins may block apps for under-18 users | Medium |
+| 5 | **Google Classroom** (removed, see top) | Students whose school uses it | Courses, coursework due dates and announcements for the user | None in v1 (the student turns work in on Classroom itself) | Free | Sensitive scopes on the unverified Google project; school admins may block apps for under-18 users | Medium |
 
 **Runner-up: Vercel + Supabase deploy status** for vibe coders ("did my deploy fail?"). It is self-serve but lower demand than GitHub. It is the first swap if Classroom's verification stalls.
 
@@ -177,7 +179,7 @@ later, an Interview Companion session starts
 - **Write:** a `tweet` draft ("shipped dark mode today") goes through the approval card, then gets posted.
 - **Budget:** a per-user monthly counter plus a global $150/month kill switch.
 
-### 4.5 Google Classroom (students)
+### 4.5 Google Classroom (students) (removed, see top)
 
 - **Connect:** separate Google consent for `classroom.courses.readonly classroom.coursework.me.readonly classroom.announcements.readonly`.
 - **Read:** due dates flow into the existing agenda card as "Due tomorrow: Lab 4". "What's due this week?" is answered in voice.
@@ -239,14 +241,14 @@ later, an Interview Companion session starts
 | **2** | Foundation A + B, proven with **GitHub** (read build status, confirmed issue) | 0 |
 | **3** | **LinkedIn** Post button on drafts through pending actions | 2 |
 | **4** | **X** bookmarks into memory + confirmed post, with budget counters | 2, memory spike |
-| **5** | **Google Classroom** due dates in the agenda | Google verification (swap to Vercel/Supabase if it stalls) |
+| **5** | **Google Classroom** due dates in the agenda (built, then removed pending Google verification) | Google verification (swap to Vercel/Supabase if it stalls) |
 | Each phase | `product_knowledge_v1.json` entry (platforms `["windows","macos"]`, both key legends); `ECOSYSTEM.md` update for new `/connectors/*`, `/actions/*`, `/jobs/*` contracts | none |
 
 ### Critical files
 
 - **Backend (`../Aura/backend/src`):**
   - Edit: `services/connector_oauth.py`, `handlers/connectors.py`, `main.py`, `shared/tools.py`, `handlers/mcp.py`, `services/chat_completion/tool_executor.py`, `agent/voice/capabilities.py`.
-  - New: `services/job_feeds/`, `services/{github,linkedin,x,google_classroom}_connector.py`, `services/pending_actions/`.
+  - New: `services/job_feeds/`, `services/{github,linkedin,x}_connector.py`, `services/pending_actions/`.
 - **Desktop:**
   - Edit: `src/lib/connectors.ts`, `src/lib/connectorOAuth.ts`, `src/dashboard/useConnectors.ts`, `src/dashboard/pages/ConnectorsPage.tsx`, `src/overlay/agentData.ts`, `src/overlay/OverlayRoot.tsx`, `src/overlay/DraftCard.tsx`.
   - New: `src/lib/connectorCatalog.ts`, `src/overlay/ActionApprovalCard.tsx`, `src/dashboard/pages/ApplicationsPage.tsx` (bright glass recipe).

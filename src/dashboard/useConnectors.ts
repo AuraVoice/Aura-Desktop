@@ -5,7 +5,6 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ACCOUNT_CONNECTOR_NAMES,
-  ConnectorBlockedError,
   ConnectorReauthorizationRequiredError,
   GitHubRateLimitedError,
   disableAccountConnector,
@@ -114,7 +113,6 @@ const PROVIDER_NAMES: Record<ConnectorName, string> = {
   google_calendar: "Google",
   gmail: "Google",
   notion: "Notion",
-  google_classroom: ACCOUNT_CONNECTOR_BY_NAME.google_classroom.providerName,
   github: ACCOUNT_CONNECTOR_BY_NAME.github.providerName,
   linkedin: ACCOUNT_CONNECTOR_BY_NAME.linkedin.providerName,
   x: ACCOUNT_CONNECTOR_BY_NAME.x.providerName,
@@ -124,14 +122,10 @@ const CONNECTED_MESSAGES: Record<ConnectorName, string> = {
   google_calendar: "Google Calendar is connected. Buddy has the latest.",
   gmail: "Gmail is connected. Buddy can now help send email when you ask.",
   notion: "Notion is connected. Say where something on your screen should go and Buddy saves it there.",
-  google_classroom: ACCOUNT_CONNECTOR_BY_NAME.google_classroom.connectedMessage,
   github: ACCOUNT_CONNECTOR_BY_NAME.github.connectedMessage,
   linkedin: ACCOUNT_CONNECTOR_BY_NAME.linkedin.connectedMessage,
   x: ACCOUNT_CONNECTOR_BY_NAME.x.connectedMessage,
 };
-
-const SCHOOL_BLOCKED_MESSAGE =
-  "Your school hasn't allowed Aura to use Google Classroom. Your school's IT admin can turn it on.";
 
 // A background recheck runs at most this often, so switching windows back
 // and forth does not hammer /connectors.
@@ -142,7 +136,6 @@ function reconnectableByName(catalog: ConnectorsCatalog): Record<ConnectorName, 
     google_calendar: catalog.googleCalendar.canReconnect,
     gmail: catalog.gmail.canReconnect,
     notion: catalog.notion.canReconnect,
-    google_classroom: catalog.accounts.google_classroom.canReconnect,
     github: catalog.accounts.github.canReconnect,
     linkedin: catalog.accounts.linkedin.canReconnect,
     x: catalog.accounts.x.canReconnect,
@@ -154,7 +147,6 @@ function connectedByName(catalog: ConnectorsCatalog): Record<ConnectorName, bool
     google_calendar: catalog.googleCalendar.enabled,
     gmail: catalog.gmail.enabled,
     notion: catalog.notion.enabled,
-    google_classroom: catalog.accounts.google_classroom.enabled,
     github: catalog.accounts.github.enabled,
     linkedin: catalog.accounts.linkedin.enabled,
     x: catalog.accounts.x.enabled,
@@ -348,7 +340,6 @@ export function useConnectors(): ConnectorsState {
     openingMessage: string;
     waitingMessage: string;
     openFailedMessage: string;
-    blockedMessage?: string;
   }) => {
     // A browser wait is not real work, so it never blocks a new request: the
     // click that lands during one is the user asking to start over.
@@ -365,12 +356,6 @@ export function useConnectors(): ConnectorsState {
       setBanner({ tone: "success", message: flow.connectedMessage });
     } catch (err) {
       if (!mountedRef.current) return;
-      if (err instanceof ConnectorBlockedError && flow.blockedMessage) {
-        setAction(null);
-        setBanner({ tone: "error", message: flow.blockedMessage });
-        void reload();
-        return;
-      }
       if (!(err instanceof ConnectorReauthorizationRequiredError)) {
         logError(`useConnectors: enable ${flow.logLabel}`, err);
         setAction(null);
@@ -397,7 +382,7 @@ export function useConnectors(): ConnectorsState {
         setBanner({ tone: "error", message: flow.openFailedMessage });
       }
     }
-  }, [action, clearBannerTimer, clearOAuthWait, reload, waitForOAuth]);
+  }, [action, clearBannerTimer, clearOAuthWait, waitForOAuth]);
 
   /** The shared disable/refresh flow, same deduplication rationale. */
   const runAction = useCallback(async <Status,>(flow: {
@@ -545,7 +530,6 @@ export function useConnectors(): ConnectorsState {
       openingMessage: descriptor.openingMessage,
       waitingMessage: descriptor.waitingMessage,
       openFailedMessage: `The secure ${descriptor.providerName} page could not open. Nothing changed, so you can try again.`,
-      blockedMessage: name === "google_classroom" ? SCHOOL_BLOCKED_MESSAGE : undefined,
     });
   }, [runEnable, applyAccount]);
 

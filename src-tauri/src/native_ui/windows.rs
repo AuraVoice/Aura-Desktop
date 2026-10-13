@@ -19,8 +19,9 @@
 //!    read, the same rule as `uia/tree.rs`.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use log::{error, warn};
@@ -49,8 +50,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetForegroundWindow, GetSystemMetrics, GetWindow, GetWindowLongW,
-    GetWindowRect, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
-    IsWindow, IsWindowVisible, ShowWindow, GWL_EXSTYLE, GW_OWNER, SM_CXVIRTUALSCREEN,
+    GetWindowRect, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsHungAppWindow,
+    IsIconic, IsWindow, IsWindowVisible, ShowWindow, GWL_EXSTYLE, GW_OWNER, SM_CXVIRTUALSCREEN,
     SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SW_RESTORE, WS_EX_TOOLWINDOW,
 };
 
@@ -94,48 +95,146 @@ enum Job {
     },
 }
 
+/// Workers alive at once, the current one included. A worker stuck inside a
+/// provider that never returns is abandoned, not killed, so this bounds how
+/// many threads one deadlocked app can park.
+const MAX_LIVE_WORKERS: usize = 3;
+
 /// Managed as Tauri state.
+///
+/// The worker is replaceable. A panic used to drop its receiver and leave
+/// every later call `ui_unavailable` until Aura was relaunched; a provider
+/// that blocked queued every later job behind it. Now either one swaps in a
+/// fresh worker, and the old one exits by itself once its call returns, since
+/// its sender is gone.
 pub struct NativeUi {
     jobs: Mutex<Sender<Job>>,
+    live: Arc<AtomicUsize>,
 }
 
 impl NativeUi {
     pub fn start() -> Self {
-        let (tx, rx) = mpsc::channel::<Job>();
-        if let Err(e) = std::thread::Builder::new()
-            .name("aura-operator-ui".into())
-            .spawn(move || worker_loop(rx))
-        {
-            error!("native_ui: worker thread failed to start: {e}");
-        }
-        Self { jobs: Mutex::new(tx) }
+        let live = Arc::new(AtomicUsize::new(0));
+        let jobs = spawn_worker(&live).unwrap_or_else(|| mpsc::channel().0);
+        Self { jobs: Mutex::new(jobs), live }
     }
 
-    fn send(&self, job: Job) -> bool {
+    fn send(&self, job: Job) -> Result<(), Job> {
         let jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
-        jobs.send(job).is_ok()
+        jobs.send(job).map_err(|e| e.0)
     }
 
-    /// Walks the window. Blocking; call from a worker thread.
-    pub fn snapshot(&self, hwnd: isize) -> Result<Snapshot, String> {
-        let (reply, rx) = mpsc::channel();
-        if !self.send(Job::Snapshot { hwnd, reply }) {
-            return Err("ui_unavailable".to_string());
+    /// Replaces the worker. False when too many abandoned ones are still stuck.
+    fn restart(&self, reason: &str) -> bool {
+        let mut jobs = self.jobs.lock().unwrap_or_else(|e| e.into_inner());
+        if self.live.load(Ordering::SeqCst) >= MAX_LIVE_WORKERS {
+            warn!("native_ui: worker not restarted reason={reason} alive={}", self.live.load(Ordering::SeqCst));
+            return false;
         }
-        rx.recv_timeout(SNAPSHOT_TIMEOUT)
-            .map_err(|_| "ui_timeout".to_string())?
+        match spawn_worker(&self.live) {
+            Some(fresh) => {
+                *jobs = fresh;
+                warn!("native_ui: worker restarted reason={reason} alive={}", self.live.load(Ordering::SeqCst));
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Walks the window. Blocking; call from a worker thread. A read is safe
+    /// to repeat, so a stalled or dead worker gets one retry on a fresh one.
+    pub fn snapshot(&self, hwnd: isize) -> Result<Snapshot, String> {
+        if window_hung(hwnd) {
+            return Err("window_not_responding".to_string());
+        }
+        let mut retried = false;
+        loop {
+            let (reply, rx) = mpsc::channel();
+            let failure = match self.send(Job::Snapshot { hwnd, reply }) {
+                Err(_) => "ui_unavailable",
+                Ok(()) => match rx.recv_timeout(SNAPSHOT_TIMEOUT) {
+                    Ok(result) => return result,
+                    Err(mpsc::RecvTimeoutError::Timeout) => "ui_timeout",
+                    Err(mpsc::RecvTimeoutError::Disconnected) => "ui_restarted",
+                },
+            };
+            if !self.restart(failure) {
+                return Err("ui_stuck".to_string());
+            }
+            if retried {
+                return Err(failure.to_string());
+            }
+            retried = true;
+        }
     }
 
     /// Runs one action against a ref of the LAST snapshot of `hwnd`. Returns
     /// how it was done ("invoke", "click", "typed", ...) for the trace.
+    ///
+    /// Retried only when the job never reached a worker. Once a worker took
+    /// it, the click or keystroke may have landed, and doing it twice could
+    /// send something twice.
     pub fn act(&self, hwnd: isize, action: UiAction) -> Result<String, String> {
-        let (reply, rx) = mpsc::channel();
-        if !self.send(Job::Act { hwnd, action, reply }) {
-            return Err("ui_unavailable".to_string());
+        if window_hung(hwnd) {
+            // Input sent to a hung app queues and lands whenever it wakes.
+            return Err("window_not_responding".to_string());
         }
-        rx.recv_timeout(ACT_TIMEOUT)
-            .map_err(|_| "ui_timeout".to_string())?
+        let (reply, rx) = mpsc::channel();
+        let job = Job::Act { hwnd, action, reply };
+        if let Err(job) = self.send(job) {
+            if !self.restart("ui_unavailable") {
+                return Err("ui_stuck".to_string());
+            }
+            if self.send(job).is_err() {
+                return Err("ui_unavailable".to_string());
+            }
+        }
+        match rx.recv_timeout(ACT_TIMEOUT) {
+            Ok(result) => result,
+            Err(error) => {
+                let failure = match error {
+                    mpsc::RecvTimeoutError::Timeout => "ui_timeout",
+                    mpsc::RecvTimeoutError::Disconnected => "ui_restarted",
+                };
+                self.restart(failure);
+                Err(failure.to_string())
+            }
+        }
     }
+}
+
+/// Starts one `aura-operator-ui` worker and counts it while it lives.
+fn spawn_worker(live: &Arc<AtomicUsize>) -> Option<Sender<Job>> {
+    let (tx, rx) = mpsc::channel::<Job>();
+    let counter = Arc::clone(live);
+    counter.fetch_add(1, Ordering::SeqCst);
+    let spawned = std::thread::Builder::new()
+        .name("aura-operator-ui".into())
+        .spawn(move || {
+            // Decrements on return and on unwind alike.
+            struct Alive(Arc<AtomicUsize>);
+            impl Drop for Alive {
+                fn drop(&mut self) {
+                    self.0.fetch_sub(1, Ordering::SeqCst);
+                }
+            }
+            let _alive = Alive(counter);
+            worker_loop(rx);
+        });
+    match spawned {
+        Ok(_) => Some(tx),
+        Err(e) => {
+            live.fetch_sub(1, Ordering::SeqCst);
+            error!("native_ui: worker thread failed to start: {e}");
+            None
+        }
+    }
+}
+
+/// The window's thread has not pumped messages for 5 s ("Not Responding").
+/// Its UIA provider would block the worker, so it is never dispatched.
+fn window_hung(hwnd: isize) -> bool {
+    hwnd != 0 && unsafe { IsHungAppWindow(HWND(hwnd as *mut core::ffi::c_void)) }.as_bool()
 }
 
 fn worker_loop(jobs: Receiver<Job>) {

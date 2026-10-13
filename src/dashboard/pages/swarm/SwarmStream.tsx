@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
-import type { SwarmDecision, SwarmDoc, SwarmManager, SwarmRoster, SwarmRoundView, SwarmSessionView } from "../../../lib/swarmApi";
+import type { SwarmDecision, SwarmDoc, SwarmManager, SwarmRoster, SwarmRoundView, SwarmRoutine, SwarmRoutineInput, SwarmSessionView } from "../../../lib/swarmApi";
 import { DOCUMENT_ACCEPT } from "../../../lib/documentText";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { IMAGE_ACCEPT, MAX_ATTACHMENTS } from "../../../lib/chatAttachments";
@@ -30,6 +30,7 @@ import { CONNECTOR_LABEL, QuestionEmbed, ReportEmbed, RoundEmbed, RoundReplyEmbe
 import { useMentionPicker } from "./SwarmMentionPicker";
 import { SwarmMarkdown } from "./SwarmMarkdown";
 import { DesktopTaskStart } from "./DesktopTaskStart";
+import { ScheduleProposal } from "./SwarmManagerTools";
 import { ComposerGrants } from "./SwarmComposerGrants";
 import {
   CAPABILITY_LABEL,
@@ -110,7 +111,7 @@ const STARTERS = [
     Icon: StudyGlyph,
     title: "Ace this semester",
     blurb: "Deadlines, study plans, quizzes.",
-    text: "I'm a student this semester: track every deadline from Google Classroom, build study plans before exams and quiz me on weak topics.",
+    text: "I'm a student this semester: track every deadline, build study plans before exams and quiz me on weak topics.",
   },
 ];
 
@@ -164,6 +165,9 @@ interface Props {
   onOpenChannel: (channel: ChannelId) => void;
   onAnswerSession: (sessionId: string, text: string) => void;
   grants: Record<string, string[]>;
+  /** Every schedule, so a report's offered one shows whether it is already on. */
+  routines: SwarmRoutine[];
+  onSaveRoutine: (routineId: string, input: SwarmRoutineInput) => void;
   onGrant: (managerId: string, connector: string) => void;
   /** Connectors the account has connected that a manager may be granted. */
   grantable: string[];
@@ -227,8 +231,8 @@ function HiredEmbed({ manager }: { manager: SwarmManager }) {
           {manager.connectors.map((c) => <em key={c}>{CONNECTOR_LABEL[c] ?? c}</em>)}
         </div>
       )}
-      {manager.routines.length > 0 && (
-        <div className="db-swarm-embed-foot"><SparkGlyph size={14} /> {manager.routines.join(" · ")}</div>
+      {manager.routines.length > 0 && manager.suggestedRoutines.length === 0 && (
+        <div className="db-swarm-embed-foot"><SparkGlyph size={14} /> Not scheduled: {manager.routines.join(" · ")}</div>
       )}
       </details>
       {manager.missingCapabilities.length > 0 && (
@@ -397,9 +401,11 @@ function DecisionMessage({
   onAnswer,
   onOpenPath,
   onHireInstead,
+  routines,
+  onSaveRoutine,
 }: {
   item: Extract<StreamItem, { kind: "decision" }>;
-} & Pick<Props, "roster" | "openDrafts" | "busy" | "freeAnswers" | "onFreeAnswer" | "onAnswer" | "onOpenPath" | "onHireInstead">) {
+} & Pick<Props, "roster" | "openDrafts" | "busy" | "freeAnswers" | "onFreeAnswer" | "onAnswer" | "onOpenPath" | "onHireInstead" | "routines" | "onSaveRoutine">) {
   const d = item.decision;
   const capability = CAPABILITY_LABEL[d.capability];
   const hired = d.decision === "new_manager" && d.applied ? findManager(roster, d.targetManagerId) : undefined;
@@ -423,6 +429,18 @@ function DecisionMessage({
       {d.reason && <p className="db-swarm-text">{d.reason}</p>}
       {d.note && <p className="db-swarm-note">{d.note}</p>}
       {hired && <HiredEmbed manager={hired} />}
+      {/* What the hire asked to run on a schedule is offered here, where it was asked;
+          the card's labels alone read as if it were already running. */}
+      {hired && hired.suggestedRoutines.slice(0, 1).map((s) => (
+        <ScheduleProposal
+          key={s.brief}
+          sessionId={`hire-${hired.id}`}
+          managerId={hired.id}
+          offer={s}
+          routines={routines}
+          onSave={onSaveRoutine}
+        />
+      ))}
       {declined && d.capability === "desktop_task" && <DesktopTaskStart itemKey={item.key} initialBrief={d.text || item.asked.text} />}
       {(feature || ongoing) && (
         <div className="db-swarm-choice-row">
@@ -707,6 +725,7 @@ export function SwarmStream(props: Props) {
                       plan={item.plan}
                       steps={item.steps}
                       reportAt={item.reportAt}
+                      waitedMs={item.waitedMs}
                       granted={props.grants[item.author.id] ?? []}
                       onGrant={(managerId, connector) => live.current.onGrant(managerId, connector)}
                       session={props.sessions[item.sessionId]}
@@ -727,6 +746,8 @@ export function SwarmStream(props: Props) {
                       managerId={item.author.id}
                       granted={props.grants[item.author.id] ?? []}
                       draftActions={props.sessions[item.message.sessionId]?.draftActions ?? {}}
+                      routines={props.routines}
+                      onSaveRoutine={(routineId, input) => live.current.onSaveRoutine(routineId, input)}
                       onGrant={(managerId, connector) => live.current.onGrant(managerId, connector)}
                       onOpenSource={openSource}
                       answerable={item.key === lastKey}
@@ -761,6 +782,8 @@ export function SwarmStream(props: Props) {
                   onAnswer={(draftId, label, managerId) => live.current.onAnswer(draftId, label, managerId)}
                   onOpenPath={(path) => live.current.onOpenPath(path)}
                   onHireInstead={(text, docIds) => live.current.onHireInstead(text, docIds)}
+                  routines={props.routines}
+                  onSaveRoutine={(routineId, input) => live.current.onSaveRoutine(routineId, input)}
                 />
               )}
             </div>
@@ -768,7 +791,7 @@ export function SwarmStream(props: Props) {
         </Fragment>
       );
     });
-  }, [items, props.fresh, props.grants, props.roster, props.sessions, props.stopping, props.rounds, props.openDrafts, props.freeAnswers, props.youName, props.docShelf, view, busy, openSource]);
+  }, [items, props.fresh, props.grants, props.routines, props.roster, props.sessions, props.stopping, props.rounds, props.openDrafts, props.freeAnswers, props.youName, props.docShelf, view, busy, openSource]);
 
   const placeholder = readOnly
     ? "Read only"

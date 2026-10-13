@@ -80,7 +80,7 @@ export type StreamItem =
   | { key: string; kind: "say"; text: string; author: Author; at: number }
   /** A session's working line. Its plan and steps ride on it rather than as rows of their
    * own, so a finished run folds to one line and a live one shows only the chip. */
-  | { key: string; kind: "working"; sessionId: string; text: string; author: Author; at: number; plan?: SwarmMessage; steps: SwarmMessage[]; reportAt: number }
+  | { key: string; kind: "working"; sessionId: string; text: string; author: Author; at: number; plan?: SwarmMessage; steps: SwarmMessage[]; reportAt: number; waitedMs: number }
   | { key: string; kind: "question"; message: SwarmMessage; author: Author; at: number }
   | { key: string; kind: "report"; message: SwarmMessage; author: Author; at: number }
   | { key: string; kind: "round"; roundId: string; message: SwarmMessage; author: Author; at: number }
@@ -207,13 +207,24 @@ export function channelItems(messages: SwarmMessage[], roster: SwarmRoster): Str
   const backer = frontDoorAuthor(roster);
   const items: StreamItem[] = [];
   // First pass: what each session did, keyed by session, so the working line can carry it.
-  const work: { plan: Record<string, SwarmMessage>; steps: Record<string, SwarmMessage[]>; reportAt: Record<string, number> } = {
+  const work: { plan: Record<string, SwarmMessage>; steps: Record<string, SwarmMessage[]>; reportAt: Record<string, number>; waitedMs: Record<string, number> } = {
     plan: {},
     steps: {},
     reportAt: {},
+    waitedMs: {},
   };
+  // A question parks the session until the next message in it: the user's answer, or the
+  // report the 24 h expiry writes. That wait is the user's time, not the manager's work.
+  const askedAt: Record<string, number> = {};
   for (const m of messages) {
-    if (m.authorKind === "user" || !m.sessionId) continue;
+    if (!m.sessionId) continue;
+    const since = askedAt[m.sessionId];
+    if (since) {
+      if (m.at > since) work.waitedMs[m.sessionId] = (work.waitedMs[m.sessionId] ?? 0) + (m.at - since);
+      delete askedAt[m.sessionId];
+    }
+    if (m.kind === "question" && m.authorKind !== "user") askedAt[m.sessionId] = m.at;
+    if (m.authorKind === "user") continue;
     if (m.kind === "plan") work.plan[m.sessionId] = m;
     else if (m.kind === "step") (work.steps[m.sessionId] ??= []).push(m);
     else if (m.kind === "report") work.reportAt[m.sessionId] = m.at;
@@ -277,6 +288,7 @@ export function channelItems(messages: SwarmMessage[], roster: SwarmRoster): Str
           plan: work.plan[m.sessionId],
           steps: work.steps[m.sessionId] ?? [],
           reportAt: work.reportAt[m.sessionId] ?? 0,
+          waitedMs: work.waitedMs[m.sessionId] ?? 0,
         });
         break;
       case "plan":

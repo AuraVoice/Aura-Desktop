@@ -151,11 +151,11 @@ What it never does: write into `Desktop\jobtrack` (copy target must not exist), 
 
 ### 2.2 Routine fires while the laptop is shut (student's Semester manager, 07:00 daily)
 
-The routine reads Classroom (connector), sees a lab due today, and calls `desktop.task` to copy
+The routine reads the calendar (connector), sees a lab due today, and calls `desktop.task` to copy
 the newest `lab3*.docx` from Downloads into the course folder. The laptop is closed.
 
 ```
- 07:00  routine sweep ─► session ─► classroom.due (tainted=True) ─► desktop.task ─► waiting_desktop
+ 07:00  routine sweep ─► session ─► calendar.events (tainted=True) ─► desktop.task ─► waiting_desktop
         outbox swarm_desktop_job written; no desktop is polling
  07:15  session sweep: deadline passed ─► gap desktop_offline ─► lane acting ─► STEP: finish
         REPORT: "Lab 3 is due at 23:59. I could not reach your PC to stage the file." + the gap
@@ -186,7 +186,7 @@ Undo lives on PC-A only (the journal is sealed with PC-A's key); PC-B's history 
 | # | User and trigger | Inputs | Policy | Perfect behaviour |
 |---|---|---|---|---|
 | 1 | Vibe coder, DM "get my deleted project back" | brief with the path | ladder of Read verbs, one Reversible copy, shell approved once | 2.1 above: honest partial recovery with the OneDrive link |
-| 2 | Student, routine, laptop closed | Classroom + brief | job expires unclaimed | 2.2: gap in the report, no stale action later |
+| 2 | Student, routine, laptop closed | Calendar + brief | job expires unclaimed | 2.2: gap in the report, no stale action later |
 | 3 | Job seeker, DM "put my newest resume and the two samples in a folder for Acme" | Documents, Downloads listing | fs.search + fs.copy (Reversible) into a new dated folder | zero prompts; result card lists the three files with Undo |
 | 4 | Anyone, "clean the 20 .tmp files in Downloads" | listing | fs.trash x20, Reversible | zero prompts; Undo restores all 20 from the Recycle Bin by `rb:` identity |
 | 5 | Anyone, "permanently delete the old ISO" | listing | fs.delete_permanent Irreversible | one card showing the absolute path and size, default Deny, 60 s |

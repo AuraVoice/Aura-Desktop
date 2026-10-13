@@ -16,10 +16,23 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-10-13
+
+### Added
+
+- Ask a Swarm manager to run on a schedule and its report offers one, with the day and time filled in. One tap turns it on, and Edit lets you change it first. Managers also know their own schedules now, so asking "do you run on a schedule?" gets a true answer. The same card shows in #group when you ask there ("check this every Monday") or hire a manager for recurring work, and #group no longer says "routine added" for a schedule that never ran.
+
 ### Changed
 
 - Swarm in dark mode is plain black now, with no green haze. A manager at work shows one live line saying what it is doing, with a short list of what it has done underneath, instead of step cards. Its answer reads like a normal chat reply. Only things waiting on you, like a draft to approve, still sit in a box.
 - The Beta tags in the sidebar are smaller, with a soft white glint that fades across them.
+- Google Classroom is no longer offered under Connectors for now. It needs Google to approve Aura's access first; it will come back once that is done.
+
+### Fixed
+
+- A Swarm manager's "Worked on this in" time no longer counts the hours it sat waiting for your answer, so a run that asked you something and then stopped no longer claims a day of work.
+- Swarm managers no longer stop to ask permission to start ("Should I proceed?"). Asking you is reserved for a real choice, such as which of two repositories you meant.
+- A desktop task no longer fails on every step after an app stops responding. Aura skips the frozen window and restarts its window reader instead of needing a relaunch.
 
 ## [0.18.0] - 2026-10-10
 

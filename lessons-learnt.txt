@@ -2657,3 +2657,26 @@ Justification: a virtualiser owns the scroll position the moment it attaches. An
 positions the same scroller first has to hand its position over through initialOffset, or the
 library's default silently wins.
 ================================================================================
+2026-10-13: A Swarm question asked permission, parked 24 h, and the clock called it work
+Problem: Varun asked a Langfuse manager to build a snapshot job. Its channel showed "Worked on
+this in 1454 min" next to "Should I proceed with web research ... without requiring any input
+from you?", then "It asked you something and did not hear back", and no report in sight. He
+asked the Supervisor where the report was.
+Issue: three faults stacked, verified against live Firestore rather than the transcript. (1) On
+10-03 his "go search yourself" replies in #group were classified as answers but stored as queued
+behind the session waiting for them, so it expired at 24 h and only then ran them (fixed the same
+day by bf0292f, never logged). (2) The second queued reply started a run that asked leave to
+proceed 3 s after planning; the ask rules were prompt-only and the planner's clarify_question
+had no code gate at all, so it parked for WAIT_USER_S. Its real report from the first queued run
+had landed 1 s earlier and was buried under it. (3) SwarmWork measured "Worked on this" from
+session creation to the report, so every park, answered or expired, counted as work.
+Solution: runner._asks_permission (regex, no model call) turns a leave-to-start question into an
+in-thread "you already have the go-ahead" answer on the step path and drops it on the planner
+path; a question with alternatives still parks. swarmThread sums each question-to-next-message
+gap per session and the fold subtracts it. thread_entries carries the report's fallback flag so
+a stand-in report reaches the next run as "That run ended before you wrote a report", not
+"Your report".
+Justification: a permission ask costs a full 24 h park and returns no information, so it is the
+one question that must be stopped in code, the way _FINDABLE already stops asks a read can
+answer. And a session's wall clock is not its work time once it can wait on a person.
+================================================================================

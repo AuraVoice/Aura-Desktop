@@ -260,6 +260,101 @@ export function RoutineList({
   );
 }
 
+export interface ScheduleOffer {
+  brief: string;
+  weekdays: number[];
+  hour: number;
+  minute: number;
+}
+
+function nextRunLabel(iso: string): string {
+  const at = new Date(iso);
+  if (!iso || Number.isNaN(at.getTime())) return "";
+  return at.toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+/** A schedule a manager offered in its report (runner._schedule_proposal). Nothing runs
+ * until Turn on, which saves the routine under an id taken from the session, so a second
+ * tap, or a tap on another computer, edits that one routine instead of adding another. */
+export function ScheduleProposal({
+  sessionId,
+  managerId,
+  offer,
+  routines,
+  onSave,
+}: {
+  sessionId: string;
+  managerId: string;
+  offer: ScheduleOffer;
+  routines: SwarmRoutine[];
+  onSave: (routineId: string, input: SwarmRoutineInput) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const routineId = `sc-${sessionId}`;
+  const saved = routines.find((r) => r.id === routineId);
+  const othersOn = routines.some((r) => r.managerId === managerId && r.id !== routineId && r.enabled);
+  const draft: SwarmRoutine = saved ?? {
+    id: routineId,
+    managerId,
+    brief: offer.brief,
+    weekdays: offer.weekdays.length ? offer.weekdays : [0, 1, 2, 3, 4, 5, 6],
+    hour: offer.hour,
+    minute: offer.minute,
+    timezone: localZone(),
+    enabled: true,
+    nextRunAt: "",
+  };
+  const next = saved?.enabled ? nextRunLabel(saved.nextRunAt) : "";
+  return (
+    <div className="db-swarm-report-ask">
+      <span className="db-swarm-kicker"><CycleGlyph size={13} /> Schedule</span>
+      {editing ? (
+        <RoutineForm
+          managerId={managerId}
+          initial={draft}
+          onCancel={() => setEditing(false)}
+          onSave={(input) => {
+            onSave(routineId, input);
+            setEditing(false);
+          }}
+        />
+      ) : saved ? (
+        <div className={`db-swarm-routine${saved.enabled ? " is-on" : ""}`}>
+          <CycleGlyph size={15} />
+          <button type="button" className="db-swarm-routine-main" onClick={() => setEditing(true)} title="Edit">
+            <strong>{scheduleLabel(saved.weekdays, saved.hour, saved.minute)}</strong>
+            <span>{saved.enabled ? (next ? `On, next run ${next}` : "On") : "Off"}</span>
+          </button>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={saved.enabled}
+            aria-label={saved.enabled ? "Turn off" : "Turn on"}
+            className={`db-swarm-grant is-mini${saved.enabled ? " is-on" : ""}`}
+            onClick={() => onSave(saved.id, { ...saved, enabled: !saved.enabled })}
+          >
+            <i aria-hidden="true" />
+          </button>
+        </div>
+      ) : (
+        <div className="db-swarm-routine is-suggested">
+          <SparkGlyph size={15} />
+          <span className="db-swarm-routine-main">
+            <strong>{scheduleLabel(offer.weekdays, offer.hour, offer.minute)}</strong>
+            <span>{offer.brief}</span>
+          </span>
+          <span className="db-swarm-routine-actions">
+            <button type="button" className="db-swarm-pill-btn" onClick={() => setEditing(true)}>Edit</button>
+            <button type="button" className="db-swarm-pill-btn is-primary" onClick={() => onSave(routineId, draft)}>
+              {othersOn ? "Add another" : "Turn on"}
+            </button>
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const WATCH_KIND_LABEL: Record<SwarmWatchKind, string> = {
   version_heading: "New versions",
   feed: "New feed entries",

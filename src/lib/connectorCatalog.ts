@@ -2,7 +2,6 @@ import type { ComponentType } from "react";
 import type { AccountConnectorName, AccountConnectorStatus } from "./connectors";
 import {
   GitHubBrandIcon,
-  GoogleClassroomBrandIcon,
   LinkedInBrandIcon,
   XBrandIcon,
 } from "../dashboard/components/connectorBrandIcons";
@@ -77,17 +76,6 @@ export const ACCOUNT_CONNECTORS: readonly AccountConnectorDescriptor[] = [
     connectedMessage: "X is connected. Aura is pulling in your bookmarks so Buddy can find them.",
     openingMessage: "Opening X so you can connect securely.",
     waitingMessage: "Finish connecting X in your browser. Aura reopens here when it is done.",
-  },
-  {
-    name: "google_classroom",
-    label: "Google Classroom",
-    providerName: "Google",
-    Icon: GoogleClassroomBrandIcon,
-    pitch: "Ask what's due this week and Buddy checks your classes.",
-    connectedDetail: (status) => status.accountLabel ?? "Your classes",
-    connectedMessage: "Google Classroom is connected. Ask Buddy what's due this week.",
-    openingMessage: "Opening Google so you can connect Classroom securely.",
-    waitingMessage: "Finish connecting Classroom in your browser. Aura reopens here when it is done.",
   },
 ];
 

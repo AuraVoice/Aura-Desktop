@@ -3,7 +3,6 @@ import {
   GitHubBrandIcon,
   GmailBrandIcon,
   GoogleCalendarBrandIcon,
-  GoogleClassroomBrandIcon,
   NotionBrandIcon,
   XBrandIcon,
 } from "../../components/connectorBrandIcons";
@@ -16,8 +15,9 @@ import {
 } from "../../../lib/pendingActions";
 import { openPath } from "@tauri-apps/plugin-opener";
 import { FORMAT_LABEL, saveDocumentDraft, type DocumentFormat } from "../../../lib/swarmDocumentFile";
-import type { SwarmManager, SwarmMessage, SwarmRoundMember, SwarmRoundView, SwarmSessionView } from "../../../lib/swarmApi";
-import { list, mapRoundMember, num, proposeDraft, str, strings, SwarmRequestError, TERMINAL_SESSION_STATES } from "../../../lib/swarmApi";
+import type { SwarmManager, SwarmMessage, SwarmRoundMember, SwarmRoundView, SwarmRoutine, SwarmRoutineInput, SwarmSessionView } from "../../../lib/swarmApi";
+import { list, mapRoundMember, num, numbers, proposeDraft, str, strings, SwarmRequestError, TERMINAL_SESSION_STATES } from "../../../lib/swarmApi";
+import { ScheduleProposal, type ScheduleOffer } from "./SwarmManagerTools";
 import { SwarmOrb } from "./SwarmOrb";
 import type { OrbState, OrbTone } from "./swarmOrbRenderer";
 import { SWARM_CAPABILITIES, thinkingLine } from "./swarmThinking";
@@ -27,7 +27,6 @@ import {
   BranchGlyph,
   CaretGlyph,
   CellGlyph,
-  CourseGlyph,
   DayGlyph,
   HaltGlyph,
   KeepGlyph,
@@ -53,7 +52,6 @@ type Json = Record<string, unknown>;
 export const SWARM_CONNECTORS: Record<string, { label: string; Icon: ComponentType<{ size?: number; className?: string }> }> = {
   gmail: { label: "Gmail", Icon: GmailBrandIcon },
   google_calendar: { label: "Google Calendar", Icon: GoogleCalendarBrandIcon },
-  google_classroom: { label: "Google Classroom", Icon: GoogleClassroomBrandIcon },
   github: { label: "GitHub", Icon: GitHubBrandIcon },
   x: { label: "X", Icon: XBrandIcon },
   notion: { label: "Notion", Icon: NotionBrandIcon },
@@ -69,7 +67,6 @@ function CapabilityGlyph({ id, size = 15 }: { id: string; size?: number }) {
   if (id === "web.read") return <LeafGlyph size={size} />;
   if (id.startsWith("gmail.")) return <MailGlyph size={size} />;
   if (id === "calendar.events") return <DayGlyph size={size} />;
-  if (id === "classroom.due") return <CourseGlyph size={size} />;
   if (id.startsWith("github.")) return <BranchGlyph size={size} />;
   if (id === "x.bookmarks") return <KeepGlyph size={size} />;
   if (id === "notion.recent") return <BlockGlyph size={size} />;
@@ -260,6 +257,7 @@ export function WorkingEmbed({
   plan,
   steps,
   reportAt,
+  waitedMs,
   granted,
   onGrant,
   session,
@@ -274,6 +272,8 @@ export function WorkingEmbed({
   plan: SwarmMessage | undefined;
   steps: SwarmMessage[];
   reportAt: number;
+  /** Time spent parked on a question (swarmThread.ts): the user's, so not counted as work. */
+  waitedMs: number;
   granted: string[];
   onGrant: (managerId: string, connector: string) => void;
   session: SwarmSessionView | undefined;
@@ -288,13 +288,14 @@ export function WorkingEmbed({
   const fresh = Date.now() - at < FRESH_RUN_MS;
   const ended = reported || (session ? TERMINAL_SESSION_STATES.has(session.state) : !fresh);
   if (ended) {
+    const endedAt = reportAt || session?.endedAt || 0;
     return (
       <WorkFold
         managerId={managerId}
         plan={plan}
         steps={steps}
         startedAt={session?.createdAt || plan?.at || steps[0]?.at || 0}
-        endedAt={reportAt || session?.endedAt || 0}
+        endedAt={endedAt ? endedAt - waitedMs : 0}
         granted={granted}
         onGrant={onGrant}
         settle={sawLive.current}
@@ -715,6 +716,8 @@ export function ReportEmbed({
   managerId,
   granted,
   draftActions,
+  routines,
+  onSaveRoutine,
   onGrant,
   onOpenSource,
   answerable,
@@ -724,6 +727,8 @@ export function ReportEmbed({
   managerId: string;
   granted: string[];
   draftActions: Record<string, string>;
+  routines: SwarmRoutine[];
+  onSaveRoutine: (routineId: string, input: SwarmRoutineInput) => void;
   onGrant: (managerId: string, connector: string) => void;
   onOpenSource: (url: string) => void;
   /** The newest thing in the channel: its question still waits on the user. */
@@ -742,6 +747,11 @@ export function ReportEmbed({
   const question = (report.question && typeof report.question === "object" ? report.question : {}) as Json;
   const questionText = str(question.text);
   const questionChoices = strings(question.choices);
+  // A schedule the manager offered (runner._schedule_proposal); only the user's tap saves it.
+  const scheduleRaw = (report.schedule && typeof report.schedule === "object" ? report.schedule : null) as Json | null;
+  const schedule: ScheduleOffer | null = scheduleRaw && str(scheduleRaw.brief)
+    ? { brief: str(scheduleRaw.brief), weekdays: numbers(scheduleRaw.weekdays), hour: num(scheduleRaw.hour), minute: num(scheduleRaw.minute) }
+    : null;
   const verified = data.verified === true;
   // A report built with no model call (runner.py _fallback_report): its findings were
   // raw excerpt lines, so the sources it had are shown instead of prose that was never written.
@@ -887,6 +897,15 @@ export function ReportEmbed({
             </div>
           )}
         </div>
+      )}
+      {schedule && message.sessionId && (
+        <ScheduleProposal
+          sessionId={message.sessionId}
+          managerId={managerId}
+          offer={schedule}
+          routines={routines}
+          onSave={onSaveRoutine}
+        />
       )}
     </section>
   );

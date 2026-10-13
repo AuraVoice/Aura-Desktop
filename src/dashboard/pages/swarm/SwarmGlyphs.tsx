@@ -305,17 +305,6 @@ export function DayGlyph(p: GlyphProps) {
   );
 }
 
-/** Classroom: a stacked course with a due marker. */
-export function CourseGlyph(p: GlyphProps) {
-  return (
-    <Glyph name="course" {...p}>
-      <path d="M3.5 9 12 5l8.5 4L12 13Z" strokeWidth={1.5} />
-      <path d="M7 11v4.2c2.8 2 7.2 2 10 0V11" strokeWidth={1.5} />
-      <circle className="sw-node" cx="20.5" cy="15.5" r="1.4" fill="currentColor" stroke="none" />
-    </Glyph>
-  );
-}
-
 /** Code activity: a branch that forks and rejoins. */
 export function BranchGlyph(p: GlyphProps) {
   return (

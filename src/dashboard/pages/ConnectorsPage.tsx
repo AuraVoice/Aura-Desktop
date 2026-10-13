@@ -491,7 +491,6 @@ function AccountConnectorRow({
 }) {
   const connected = status?.enabled === true;
   const { Icon } = descriptor;
-  const schoolBlocked = status?.lastError === "school_blocked";
   const installUrl = status?.installUrl ?? null;
   const repoLine = connected && descriptor.name === "github"
     ? gitHubRepoLine(githubRepos, githubReposError)
@@ -511,12 +510,7 @@ function AccountConnectorRow({
             {repoLine.text}
           </p>
         )}
-        {schoolBlocked && (
-          <p className="db-connector-attention">
-            Your school hasn't allowed Aura to use Classroom. Your school's IT admin can turn it on.
-          </p>
-        )}
-        {!connected && status?.lastError && !schoolBlocked && (
+        {!connected && status?.lastError && (
           <p className="db-connector-attention">
             {status.canReconnect
               ? `${descriptor.label} needs to be reconnected. Turn it on to reconnect.`

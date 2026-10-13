@@ -15,7 +15,6 @@ export const SWARM_CAPABILITIES: Record<string, { done: string; doing: string }>
   "gmail.search": { done: "Searched Gmail", doing: "Reading what Gmail turned up" },
   "gmail.read": { done: "Read an email", doing: "Reading that email closely" },
   "calendar.events": { done: "Checked the calendar", doing: "Going through the calendar" },
-  "classroom.due": { done: "Checked Classroom", doing: "Going through Classroom deadlines" },
   "github.activity": { done: "Checked GitHub", doing: "Going through GitHub activity" },
   "github.repos": { done: "Listed repositories", doing: "Going through your repositories" },
   "github.tree": { done: "Listed files", doing: "Going through the file list" },
