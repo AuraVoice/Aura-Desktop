@@ -172,41 +172,27 @@ function ledgerRows(steps: SwarmMessage[]): LedgerRow[] {
   return rows;
 }
 
-/** The steps as a vertical ledger: done rows from the thread, then, while the run is live,
- * one active row that says what it is doing now. */
+/** What the run did, as a plain list of short lines under the live line (and inside the
+ * fold once it ends). Each new row eases in, which is what makes the run read as streaming. */
 function Ledger({
   steps,
   managerId,
   granted,
   onGrant,
-  active,
-  stopping,
 }: {
   steps: SwarmMessage[];
   managerId: string;
   granted: string[];
   onGrant: (managerId: string, connector: string) => void;
-  active?: string;
-  stopping?: boolean;
 }) {
   const rows = ledgerRows(steps);
-  if (rows.length === 0 && !active) return null;
+  if (rows.length === 0) return null;
   return (
-    <ol className="db-swarm-ledger">
+    <ul className="db-swarm-ledger">
       {rows.map((row) => (
         <StepRow key={row.key} row={row} managerId={managerId} granted={granted} onGrant={onGrant} />
       ))}
-      {active && (
-        <li className={`db-swarm-step is-active${stopping ? " is-stopping" : ""}`}>
-          <span className="db-swarm-step-node" aria-hidden="true"><span className="db-swarm-step-spin" /></span>
-          <div className="db-swarm-step-body">
-            <span className="db-swarm-step-head">
-              <strong className="db-swarm-shimmer" aria-live="polite">{active}</strong>
-            </span>
-          </div>
-        </li>
-      )}
-    </ol>
+    </ul>
   );
 }
 
@@ -252,7 +238,7 @@ function WorkFold({
       </button>
       {open && (
         <div className="db-swarm-fold-body">
-          {plan && <PlanEmbed message={plan} />}
+          {plan?.text && <SwarmMarkdown className="db-swarm-run-plan" text={plan.text} />}
           <Ledger steps={steps} managerId={managerId} granted={granted} onGrant={onGrant} />
         </div>
       )}
@@ -321,68 +307,32 @@ export function WorkingEmbed({
   const stopRequested = Boolean(session?.cancelRequested) || stopping;
   const tasks = session ? session.lanes.filter((l) => l.kind === "task") : [];
   const active = session ? thinkingLine(stopRequested ? { ...session, cancelRequested: true } : session, steps[steps.length - 1], manager) : "Getting started";
-  const phase = stopRequested ? "Stopping" : session ? PHASE_COPY[session.state] ?? "Working" : "Starting";
-  const sources = session?.sources ?? 0;
+  // One line that says what it is doing now, then the plain list of what it has done.
+  // No card: it reads like a chat app's "thinking" line, and folds once the report lands.
   return (
     <div className={`db-swarm-run${stopRequested ? " is-stopping" : ""}`}>
       <div className="db-swarm-run-head">
-        <span className="db-swarm-run-state">
-          <span className="db-swarm-run-dot" aria-hidden="true" />
-          {phase}
-        </span>
+        <span className="db-swarm-run-now db-swarm-shimmer" aria-live="polite">{active}</span>
         {session && <Elapsed since={session.createdAt} />}
         {session && (
-          <span className="db-swarm-run-budget" title="Model decisions so far. It keeps going while it finds new things, and asks before spending past each dollar">
-            step {session.decisionsUsed}
-          </span>
-        )}
-        {session && (
-          <button type="button" className="db-swarm-pill-btn is-stop" onClick={onStop} disabled={stopRequested}>
-            <HaltGlyph size={14} /> {stopRequested ? "Stopping" : "Stop"}
+          <button type="button" className="db-swarm-run-stop" onClick={onStop} disabled={stopRequested}>
+            <HaltGlyph size={13} /> {stopRequested ? "Stopping" : "Stop"}
           </button>
         )}
       </div>
-      {plan?.text && <SwarmMarkdown className="db-swarm-run-plan" text={plan.text} />}
-      <Ledger steps={steps} managerId={managerId} granted={granted} onGrant={onGrant} active={active} stopping={stopRequested} />
+      <Ledger steps={steps} managerId={managerId} granted={granted} onGrant={onGrant} />
       {tasks.length > 1 && (
-        <ul className="db-swarm-lanes">
+        <ul className="db-swarm-ledger is-lanes">
           {tasks.map((lane) => (
-            <li key={lane.id} className={`is-${lane.state}`}>
-              <CellGlyph size={14} />
-              <span>
-                {lane.subagentTitle && <b>{lane.subagentTitle}: </b>}
-                {lane.goal}
+            <li key={lane.id} className={`db-swarm-step is-${lane.state}`}>
+              <span className="db-swarm-step-node" aria-hidden="true"><CellGlyph size={13} /></span>
+              <span className="db-swarm-step-head">
+                <strong>{lane.subagentTitle ? `${lane.subagentTitle}: ${lane.goal}` : lane.goal}</strong>
+                <span className="db-swarm-step-meta">{lane.state === "done" ? "done" : lane.state === "failed" ? "dropped" : "working"}</span>
               </span>
-              <em>{lane.state === "done" ? "done" : lane.state === "failed" ? "dropped" : `step ${lane.n + 1}`}</em>
             </li>
           ))}
         </ul>
-      )}
-      {sources > 0 && (
-        <div className="db-swarm-run-foot">
-          {sources} source{sources === 1 ? "" : "s"} so far
-        </div>
-      )}
-    </div>
-  );
-}
-
-export function PlanEmbed({ message }: { message: SwarmMessage }) {
-  const criteria = list(message.data.criteria);
-  const tasks = list(message.data.tasks);
-  return (
-    <div className="db-swarm-plan">
-      <div className="db-swarm-kicker"><SparkGlyph size={13} /> Plan</div>
-      {message.text && <SwarmMarkdown text={message.text} />}
-      {criteria.length > 0 && (
-        <ol className="db-swarm-criteria">
-          {criteria.map((c) => <li key={str(c.id)}>{str(c.text)}</li>)}
-        </ol>
-      )}
-      {tasks.length > 1 && (
-        <div className="db-swarm-plan-tasks">
-          {tasks.map((t) => <em key={str(t.id)}>{str(t.goal)}</em>)}
-        </div>
       )}
     </div>
   );
@@ -408,10 +358,11 @@ function StepRow({
   const connector = str(data.connector);
   const label = capability ? SWARM_CAPABILITIES[capability]?.done ?? "Used a tool" : action === "finish" ? "Finished its part" : "Step";
   const sub = str(data.subagent_title);
+  // The model's own "why" sits behind a hover, so the list stays one short line per row.
   const why = row.count === 1 ? str(data.why) || row.step.text : "";
   const gap = Boolean(capability) && !ok;
   return (
-    <li className={`db-swarm-step${gap ? " is-gap" : ""}`}>
+    <li className={`db-swarm-step${gap ? " is-gap" : ""}`} title={why || undefined}>
       <span className="db-swarm-step-node" aria-hidden="true">
         {capability ? <CapabilityGlyph id={capability} size={13} /> : <TickGlyph size={12} />}
       </span>
@@ -423,10 +374,8 @@ function StepRow({
           <span className="db-swarm-step-meta">
             {data.cached === true && <span>already read</span>}
             {row.added > 0 && <span>+{row.added} source{row.added === 1 ? "" : "s"}</span>}
-            {row.duration > 0 && <span>{(row.duration / 1000).toFixed(1)}s</span>}
           </span>
         </span>
-        {why && <span className="db-swarm-step-why">{why}</span>}
         {gap && str(data.gap_reason) && (
           <span className="db-swarm-step-gap">
             {str(data.gap_reason)}
@@ -836,14 +785,6 @@ export function ReportEmbed({
           <span>{stopCopy}</span>
         </div>
       )}
-      {(sources.size > 0 || verified) && <div className="db-swarm-report-head">
-        {sources.size > 0 && <span className="db-swarm-muted">{sources.size} source{sources.size === 1 ? "" : "s"}</span>}
-        {verified && (
-          <span className="db-swarm-verified" title="A separate checker confirmed every goal against the sources">
-            <SealGlyph size={13} /> Verified
-          </span>
-        )}
-      </div>}
       {report.summary && !(fallback && stopCopy) ? (
         <SwarmMarkdown className="db-swarm-report-summary" text={str(report.summary)} onOpenLink={onOpenSource} />
       ) : null}
@@ -874,6 +815,14 @@ export function ReportEmbed({
           })}
         </ul>
       )}
+      {(sources.size > 0 || verified) && <div className="db-swarm-report-head">
+        {sources.size > 0 && <span className="db-swarm-muted">{sources.size} source{sources.size === 1 ? "" : "s"}</span>}
+        {verified && (
+          <span className="db-swarm-verified" title="A separate checker confirmed every goal against the sources">
+            <SealGlyph size={13} /> Verified
+          </span>
+        )}
+      </div>}
       {drafts.map((d, i) => (
         <article key={i} className={`db-swarm-draft-card${PUBLIC_TARGETS.has(str(d.target)) && actionable(d) ? " is-public" : ""}`}>
           <header className="db-swarm-draft-card-head">

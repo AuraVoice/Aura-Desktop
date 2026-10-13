@@ -456,9 +456,53 @@
 .db-nav-beta {
   max-width: 48px;
   margin-left: auto;
+  padding: 0 5px;
+  border-radius: 8px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 15px;
+  letter-spacing: 0.02em;
   opacity: 1;
   transition: max-width 0.28s var(--db-ease), padding 0.28s var(--db-ease),
     opacity 0.16s var(--db-ease);
+}
+/* A soft white glare that fades in at the top left, brightens as it crosses and fades
+   out at the bottom right, then rests. The layer is three times the pill so the band
+   starts and ends fully outside it; only transform and opacity animate. The light
+   pill's static gloss is toned down here, or white on near-white hides the glare. */
+.aura-polished-pill.db-nav-beta {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0)),
+    var(--aura-pill-fill, rgba(232, 174, 51, 0.2));
+}
+.db-nav-beta::after {
+  position: absolute;
+  inset: -100%;
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0) 38%,
+    rgba(255, 255, 255, 0.55) 46%,
+    rgba(255, 255, 255, 1) 50%,
+    rgba(255, 255, 255, 0.55) 54%,
+    rgba(255, 255, 255, 0) 62%
+  );
+  content: "";
+  pointer-events: none;
+  opacity: 0;
+  transform: translate3d(-34%, -34%, 0);
+  animation: db-nav-beta-glare 2.8s ease-in-out infinite;
+}
+@keyframes db-nav-beta-glare {
+  0% { opacity: 0; transform: translate3d(-34%, -34%, 0); }
+  25% { opacity: 1; }
+  55% { opacity: 0; transform: translate3d(34%, 34%, 0); }
+  100% { opacity: 0; transform: translate3d(34%, 34%, 0); }
+}
+/* Like the chord keycaps' flash, the glare is the badge itself, so it keeps running
+   under Reduce motion instead of stopping after one invisible pass. */
+.db-app.db-reduce-motion .db-nav-beta::after {
+  animation-duration: 2.8s !important;
+  animation-iteration-count: infinite !important;
 }
 .db-nav-item-active .db-nav-beta {
   --aura-pill-border: rgba(255, 215, 128, 0.5);
@@ -8330,9 +8374,8 @@
   }
 }
 
-/* The field the glass sits on. Without it a translucent card over a flat colour is just
-   a grey card; with it the same card reads as frosted, and no backdrop-filter is needed
-   because the field is already soft. One layer, drifting on transform alone. */
+/* A soft colour field behind the light panel, drifting on transform alone. Dark hides it
+   (dashboard-data.dark.css): Swarm is matte black there. */
 .db-swarm-aurora {
   position: absolute;
   inset: -20%;
@@ -9973,18 +10016,22 @@ button:hover > .sw-g-dismiss { transform: rotate(90deg); }
    routine editor. Every colour is a --sw-* token, so the dark sheet's token remap covers
    these with no twin rules. No backdrop-filter: these sit on the panel's flat fill. */
 
-/* ── One card grammar ── the run card, plan, report, question and draft cards share one
-   shape: the panel's glass fill, a hairline, a 12px radius, no backdrop-filter (they sit on
-   the panel's flat fill). State changes the accent rule, never the shape. */
+/* ── Prose first ── a run and a report read like a chat reply: no box, just text on the
+   page (Varun's call, 2026-10-13, after comparing with ChatGPT and Claude). Only what the
+   user has to act on (an open question, a draft to approve) keeps one slim outline. */
 .db-swarm-run,
-.db-swarm-report,
+.db-swarm-report {
+  position: relative;
+  max-width: var(--sw-measure);
+  margin-top: 6px;
+  contain: layout paint;
+}
 .db-swarm-ask-card,
-.db-swarm-draft-card,
-.db-swarm-plan {
+.db-swarm-draft-card {
   position: relative;
   max-width: var(--sw-measure);
   margin-top: 10px;
-  padding: 14px 16px;
+  padding: 12px 14px;
   border-radius: var(--sw-r-lg);
   border: 1px solid var(--sw-card-border);
   background: var(--sw-card-fill);
@@ -10015,30 +10062,39 @@ button:hover > .sw-g-dismiss { transform: rotate(90deg); }
   to { background-position: 0 0; }
 }
 
-/* ── A live run ── a header that says the phase, the clock and the budget; the ledger of
-   finished steps; one active row at the foot. */
-.db-swarm-run { padding: 12px 16px 14px; overflow: hidden; }
-.db-swarm-run:not(.is-round):not(.is-done)::before {
-  content: "";
-  position: absolute;
-  inset: -40% auto auto -20%;
-  width: 70%;
-  height: 160%;
-  pointer-events: none;
-  background: radial-gradient(closest-side, var(--sw-glow), transparent);
-  animation: db-swarm-g-breathe 3.2s ease-in-out infinite;
-}
-.db-swarm-run.is-stopping::before { display: none; }
+/* ── A live run ── one line that says what it is doing now (shimmer), the clock and a
+   quiet Stop; under it a plain list of what it has done, each row easing in as it lands.
+   Finished, the same list sits inside the fold. */
 .db-swarm-run-head {
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 28px;
-  font-size: var(--sw-fs-sm);
+  min-height: 26px;
+  font-size: var(--sw-fs-body);
   color: var(--sw-mute);
   font-variant-numeric: tabular-nums;
 }
-.db-swarm-run-state { display: inline-flex; align-items: center; gap: 8px; font-weight: 650; color: var(--sw-text); }
+.db-swarm-run-now { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
+.db-swarm-run.is-stopping .db-swarm-run-now { -webkit-text-fill-color: var(--sw-warn); animation: none; }
+.db-swarm-run-time { flex: none; font-size: var(--sw-fs-xs); color: var(--sw-mute); }
+.db-swarm-run-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: var(--sw-r-pill);
+  background: none;
+  font: inherit;
+  font-size: var(--sw-fs-xs);
+  color: var(--sw-mute);
+  cursor: pointer;
+  transition: color 160ms var(--sw-out), background 160ms var(--sw-out);
+}
+.db-swarm-run-stop:hover:not(:disabled) { color: var(--sw-text); background: var(--sw-hover); }
+.db-swarm-run-stop:focus-visible { outline: 2px solid var(--sw-accent-ring); outline-offset: 2px; }
+.db-swarm-run-stop:disabled { cursor: default; opacity: 0.7; }
 .db-swarm-run-dot {
   position: relative;
   width: 8px;
@@ -10055,83 +10111,38 @@ button:hover > .sw-g-dismiss { transform: rotate(90deg); }
   border: 1px solid var(--sw-live);
   animation: db-swarm-presence-ring 2.4s var(--sw-out) infinite;
 }
-.db-swarm-run.is-stopping .db-swarm-run-dot,
-.db-swarm-run.is-stopping .db-swarm-run-dot::after { background: var(--sw-warn); border-color: var(--sw-warn); }
-.db-swarm-run-time::before,
-.db-swarm-run-budget::before { content: "\00b7"; margin-right: 10px; color: var(--sw-mute); }
-.db-swarm-run-head .db-swarm-pill-btn { margin-left: auto; }
-.db-swarm-run-plan { margin: 6px 0 0; font-size: var(--sw-fs-sm); color: var(--sw-dim); }
+.db-swarm-run-plan { margin: 4px 0 0; font-size: var(--sw-fs-sm); color: var(--sw-dim); }
 .db-swarm-run-foot { margin-top: 8px; font-size: var(--sw-fs-xs); color: var(--sw-mute); display: flex; align-items: center; gap: 10px; }
 .db-swarm-run-foot .db-swarm-pill-btn { margin-left: auto; }
-.db-swarm-run.is-round.is-done { background: transparent; border-color: transparent; box-shadow: none; padding-left: 0; }
 
-/* The ledger: a hairline spine with one node per step. */
-.db-swarm-ledger { list-style: none; margin: 8px 0 0; padding: 0; display: grid; position: relative; }
-.db-swarm-ledger::before {
-  content: "";
-  position: absolute;
-  left: 11px;
-  top: 14px;
-  bottom: 14px;
-  width: 1px;
-  background: linear-gradient(180deg, transparent, var(--sw-divider) 12%, var(--sw-divider) 88%, transparent);
-}
+/* What it did: one short muted line per step, a small glyph in front, no boxes or spine. */
+.db-swarm-ledger { list-style: none; margin: 4px 0 0; padding: 0 0 0 2px; display: grid; gap: 1px; }
 .db-swarm-step {
-  position: relative;
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr);
-  gap: 10px;
-  padding: 5px 0;
+  grid-template-columns: 16px minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  padding: 2px 0;
+  animation: db-swarm-msg-in 220ms var(--sw-out) both;
   contain: layout paint;
 }
-.db-swarm-step-node {
-  position: relative;
-  z-index: 1;
-  display: grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  border-radius: 50%;
-  color: var(--sw-dim);
-  background: var(--sw-step-fill);
-  box-shadow: inset 0 0 0 1px var(--sw-chip-border), 0 2px 6px -2px rgba(0, 0, 0, 0.18);
-}
-.db-swarm-step.is-gap .db-swarm-step-node { color: var(--sw-warn); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sw-warn) 40%, transparent); }
-.db-swarm-step-spin {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  border: 1.5px solid var(--sw-divider);
-  border-top-color: var(--sw-live);
-  animation: db-swarm-spin 900ms linear infinite;
-}
-.db-swarm-step.is-stopping .db-swarm-step-spin { border-top-color: var(--sw-warn); }
-.db-swarm-step.is-stopping .db-swarm-shimmer { -webkit-text-fill-color: var(--sw-warn); animation: none; }
-@keyframes db-swarm-spin { to { transform: rotate(360deg); } }
-.db-swarm-step.is-active { animation: db-swarm-msg-in 220ms var(--sw-out) both; }
-.db-swarm-step-body { display: grid; gap: 2px; min-width: 0; padding-top: 2px; }
-.db-swarm-step-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: var(--sw-fs-body); line-height: 1.4; }
-.db-swarm-step-head strong { font-weight: 550; color: var(--sw-text); }
-.db-swarm-step-count {
-  padding: 0 6px;
-  border-radius: var(--sw-r-pill);
-  font-size: var(--sw-fs-xs);
-  font-weight: 650;
-  color: var(--sw-dim);
-  background: var(--sw-chip);
-  font-variant-numeric: tabular-nums;
-}
+.db-swarm-step-node { display: grid; place-items: center; height: 20px; color: var(--sw-mute); }
+.db-swarm-step.is-gap .db-swarm-step-node { color: var(--sw-warn); }
+.db-swarm-step-body { display: grid; gap: 2px; min-width: 0; }
+.db-swarm-step-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; font-size: var(--sw-fs-sm); line-height: 20px; color: var(--sw-mute); }
+.db-swarm-step-head strong { font-weight: 450; color: var(--sw-dim); }
+.db-swarm-step.is-done .db-swarm-step-head strong { color: var(--sw-mute); }
+.db-swarm-step-count { font-size: var(--sw-fs-xs); color: var(--sw-mute); font-variant-numeric: tabular-nums; }
 .db-swarm-step-meta {
-  margin-left: auto;
   display: inline-flex;
-  gap: 10px;
+  gap: 8px;
   font-size: var(--sw-fs-xs);
   color: var(--sw-mute);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
-.db-swarm-step-why { font-size: var(--sw-fs-sm); color: var(--sw-dim); line-height: 1.45; }
 .db-swarm-step-gap { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: var(--sw-fs-sm); color: var(--sw-warn); }
+.db-swarm-ledger.is-lanes { margin-top: 6px; }
 
 /* Subagent lanes, only when a run has more than one. */
 .db-swarm-lanes { list-style: none; margin: 10px 0 0; padding: 10px 0 0; display: grid; gap: 6px; border-top: 1px solid var(--sw-divider); }
@@ -10195,21 +10206,6 @@ button:hover > .sw-g-dismiss { transform: rotate(90deg); }
 .db-swarm-pill-btn.is-stop:hover:not(:disabled) .sw-g-halt .sw-orbit { animation: db-swarm-g-orbit 1.4s linear infinite; }
 .db-swarm-pill-btn:focus-visible { outline: 2px solid var(--sw-accent-ring); outline-offset: 2px; }
 .sw-g-halt .sw-orbit { transform-box: view-box; transform-origin: 50% 50%; }
-
-/* The plan, inside a finished run's fold. */
-.db-swarm-plan { margin: 4px 0 8px; padding: 12px 14px; border-color: transparent; box-shadow: none; background: var(--sw-chip); }
-.db-swarm-plan .db-swarm-md { margin-top: 4px; font-size: var(--sw-fs-sm); color: var(--sw-dim); }
-.db-swarm-criteria { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 3px; font-size: var(--sw-fs-sm); color: var(--sw-dim); }
-.db-swarm-plan-tasks { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-.db-swarm-plan-tasks em {
-  font-style: normal;
-  font-size: var(--sw-fs-xs);
-  padding: 2px 8px;
-  border-radius: var(--sw-r-pill);
-  color: var(--sw-dim);
-  background: var(--sw-chip);
-  border: 1px solid var(--sw-chip-border);
-}
 
 /* A finished run: one quiet line, the plan and the ledger behind it. */
 .db-swarm-fold { display: grid; gap: 4px; max-width: var(--sw-measure); margin-top: 4px; }
@@ -10282,33 +10278,27 @@ button:hover > .sw-g-dismiss { transform: rotate(90deg); }
 }
 .db-swarm-md-link:hover { text-decoration-color: currentColor; }
 
-/* ── The report ── status strip (only when short), a header, the summary first and
-   largest, findings with their domains at the claim, drafts as their own cards, then a
-   quiet footer for what it could not read and what comes next. */
-.db-swarm-report { padding: 14px 16px; }
-.db-swarm-report.is-partial { border-color: color-mix(in srgb, var(--sw-warn) 30%, var(--sw-card-border)); }
+/* ── The report ── reads as the manager's reply: an optional one-line note when it fell
+   short, the summary as plain prose, findings with their domains at the claim, then one
+   muted line for the source count and Verified. Drafts keep their own slim outline. */
 .db-swarm-report-status {
   display: flex;
   align-items: flex-start;
   gap: 8px;
-  margin: 0 0 12px;
-  padding: 9px 12px;
-  border-radius: var(--sw-r-md);
+  margin: 0 0 6px;
   font-size: var(--sw-fs-sm);
   line-height: 1.45;
   color: var(--sw-warn);
-  background: var(--sw-warn-soft);
 }
 .db-swarm-report-status .sw-g { flex: none; margin-top: 1px; }
 .db-swarm-report.is-cancelled .db-swarm-report-status,
-.db-swarm-report.is-failed .db-swarm-report-status { color: var(--sw-dim); background: var(--sw-chip); }
-.db-swarm-report-head { display: flex; align-items: center; justify-content: flex-end; gap: 8px; margin: -2px 0 6px; }
+.db-swarm-report.is-failed .db-swarm-report-status { color: var(--sw-dim); }
+.db-swarm-report-head { display: flex; align-items: center; gap: 8px; margin: 10px 0 0; }
 .db-swarm-report-head .db-swarm-muted { font-size: var(--sw-fs-xs); font-variant-numeric: tabular-nums; }
 .db-swarm-verified {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  margin-left: auto;
   padding: 2px 8px;
   border-radius: var(--sw-r-pill);
   font-size: var(--sw-fs-xs);
@@ -10378,10 +10368,11 @@ button:hover > .sw-g-dismiss { transform: rotate(90deg); }
   gap: 6px;
   margin-top: 16px;
   padding: 12px 14px;
-  border-radius: var(--sw-r-md);
-  background: var(--sw-chip);
+  border-radius: var(--sw-r-lg);
+  border: 1px solid var(--sw-card-border);
+  max-width: var(--sw-measure);
 }
-.db-swarm-report-ask.is-open { background: var(--sw-warn-soft); border-color: transparent; }
+.db-swarm-report-ask.is-open { border-color: color-mix(in srgb, var(--sw-warn) 40%, var(--sw-card-border)); }
 .db-swarm-report-ask .db-swarm-text { margin: 0; font-size: var(--sw-fs-body); }
 .db-swarm-report-open { margin-left: 8px; font-size: var(--sw-fs-xs); }
 
@@ -10412,7 +10403,7 @@ button:hover > .sw-g-dismiss { transform: rotate(90deg); }
 
 /* ── A draft ── its own card inside the report. A public post takes a warn hairline and
    says where it goes above the buttons, so it never reads like a private hold. */
-.db-swarm-draft-card { margin-top: 14px; padding: 12px 14px; border-color: transparent; box-shadow: none; background: var(--sw-chip); }
+.db-swarm-draft-card { margin-top: 14px; background: transparent; box-shadow: none; }
 .db-swarm-draft-card.is-public { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sw-warn) 32%, transparent); }
 .db-swarm-draft-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
 .db-swarm-draft-card-head .db-swarm-tag { margin-left: auto; }

@@ -16,6 +16,11 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+### Changed
+
+- Swarm in dark mode is plain black now, with no green haze. A manager at work shows one live line saying what it is doing, with a short list of what it has done underneath, instead of step cards. Its answer reads like a normal chat reply. Only things waiting on you, like a draft to approve, still sit in a box.
+- The Beta tags in the sidebar are smaller, with a soft white glint that fades across them.
+
 ## [0.18.0] - 2026-10-10
 
 ### Added

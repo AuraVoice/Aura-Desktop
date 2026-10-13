@@ -18,8 +18,8 @@
   white-space: nowrap;
 }
 
-/* The pill itself no longer flashes (the sidebar stays still at rest), but
-   .db-chord-flash in dashboard.css still runs this sweep across its keycaps. */
+/* The sidebar's Beta pill runs its own diagonal glare (db-nav-beta-glare in
+   dashboard.css); .db-chord-flash still runs this sweep across its keycaps. */
 @keyframes aura-polished-pill-flash {
   from {
     transform: translate3d(-180%, -35%, 0) rotate(-25deg);
