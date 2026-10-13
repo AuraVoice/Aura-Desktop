@@ -62,11 +62,12 @@ export function ConnectorsPage() {
   const banner = connectors.banner;
   const clearBanner = connectors.clearBanner;
 
-  // Success sits center-screen now, so it dismisses itself; errors stay until
-  // the user closes them, and info lives only as long as the work it narrates.
+  // Success sits center-screen and dims the page, so it dismisses itself after a
+  // beat; errors stay until the user closes them, and info lives only as long as
+  // the work it narrates.
   useEffect(() => {
     if (banner?.tone !== "success") return;
-    const timer = setTimeout(clearBanner, 4_000);
+    const timer = setTimeout(clearBanner, 1_000);
     return () => clearTimeout(timer);
   }, [banner, clearBanner]);
 

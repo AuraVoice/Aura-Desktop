@@ -306,9 +306,11 @@ export function enableGoogleCalendar(): Promise<GoogleCalendarConnectorStatus> {
   );
 }
 
-export function disableGoogleCalendar(): Promise<GoogleCalendarConnectorStatus> {
+/** Deletes the stored grant, so turning Calendar back on goes through Google's
+ * account picker and consent again instead of silently reusing the old token. */
+export function disconnectGoogleCalendar(): Promise<GoogleCalendarConnectorStatus> {
   return postConnectorAction(
-    "/connectors/google-calendar/disable", "Calendar disable", parseCalendarStatus,
+    "/connectors/google-calendar/disconnect", "Calendar disconnect", parseCalendarStatus,
   );
 }
 
@@ -322,8 +324,9 @@ export function enableGmail(): Promise<GmailConnectorStatus> {
   return postConnectorAction("/connectors/gmail/enable", "Gmail enable", parseGmailStatus);
 }
 
-export function disableGmail(): Promise<GmailConnectorStatus> {
-  return postConnectorAction("/connectors/gmail/disable", "Gmail disable", parseGmailStatus);
+/** Same contract as disconnectGoogleCalendar: the next on is a fresh authorization. */
+export function disconnectGmail(): Promise<GmailConnectorStatus> {
+  return postConnectorAction("/connectors/gmail/disconnect", "Gmail disconnect", parseGmailStatus);
 }
 
 export function enableNotion(): Promise<NotionConnectorStatus> {

@@ -8,10 +8,10 @@ import {
   ConnectorReauthorizationRequiredError,
   GitHubRateLimitedError,
   disableAccountConnector,
-  disableGmail,
-  disableGoogleCalendar,
   disableNotion,
   disconnectGitHub,
+  disconnectGmail,
+  disconnectGoogleCalendar,
   enableAccountConnector,
   enableGmail,
   enableGoogleCalendar,
@@ -441,11 +441,11 @@ export function useConnectors(): ConnectorsState {
 
   const disableCalendar = useCallback(() => runAction({
     actionName: "disabling",
-    run: disableGoogleCalendar,
+    run: disconnectGoogleCalendar,
     apply: applyCalendar,
-    logLabel: "disable Calendar",
-    startMessage: "Disconnecting Calendar and stopping active sync.",
-    doneMessage: "Google Calendar is disconnected. You can reconnect anytime.",
+    logLabel: "disconnect Calendar",
+    startMessage: "Disconnecting Google Calendar.",
+    doneMessage: "Google Calendar is disconnected.",
     failedMessage: "Calendar stayed connected because the disconnect did not finish. Try again.",
   }), [runAction, applyCalendar]);
 
@@ -457,7 +457,7 @@ export function useConnectors(): ConnectorsState {
     startMessage: "Checking Google Calendar for the latest events.",
     doneMessage: "Calendar is up to date. Buddy has the latest.",
     failedMessage: "Calendar could not refresh just now. Your last good sync is still safe.",
-    autoClearDoneMs: 4_000,
+    autoClearDoneMs: 1_000,
   }), [runAction, applyCalendar]);
 
   const enableGmailConnector = useCallback(() => runEnable({
@@ -478,11 +478,11 @@ export function useConnectors(): ConnectorsState {
 
   const disableGmailConnector = useCallback(() => runAction({
     actionName: "disabling_gmail",
-    run: disableGmail,
+    run: disconnectGmail,
     apply: applyGmail,
-    logLabel: "disable Gmail",
-    startMessage: "Turning Gmail off for Buddy.",
-    doneMessage: "Gmail is off. You can reconnect without consent while Google still allows it.",
+    logLabel: "disconnect Gmail",
+    startMessage: "Disconnecting Gmail.",
+    doneMessage: "Gmail is disconnected.",
     failedMessage: "Gmail stayed connected because the disconnect did not finish. Try again.",
   }), [runAction, applyGmail]);
 
@@ -565,7 +565,7 @@ export function useConnectors(): ConnectorsState {
     startMessage: "Pulling in your latest X bookmarks.",
     doneMessage: "Your X bookmarks are up to date.",
     failedMessage: "Aura couldn't sync your bookmarks just now. You may have reached this month's limit.",
-    autoClearDoneMs: 4_000,
+    autoClearDoneMs: 1_000,
   }), [runAction, applyAccount]);
 
   // Stable identity: the page keys its success auto-close timer on this, and a
