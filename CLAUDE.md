@@ -419,6 +419,13 @@ Rules an edit could break:
   tool, per scope, under a daily cap, and only for tools in `actions.AUTO_APPROVE_TARGETS`;
   a public post never joins that set. `setGrants` sends the policy only from its own switch,
   so a connector toggle can never change it.
+- **A write reads as the user's own work, never as the manager's research trail** (Varun's
+  call, 2026-10-13). An issue body is a proposal: what is wrong in this code, why it matters,
+  what to change, how to tell it is done. Where the idea came from (another product, a site,
+  a changelog) stays in the report summary and never reaches the title or body, and nothing
+  attributes the write to Aura: the idempotency key rides in an HTML comment
+  (`_run_create_issue`). This holds for every manager and every write target, not the one
+  competitor watch that surfaced it.
 - **Anything on the user's own PC is `desktop_task`, never a manager or `computer_task`.**
   Managers have no hands on this machine and Aura's browser has none of the user's sign-ins,
   so the classifier routes "find out what this app I have can do" to the `desktop_task` card
