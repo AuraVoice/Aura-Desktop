@@ -7,9 +7,9 @@ import {
   ACCOUNT_CONNECTOR_NAMES,
   ConnectorReauthorizationRequiredError,
   GitHubRateLimitedError,
-  disableAccountConnector,
-  disableNotion,
+  disconnectAccountConnector,
   disconnectGitHub,
+  disconnectNotion,
   disconnectGmail,
   disconnectGoogleCalendar,
   enableAccountConnector,
@@ -506,11 +506,11 @@ export function useConnectors(): ConnectorsState {
 
   const disableNotionConnector = useCallback(() => runAction({
     actionName: "disabling_notion",
-    run: disableNotion,
+    run: disconnectNotion,
     apply: applyNotion,
-    logLabel: "disable Notion",
-    startMessage: "Turning Notion off for Buddy.",
-    doneMessage: "Notion is off. You can reconnect anytime.",
+    logLabel: "disconnect Notion",
+    startMessage: "Disconnecting Notion.",
+    doneMessage: "Notion is disconnected.",
     failedMessage: "Notion stayed connected because the disconnect did not finish. Try again.",
   }), [runAction, applyNotion]);
 
@@ -548,11 +548,11 @@ export function useConnectors(): ConnectorsState {
     }
     return runAction({
       actionName: `disabling_${name}`,
-      run: () => disableAccountConnector(name),
+      run: () => disconnectAccountConnector(name),
       apply: (status: AccountConnectorStatus) => applyAccount(name, status),
-      logLabel: `disable ${descriptor.label}`,
-      startMessage: `Turning ${descriptor.label} off for Buddy.`,
-      doneMessage: `${descriptor.label} is off. You can reconnect anytime.`,
+      logLabel: `disconnect ${descriptor.label}`,
+      startMessage: `Disconnecting ${descriptor.label}.`,
+      doneMessage: `${descriptor.label} is disconnected.`,
       failedMessage: `${descriptor.label} stayed connected because the disconnect did not finish. Try again.`,
     });
   }, [runAction, applyAccount]);

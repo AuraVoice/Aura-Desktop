@@ -191,6 +191,8 @@ export function ConnectorsPage() {
             Buddy will stop using it, but you can reconnect anytime.
             {confirmDisconnect === "github"
               && " Aura's access is removed on GitHub too. The Aura app stays installed on your repositories until you remove it there."}
+            {confirmDisconnect === "x"
+              && " The bookmarks Aura copied from X are deleted too."}
           </p>
           <div className="db-update-dialog-actions">
             <button

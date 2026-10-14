@@ -16,6 +16,10 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+### Fixed
+
+- Disconnecting Notion, LinkedIn or X on the Connectors page now really disconnects it, like Google Calendar, Gmail and GitHub already do. Connecting again starts from scratch in your browser, so you can pick a different account or workspace instead of Aura quietly reusing the old one. GitHub now always asks which account to use.
+
 ## [0.18.1] - 2026-10-13
 
 ### Added

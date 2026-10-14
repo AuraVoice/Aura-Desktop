@@ -333,8 +333,9 @@ export function enableNotion(): Promise<NotionConnectorStatus> {
   return postConnectorAction("/connectors/notion/enable", "Notion enable", parseNotionStatus);
 }
 
-export function disableNotion(): Promise<NotionConnectorStatus> {
-  return postConnectorAction("/connectors/notion/disable", "Notion disable", parseNotionStatus);
+/** Revokes at Notion and deletes the grant: the next on is a fresh authorization. */
+export function disconnectNotion(): Promise<NotionConnectorStatus> {
+  return postConnectorAction("/connectors/notion/disconnect", "Notion disconnect", parseNotionStatus);
 }
 
 export function enableAccountConnector(name: AccountConnectorName): Promise<AccountConnectorStatus> {
@@ -343,9 +344,11 @@ export function enableAccountConnector(name: AccountConnectorName): Promise<Acco
   );
 }
 
-export function disableAccountConnector(name: AccountConnectorName): Promise<AccountConnectorStatus> {
+/** Deletes the stored grant (X also revokes it), so turning the connector back
+ * on goes through the provider's sign-in again instead of reusing the token. */
+export function disconnectAccountConnector(name: AccountConnectorName): Promise<AccountConnectorStatus> {
   return postConnectorAction(
-    `/connectors/${ACCOUNT_CONNECTOR_PATHS[name]}/disable`, `${name} disable`, parseAccountStatus,
+    `/connectors/${ACCOUNT_CONNECTOR_PATHS[name]}/disconnect`, `${name} disconnect`, parseAccountStatus,
   );
 }
 
