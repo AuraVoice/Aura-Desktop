@@ -16,6 +16,8 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-10-13
+
 ### Added
 
 - Ask Aura in text chat to write an email and it now arrives as an email card instead of a block of text: a subject you can copy on its own, the message, your signature, a Copy email button, and Open in Gmail, which starts a new Gmail message with the subject and text already filled in. Set your signature in Settings > General > Email drafts; until you do, Aura signs with your first name.
@@ -36,9 +38,17 @@ was started and read like commit subjects rather than release notes.
 ### Changed
 
 - Meeting Notes now records meetings, classes and lectures up to 2 hours long, up from 1 hour.
+- A call recorded without a calendar event is named after what was said, like "Q4 pricing review with Acme", instead of "Google Meet" or "Zoom". Recordings made in person and uploaded files are named the same way. Notes you already have keep their names.
+- The recovery copy on your computer moved into each meeting's ⋯ menu: Export audio, Support bundle, Delete local audio, and Process now while a recording is still waiting to upload. The separate "Retained meeting recordings" panel is gone, and the ⋯ button only shows, and only clicks, when you hover a meeting or open its menu.
+- Record in person and Upload recording sit next to search in the Meetings toolbar, and shrink to icons while search is open so the toolbar stays on one line.
+- Coding agents setup shows the Claude Code, Cursor and Codex lines in one panel you switch between, with the whole line readable before you copy it. Connected keys are a simple list with Revoke beside each.
+- On the Connectors page Slack now comes before X, and X is last.
 
 ### Fixed
 
+- A recording shorter than 5 seconds, such as a call that ended right after Aura started, is thrown away: no notification, nothing uploaded, and no empty meeting in your list.
+- "Meeting recording ended. Aura is sending it for transcription." no longer appears when the recording failed and nothing is being sent.
+- A meeting where no one spoke no longer sends a "Your meeting insights are ready" notification.
 - The close button on the Meetings and Dictation search now closes an empty search box. It used to fold the box and snap it straight back open, which made the toolbar jump.
 - On Windows, double-tapping Left Ctrl on the onboarding "try your hotkey" screen now lights the tile and moves you on. It also starts a call while the dashboard or chat card is in front, where it used to do nothing.
 - A desktop task can no longer take an Allow you clicked on an approval card that had already timed out and use it as the answer to the next, different question. Every new question waits for its own answer.
