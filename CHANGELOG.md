@@ -16,6 +16,8 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-10-14
+
 ### Added
 
 - While a meeting is still recording, its page shows the conversation so far, filled in every five minutes, so you no longer stare at a progress card until the call ends.
