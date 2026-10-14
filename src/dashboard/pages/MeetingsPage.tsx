@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emitTo } from "@tauri-apps/api/event";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -54,6 +54,13 @@ import { fetchConnectors } from "../../lib/connectors";
 import type { PendingActionTool } from "../../lib/pendingActions";
 import { MeetingCaptureButtons, MeetingCaptureStatus, useMeetingCaptureModes } from "./MeetingCaptureModes";
 import { MeetingFollowUp } from "./MeetingFollowUp";
+import {
+  OTHERS_LABEL,
+  SpeakerNameInput,
+  speakerDisplayName,
+  WhoIsCard,
+  type WhoIsState,
+} from "./MeetingSpeakers";
 import { MeetingSendToSlack, MeetingShare } from "./MeetingShare";
 import {
   canExportSubtitles,
@@ -74,8 +81,10 @@ import {
   regenerateMeetingNote,
   restoreAiNote,
   retryMeeting,
+  matchMeetingCalendar,
   saveEditedNote,
   setMeetingPinned,
+  setSpeakerName,
   type EditedNote,
   type MeetingDoc,
   type MeetingKind,
@@ -91,9 +100,8 @@ import { ChipStrip } from "../components/RangeChips";
 import { RefreshIndicator } from "../components/RefreshIndicator";
 import { RowMenu, type RowMenuItem } from "../components/RowMenu";
 import { SlidingTabs, useTabStage } from "../components/SlidingTabs";
-import { shortDateTime } from "../format";
+import { durationCoarse, relativeTime, shortDateTime, timeOfDay } from "../format";
 import { useDashboardResource } from "../useDashboardResource";
-import { useMediaQuery } from "../useMediaQuery";
 
 type MeetingPane = "insights" | "transcript";
 
@@ -106,6 +114,8 @@ interface LocalRecording {
   finishedAtMs: number | null;
   retainLocalUntilMs: number | null;
   segmentCount: number;
+  uploadedCount: number;
+  durationMs: number;
   byteLength: number;
   exportable: boolean;
   deletionState: string | null;
@@ -199,6 +209,136 @@ function stateCopy(meeting: MeetingDoc, local?: LocalRecording): string {
   if (meeting.processingStage === "building_insights") return meetingNotes.buildingInsights;
   return meetingNotes.processing;
 }
+
+/** How often an open, still-processing meeting re-reads the server doc and the
+ *  device queue. Upload segments land every few seconds, so slower reads as frozen. */
+const PROGRESS_POLL_MS = 4_000;
+
+/** Which of the four steps (recorded, sent, transcribed, notes) is under way.
+ *  The server stage wins; without one, the device queue says whether the upload
+ *  is still running. */
+function progressStep(meeting: MeetingDoc, local?: LocalRecording): number {
+  if (meeting.status === "capturing") {
+    // The server stage reads "uploading" as soon as the first five minute
+    // segment lands mid-call, which ticked "Recorded" off while still
+    // recording. Only this device knows whether the recording has stopped.
+    return local && local.finishedAtMs !== null ? 1 : 0;
+  }
+  switch (meeting.processingStage) {
+    case "capturing":
+      return 0;
+    case "uploading":
+      return 1;
+    case "queued":
+    case "transcribing":
+      return 2;
+    case "building_insights":
+    case "quality_check":
+      return 3;
+    default:
+      if (meeting.status === "synthesizing") return 3;
+      if (local && local.uploadedCount < local.segmentCount) return 1;
+      return meeting.status === "uploaded" ? 2 : 1;
+  }
+}
+
+function MeetingProgress({ meeting, local }: { meeting: MeetingDoc; local?: LocalRecording }) {
+  const active = progressStep(meeting, local);
+  const total = local?.segmentCount ?? 0;
+  const sent = Math.min(local?.uploadedCount ?? 0, total);
+  const audio = local && local.durationMs > 0
+    ? meetingNotes.progressAudioLength(durationCoarse(local.durationMs / 1000))
+    : null;
+  const uploadDetail = total > 0
+    ? sent < total
+      ? meetingNotes.progressUploadCount(sent, total)
+      : meetingNotes.progressUploadConfirming(total)
+    : meetingNotes.progressUploadElsewhere;
+  const steps: { label: string; detail: string | null; fraction?: number }[] = [
+    {
+      label: meetingNotes.progressRecorded,
+      detail: active === 0 ? meetingNotes.progressRecordingTranscribing : audio,
+    },
+    {
+      label: meetingNotes.progressUpload,
+      detail: active === 1 ? uploadDetail : null,
+      fraction: active === 1 && total > 0 ? sent / total : undefined,
+    },
+    {
+      label: meetingNotes.progressTranscribe,
+      detail: active !== 2
+        ? null
+        : meeting.processingStage === "queued"
+          ? meetingNotes.progressQueued
+          : meetingNotes.progressTranscribing,
+    },
+    {
+      label: meetingNotes.progressNotes,
+      detail: active !== 3
+        ? null
+        : meeting.processingStage === "quality_check"
+          ? meetingNotes.progressChecking
+          : meetingNotes.progressWriting,
+    },
+  ];
+
+  return (
+    <>
+    <div className="db-meeting-progress" role="status" aria-live="polite">
+      <ol className="db-meeting-progress-steps">
+        {steps.map((step, index) => {
+          const phase = index < active ? "done" : index === active ? "active" : "pending";
+          return (
+            <li key={step.label} className={`db-meeting-progress-step is-${phase}`}>
+              <span className="db-meeting-progress-mark" aria-hidden="true">
+                {phase === "done" ? (
+                  <Check size={14} />
+                ) : phase === "active" ? (
+                  <LoaderCircle size={14} />
+                ) : null}
+              </span>
+              <div className="db-meeting-progress-body">
+                <span className="db-meeting-progress-label">{step.label}</span>
+                {step.detail && <span className="db-meeting-progress-detail">{step.detail}</span>}
+                {step.fraction !== undefined && (
+                  <span className="db-meeting-progress-bar" aria-hidden="true">
+                    <span style={{ width: `${Math.round(step.fraction * 100)}%` }} />
+                  </span>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+      <p className="db-meeting-progress-foot">
+        {meetingNotes.progressLastChange(relativeTime(meeting.updatedAt))}
+      </p>
+    </div>
+    {/* Outside the live region on purpose: a status announcement on every
+        poll must not read the whole conversation aloud. */}
+    {meeting.liveTranscript.length > 0 && (
+      <section className="db-meeting-live" aria-label={meetingNotes.liveTranscriptHeading(clockStamp(meeting.liveThroughMs / 1000))}>
+        <header className="db-meeting-live-head">
+          <h3>{meetingNotes.liveTranscriptHeading(clockStamp(meeting.liveThroughMs / 1000))}</h3>
+          <p>{meetingNotes.liveTranscriptNote}</p>
+        </header>
+        <MeetingTranscript
+          turns={meeting.liveTranscript}
+          jump={null}
+          speakerNames={meeting.speakerNames}
+          people={meeting.people}
+          onRename={NO_RENAME}
+          readOnly
+        />
+      </section>
+    )}
+    </>
+  );
+}
+
+/** Live labels can change before the note lands, and the server only accepts a
+ *  name for a label the published transcript uses, so the live view is read only. */
+const NO_RENAME = () => {};
 
 /** The list only mentions retention when it matters soon: a pinned note, or
  *  one that is deleted within two days. */
@@ -478,16 +618,35 @@ function MeetingNoteEditor({
   );
 }
 
-/** One transcript turn. Memoized so a chapter flash re-renders the two rows
- *  whose `flashing` flips, not every turn of a two hour meeting. */
+/** One transcript turn as a chat bubble: the user's own on the right, every
+ *  other speaker on the left. A run of turns from one speaker shows the name
+ *  once, above its first bubble, and the time once, under its last.
+ *  Memoized so a chapter flash re-renders the two rows whose `flashing`
+ *  flips, not every turn of a two hour meeting. */
 const TranscriptTurnRow = memo(function TranscriptTurnRow({
   turn,
   index,
   flashing,
+  first,
+  last,
+  name,
+  renaming,
+  onStartRename,
+  onRename,
+  onCancelRename,
+  readOnly,
 }: {
   turn: TranscriptTurn;
   index: number;
   flashing: boolean;
+  first: boolean;
+  last: boolean;
+  name: string;
+  renaming: boolean;
+  onStartRename: (index: number) => void;
+  onRename: (label: string, name: string) => void;
+  onCancelRename: () => void;
+  readOnly: boolean;
 }) {
   const stamp = turnStamp(turn.startS);
   // "You" is the device owner's microphone channel; the backend owns
@@ -495,31 +654,70 @@ const TranscriptTurnRow = memo(function TranscriptTurnRow({
   const mine = turn.speaker === "You";
   return (
     <article
-      className={`db-meeting-turn${mine ? " is-mine" : ""}${flashing ? " is-flash" : ""}`}
+      className={`db-meeting-turn ${mine ? "is-mine" : "is-theirs"}${first ? " is-first" : ""}${flashing ? " is-flash" : ""}`}
       data-turn={index}
     >
-      <header>
-        <span className="db-meeting-turn-speaker">{turn.speaker || "Speaker"}</span>
-        {stamp && <time className="db-meeting-turn-stamp">{stamp}</time>}
-      </header>
-      <p>{turn.text}</p>
+      {first && !mine && (
+        <header>
+          {readOnly ? (
+            <span className="db-meeting-turn-name">{name}</span>
+          ) : renaming ? (
+            <SpeakerNameInput
+              initial={name === turn.speaker ? "" : name}
+              label={turn.speaker}
+              onSave={(next) => onRename(turn.speaker, next)}
+              onCancel={onCancelRename}
+            />
+          ) : (
+            <button
+              type="button"
+              className="db-meeting-turn-speaker"
+              title={meetingNotes.renameSpeaker(name)}
+              onClick={() => onStartRename(index)}
+            >
+              {name}
+              <Pencil size={11} aria-hidden="true" />
+            </button>
+          )}
+        </header>
+      )}
+      <p className="db-meeting-bubble">{turn.text}</p>
+      {last && stamp && <time className="db-meeting-turn-stamp">{stamp}</time>}
     </article>
   );
 });
 
 /** Memoized: MeetingDetail's own state (menu, status, copy flash, busy) never
- *  changes `turns` or `jump`, so none of it reaches the transcript. */
+ *  changes `turns`, `jump` or the names, so none of it reaches the transcript. */
 const MeetingTranscript = memo(function MeetingTranscript({
   turns,
   jump,
+  speakerNames,
+  people,
+  onRename,
+  notice,
+  readOnly = false,
 }: {
   turns: TranscriptTurn[];
   /** A chapter click: scroll that turn into view and flash it. The nonce makes
    *  a second click on the same chapter move the view again. */
   jump: { index: number; nonce: number } | null;
+  speakerNames: Record<string, string>;
+  people: string[];
+  onRename: (label: string, name: string) => void;
+  /** The "who is Others" card, above the first bubble. */
+  notice?: ReactNode;
+  /** Speaker names shown as plain text, not rename buttons. */
+  readOnly?: boolean;
 }) {
   const listRef = useRef<HTMLDivElement | null>(null);
   const [flashIndex, setFlashIndex] = useState<number | null>(null);
+  const [renamingIndex, setRenamingIndex] = useState<number | null>(null);
+  const cancelRename = useCallback(() => setRenamingIndex(null), []);
+  const rename = useCallback((label: string, name: string) => {
+    setRenamingIndex(null);
+    onRename(label, name);
+  }, [onRename]);
 
   useEffect(() => {
     if (!jump) return;
@@ -535,10 +733,7 @@ const MeetingTranscript = memo(function MeetingTranscript({
 
   return (
     <div className="db-meeting-transcript">
-      <div className="db-meeting-transcript-head">
-        <h2>Transcript</h2>
-        <span>{turns.length} turns</span>
-      </div>
+      {notice}
       <div className="db-meeting-turns" ref={listRef}>
         {turns.map((turn, index) => (
           <TranscriptTurnRow
@@ -546,6 +741,14 @@ const MeetingTranscript = memo(function MeetingTranscript({
             turn={turn}
             index={index}
             flashing={flashIndex === index}
+            first={index === 0 || turns[index - 1].speaker !== turn.speaker}
+            last={index === turns.length - 1 || turns[index + 1].speaker !== turn.speaker}
+            name={speakerDisplayName(turn.speaker, speakerNames, people)}
+            renaming={renamingIndex === index}
+            onStartRename={setRenamingIndex}
+            onRename={rename}
+            onCancelRename={cancelRename}
+            readOnly={readOnly}
           />
         ))}
       </div>
@@ -568,6 +771,7 @@ function MeetingDetail({
   initialSecond,
   onBack,
   onListReload,
+  onLocalReload,
 }: {
   meeting: MeetingDoc;
   local?: LocalRecording;
@@ -575,6 +779,7 @@ function MeetingDetail({
   initialSecond?: number | null;
   onBack: () => void;
   onListReload: () => void;
+  onLocalReload: () => void;
 }) {
   const detail = useDashboardResource<MeetingDoc | null>(
     `meeting:${meeting.meetingId}`,
@@ -588,11 +793,26 @@ function MeetingDetail({
   }, [detail.data]);
   const current = updated ?? detail.data ?? meeting;
   const state = visualState(current, local);
+  // While the note is being made, keep both sources fresh so the steps move on
+  // their own; refresh the list once it lands so its card stops spinning too.
+  const reloadDetail = detail.reload;
+  const wasProcessing = useRef(state === "processing");
+  useEffect(() => {
+    if (state !== "processing") {
+      if (wasProcessing.current) onListReload();
+      wasProcessing.current = false;
+      return;
+    }
+    wasProcessing.current = true;
+    const timer = window.setInterval(() => {
+      reloadDetail();
+      onLocalReload();
+    }, PROGRESS_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [state, reloadDetail, onLocalReload, onListReload]);
   const [retrying, setRetrying] = useState(false);
   const [retryError, setRetryError] = useState(false);
-  // Wide enough for two readable columns; below it the panes take turns.
-  const stacked = useMediaQuery("(max-width: 1080px)");
-  const pane = useTabStage<MeetingPane>("insights");
+  const pane = useTabStage<MeetingPane>("transcript");
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState<"" | "save" | "pin" | "restore" | "regenerate" | "export">("");
   const [regeneratingKind, setRegeneratingKind] = useState<MeetingKind | null>(null);
@@ -601,16 +821,22 @@ function MeetingDetail({
   const [copied, setCopied] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [jump, setJump] = useState<{ index: number; nonce: number } | null>(null);
-  // One panel under the actions bar at a time: the follow-up email or a send.
-  const [panel, setPanel] = useState<null | "followUp" | PendingActionTool>(null);
+  // One panel under the actions bar at a time: a send to Notion or Slack.
+  const [panel, setPanel] = useState<null | PendingActionTool>(null);
+  // The follow-up email floats in its own compose card, so it stays open
+  // while the notes and transcript are read and other panels come and go.
+  const [followUpOpen, setFollowUpOpen] = useState(false);
   // Which destinations the user has connected; read once per opened meeting.
   const [connected, setConnected] = useState({ notion: false, slack: false });
+  // Null until read; decides whether "Others" is named automatically.
+  const [calendarConnected, setCalendarConnected] = useState<boolean | null>(null);
   useEffect(() => {
     let cancelled = false;
     fetchConnectors()
       .then((catalog) => {
         if (!cancelled) {
           setConnected({ notion: catalog.notion.enabled, slack: catalog.accounts.slack.enabled });
+          setCalendarConnected(catalog.googleCalendar.enabled);
         }
       })
       .catch((err) => logError("MeetingsPage: connector status", err));
@@ -621,6 +847,67 @@ function MeetingDetail({
 
   const note = current.note ? shownNote(current.note, current.editedNote) : null;
   const turns = current.note?.transcript ?? [];
+
+  // "Others" carries a real name: the user's own, else the invitees of the
+  // calendar event behind the meeting. An ad-hoc call was claimed without an
+  // event, so with Calendar connected Aura looks one up, once per meeting.
+  const meetingId = current.meetingId;
+  const [matching, setMatching] = useState(false);
+  const [whoIsDismissed, setWhoIsDismissed] = useState(false);
+  const othersUnnamed = state === "ready"
+    && turns.some((turn) => turn.speaker === OTHERS_LABEL)
+    && !current.speakerNames[OTHERS_LABEL]
+    && current.people.length === 0;
+  const matchCalendar = useCallback(async () => {
+    setMatching(true);
+    try {
+      setUpdated(await matchMeetingCalendar(meetingId));
+      reloadDetail();
+      onListReload();
+    } catch (err) {
+      if (err instanceof MeetingActionError && err.code === "calendar_not_connected") {
+        setCalendarConnected(false);
+      } else {
+        logError("MeetingsPage: calendar match", err);
+        setStatus({ tone: "error", text: actionErrorText(err) });
+      }
+    } finally {
+      setMatching(false);
+    }
+  }, [meetingId, reloadDetail, onListReload]);
+  const autoMatchedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!othersUnnamed || current.calendarMatch !== null || calendarConnected !== true) return;
+    if (autoMatchedRef.current === meetingId) return;
+    autoMatchedRef.current = meetingId;
+    void matchCalendar();
+  }, [othersUnnamed, current.calendarMatch, calendarConnected, meetingId, matchCalendar]);
+  const calendarJustConnected = useCallback(() => {
+    autoMatchedRef.current = null;
+    setCalendarConnected(true);
+  }, []);
+  const renameSpeaker = useCallback((label: string, name: string) => {
+    if (name === (current.speakerNames[label] ?? "")) return;
+    setStatus(null);
+    void setSpeakerName(meetingId, label, name)
+      .then((doc) => {
+        setUpdated(doc);
+        reloadDetail();
+      })
+      .catch((err) => {
+        logError("MeetingsPage: rename speaker", err);
+        setStatus({ tone: "error", text: actionErrorText(err) });
+      });
+  }, [meetingId, current.speakerNames, reloadDetail]);
+  const whoIs: WhoIsState | null = !othersUnnamed || whoIsDismissed
+    ? null
+    : matching
+      ? "checking"
+      : current.calendarMatch !== null
+        ? "no_event"
+        : calendarConnected === false
+          ? "connect"
+          : null;
   const dateLabel = shortDateTime(current.createdAt);
   const retention = retentionLabel(current);
   const canPin = current.pinned || current.expiresAt !== null;
@@ -732,7 +1019,7 @@ function MeetingDetail({
 
   const jumpToSecond = (startS: number) => {
     setJump({ index: chapterTurnIndex(turns, startS), nonce: Date.now() });
-    if (stacked && pane.tab !== "transcript") pane.switchTab("transcript");
+    if (pane.tab !== "transcript") pane.switchTab("transcript");
   };
 
   const openChapter = (startS: number) => {
@@ -834,7 +1121,7 @@ function MeetingDetail({
           <ArrowLeft size={17} /> Back to meetings
         </button>
         <RefreshIndicator
-          refreshing={detail.refreshing}
+          refreshing={detail.refreshing && state !== "processing"}
           stale={detail.stale || detail.error}
           cachedAt={detail.cachedAt}
           onRetry={detail.reload}
@@ -868,9 +1155,9 @@ function MeetingDetail({
           </button>
           <button
             type="button"
-            className={`db-secondary-btn${panel === "followUp" ? " is-active" : ""}`}
-            aria-pressed={panel === "followUp"}
-            onClick={() => setPanel(panel === "followUp" ? null : "followUp")}
+            className={`db-secondary-btn${followUpOpen ? " is-active" : ""}`}
+            aria-pressed={followUpOpen}
+            onClick={() => setFollowUpOpen((open) => !open)}
           >
             <Mail size={15} />
             {meetingFollowUpCopy.button}
@@ -912,13 +1199,13 @@ function MeetingDetail({
         </div>
       )}
 
-      {state === "ready" && note && panel === "followUp" && (
-        <MeetingFollowUp meetingId={current.meetingId} onClose={() => setPanel(null)} />
+      {state === "ready" && note && followUpOpen && (
+        <MeetingFollowUp meetingId={current.meetingId} onClose={() => setFollowUpOpen(false)} />
       )}
       {state === "ready" && note && panel === "slack_post_meeting" && (
         <MeetingSendToSlack meeting={current} onClose={() => setPanel(null)} />
       )}
-      {state === "ready" && note && panel && panel !== "followUp" && panel !== "slack_post_meeting" && (
+      {state === "ready" && note && panel && panel !== "slack_post_meeting" && (
         <MeetingShare meeting={current} tool={panel} onClose={() => setPanel(null)} />
       )}
       {pendingKind && (
@@ -965,17 +1252,17 @@ function MeetingDetail({
       {state === "ready" && note ? (
         turns.length === 0 ? (
           <div className="db-detail">{insights}</div>
-        ) : stacked ? (
+        ) : (
           <div className="db-detail">
             <SlidingTabs
               tabs={[
-                { value: "insights", label: "Insights", Icon: Sparkles },
                 {
                   value: "transcript",
                   label: "Transcript",
                   Icon: MessageSquareText,
                   count: turns.length,
                 },
+                { value: "insights", label: "Insights", Icon: Sparkles },
               ]}
               value={pane.tab}
               onChange={pane.switchTab}
@@ -985,7 +1272,22 @@ function MeetingDetail({
             <div className={`db-tab-stage is-${pane.transition}`}>
               {pane.renderedTab === "transcript" ? (
                 <div id="meeting-transcript-panel" role="tabpanel" aria-labelledby="meeting-transcript-tab">
-                  <MeetingTranscript turns={turns} jump={jump} />
+                  <MeetingTranscript
+                    turns={turns}
+                    jump={jump}
+                    speakerNames={current.speakerNames}
+                    people={current.people}
+                    onRename={renameSpeaker}
+                    notice={whoIs && (
+                      <WhoIsCard
+                        state={whoIs}
+                        time={timeOfDay(current.createdAt)}
+                        onConnected={calendarJustConnected}
+                        onSaveName={(name) => renameSpeaker(OTHERS_LABEL, name)}
+                        onDismiss={() => setWhoIsDismissed(true)}
+                      />
+                    )}
+                  />
                 </div>
               ) : (
                 <div id="meeting-insights-panel" role="tabpanel" aria-labelledby="meeting-insights-tab">
@@ -994,12 +1296,9 @@ function MeetingDetail({
               )}
             </div>
           </div>
-        ) : (
-          <div className="db-detail db-meeting-split">
-            {insights}
-            <MeetingTranscript turns={turns} jump={jump} />
-          </div>
         )
+      ) : state === "processing" ? (
+        <MeetingProgress meeting={current} local={local} />
       ) : (
         <div className={`db-meeting-state db-meeting-state-${state}`}>
           {state === "failed" ? <TriangleAlert size={20} /> : <LoaderCircle size={20} />}
@@ -1444,6 +1743,7 @@ export function MeetingsPage() {
           initialSecond={openSecond}
           onBack={() => setSelectedId(null)}
           onListReload={res.reload}
+          onLocalReload={local.loadRecordings}
         />
       ) : (
         <>

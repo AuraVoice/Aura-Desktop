@@ -92,6 +92,42 @@ export const meetingNotes = {
   processing: "Processing your meeting.",
   retryNow: "Retry now",
 
+  // Meetings page detail, while the note is being made
+  progressRecorded: "Recorded",
+  progressRecordingNow: "Recording now.",
+  progressRecordingTranscribing: "Recording now. The conversation shows up below every five minutes.",
+  liveTranscriptHeading: (through: string) => `So far, up to ${through}`,
+  liveTranscriptNote:
+    "Names can change once the notes are ready, when Aura matches voices across the whole meeting.",
+  progressAudioLength: (length: string) => `${length} of audio saved on this device.`,
+  progressUpload: "Sent to Aura",
+  progressUploadCount: (sent: number, total: number) =>
+    `${sent} of ${total} segment${total === 1 ? "" : "s"} sent.`,
+  progressUploadConfirming: (total: number) =>
+    `All ${total} segment${total === 1 ? "" : "s"} sent. Waiting for Aura to confirm.`,
+  progressUploadElsewhere: "Sending the recording.",
+  progressTranscribe: "Transcribed",
+  progressQueued: "Waiting for a transcription slot.",
+  progressTranscribing: "Turning the audio into a transcript.",
+  progressNotes: "Notes written",
+  progressWriting: "Writing the summary, action items and chapters.",
+  progressChecking: "Checking the notes against the transcript.",
+  progressLastChange: (when: string) => `Last change ${when}. This page updates on its own.`,
+
+  // Meetings page transcript: who the other side was
+  whoIsChecking: "Looking in your calendar for who was on this call...",
+  whoIsConnect: (time: string) =>
+    `Who is "Others"? Connect Google Calendar and Aura will name them from your ${time} event.`,
+  whoIsConnectButton: "Connect Google Calendar",
+  whoIsConnecting: "Finish connecting in your browser...",
+  whoIsNoEvent: (time: string) =>
+    `Your calendar doesn't say who was on this ${time} call. Type their name instead.`,
+  whoIsTypeName: "Type a name",
+  whoIsDismiss: "Dismiss",
+  renameSpeaker: (label: string) => `Rename ${label}`,
+  renamePlaceholder: "Their name",
+  you: "You",
+
   // Meetings page detail
   keyPointsHeading: "Key points",
   blockersHeading: "Blockers",
@@ -135,6 +171,11 @@ export const meetingKindLabels: Record<string, string> = {
 /** Why a meeting action was refused, keyed by the backend's detail.code. */
 const actionFailureCopy: Record<string, string> = {
   pin_limit_reached: "You can pin 3 notes. Unpin one first.",
+  speaker_name_too_long: "Keep the name under 60 characters.",
+  speaker_unknown: "That speaker isn't in this transcript any more. Reload the page.",
+  calendar_unavailable: "Aura couldn't read your calendar just now. Try again in a moment.",
+  // Never shown as an error line: the page turns it into the Connect card.
+  calendar_not_connected: "Google Calendar isn't connected.",
   meeting_expired: "This note has already been deleted.",
   meeting_not_found: "This note no longer exists.",
   meeting_not_ready: "This note isn't ready yet.",
@@ -208,6 +249,8 @@ export const meetingFollowUpCopy = {
   openGmail: "Open in Gmail",
   retry: "Try again",
   close: "Close",
+  minimize: "Minimize",
+  expand: "Expand",
 } as const;
 
 /** Send to Notion / Slack from the Meetings page. */

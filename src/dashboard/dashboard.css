@@ -6991,95 +6991,161 @@
   gap: 24px;
   padding-top: 24px;
 }
-/* Insights and transcript side by side. The detail already re-narrows itself
-   inside a full-width page shell, so widening it costs the page nothing. */
-.db-meeting-split {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: 32px;
-  align-items: start;
-}
+/* The transcript is its own tab at full width and scrolls with the page, so
+   the whole conversation reads top to bottom. */
 .db-meeting-transcript {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  padding-top: 24px;
+  padding-top: 18px;
 }
-/* The transcript scrolls against the note instead of pushing it off screen. */
 .db-meeting-turns {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  overflow-y: auto;
-  max-height: calc(100vh - 300px);
-  padding-right: 6px;
+  gap: 3px;
 }
-.db-meeting-transcript-head {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  padding-bottom: 9px;
-  background: var(--db-bg, transparent);
-}
-.db-meeting-transcript-head h2 {
-  margin: 0;
-  color: var(--db-text);
-  font-size: 13px;
-  font-weight: 700;
-}
-.db-meeting-transcript-head span {
-  color: var(--db-text-mute);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-/* A transcript row, not a chat bubble: speaker and time in a quiet header, the
-   speech as one paragraph the eye can run down. */
+/* The transcript as a chat: the user's own lines on the right, everyone else
+   on the left, like Swarm's bubbles. A run from one speaker is one group with
+   the name above its first bubble and the time under its last. */
 .db-meeting-turn {
-  padding: 9px 13px;
-  border-radius: 12px;
-  background: color-mix(in srgb, var(--db-text) 4%, transparent);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
 }
 .db-meeting-turn.is-mine {
-  background: color-mix(in srgb, var(--db-teal, #2fb3a3) 11%, transparent);
+  align-items: flex-end;
+}
+.db-meeting-turn.is-first {
+  margin-top: 12px;
+}
+.db-meeting-turn:first-child {
+  margin-top: 0;
 }
 .db-meeting-turn header {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
-  margin-bottom: 3px;
+  align-items: center;
+  margin: 0 0 4px 12px;
 }
 .db-meeting-turn-speaker {
-  color: var(--db-text-muted, var(--db-text-dim));
-  font-size: 11px;
-  font-weight: 650;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: var(--db-text-dim);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.db-meeting-turn-speaker svg {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.db-meeting-turn-speaker:hover,
+.db-meeting-turn-speaker:focus-visible {
+  background: rgba(63, 86, 78, 0.08);
+  color: var(--db-text);
+}
+.db-meeting-turn-speaker:hover svg,
+.db-meeting-turn-speaker:focus-visible svg {
+  opacity: 1;
+}
+.db-meeting-bubble {
+  max-width: min(68ch, 78%);
+  margin: 0;
+  padding: 9px 15px;
+  border: 1px solid rgba(63, 86, 78, 0.1);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 1px 2px rgba(63, 86, 78, 0.08);
+  color: var(--db-text);
+  font-size: 14px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.db-meeting-turn.is-mine .db-meeting-bubble {
+  border-color: rgba(47, 179, 163, 0.22);
+  background: rgba(47, 179, 163, 0.14);
+}
+/* Bubbles in a run hug each other on the speaker's side. */
+.db-meeting-turn.is-theirs:not(.is-first) .db-meeting-bubble {
+  border-top-left-radius: 6px;
+}
+.db-meeting-turn.is-mine:not(.is-first) .db-meeting-bubble {
+  border-top-right-radius: 6px;
 }
 .db-meeting-turn-stamp {
+  margin: 3px 12px 0;
   color: var(--db-text-mute);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
-.db-meeting-turn p {
-  margin: 0;
+.db-meeting-name-input {
+  min-width: 180px;
+  padding: 4px 9px;
+  border: 1px solid color-mix(in srgb, var(--db-teal, #2fb3a3) 60%, transparent);
+  border-radius: 8px;
+  outline: none;
+  background: rgba(255, 255, 255, 0.9);
   color: var(--db-text);
-  font-size: 13.5px;
-  line-height: 1.55;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
+  font: inherit;
+  font-size: 13px;
 }
-@media (max-width: 1080px) {
-  /* Single pane under the tab strip; it owns the page scroll again. */
-  .db-meeting-turns {
-    max-height: none;
-    overflow-y: visible;
-    padding-right: 0;
-  }
-  .db-meeting-transcript {
-    padding-top: 18px;
-  }
+/* Who is "Others": above the first bubble until the other side has a name. */
+.db-meeting-whois {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 12px;
+  margin-bottom: 18px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.88), rgba(232, 244, 241, 0.56));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 5px 14px rgba(63, 86, 78, 0.06);
+  color: var(--db-text-dim);
+}
+.db-meeting-whois > svg {
+  flex: 0 0 auto;
+  color: var(--db-teal-deep-a);
+}
+.db-meeting-whois p {
+  flex: 1 1 260px;
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.db-meeting-whois-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.db-meeting-whois-actions .db-primary-btn,
+.db-meeting-whois-actions .db-secondary-btn {
+  min-height: 30px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+.db-meeting-whois-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--db-text-mute);
+  cursor: pointer;
+}
+.db-meeting-whois-close:hover {
+  background: rgba(63, 86, 78, 0.08);
+  color: var(--db-text);
 }
 .db-meeting-section h2 {
   margin: 0 0 9px;
@@ -7181,6 +7247,141 @@
   color: #a33232;
   font-size: 12px !important;
 }
+/* The steps a meeting walks through before its note exists. Tokens only, so
+   the dark theme needs no twin. */
+.db-meeting-progress {
+  margin-top: 24px;
+  padding: 20px 22px;
+  border: 1px solid var(--db-border);
+  border-radius: 12px;
+  background: var(--db-surface);
+}
+.db-meeting-progress-steps {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.db-meeting-progress-step {
+  position: relative;
+  display: flex;
+  gap: 14px;
+  padding-bottom: 18px;
+}
+.db-meeting-progress-step:last-child {
+  padding-bottom: 0;
+}
+/* The rail joining one mark to the next. */
+.db-meeting-progress-step:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  top: 24px;
+  bottom: 2px;
+  left: 11px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--db-border);
+}
+.db-meeting-progress-step.is-done:not(:last-child)::before {
+  background: var(--db-teal);
+}
+.db-meeting-progress-mark {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--db-border);
+  border-radius: 50%;
+  box-sizing: border-box;
+}
+.db-meeting-progress-step.is-done .db-meeting-progress-mark {
+  border-color: var(--db-teal);
+  background: var(--db-teal);
+  color: var(--db-bg);
+}
+.db-meeting-progress-step.is-active .db-meeting-progress-mark {
+  border-color: transparent;
+  color: var(--db-teal);
+}
+.db-meeting-progress-step.is-active .db-meeting-progress-mark svg {
+  width: 20px;
+  height: 20px;
+  animation: db-meeting-spin 1.2s linear infinite;
+}
+.db-meeting-progress-body {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding-top: 2px;
+}
+.db-meeting-progress-label {
+  color: var(--db-text-mute);
+  font-size: 14px;
+  line-height: 20px;
+}
+.db-meeting-progress-step.is-done .db-meeting-progress-label {
+  color: var(--db-text-dim);
+}
+.db-meeting-progress-step.is-active .db-meeting-progress-label {
+  color: var(--db-text);
+  font-weight: 600;
+}
+.db-meeting-progress-detail {
+  color: var(--db-text-dim);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.db-meeting-progress-bar {
+  display: block;
+  max-width: 360px;
+  height: 4px;
+  margin-top: 4px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--db-border);
+}
+.db-meeting-progress-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--db-teal);
+  transition: width 400ms var(--db-ease);
+}
+.db-meeting-progress-foot {
+  margin: 18px 0 0;
+  padding-top: 14px;
+  border-top: 1px solid var(--db-border);
+  color: var(--db-text-mute);
+  font-size: 13px;
+}
+/* The conversation so far, under the steps while the meeting records. */
+.db-meeting-live {
+  margin-top: 20px;
+}
+.db-meeting-live-head h3 {
+  margin: 0;
+  color: var(--db-text);
+  font-size: 14px;
+  font-weight: 600;
+}
+.db-meeting-live-head p {
+  margin: 4px 0 12px;
+  color: var(--db-text-mute);
+  font-size: 13px;
+}
+/* A live speaker name: the same look as the rename button, but static text. */
+.db-meeting-turn-name {
+  display: inline-block;
+  padding: 2px 4px;
+  color: var(--db-text-dim);
+  font-size: 12px;
+  font-weight: 600;
+}
 @keyframes db-meeting-spin {
   to {
     transform: rotate(360deg);
@@ -7275,10 +7476,10 @@
   font-variant-numeric: tabular-nums;
   font-weight: 650;
 }
-.db-meeting-turn {
+.db-meeting-bubble {
   transition: box-shadow 0.4s ease;
 }
-.db-meeting-turn.is-flash {
+.db-meeting-turn.is-flash .db-meeting-bubble {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--db-teal, #2fb3a3) 55%, transparent);
 }
 .db-meeting-editor .db-meeting-section {
@@ -7322,25 +7523,157 @@
   font: inherit;
   font-size: 12px;
 }
-/* Draft follow-up: To, Subject and the email under the actions bar. */
-.db-meeting-follow-up {
+/* Draft follow-up: a mail-style compose card pinned to the window's bottom
+   right. It floats over varied page content, so it is one of the surfaces
+   allowed a backdrop blur. */
+.db-compose {
+  position: fixed;
+  right: 24px;
+  bottom: 0;
+  z-index: 60;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin: 14px 0 0;
+  width: min(500px, calc(100vw - 32px));
+  height: min(560px, calc(100vh - 96px));
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.82);
+  border-bottom: 0;
+  border-radius: 12px 12px 0 0;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(240, 248, 246, 0.92));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 12px 40px rgba(63, 86, 78, 0.18);
+  backdrop-filter: blur(18px);
+  animation: db-compose-in 220ms var(--db-ease) both;
 }
-.db-meeting-follow-up h2 {
-  margin: 0;
-  font-size: 14px;
+.db-compose.is-minimized {
+  height: auto;
+  width: min(300px, calc(100vw - 32px));
+}
+@keyframes db-compose-in {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+}
+.db-compose-head {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  padding: 6px 8px 6px 14px;
+  border-bottom: 1px solid rgba(63, 86, 78, 0.1);
+}
+.db-compose-title {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: var(--db-text);
+  font: inherit;
+  font-size: 13px;
   font-weight: 600;
+  text-align: left;
+  cursor: pointer;
 }
-.db-meeting-follow-up-field {
-  display: grid;
-  grid-template-columns: 64px 1fr;
+.db-compose-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  color: var(--db-text-dim);
+  cursor: pointer;
+}
+.db-compose-icon:hover {
+  background: rgba(63, 86, 78, 0.08);
+  color: var(--db-text);
+}
+.db-compose-field {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 10px;
+  margin: 0 14px;
+  border-bottom: 1px solid rgba(63, 86, 78, 0.1);
+  color: var(--db-text-mute);
+  font-size: 13px;
+}
+.db-compose-field input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 10px 0;
+  border: 0;
+  outline: none;
+  background: none;
+  color: var(--db-text);
+  font: inherit;
+  font-size: 13px;
+}
+.db-compose-field input::placeholder {
+  color: var(--db-text-mute);
+}
+.db-compose-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 12px 14px;
+  border: 0;
+  outline: none;
+  resize: none;
+  background: none;
+  color: var(--db-text);
+  font: inherit;
+  font-size: 13.5px;
+  line-height: 1.6;
+  scrollbar-width: none;
+}
+.db-compose-foot {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px 12px 14px;
+}
+.db-compose-send {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 8px 16px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--db-teal-deep-a);
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.db-compose-send:hover {
+  filter: brightness(1.08);
+}
+.db-compose-state {
+  display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
+  margin: 0;
+  padding: 16px 14px;
   color: var(--db-text-dim);
+  font-size: 13px;
+}
+.db-compose-state.is-error {
+  color: #a33232;
+}
+.db-compose-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--db-teal-deep-a);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
 }
 /* Settings > Data and privacy > Private meetings. */
 .db-setting-row.db-skip-words > span:first-child {

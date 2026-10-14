@@ -285,3 +285,67 @@
 :root[data-theme="dark"] .db-agent-revoke {
   color: var(--dk-danger);
 }
+/* Follow-up compose card: matte, a raised step over the page. */
+:root[data-theme="dark"] .db-compose {
+  border-color: var(--dk-border-strong);
+  background: var(--dk-popover-bg);
+  box-shadow: var(--dk-shadow-pop);
+  backdrop-filter: none;
+}
+:root[data-theme="dark"] .db-compose-head,
+:root[data-theme="dark"] .db-compose-field {
+  border-color: var(--dk-divider);
+}
+:root[data-theme="dark"] .db-compose-icon:hover {
+  background: var(--dk-hover);
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .db-compose-send {
+  background: var(--dk-text);
+  color: var(--dk-bg);
+}
+:root[data-theme="dark"] .db-compose-send:hover {
+  filter: brightness(0.92);
+}
+:root[data-theme="dark"] .db-compose-state.is-error {
+  color: var(--dk-danger);
+}
+:root[data-theme="dark"] .db-compose-link {
+  color: var(--dk-accent-text);
+}
+/* Meeting transcript bubbles and the who-is card: matte steps, accent only on
+   the user's own side. */
+:root[data-theme="dark"] .db-meeting-bubble {
+  border-color: var(--dk-border);
+  background: var(--dk-surface-2);
+  box-shadow: none;
+}
+:root[data-theme="dark"] .db-meeting-turn.is-mine .db-meeting-bubble {
+  border-color: var(--dk-accent-ring);
+  background: var(--dk-accent-soft);
+}
+:root[data-theme="dark"] .db-meeting-turn.is-flash .db-meeting-bubble {
+  box-shadow: 0 0 0 2px var(--dk-accent-ring);
+}
+:root[data-theme="dark"] .db-meeting-turn-speaker:hover,
+:root[data-theme="dark"] .db-meeting-turn-speaker:focus-visible {
+  background: var(--dk-hover);
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .db-meeting-name-input {
+  border-color: var(--dk-accent-ring);
+  background: var(--dk-field-bg);
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .db-meeting-whois {
+  border-color: var(--dk-glass-border);
+  background: var(--dk-glass-fill);
+  box-shadow: var(--dk-glass-inset), var(--dk-glass-shadow);
+}
+:root[data-theme="dark"] .db-meeting-whois > svg {
+  color: var(--dk-accent-text);
+}
+:root[data-theme="dark"] .db-meeting-whois-close:hover {
+  background: var(--dk-hover);
+  color: var(--dk-text);
+}

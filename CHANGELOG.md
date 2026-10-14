@@ -16,6 +16,23 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+### Added
+
+- While a meeting is still recording, its page shows the conversation so far, filled in every five minutes, so you no longer stare at a progress card until the call ends.
+
+### Fixed
+
+- Calls on laptop speakers no longer put the other person's words under "You" a second time. The microphone hears the speakers; Aura now recognises that copy and leaves only what you actually said.
+- A call with several people on the other side now tells them apart as Speaker A, Speaker B and so on, the same letter for the same person all meeting. A one to one call still reads You and Others.
+- The progress steps no longer tick "Recorded" off while the meeting is still recording.
+
+### Changed
+
+- A meeting that is still being processed now shows where it is: recorded, sent to Aura (with a live "12 of 30 segments" bar), transcribed, and notes written. The page updates on its own and opens the notes as soon as they are ready.
+- Draft follow-up now opens as a compose card in the bottom right corner, like a mail app, so you can read the notes and transcript while you edit the email. Minimize it to keep it around.
+- A meeting opens on its full transcript, drawn as a chat: your lines on the right, the other side's on the left. Insights is the second tab.
+- "Others" in a transcript now shows the real name of who you spoke with, taken from the calendar event at the time of the recording, even for calls you started recording yourself. Without Google Calendar connected, the transcript offers to connect it. Click any name to type your own.
+
 ## [0.19.0] - 2026-10-13
 
 ### Added

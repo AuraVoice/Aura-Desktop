@@ -220,6 +220,10 @@ pub struct LocalRecording {
     pub finished_at_ms: Option<i64>,
     pub retain_local_until_ms: Option<i64>,
     pub segment_count: u32,
+    /// Segments the server has acknowledged, for the detail page's upload bar.
+    pub uploaded_count: u32,
+    /// Recorded audio across all segments.
+    pub duration_ms: i64,
     pub byte_length: u64,
     pub exportable: bool,
     pub deletion_state: Option<String>,

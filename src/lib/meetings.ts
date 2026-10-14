@@ -192,6 +192,17 @@ export interface MeetingDoc {
   expiresAt: string | null;
   pinned: boolean;
   editedNote: EditedNote | null;
+  /** The user's own names for transcript speaker labels, {"Others": "Jane"}. */
+  speakerNames: Record<string, string>;
+  /** Invitees of the calendar event behind the meeting, as display names. */
+  people: string[];
+  /** Whether Aura already looked for a calendar event this meeting overlapped. */
+  calendarMatch: "matched" | "no_event" | null;
+  /** The conversation so far while recording, transcribed one five minute
+   *  segment at a time. Speaker labels are provisional; empty once ready. */
+  liveTranscript: TranscriptTurn[];
+  /** How much of the meeting liveTranscript covers, in milliseconds. */
+  liveThroughMs: number;
 }
 
 /** Reads a 402 body defensively, same discipline as voice.ts's parseCapDenial:
@@ -587,16 +598,14 @@ function parseEditedNote(raw: unknown): EditedNote | null {
   };
 }
 
-function parseNote(raw: unknown): MeetingNote | null {
-  if (typeof raw !== "object" || raw === null) return null;
-  const row = raw as Record<string, unknown>;
-  const transcript = Array.isArray(row.transcript)
-    && row.transcript.every((turn) => {
+function parseTurns(raw: unknown): TranscriptTurn[] {
+  return Array.isArray(raw)
+    && raw.every((turn) => {
       if (typeof turn !== "object" || turn === null) return false;
       const entry = turn as Record<string, unknown>;
       return typeof entry.speaker === "string" && typeof entry.text === "string";
     })
-    ? row.transcript.map((turn) => {
+    ? raw.map((turn) => {
         const entry = turn as Record<string, unknown>;
         return {
           speaker: entry.speaker as string,
@@ -606,6 +615,12 @@ function parseNote(raw: unknown): MeetingNote | null {
         };
       })
     : [];
+}
+
+function parseNote(raw: unknown): MeetingNote | null {
+  if (typeof raw !== "object" || raw === null) return null;
+  const row = raw as Record<string, unknown>;
+  const transcript = parseTurns(row.transcript);
   return {
     summary: typeof row.summary === "string" ? row.summary : "",
     decisions: strings(row.decisions),
@@ -662,6 +677,15 @@ const processingStages = new Set<MeetingProcessingStage>([
   "ready",
 ]);
 
+function parseSpeakerNames(raw: unknown): Record<string, string> {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  return Object.fromEntries(
+    Object.entries(raw).filter(
+      (entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].trim().length > 0,
+    ),
+  );
+}
+
 export function parseMeetingDoc(raw: unknown): MeetingDoc | null {
   if (typeof raw !== "object" || raw === null) return null;
   const row = raw as Record<string, unknown>;
@@ -712,6 +736,19 @@ export function parseMeetingDoc(raw: unknown): MeetingDoc | null {
     expiresAt: typeof row.expires_at === "string" ? row.expires_at : null,
     pinned: row.pinned === true,
     editedNote: parseEditedNote(row.edited_note),
+    speakerNames: parseSpeakerNames(row.speaker_names),
+    people: Array.isArray(row.people)
+      ? row.people.filter((name): name is string => typeof name === "string" && name.length > 0)
+      : [],
+    calendarMatch:
+      row.calendar_match === "matched" || row.calendar_match === "no_event"
+        ? row.calendar_match
+        : null,
+    liveTranscript: parseTurns(row.live_transcript),
+    liveThroughMs:
+      typeof row.live_through_ms === "number" && Number.isFinite(row.live_through_ms)
+        ? Math.max(0, row.live_through_ms)
+        : 0,
   };
 }
 
@@ -804,6 +841,26 @@ export async function setMeetingPinned(meetingId: string, pinned: boolean): Prom
   return meetingOrThrow(await meetingAction(
     `/meetings/${encodeURIComponent(meetingId)}/pin`,
     jsonInit("POST", { pinned }),
+    MEETING_ACTION_TIMEOUT_MS,
+  ));
+}
+
+/** Find the calendar event an ad-hoc recording overlapped and keep its
+ *  invitees. A miss comes back as calendarMatch "no_event", not an error;
+ *  "calendar_not_connected" is the error the page turns into a Connect card. */
+export async function matchMeetingCalendar(meetingId: string): Promise<MeetingDoc> {
+  return meetingOrThrow(await meetingAction(
+    `/meetings/${encodeURIComponent(meetingId)}/calendar-match`,
+    jsonInit("POST"),
+    MEETING_ACTION_TIMEOUT_MS,
+  ));
+}
+
+/** Name one transcript speaker label; an empty name clears it. */
+export async function setSpeakerName(meetingId: string, label: string, name: string): Promise<MeetingDoc> {
+  return meetingOrThrow(await meetingAction(
+    `/meetings/${encodeURIComponent(meetingId)}/speaker-names`,
+    jsonInit("PUT", { label, name }),
     MEETING_ACTION_TIMEOUT_MS,
   ));
 }

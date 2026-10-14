@@ -416,7 +416,15 @@ impl Store {
                         WHERE j.capture_run_id=r.capture_run_id
                         ORDER BY j.created_at_ms DESC LIMIT 1
                     ),
-                    r.last_error_code
+                    r.last_error_code,
+                    SUM(CASE WHEN EXISTS(
+                        SELECT 1 FROM upload_jobs u
+                        WHERE u.capture_run_id=s.capture_run_id
+                          AND u.seq=s.seq
+                          AND u.content_sha256=s.content_sha256
+                          AND u.state='succeeded'
+                    ) THEN 1 ELSE 0 END),
+                    COALESCE(SUM(s.duration_ms), 0)
                  FROM capture_runs r
                  LEFT JOIN segments s ON s.capture_run_id=r.capture_run_id
                  WHERE r.owner_uid=?1
@@ -436,6 +444,8 @@ impl Store {
                     finished_at_ms: row.get(5)?,
                     retain_local_until_ms: row.get(6)?,
                     segment_count: row.get::<_, i64>(7)? as u32,
+                    uploaded_count: row.get::<_, Option<i64>>(12)?.unwrap_or(0) as u32,
+                    duration_ms: row.get(13)?,
                     byte_length: row.get::<_, i64>(8)? as u64,
                     exportable: local_count > 0,
                     deletion_state: row.get(10)?,

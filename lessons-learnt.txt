@@ -2711,3 +2711,26 @@ Stop if one is in there. An answer can now only be read by the question it was c
 Justification: a deny must never turn into an allow. An untagged reply channel shared by several
 questions needs a drain at the point each question is asked, not only at the top of the loop.
 ================================================================================
+2026-10-14: Meeting Notes put the interviewer's words under "You", and one person under two names
+Problem: a 35 minute interview recorded on laptop speakers showed almost every interviewer line
+twice, once under "Others" and again under "You" slightly misheard ("end to end" as "head to
+end", "Vern" as "Farhan"), with the user's real replies fused into those echoed turns.
+Issue: the mic is opened as a plain shared-mode stream with no echo cancellation, so it records
+the speakers too, and synthesis named speakers by channel alone (channel 0 = You). The Deepgram
+module's docstring promised "perfect You vs Others attribution", which is only true on
+headphones. Calls were never diarized either, so several remote people were one "Others".
+Turning diarization on exposed a second trap: Deepgram's v2 diarizer split the single
+interviewer into two voices inside two of six segments, and a "voices in one segment stay
+apart" rule turned one person into Speaker A and Speaker B.
+Solution (juno-backend): echo.py aligns the mic's words against the loopback's words spoken at
+the same moment and drops the copy (2,560 echo words on this capture), using the diarized mic
+voice that is mostly echo as extra evidence. speakers.py embeds each diarized voice with
+WeSpeaker ResNet34 and links voices across segments by cosine similarity, thresholds taken from
+this capture (same person 0.907-0.979, different people at most 0.632), with no same-segment
+cannot-link. Each segment is also transcribed as it uploads, so the conversation exists before
+Stop.
+Justification: the loopback channel is an exact reference of what the speakers played, so the
+echo is recoverable after the fact, which also repairs recordings made before the fix. Splitting
+errs safer than merging: a split person can be renamed to one name, a merged pair cannot be
+told apart again.
+================================================================================

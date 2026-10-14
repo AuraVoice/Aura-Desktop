@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Check, Copy, LoaderCircle, Mail } from "lucide-react";
+import { Check, ChevronUp, Copy, LoaderCircle, Mail, Minus, X } from "lucide-react";
 import { trackEvent } from "../../lib/analytics";
 import { emailWithSignature, gmailComposeUrl, resolveEmailSignature } from "../../lib/emailDraft";
 import { logError } from "../../lib/log";
@@ -11,8 +12,9 @@ import { useAuth } from "../../state/AuthProvider";
 import { useGeneralSettings } from "../../state/useGeneralSettings";
 
 /** The Meetings page's "Draft follow-up": Aura writes the email from the note,
- *  the user edits it here, and Open in Gmail starts a new message with the
- *  invitees, subject and text filled in. Nothing is sent from Aura; the user
+ *  the user edits it in a compose card pinned to the window's bottom right,
+ *  and Open in Gmail starts a new message with the invitees, subject and text
+ *  filled in. Nothing is sent from Aura; the user
  *  presses Send in Gmail. */
 export function MeetingFollowUp({ meetingId, onClose }: { meetingId: string; onClose: () => void }) {
   const { user } = useAuth();
@@ -23,6 +25,7 @@ export function MeetingFollowUp({ meetingId, onClose }: { meetingId: string; onC
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [copied, setCopied] = useState(false);
+  const [minimized, setMinimized] = useState(false);
   const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
@@ -56,87 +59,121 @@ export function MeetingFollowUp({ meetingId, onClose }: { meetingId: string; onC
 
   const recipients = to.split(/[,;\s]+/).map((item) => item.trim()).filter((item) => item.includes("@"));
 
-  if (state === "drafting") {
-    return (
-      <p className="db-meeting-action-status" role="status">
-        <LoaderCircle size={15} className="db-meeting-spin" />
-        {copy.drafting}
-      </p>
-    );
-  }
-  if (state === "error") {
-    return (
-      <div className="db-meeting-action-status is-error" role="alert">
-        <span>{error}</span>
-        <button type="button" className="db-secondary-btn" onClick={() => setAttempt((n) => n + 1)}>
-          {copy.retry}
-        </button>
-        <button type="button" className="db-secondary-btn" onClick={onClose}>
-          {copy.close}
-        </button>
-      </div>
-    );
-  }
-  return (
-    <section className="db-meeting-follow-up" aria-label={copy.heading}>
-      <h2>{copy.heading}</h2>
-      <label className="db-meeting-follow-up-field">
-        <span>{copy.to}</span>
-        <input
-          className="db-meeting-editor-field"
-          value={to}
-          placeholder={copy.toPlaceholder}
-          onChange={(event) => setTo(event.target.value)}
-        />
-      </label>
-      <label className="db-meeting-follow-up-field">
-        <span>{copy.subject}</span>
-        <input
-          className="db-meeting-editor-field"
-          value={subject}
-          onChange={(event) => setSubject(event.target.value)}
-        />
-      </label>
-      <textarea
-        className="db-meeting-editor-field"
-        rows={Math.min(18, Math.max(8, body.split("\n").length + 1))}
-        value={body}
-        aria-label={copy.body}
-        onChange={(event) => setBody(event.target.value)}
-      />
-      <div className="db-meeting-editor-actions">
-        <button type="button" className="db-secondary-btn" onClick={onClose}>
-          {copy.close}
+  const copyDraft = () => {
+    void writeText(subject ? `${subject}
+
+${body}` : body)
+      .then(() => {
+        setCopied(true);
+        window.setTimeout(() => setCopied(false), 1500);
+      })
+      .catch((err) => logError("MeetingFollowUp: copy", err));
+  };
+
+  const card = (
+    <section
+      className={`db-compose${minimized ? " is-minimized" : ""}`}
+      role="dialog"
+      aria-label={copy.heading}
+    >
+      <header className="db-compose-head">
+        <button
+          type="button"
+          className="db-compose-title"
+          onClick={() => setMinimized((value) => !value)}
+          aria-expanded={!minimized}
+        >
+          {copy.heading}
         </button>
         <button
           type="button"
-          className="db-secondary-btn"
-          onClick={() => {
-            void writeText(subject ? `${subject}\n\n${body}` : body)
-              .then(() => {
-                setCopied(true);
-                window.setTimeout(() => setCopied(false), 1500);
-              })
-              .catch((err) => logError("MeetingFollowUp: copy", err));
-          }}
+          className="db-compose-icon"
+          title={minimized ? copy.expand : copy.minimize}
+          aria-label={minimized ? copy.expand : copy.minimize}
+          onClick={() => setMinimized((value) => !value)}
         >
-          {copied ? <Check size={15} /> : <Copy size={15} />}
-          {copied ? copy.copied : copy.copy}
+          {minimized ? <ChevronUp size={16} /> : <Minus size={16} />}
         </button>
         <button
           type="button"
-          className="db-primary-btn"
-          onClick={() => {
-            trackEvent("meeting_follow_up_opened", { recipients: recipients.length });
-            void openUrl(gmailComposeUrl(subject, body, recipients)).catch((err) =>
-              logError("MeetingFollowUp: open gmail", err),
-            );
-          }}
+          className="db-compose-icon"
+          title={copy.close}
+          aria-label={copy.close}
+          onClick={onClose}
         >
-          <Mail size={15} />
-          {copy.openGmail}
+          <X size={16} />
         </button>
-      </div>
+      </header>
+
+      {!minimized && state === "drafting" && (
+        <p className="db-compose-state" role="status">
+          <LoaderCircle size={15} className="db-meeting-spin" />
+          {copy.drafting}
+        </p>
+      )}
+      {!minimized && state === "error" && (
+        <div className="db-compose-state is-error" role="alert">
+          <span>{error}</span>
+          <button type="button" className="db-compose-link" onClick={() => setAttempt((n) => n + 1)}>
+            {copy.retry}
+          </button>
+        </div>
+      )}
+      {!minimized && state === "ready" && (
+        <>
+          <label className="db-compose-field">
+            <span>{copy.to}</span>
+            <input
+              value={to}
+              placeholder={copy.toPlaceholder}
+              onChange={(event) => setTo(event.target.value)}
+            />
+          </label>
+          <label className="db-compose-field">
+            <span className="db-sr-only">{copy.subject}</span>
+            <input
+              value={subject}
+              placeholder={copy.subject}
+              onChange={(event) => setSubject(event.target.value)}
+            />
+          </label>
+          <textarea
+            className="db-compose-body"
+            value={body}
+            aria-label={copy.body}
+            onChange={(event) => setBody(event.target.value)}
+          />
+          <footer className="db-compose-foot">
+            <button
+              type="button"
+              className="db-compose-send"
+              onClick={() => {
+                trackEvent("meeting_follow_up_opened", { recipients: recipients.length });
+                void openUrl(gmailComposeUrl(subject, body, recipients)).catch((err) =>
+                  logError("MeetingFollowUp: open gmail", err),
+                );
+              }}
+            >
+              <Mail size={15} />
+              {copy.openGmail}
+            </button>
+            <button
+              type="button"
+              className="db-compose-icon"
+              title={copied ? copy.copied : copy.copy}
+              aria-label={copied ? copy.copied : copy.copy}
+              onClick={copyDraft}
+            >
+              {copied ? <Check size={16} /> : <Copy size={16} />}
+            </button>
+          </footer>
+        </>
+      )}
     </section>
   );
+
+  // Portaled into .db-app so it floats over the page like a mail compose
+  // window and keeps the dashboard's tokens and hidden scrollbars.
+  const host = document.querySelector(".db-app") ?? document.body;
+  return createPortal(card, host);
 }
