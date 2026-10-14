@@ -135,6 +135,8 @@ export function MeetingCaptureButtons({ modes }: { modes: CaptureModes }) {
       <button
         type="button"
         className="db-secondary-btn"
+        title={copy.inPerson}
+        aria-label={copy.inPerson}
         onClick={() => {
           trackEvent("meeting_in_person_requested", {});
           void emitTo("main", CAPTURE_IN_PERSON_REQUESTED).catch((err) =>
@@ -143,16 +145,18 @@ export function MeetingCaptureButtons({ modes }: { modes: CaptureModes }) {
         }}
       >
         <Users size={15} />
-        {copy.inPerson}
+        <span className="db-meeting-capture-label">{copy.inPerson}</span>
       </button>
       <button
         type="button"
         className="db-secondary-btn"
+        title={copy.upload}
+        aria-label={copy.upload}
         disabled={phase === "preparing" || phase === "claiming"}
         onClick={() => inputRef.current?.click()}
       >
         <Upload size={15} />
-        {copy.upload}
+        <span className="db-meeting-capture-label">{copy.upload}</span>
       </button>
       <input
         ref={inputRef}

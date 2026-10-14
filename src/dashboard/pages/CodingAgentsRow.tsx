@@ -43,6 +43,7 @@ export function CodingAgentsRow() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState<string | null>(null);
+  const [agent, setAgent] = useState(0);
 
   const load = useCallback(() => {
     listPersonalTokens()
@@ -60,6 +61,7 @@ export function CodingAgentsRow() {
     try {
       const minted = await mintPersonalToken("Coding agent");
       setFresh(minted.token);
+      setAgent(0);
       trackEvent("coding_agent_token_created", {});
       load();
     } catch (err) {
@@ -107,33 +109,57 @@ export function CodingAgentsRow() {
           <h2>Coding agents</h2>
         </div>
         <p>Let Claude Code, Cursor or Codex read your meeting notes. Read only, and you can revoke it anytime.</p>
-        {fresh && (
-          <div className="db-coding-agents-setup">
-            <p className="db-connector-attention">Copy one of these now. Aura shows this key once.</p>
-            {agentSetup(fresh).map(({ agent, text }) => (
-              <div key={agent} className="db-coding-agents-line">
-                <span>{agent}</span>
-                <code>{text}</code>
-                <button type="button" className="db-secondary-btn" onClick={() => copy(agent, text)}>
-                  {copied === agent ? <Check size={14} /> : <Copy size={14} />}
-                  {copied === agent ? "Copied" : "Copy"}
-                </button>
+        {fresh && (() => {
+          const setups = agentSetup(fresh);
+          const shown = setups[agent] ?? setups[0];
+          return (
+            <div className="db-agent-setup">
+              <p className="db-connector-attention">Copy this now. Aura shows the key only once.</p>
+              <div className="db-agent-terminal">
+                <div className="db-agent-terminal-bar" role="tablist" aria-label="Coding agent">
+                  {setups.map((setup, index) => (
+                    <button
+                      key={setup.agent}
+                      type="button"
+                      role="tab"
+                      aria-selected={index === agent}
+                      className={index === agent ? "db-agent-tab is-active" : "db-agent-tab"}
+                      onClick={() => setAgent(index)}
+                    >
+                      {setup.agent}
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    className="db-agent-copy"
+                    aria-label={`Copy the ${shown.agent} setup`}
+                    onClick={() => copy(shown.agent, shown.text)}
+                  >
+                    {copied === shown.agent ? <Check size={14} /> : <Copy size={14} />}
+                    {copied === shown.agent ? "Copied" : "Copy"}
+                  </button>
+                </div>
+                <pre className="db-agent-code">{shown.text}</pre>
               </div>
-            ))}
-            <button type="button" className="db-secondary-btn" onClick={() => setFresh(null)}>
-              Done
-            </button>
-          </div>
-        )}
+              <button type="button" className="db-agent-done" onClick={() => setFresh(null)}>
+                Done, hide the key
+              </button>
+            </div>
+          );
+        })()}
         {tokens && tokens.length > 0 && (
-          <ul className="db-coding-agents-list">
+          <ul className="db-agent-tokens">
             {tokens.map((token) => (
               <li key={token.id}>
-                <span>
-                  {token.label}, made {shortDate(token.createdAt)}
-                  {token.lastUsedAt ? `, last used ${shortDate(token.lastUsedAt)}` : ", not used yet"}
+                <span className="db-agent-token-dot" aria-hidden="true" />
+                <span className="db-agent-token-copy">
+                  <strong>{token.label}</strong>
+                  <span>
+                    Made {shortDate(token.createdAt)}
+                    {token.lastUsedAt ? `, last used ${shortDate(token.lastUsedAt)}` : ", not used yet"}
+                  </span>
                 </span>
-                <button type="button" className="db-secondary-btn" disabled={busy} onClick={() => void revoke(token.id)}>
+                <button type="button" className="db-agent-revoke" disabled={busy} onClick={() => void revoke(token.id)}>
                   Revoke
                 </button>
               </li>

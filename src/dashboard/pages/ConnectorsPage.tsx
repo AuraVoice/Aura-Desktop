@@ -128,6 +128,8 @@ export function ConnectorsPage() {
             }}
           />
 
+          <CodingAgentsRow />
+
           {ACCOUNT_CONNECTORS.map((descriptor) => (
             <AccountConnectorRow
               key={descriptor.name}
@@ -149,8 +151,6 @@ export function ConnectorsPage() {
               onSync={() => void connectors.syncXBookmarks()}
             />
           ))}
-
-          <CodingAgentsRow />
         </section>
       )}
 

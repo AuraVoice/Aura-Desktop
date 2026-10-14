@@ -41,38 +41,6 @@
 }
 
 /* ── Local recordings ── */
-:root[data-theme="dark"] .db-local-recordings {
-  border-color: var(--dk-glass-border);
-  background: var(--dk-glass-fill);
-  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.3), var(--dk-glass-inset);
-}
-:root[data-theme="dark"] .db-local-recording {
-  border-color: var(--dk-glass-border);
-  background: rgba(255, 255, 255, 0.03);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2), var(--dk-glass-inset);
-}
-:root[data-theme="dark"] .db-local-warning {
-  color: var(--dk-warning);
-}
-:root[data-theme="dark"] .db-local-recording-actions .db-primary-btn {
-  border-color: var(--dk-border-strong);
-  background: var(--dk-active);
-  box-shadow: 0 8px 18px rgba(0, 0, 0, 0.35), var(--dk-glass-inset);
-}
-:root[data-theme="dark"] .db-local-recording-actions .db-primary-btn:hover:not(:disabled) {
-  background: #2a2a2e;
-  box-shadow: var(--db-shadow-md);
-}
-:root[data-theme="dark"] .db-local-recording-actions .db-secondary-btn {
-  border-color: var(--dk-glass-border);
-  background: rgba(255, 255, 255, 0.05);
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.2), var(--dk-glass-inset);
-}
-:root[data-theme="dark"] .db-local-recording-actions .db-secondary-btn:hover:not(:disabled) {
-  border-color: var(--dk-glass-border-hover);
-  background: rgba(255, 255, 255, 0.09);
-  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.28), var(--dk-glass-inset);
-}
 :root[data-theme="dark"] .db-local-delete {
   border-color: rgba(255, 138, 128, 0.26);
   background: var(--dk-danger-soft);
@@ -311,4 +279,9 @@
 :root[data-theme="dark"] .db-browser-agent-trace th,
 :root[data-theme="dark"] .db-browser-agent-trace td {
   border-bottom-color: var(--dk-border);
+}
+
+/* ── Coding agents: Revoke's light-mode red is too dark on black ── */
+:root[data-theme="dark"] .db-agent-revoke {
+  color: var(--dk-danger);
 }

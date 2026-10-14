@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { memo, useState, type ReactNode } from "react";
 import type { IconComponent } from "./channelIcons";
 import { RowMenu, type RowMenuItem } from "./RowMenu";
 
@@ -23,8 +23,10 @@ export interface CardModel {
 /** Fixed, presentational card shell. The whole card is the open target, so it
  * is a real <button> (an ARIA-role div would be swallowed by the overlay drag
  * region rules and by keyboard users). Media, badge, title, meta and preview
- * are all populated from the `model` prop - no per-kind branching here. */
-export function DashboardCard({
+ * are all populated from the `model` prop - no per-kind branching here.
+ * Memoized: a page that keeps `model`, `onOpen` and `style` stable re-renders
+ * no cards when its own unrelated state (a search box) changes. */
+export const DashboardCard = memo(function DashboardCard({
   model,
   onOpen,
   style,
@@ -76,7 +78,7 @@ export function DashboardCard({
       </div>
     </div>
   );
-}
+});
 
 /** Image with a fixed aspect ratio (no layout shift) that fades in on load and
  * shows a shimmer until it decodes. A null URL (e.g. a cache-seeded save before

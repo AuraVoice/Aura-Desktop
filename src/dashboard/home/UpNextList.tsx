@@ -6,6 +6,7 @@ import { getMeetingBrief, type MeetingBrief } from "../../lib/dashboardApi";
 import { logError } from "../../lib/log";
 import { timeOfDay } from "../format";
 import { meetingPath } from "../pages/MeetingsPage";
+import { useDashboardScopeUid } from "../useDashboardResource";
 
 const MAX_EVENTS = 4;
 const JOIN_LEAD_MS = 10 * 60_000;
@@ -85,21 +86,24 @@ export function UpNextList({
   const events = upcoming.slice(0, MAX_EVENTS);
   const hidden = upcoming.length - events.length;
 
-  // One brief per shown event, fetched once per set of events. Failures and
-  // empty briefs simply show nothing.
+  // One brief per shown event, fetched once per set of events and cached
+  // across visits (getMeetingBrief). Failures and empty briefs show nothing.
+  const uid = useDashboardScopeUid();
   const [briefs, setBriefs] = useState<Record<string, MeetingBrief>>({});
   const eventKey = events.map((event) => event.id).join("|");
   useEffect(() => {
     if (!eventKey) return;
-    const controller = new AbortController();
+    let cancelled = false;
     void Promise.all(
-      eventKey.split("|").map(async (id) => [id, await getMeetingBrief(id, controller.signal)] as const),
+      eventKey.split("|").map(async (id) => [id, await getMeetingBrief(uid, id)] as const),
     ).then((pairs) => {
-      if (controller.signal.aborted) return;
+      if (cancelled) return;
       setBriefs(Object.fromEntries(pairs.filter((pair): pair is readonly [string, MeetingBrief] => pair[1] !== null)));
     });
-    return () => controller.abort();
-  }, [eventKey]);
+    return () => {
+      cancelled = true;
+    };
+  }, [uid, eventKey]);
 
   return (
     <section className="db-home-panel" aria-labelledby="db-home-upnext-title">

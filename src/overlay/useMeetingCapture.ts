@@ -16,6 +16,7 @@ import { sameCallFamily } from "../lib/meetingCallFamily";
 import {
   claimMeeting,
   completeMeeting,
+  deleteMeeting,
   MeetingCapError,
   MeetingClaimConflictError,
   MeetingTransportError,
@@ -138,6 +139,10 @@ interface CaptureStatePayload {
   paused: boolean;
   reason: string;
   startedAtMs: number | null;
+  /** On a stop: the run is queued to upload, so the capture-ended toast is true. */
+  queuedForUpload: boolean;
+  /** On a stop: under 5 s, so Rust already deleted it locally and nothing uploads. */
+  discarded: boolean;
 }
 
 // Same transport normalization as useScreenSight's asArrayBuffer: the IPC
@@ -867,12 +872,26 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
               setTimeout(() => void pump(), REJOIN_HOLD_MS + 1000);
             }
             const completedMeetingId = payload.meetingId;
-            void sendMeetingCaptureEndedNotification()
-              .catch((err) => logError("useMeetingCapture: capture-end notification", err))
-              .finally(() => {
-                endNotificationPendingRef.current.delete(completedMeetingId);
-                void pump();
-              });
+            if (payload.discarded) {
+              // A blip, not a meeting: its claim is the only trace on the
+              // server, so remove it rather than leave a card stuck capturing.
+              endNotificationPendingRef.current.delete(completedMeetingId);
+              trackEvent("meeting_capture_discarded", {});
+              void deleteMeeting(completedMeetingId).catch((err) =>
+                logError("useMeetingCapture: delete discarded meeting", err),
+              );
+            } else if (payload.queuedForUpload) {
+              void sendMeetingCaptureEndedNotification()
+                .catch((err) => logError("useMeetingCapture: capture-end notification", err))
+                .finally(() => {
+                  endNotificationPendingRef.current.delete(completedMeetingId);
+                  void pump();
+                });
+            } else {
+              // Nothing is on its way to the server, so the toast would lie.
+              endNotificationPendingRef.current.delete(completedMeetingId);
+              void pump();
+            }
           }
           if (payload.reason === "capture_failed") {
             trackEvent("meeting_capture_failed", {});

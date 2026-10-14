@@ -39,6 +39,7 @@ was started and read like commit subjects rather than release notes.
 
 ### Fixed
 
+- The close button on the Meetings and Dictation search now closes an empty search box. It used to fold the box and snap it straight back open, which made the toolbar jump.
 - On Windows, double-tapping Left Ctrl on the onboarding "try your hotkey" screen now lights the tile and moves you on. It also starts a call while the dashboard or chat card is in front, where it used to do nothing.
 - A desktop task can no longer take an Allow you clicked on an approval card that had already timed out and use it as the answer to the next, different question. Every new question waits for its own answer.
 - Disconnecting Notion, LinkedIn or X on the Connectors page now really disconnects it, like Google Calendar, Gmail and GitHub already do. Connecting again starts from scratch in your browser, so you can pick a different account or workspace instead of Aura quietly reusing the old one. GitHub now always asks which account to use.

@@ -167,7 +167,18 @@ pub struct CaptureStatePayload {
     pub started_at_ms: Option<i64>,
     pub paused: bool,
     pub reason: String,
+    /// Only on a stop: the run passed its integrity check and its completion
+    /// job is queued, so "sending it for transcription" is true.
+    pub queued_for_upload: bool,
+    /// Only on a stop: the whole meeting was shorter than MIN_KEPT_CAPTURE_MS,
+    /// so its local audio is already being deleted and nothing will upload.
+    pub discarded: bool,
 }
+
+/// Under this the capture is a blip (a call detected and gone, a misclick),
+/// not a meeting. The duration is the meeting's whole timeline, so a short
+/// rejoin of a long meeting is never discarded.
+const MIN_KEPT_CAPTURE_MS: i64 = 5_000;
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -479,6 +490,8 @@ pub async fn start_meeting_capture(
                 started_at_ms: Some(started_at_ms),
                 paused: false,
                 reason: "started".to_string(),
+                queued_for_upload: false,
+                discarded: false,
             },
         );
 
@@ -1150,6 +1163,8 @@ pub(crate) fn notify_paused(app: &AppHandle, paused: bool, reason: &str) {
                     started_at_ms: Some(active.started_at_ms),
                     paused,
                     reason: reason.to_string(),
+                    queued_for_upload: false,
+                    discarded: false,
                 })
             }
             None => None,
@@ -1178,6 +1193,8 @@ pub(crate) fn notify_device_rebound(app: &AppHandle) {
             started_at_ms: Some(active.started_at_ms),
             paused: active.paused,
             reason: "device_rebound".to_string(),
+            queued_for_upload: false,
+            discarded: false,
         })
     };
     if let Some(payload) = payload {
@@ -1209,6 +1226,24 @@ pub(crate) fn finalize_capture(
             "meeting: durable finalization failed meeting={meeting_id} run={capture_run_id} fence={capture_fence}: {error}"
         );
     }
+    // Deleting cancels the run's upload and completion jobs in the same
+    // transaction, so a blip never reaches the server as audio.
+    let discarded = total_duration_ms < MIN_KEPT_CAPTURE_MS
+        && match queue::request_local_deletion(
+            app,
+            owner_uid,
+            meeting_id,
+            capture_run_id,
+            &run.runtime_instance_id,
+        ) {
+            Ok(()) => true,
+            Err(error) => {
+                error!(
+                    "meeting: could not discard short capture meeting={meeting_id} run={capture_run_id}: {error}"
+                );
+                false
+            }
+        };
     {
         let handle = app.state::<MeetingCaptureHandle>();
         let mut guard = handle.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -1237,6 +1272,8 @@ pub(crate) fn finalize_capture(
             started_at_ms: Some(started_at_ms),
             paused: false,
             reason: final_reason.to_string(),
+            queued_for_upload: persistence.is_ok() && !discarded,
+            discarded,
         },
     );
     persistence.map(|_| ())

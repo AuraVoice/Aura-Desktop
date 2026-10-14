@@ -71,7 +71,12 @@ export function ExpandingSearch({
         aria-label={open ? "Close search" : label}
         aria-expanded={open}
         aria-controls={inputId}
-        onClick={() => (open ? close(false) : setOpen(true))}
+        // Keep focus in the input on press. Otherwise mousedown blurs an empty
+        // field, onBlur closes it, and the click then sees `open` false and
+        // reopens it: the close button bounced the field instead of closing.
+        // Focus goes to the toggle on close, never the now-hidden input.
+        onMouseDown={(event) => event.preventDefault()}
+        onClick={() => (open ? close(true) : setOpen(true))}
       >
         {open ? <X size={17} /> : <Search size={17} />}
       </button>

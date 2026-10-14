@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emitTo } from "@tauri-apps/api/event";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
@@ -13,7 +13,6 @@ import {
   FileDown,
   FileJson,
   FileText,
-  HardDrive,
   Hash,
   LoaderCircle,
   Mail,
@@ -215,6 +214,7 @@ function meetingToCard(
   meeting: MeetingDoc,
   local: LocalRecording | undefined,
   onDelete: (meeting: MeetingDoc) => void,
+  localItems: RowMenuItem[],
 ): CardModel {
   const state = visualState(meeting, local);
   return {
@@ -229,6 +229,7 @@ function meetingToCard(
         ? meeting.note?.summary || meetingNotes.processing
         : stateCopy(meeting, local),
     menu: [
+      ...localItems,
       {
         label: "Delete this recording",
         Icon: Trash2,
@@ -477,7 +478,38 @@ function MeetingNoteEditor({
   );
 }
 
-function MeetingTranscript({
+/** One transcript turn. Memoized so a chapter flash re-renders the two rows
+ *  whose `flashing` flips, not every turn of a two hour meeting. */
+const TranscriptTurnRow = memo(function TranscriptTurnRow({
+  turn,
+  index,
+  flashing,
+}: {
+  turn: TranscriptTurn;
+  index: number;
+  flashing: boolean;
+}) {
+  const stamp = turnStamp(turn.startS);
+  // "You" is the device owner's microphone channel; the backend owns
+  // both labels, so this is the one comparison the client may make.
+  const mine = turn.speaker === "You";
+  return (
+    <article
+      className={`db-meeting-turn${mine ? " is-mine" : ""}${flashing ? " is-flash" : ""}`}
+      data-turn={index}
+    >
+      <header>
+        <span className="db-meeting-turn-speaker">{turn.speaker || "Speaker"}</span>
+        {stamp && <time className="db-meeting-turn-stamp">{stamp}</time>}
+      </header>
+      <p>{turn.text}</p>
+    </article>
+  );
+});
+
+/** Memoized: MeetingDetail's own state (menu, status, copy flash, busy) never
+ *  changes `turns` or `jump`, so none of it reaches the transcript. */
+const MeetingTranscript = memo(function MeetingTranscript({
   turns,
   jump,
 }: {
@@ -508,29 +540,18 @@ function MeetingTranscript({
         <span>{turns.length} turns</span>
       </div>
       <div className="db-meeting-turns" ref={listRef}>
-        {turns.map((turn, index) => {
-          const stamp = turnStamp(turn.startS);
-          // "You" is the device owner's microphone channel; the backend owns
-          // both labels, so this is the one comparison the client may make.
-          const mine = turn.speaker === "You";
-          return (
-            <article
-              className={`db-meeting-turn${mine ? " is-mine" : ""}${flashIndex === index ? " is-flash" : ""}`}
-              key={`${index}:${turn.startS ?? ""}`}
-              data-turn={index}
-            >
-              <header>
-                <span className="db-meeting-turn-speaker">{turn.speaker || "Speaker"}</span>
-                {stamp && <time className="db-meeting-turn-stamp">{stamp}</time>}
-              </header>
-              <p>{turn.text}</p>
-            </article>
-          );
-        })}
+        {turns.map((turn, index) => (
+          <TranscriptTurnRow
+            key={`${index}:${turn.startS ?? ""}`}
+            turn={turn}
+            index={index}
+            flashing={flashIndex === index}
+          />
+        ))}
       </div>
     </div>
   );
-}
+});
 
 type ActionStatus =
   | { tone: "info"; text: string; path?: string }
@@ -1013,51 +1034,6 @@ function canRetryLocally(recording: LocalRecording): boolean {
     && recording.state !== "delete_requested";
 }
 
-function localRecordingStatus(recording: LocalRecording): string {
-  if (recording.state === "local_deleted") return "Local audio deleted";
-  if (recording.state === "delete_requested") {
-    return recording.deletionState === "retry"
-      ? "Removing local audio. Aura will retry automatically."
-      : "Removing local audio...";
-  }
-  // Deliberately ahead of lastErrorCode: a run still waiting to hand off is the
-  // useful fact, and an error that has since been retried is not.
-  if (recording.state === "needs_attention") return "Waiting to upload. Aura will retry.";
-  if (recording.state === "finalized_local") return "Recorded here, waiting to upload";
-  if (recording.lastErrorCode) return "Needs attention";
-  if (recording.retainLocalUntilMs) {
-    const remainingMs = recording.retainLocalUntilMs - Date.now();
-    if (recording.exportable && remainingMs <= 0) {
-      return "Retention cleanup is due. Export this recording now if you need it.";
-    }
-    if (recording.exportable && remainingMs <= 24 * 60 * 60_000) {
-      return `Recovery copy expires ${new Date(recording.retainLocalUntilMs).toLocaleString()}`;
-    }
-    return `Audio kept until ${new Date(recording.retainLocalUntilMs).toLocaleString()}`;
-  }
-  return recording.exportable ? "Recoverable on this device" : "Metadata retained";
-}
-
-function hasLocalRecordingWarning(recording: LocalRecording): boolean {
-  if (recording.state === "delete_requested") {
-    return recording.deletionState === "retry";
-  }
-  return Boolean(
-    recording.lastErrorCode
-    || (
-      recording.exportable
-      && recording.retainLocalUntilMs !== null
-      && recording.retainLocalUntilMs - Date.now() <= 24 * 60 * 60_000
-    ),
-  );
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 /// One source for the device queue, shared by the meeting cards and the recovery
 /// list. They used to read separate data and could contradict each other about
 /// the same recording.
@@ -1082,289 +1058,172 @@ function useLocalRecordings() {
   return { recordings, loading, error, loadRecordings };
 }
 
-function LocalRecoverySection({
-  recordings,
-  loading,
-  error,
-  loadRecordings,
-  onListReload,
-}: ReturnType<typeof useLocalRecordings> & { onListReload: () => void }) {
-  const [busy, setBusy] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
+/// The device-copy actions for one card's overflow menu, plus the confirm
+/// dialog Delete local audio needs. Outcomes land in the page's notice line.
+function useLocalRecordingActions(
+  loadRecordings: () => void,
+  onListReload: () => void,
+  setNotice: (notice: string | null) => void,
+) {
+  const [busy, setBusy] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<LocalRecording | null>(null);
-  const visibleRecordings = useMemo(
-    () => recordings.filter((recording) => recording.state !== "local_deleted"),
-    [recordings],
-  );
 
-  const exportRecording = async (
-    recording: LocalRecording,
-    includeAudio: boolean,
-  ) => {
-    const action = `${recording.captureRunId}:${includeAudio ? "audio" : "support"}`;
-    setBusy(action);
-    setMessage(null);
+  const run = async (work: () => Promise<void>) => {
+    setBusy(true);
+    setNotice(null);
     try {
-      const result = await invoke<ExportResult>("export_local_recording", {
-        meetingId: recording.meetingId,
-        captureRunId: recording.captureRunId,
-        includeAudio,
-      });
-      setMessage(
-        includeAudio
-          ? `Exported ${result.segmentCount} verified audio segment${result.segmentCount === 1 ? "" : "s"}.`
-          : "Exported a sanitized support bundle.",
-      );
+      await work();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const exportRecording = (recording: LocalRecording, includeAudio: boolean) =>
+    run(async () => {
       try {
-        await openPath(result.path);
+        const result = await invoke<ExportResult>("export_local_recording", {
+          meetingId: recording.meetingId,
+          captureRunId: recording.captureRunId,
+          includeAudio,
+        });
+        const done = includeAudio
+          ? `Exported ${result.segmentCount} verified audio segment${result.segmentCount === 1 ? "" : "s"}`
+          : "Exported a sanitized support bundle";
+        try {
+          await openPath(result.path);
+          setNotice(`${done}.`);
+        } catch (err) {
+          logError("MeetingsPage: open exported local recording", err);
+          setNotice(`${done}, but Aura could not open its folder.`);
+        }
       } catch (err) {
-        logError("MeetingsPage: open exported local recording", err);
-        setMessage(
-          includeAudio
-            ? `Exported ${result.segmentCount} verified audio segment${result.segmentCount === 1 ? "" : "s"}, but Aura could not open its folder.`
-            : "Exported a sanitized support bundle, but Aura could not open its folder.",
-        );
+        logError("MeetingsPage: export local recording", err);
+        setNotice("Aura could not export this recording. Its retained copy was not changed.");
       }
-    } catch (err) {
-      logError("MeetingsPage: export local recording", err);
-      setMessage("Aura could not export this recording. Its retained copy was not changed.");
-    } finally {
-      setBusy(null);
-    }
-  };
+    });
 
-  const retryRecording = async (recording: LocalRecording) => {
-    const action = `${recording.captureRunId}:retry`;
-    setBusy(action);
-    setMessage(null);
-    try {
-      const requeued = await invoke<boolean>("retry_capture_jobs", {
-        captureRunId: recording.captureRunId,
-      });
-      setMessage(
-        requeued
-          ? "Queued for upload. Aura will send it and build the note."
-          : "Nothing left to send for this recording.",
-      );
-      loadRecordings();
-      onListReload();
-    } catch (err) {
-      logError("MeetingsPage: retry local recording", err);
-      setMessage("Aura could not queue this recording. Its local copy is untouched.");
-    } finally {
-      setBusy(null);
-    }
-  };
+  const retryRecording = (recording: LocalRecording) =>
+    run(async () => {
+      try {
+        const requeued = await invoke<boolean>("retry_capture_jobs", {
+          captureRunId: recording.captureRunId,
+        });
+        setNotice(
+          requeued
+            ? "Queued for upload. Aura will send it and build the note."
+            : "Nothing left to send for this recording.",
+        );
+        loadRecordings();
+        onListReload();
+      } catch (err) {
+        logError("MeetingsPage: retry local recording", err);
+        setNotice("Aura could not queue this recording. Its local copy is untouched.");
+      }
+    });
 
-  const retryAll = async () => {
-    setBusy("retry-all");
-    setMessage(null);
-    try {
-      const revived = await invoke<number>("revive_stranded_captures");
-      setMessage(
-        revived > 0
-          ? `Queued ${revived} recording${revived === 1 ? "" : "s"} for upload.`
-          : "Every recording on this device is already handed off or queued.",
-      );
-      loadRecordings();
-      onListReload();
-    } catch (err) {
-      logError("MeetingsPage: retry all local recordings", err);
-      setMessage("Aura could not queue these recordings. Their local copies are untouched.");
-    } finally {
-      setBusy(null);
-    }
-  };
+  const deleteRecording = (recording: LocalRecording) =>
+    run(async () => {
+      try {
+        await invoke("delete_local_recording", {
+          meetingId: recording.meetingId,
+          captureRunId: recording.captureRunId,
+        });
+        setNotice("Removing local audio. Cloud notes stay available.");
+        loadRecordings();
+      } catch (err) {
+        logError("MeetingsPage: delete local recording", err);
+        setNotice("Aura could not finish deletion. It will retain and retry the deletion job.");
+      } finally {
+        setPendingDelete(null);
+      }
+    });
 
-  const deleteRecording = async (recording: LocalRecording) => {
-    const action = `${recording.captureRunId}:delete`;
-    setBusy(action);
-    setMessage(null);
-    try {
-      await invoke("delete_local_recording", {
-        meetingId: recording.meetingId,
-        captureRunId: recording.captureRunId,
-      });
-      setMessage("Removing local audio. This recording will disappear when deletion finishes.");
-      loadRecordings();
-    } catch (err) {
-      logError("MeetingsPage: delete local recording", err);
-      setMessage("Aura could not finish deletion. It will retain and retry the deletion job.");
-    } finally {
-      setPendingDelete(null);
-      setBusy(null);
-    }
-  };
+  // Stable between renders so the page's card models (and every card) stay
+  // memoized while the user types in search. The actions above only close
+  // over these deps and state setters.
+  const menuItems = useCallback((recording: LocalRecording | undefined): RowMenuItem[] => {
+    if (!recording || recording.state === "local_deleted") return [];
+    const settled = !recording.exportable || recording.state === "delete_requested";
+    return [
+      ...(canRetryLocally(recording)
+        ? [{
+            label: "Process now",
+            Icon: RefreshCw,
+            disabled: busy,
+            onSelect: () => void retryRecording(recording),
+          }]
+        : []),
+      {
+        label: "Export audio",
+        Icon: Download,
+        disabled: busy || settled,
+        onSelect: () => void exportRecording(recording, true),
+      },
+      {
+        label: "Support bundle",
+        Icon: FileJson,
+        disabled: busy,
+        onSelect: () => void exportRecording(recording, false),
+      },
+      {
+        label: "Delete local audio",
+        Icon: Trash2,
+        danger: true,
+        disabled: busy || settled,
+        onSelect: () => setPendingDelete(recording),
+      },
+    ];
+  }, [busy, loadRecordings, onListReload, setNotice]);
 
-  if (!loading && !error && visibleRecordings.length === 0) return null;
-
-  return (
-    <section className="db-local-recordings" aria-labelledby="local-recordings-heading">
-      <div className="db-local-recordings-heading">
-        <div>
-          <span className="db-eyebrow"><HardDrive size={14} /> Device recovery</span>
-          <h2 id="local-recordings-heading">Retained meeting recordings</h2>
-          <p>
-            Encrypted source audio stays recoverable on this device for at least seven days
-            after capture ends.
-          </p>
-        </div>
-        <div className="db-local-recording-actions">
-          {visibleRecordings.some(canRetryLocally) && (
-            <button
-              type="button"
-              className="db-primary-btn"
-              onClick={() => void retryAll()}
-              disabled={busy !== null || loading}
-            >
-              <RefreshCw size={15} />
-              {busy === "retry-all" ? "Queueing..." : "Retry all"}
-            </button>
-          )}
+  const dialog = pendingDelete && (
+    <div
+      className="db-local-confirm"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="local-delete-title"
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && !busy) setPendingDelete(null);
+      }}
+    >
+      <button
+        type="button"
+        className="db-local-confirm-scrim"
+        aria-label="Keep local audio"
+        disabled={busy}
+        onClick={() => setPendingDelete(null)}
+      />
+      <div className="db-local-confirm-panel">
+        <span className="db-local-confirm-icon"><Trash2 size={20} /></span>
+        <h2 id="local-delete-title">Delete local audio?</h2>
+        <p>
+          Aura will remove the encrypted recording from this device. Cloud notes and
+          server data stay available. This cannot be undone.
+        </p>
+        <div className="db-local-confirm-actions">
           <button
             type="button"
-            className="db-secondary-btn"
-            onClick={loadRecordings}
-            disabled={loading}
+            className="db-local-confirm-cancel"
+            autoFocus
+            disabled={busy}
+            onClick={() => setPendingDelete(null)}
           >
-            <RefreshCw size={15} />
-            {loading ? "Checking..." : "Refresh"}
+            Keep audio
+          </button>
+          <button
+            type="button"
+            className="db-local-confirm-delete"
+            disabled={busy}
+            onClick={() => void deleteRecording(pendingDelete)}
+          >
+            <Trash2 size={15} />
+            {busy ? "Removing..." : "Delete audio"}
           </button>
         </div>
       </div>
-
-      {error ? (
-        <p className="db-local-recordings-message">
-          Local recovery is available only in the Aura process that owns meeting capture.
-        </p>
-      ) : (
-        <div className="db-local-recording-list">
-          {visibleRecordings.map((recording) => {
-            const audioAction = `${recording.captureRunId}:audio`;
-            const supportAction = `${recording.captureRunId}:support`;
-            const deleteAction = `${recording.captureRunId}:delete`;
-            return (
-              <article className="db-local-recording" key={recording.captureRunId}>
-                <div className="db-local-recording-copy">
-                  <strong>{new Date(recording.startedAtMs).toLocaleString()}</strong>
-                  <span>
-                    {recording.segmentCount} segment{recording.segmentCount === 1 ? "" : "s"}
-                    {" · "}
-                    {formatBytes(recording.byteLength)}
-                  </span>
-                  <span className={hasLocalRecordingWarning(recording) ? "db-local-warning" : ""}>
-                    {localRecordingStatus(recording)}
-                  </span>
-                </div>
-                <div className="db-local-recording-actions">
-                  {canRetryLocally(recording) && (
-                    <button
-                      type="button"
-                      className="db-primary-btn"
-                      disabled={busy !== null}
-                      onClick={() => void retryRecording(recording)}
-                    >
-                      <RefreshCw size={15} />
-                      {busy === `${recording.captureRunId}:retry`
-                        ? "Queueing..."
-                        : "Process now"}
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    className="db-secondary-btn"
-                    disabled={
-                      !recording.exportable
-                      || recording.state === "delete_requested"
-                      || busy !== null
-                    }
-                    onClick={() => void exportRecording(recording, true)}
-                  >
-                    <Download size={15} />
-                    {busy === audioAction ? "Exporting..." : "Export audio"}
-                  </button>
-                  <button
-                    type="button"
-                    className="db-secondary-btn"
-                    disabled={busy !== null}
-                    onClick={() => void exportRecording(recording, false)}
-                  >
-                    <FileJson size={15} />
-                    {busy === supportAction ? "Exporting..." : "Support bundle"}
-                  </button>
-                  <button
-                    type="button"
-                    className="db-local-delete"
-                    disabled={
-                      !recording.exportable
-                      || recording.state === "delete_requested"
-                      || busy !== null
-                    }
-                    onClick={() => setPendingDelete(recording)}
-                  >
-                    <Trash2 size={15} />
-                    {busy === deleteAction ? "Deleting..." : "Delete local audio"}
-                  </button>
-                </div>
-              </article>
-            );
-          })}
-        </div>
-      )}
-      {message && (
-        <p className="db-local-recordings-message" role="status">
-          {message}
-        </p>
-      )}
-      {pendingDelete && (
-        <div
-          className="db-local-confirm"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="local-delete-title"
-          onKeyDown={(event) => {
-            if (event.key === "Escape" && busy === null) setPendingDelete(null);
-          }}
-        >
-          <button
-            type="button"
-            className="db-local-confirm-scrim"
-            aria-label="Keep local audio"
-            disabled={busy !== null}
-            onClick={() => setPendingDelete(null)}
-          />
-          <div className="db-local-confirm-panel">
-            <span className="db-local-confirm-icon"><Trash2 size={20} /></span>
-            <h2 id="local-delete-title">Delete local audio?</h2>
-            <p>
-              Aura will remove the encrypted recording from this device. Cloud notes and
-              server data stay available. This cannot be undone.
-            </p>
-            <div className="db-local-confirm-actions">
-              <button
-                type="button"
-                className="db-local-confirm-cancel"
-                autoFocus
-                disabled={busy !== null}
-                onClick={() => setPendingDelete(null)}
-              >
-                Keep audio
-              </button>
-              <button
-                type="button"
-                className="db-local-confirm-delete"
-                disabled={busy !== null}
-                onClick={() => void deleteRecording(pendingDelete)}
-              >
-                <Trash2 size={15} />
-                {busy === `${pendingDelete.captureRunId}:delete` ? "Removing..." : "Delete audio"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-    </section>
+    </div>
   );
+
+  return { menuItems, dialog };
 }
 
 /** Route to the Meetings page with one meeting open (Home links use this). */
@@ -1413,6 +1272,8 @@ export function MeetingsPage() {
   const [pendingMeetingDelete, setPendingMeetingDelete] = useState<MeetingDoc | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const localActions = useLocalRecordingActions(local.loadRecordings, res.reload, setNotice);
+  const localMenuItems = localActions.menuItems;
 
   // "Load more" pages, appended after the first page the resource owns. A
   // filter change starts over.
@@ -1476,13 +1337,23 @@ export function MeetingsPage() {
     () =>
       searching
         ? (search.results ?? []).map((result) => ({
-            ...meetingToCard(result.meeting, localByMeeting.get(result.meeting.meetingId), setPendingMeetingDelete),
+            ...meetingToCard(
+              result.meeting,
+              localByMeeting.get(result.meeting.meetingId),
+              setPendingMeetingDelete,
+              localMenuItems(localByMeeting.get(result.meeting.meetingId)),
+            ),
             preview: result.excerpt || result.meeting.note?.summary || "",
           }))
         : meetings.map((meeting) =>
-            meetingToCard(meeting, localByMeeting.get(meeting.meetingId), setPendingMeetingDelete),
+            meetingToCard(
+              meeting,
+              localByMeeting.get(meeting.meetingId),
+              setPendingMeetingDelete,
+              localMenuItems(localByMeeting.get(meeting.meetingId)),
+            ),
           ),
-    [searching, search.results, meetings, localByMeeting],
+    [searching, search.results, meetings, localByMeeting, localMenuItems],
   );
   const known = selectedId
     ? meetings.find((meeting) => meeting.meetingId === selectedId)
@@ -1523,10 +1394,13 @@ export function MeetingsPage() {
     }
   };
 
-  const openFromList = (id: string) => {
+  // Stable for the memoized cards. Inlines setSelectedId(id, second), which
+  // with a non-null id only sets these two states.
+  const openFromList = useCallback((id: string) => {
     const hit = search.results?.find((result) => result.meeting.meetingId === id);
-    setSelectedId(id, hit && hit.matchStartS > 0 ? hit.matchStartS : null);
-  };
+    setSelectedIdState(id);
+    setOpenSecond(hit && hit.matchStartS > 0 ? hit.matchStartS : null);
+  }, [search.results]);
 
   const removeMeeting = async (meeting: MeetingDoc) => {
     setDeleting(true);
@@ -1573,7 +1447,6 @@ export function MeetingsPage() {
         />
       ) : (
         <>
-          <LocalRecoverySection {...local} onListReload={res.reload} />
           <div className="db-page-toolbar">
             {searching ? (
               <span className="db-meeting-search-summary" role="status">
@@ -1656,6 +1529,7 @@ export function MeetingsPage() {
         </>
       )}
 
+      {localActions.dialog}
       {pendingMeetingDelete && (
         <div
           className="db-local-confirm"

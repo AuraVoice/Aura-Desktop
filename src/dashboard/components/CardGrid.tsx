@@ -5,6 +5,11 @@ import { CardSkeleton } from "./CardSkeleton";
 const SKELETON_COUNT = 8;
 const INITIAL_WINDOW = 12;
 const WINDOW_STEP = 12;
+/** Built once, so a card's `style` prop keeps its identity and the memoized
+ * DashboardCard can skip re-rendering. */
+const STAGGER_STYLES = Array.from({ length: INITIAL_WINDOW }, (_, i) => ({
+  animationDelay: `${Math.min(i, 8) * 24}ms`,
+}));
 
 /** Responsive card grid with client-side windowed pagination. Renders an
  * initial window and grows it as an IntersectionObserver sentinel scrolls into
@@ -100,7 +105,7 @@ export function CardGrid({
             // Stagger the first screenful only. A card windowed in later starts
             // from the animation's invisible state, so a delay there reads as
             // the blank gap this grid is meant to avoid.
-            style={i < INITIAL_WINDOW ? { animationDelay: `${Math.min(i, 8) * 24}ms` } : undefined}
+            style={STAGGER_STYLES[i]}
           />
         ))}
       </div>

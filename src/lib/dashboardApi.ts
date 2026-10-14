@@ -241,13 +241,47 @@ export interface MeetingBrief {
   related: { meetingId: string; title: string; date: string }[];
 }
 
-/** What Aura already knows before an upcoming event. Null on any failure:
- *  the brief is extra context on Home, never something to show an error for. */
-export async function getMeetingBrief(eventId: string, signal?: AbortSignal): Promise<MeetingBrief | null> {
+/** A brief only changes when a meeting in the series finishes, but Home is the
+ *  landing route and asks again on every visit. So the last BRIEF_CACHE_SIZE
+ *  answers are kept for BRIEF_TTL_MS in an LRU: a Map iterates in insertion
+ *  order, so a hit is re-inserted as newest and eviction drops the first key,
+ *  both O(1). Not useDashboardResource: event ids are an open key space, and
+ *  its memory and disk tiers never evict. The promise is what is cached, so
+ *  concurrent asks share one request; it runs on its own timeout because one
+ *  caller unmounting must not abort it for the rest. A failure (null) is
+ *  evicted so the next visit retries; an empty brief, the common case, stays. */
+const BRIEF_CACHE_SIZE = 32;
+const BRIEF_TTL_MS = 5 * 60_000;
+const BRIEF_TIMEOUT_MS = 15_000;
+const briefCache = new Map<string, { at: number; brief: Promise<MeetingBrief | null> }>();
+
+/** What Aura already knows before an upcoming event, for this account. Null on
+ *  any failure: the brief is extra context on Home, never an error to show. */
+export function getMeetingBrief(uid: string, eventId: string): Promise<MeetingBrief | null> {
+  const key = `${uid}:${eventId}`;
+  const now = Date.now();
+  let entry = briefCache.get(key);
+  briefCache.delete(key);
+  if (!entry || now - entry.at > BRIEF_TTL_MS) {
+    const brief = fetchMeetingBrief(eventId);
+    entry = { at: now, brief };
+    void brief.then((result) => {
+      if (result === null && briefCache.get(key)?.brief === brief) briefCache.delete(key);
+    });
+  }
+  briefCache.set(key, entry);
+  if (briefCache.size > BRIEF_CACHE_SIZE) {
+    const oldest = briefCache.keys().next().value;
+    if (oldest !== undefined) briefCache.delete(oldest);
+  }
+  return entry.brief;
+}
+
+async function fetchMeetingBrief(eventId: string): Promise<MeetingBrief | null> {
   try {
     const raw = await authGetJson<{ last?: Record<string, unknown> | null; related?: unknown }>(
       `/meetings/brief?event_id=${encodeURIComponent(eventId)}`,
-      signal,
+      AbortSignal.timeout(BRIEF_TIMEOUT_MS),
     );
     const text = (value: unknown) => (typeof value === "string" ? value : "");
     const list = (value: unknown) =>

@@ -78,6 +78,7 @@ export type AnalyticsEvent =
   | "meeting_capture_manual"
   | "meeting_capture_completed"
   | "meeting_capture_failed"
+  | "meeting_capture_discarded"
   | "meeting_cap_blocked"
   | "meeting_upload_attempt"
   | "meeting_note_card_shown"
