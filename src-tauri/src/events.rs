@@ -63,6 +63,9 @@ pub const REGION_CANCELLED: &str = "region-cancelled";
 pub const MEETING_CAPTURE_STATE: &str = "meeting-capture-state";
 pub const MEETING_JOIN_DETECTED: &str = "meeting-join-detected";
 pub const MEETING_SEGMENT_READY: &str = "meeting-segment-ready";
+/// A capture has heard no speech for a while (`warning: true`, it stops in
+/// `stopsInS`), or speech or Keep recording cleared that (`warning: false`).
+pub const MEETING_SILENCE: &str = "meeting-silence";
 pub const MEETING_LEFT: &str = "meeting-left";
 /// The ambient scanner saw a call window appear / disappear (detect.rs).
 pub const MEETING_CALL_SEEN: &str = "meeting-call-seen";
@@ -97,6 +100,8 @@ pub const OPERATOR_TASK_CHECKIN: &str = "operator-task-checkin";
 // tray.rs
 pub const OPEN_NOTIFICATIONS_REQUESTED: &str = "open-notifications-requested";
 pub const CAPTURE_NOW_REQUESTED: &str = "capture-now-requested";
+/// Tray or Meetings page "Record in person": a microphone-only capture.
+pub const CAPTURE_IN_PERSON_REQUESTED: &str = "capture-in-person-requested";
 
 // updater.rs, toast.rs, connector_oauth.rs, dashboard.rs, status_pill.rs
 pub const UPDATE_READY: &str = "update-ready";

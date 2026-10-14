@@ -102,6 +102,37 @@
   background: linear-gradient(90deg, transparent, rgba(99, 102, 241, 0.26), transparent);
 }
 
+/* ── Email draft ── the --glass-* tokens already flip; only the white fills and
+   the dividers need restating for white glass. */
+:root[data-theme="light"] .chat-email-card {
+  background: rgba(255, 255, 255, 0.6);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+:root[data-theme="light"] .chat-email-subject-row,
+:root[data-theme="light"] .chat-email-actions {
+  border-color: var(--lt-divider);
+}
+:root[data-theme="light"] .chat-email-button {
+  background: rgba(255, 255, 255, 0.72);
+}
+:root[data-theme="light"] .chat-email-button.is-icon {
+  background: transparent;
+}
+:root[data-theme="light"] .chat-email-button:hover {
+  background: var(--lt-press);
+}
+:root[data-theme="light"] .chat-email-button.is-primary {
+  background: var(--glass-accent);
+  color: #ffffff;
+}
+:root[data-theme="light"] .chat-email-button.is-primary:hover {
+  background: var(--glass-accent-lerp-white);
+  color: #ffffff;
+}
+:root[data-theme="light"] .chat-email-button.is-copied {
+  color: #0d7a6b;
+}
+
 /* ── Markdown ── code sits on a slightly darker frosted panel, never a black box. */
 :root[data-theme="light"] .chat-markdown code {
   background: rgba(20, 40, 34, 0.07);

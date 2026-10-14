@@ -3,6 +3,7 @@ import type { AccountConnectorName, AccountConnectorStatus } from "./connectors"
 import {
   GitHubBrandIcon,
   LinkedInBrandIcon,
+  SlackBrandIcon,
   XBrandIcon,
 } from "../dashboard/components/connectorBrandIcons";
 
@@ -76,6 +77,17 @@ export const ACCOUNT_CONNECTORS: readonly AccountConnectorDescriptor[] = [
     connectedMessage: "X is connected. Aura is pulling in your bookmarks so Buddy can find them.",
     openingMessage: "Opening X so you can connect securely.",
     waitingMessage: "Finish connecting X in your browser. Aura reopens here when it is done.",
+  },
+  {
+    name: "slack",
+    label: "Slack",
+    providerName: "Slack",
+    Icon: SlackBrandIcon,
+    pitch: "Send a meeting's notes to a channel, as you. Aura asks every time and never reads your messages.",
+    connectedDetail: (status) => status.accountLabel ?? "Connected workspace",
+    connectedMessage: "Slack is connected. Open a meeting and choose Send to Slack from its menu.",
+    openingMessage: "Opening Slack so you can connect securely.",
+    waitingMessage: "Finish connecting Slack in your browser. Aura reopens here when it is done.",
   },
 ];
 

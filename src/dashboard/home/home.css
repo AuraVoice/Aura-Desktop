@@ -446,6 +446,28 @@ button.db-home-row:focus-visible {
 .db-home-cal-event .db-home-pill {
   align-self: center;
 }
+/* "Last time, Oct 6: ..." under an event Aura has history for. Plain text that
+   opens that meeting; Home stays still, so no hover motion. */
+.db-home-cal-brief {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--db-text-mute);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.db-home-cal-brief:hover,
+.db-home-cal-brief:focus-visible {
+  color: var(--db-text);
+  text-decoration: underline;
+}
 .db-home-cal-more {
   margin: 0;
   padding: 8px 0 6px;

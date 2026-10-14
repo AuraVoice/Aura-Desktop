@@ -6,6 +6,7 @@ import { logError } from "../lib/log";
 import { useTauriEvent } from "../lib/useTauriEvent";
 import {
   CAPTURE_NOW_REQUESTED,
+  CAPTURE_IN_PERSON_REQUESTED,
   CHAT_ATTACH_REQUESTED,
   CHAT_REQUESTED,
   CHAT_TOGGLE_REQUESTED,
@@ -33,6 +34,7 @@ import {
   MEETING_PROMPT_EXIT_MS,
   MEETING_PROMPT_HEIGHT,
 } from "./MeetingPromptCard";
+import { MeetingSilenceCard, useMeetingSilence } from "./MeetingSilenceCard";
 import { usePresence } from "./usePresence";
 import { useCallbackCard } from "./useCallbackCard";
 import { useDesktopNotifications } from "../state/useDesktopNotifications";
@@ -64,6 +66,7 @@ import type { OverlayPresentation } from "./overlayPresentation";
 import { screenPointFor, type ScreenFrameGeometry } from "../lib/screenFrame";
 import { useGuideMode, type GuidePoint } from "./useGuideMode";
 import { useGeneralSettings } from "../state/useGeneralSettings";
+import { resolveEmailSignature } from "../lib/emailDraft";
 import { dictationSharingActive } from "../lib/generalSettings";
 import { useDictationUpload } from "./useDictationUpload";
 import { ChatSlot, INITIAL_CHAT_SLOT_HEIGHT } from "./ChatSlot";
@@ -506,6 +509,7 @@ export function OverlayRoot() {
   // banner, and a draft only exists during a voice call, where the prompt is
   // suppressed anyway. The hook already hides itself for a live call, an active
   // capture, or a non-notch presentation.
+  const meetingSilence = useMeetingSilence();
   const meetingPrompt = useMeetingPrompt({
     uid: user?.uid ?? null,
     ownsRuntime: meetingCapture.ownsRuntime,
@@ -534,6 +538,17 @@ export function OverlayRoot() {
       && !showVoiceNotice
       && !showDraftCard
       && !showBrowserTask);
+  // "No one's talking" shares the prompt's slot and height. They never meet:
+  // the prompt hides during a capture, and this exists only during one.
+  const showMeetingSilence =
+    user !== null
+    && meetingSilence.warning
+    && !showInterviewContext
+    && !showVoiceNotice
+    && !showDraftCard
+    && !showBrowserTask
+    && !meetingPromptOnScreen;
+  const meetingCardOnScreen = meetingPromptOnScreen || showMeetingSilence;
   // The consent card sits directly under the meeting prompt: the user just
   // told Buddy "yes, turn it on" out loud, so it must not queue behind the
   // inbox or a banner while that sentence is still hanging.
@@ -544,7 +559,7 @@ export function OverlayRoot() {
     && !showVoiceNotice
     && !showDraftCard
     && !showBrowserTask
-    && !meetingPromptOnScreen;
+    && !meetingCardOnScreen;
   // What the user just circled with the region gesture. Under the live-session
   // surfaces above, which only exist mid-call where the gesture is a no-op, and
   // above the inbox, update banner and catch-up, which would otherwise sit on
@@ -556,7 +571,7 @@ export function OverlayRoot() {
     && !showVoiceNotice
     && !showDraftCard
     && !showBrowserTask
-    && !meetingPromptOnScreen
+    && !meetingCardOnScreen
     && !showScreenContextConsent;
   const showInbox =
     user !== null
@@ -565,7 +580,7 @@ export function OverlayRoot() {
     && !showDraftCard
     && !showInterviewContext
     && !showBrowserTask
-    && !meetingPromptOnScreen
+    && !meetingCardOnScreen
     && !showScreenContextConsent
     && !showRegionPreview;
   const showUpdateBanner =
@@ -576,7 +591,7 @@ export function OverlayRoot() {
     && !showVoiceNotice
     && !showDraftCard
     && !showBrowserTask
-    && !meetingPromptOnScreen
+    && !meetingCardOnScreen
     && !showScreenContextConsent
     && !showRegionPreview
     && !showInbox;
@@ -587,7 +602,7 @@ export function OverlayRoot() {
     && !showVoiceNotice
     && !showDraftCard
     && !showBrowserTask
-    && !meetingPromptOnScreen
+    && !meetingCardOnScreen
     && !showScreenContextConsent
     && !showRegionPreview
     && !showInbox
@@ -602,7 +617,7 @@ export function OverlayRoot() {
           ? draftCardHeight
           : showBrowserTask
             ? (browserTaskMeasured ?? browserTaskSlotHeight(agentTask))
-          : meetingPromptOnScreen
+          : meetingCardOnScreen
             ? MEETING_PROMPT_HEIGHT
             : showScreenContextConsent
               ? SCREEN_CONTEXT_CONSENT_HEIGHT
@@ -624,7 +639,7 @@ export function OverlayRoot() {
   // middle of empty space (2026-10-03). The chat is unmounted while the notice
   // is up, which is what the approval card already does, and comes back at its
   // own measured height when the notice goes.
-  const noticeOverChat = showVoiceNotice || meetingPromptOnScreen;
+  const noticeOverChat = showVoiceNotice || meetingCardOnScreen;
   const appliedSlotHeight = showApprovalCard
     ? approvalCardHeight
     : visibleChatOpen && !noticeOverChat ? chatSlotHeight : slotHeight;
@@ -716,13 +731,23 @@ export function OverlayRoot() {
       stopMeetingCapture();
       return;
     }
-    captureNow();
+    captureNow("call");
   }, [captureNow, isMeetingRecording, stopMeetingCapture]);
 
   useTauriEvent(
     CAPTURE_NOW_REQUESTED,
     () => handleCaptureAction(),
     "OverlayRoot: listen capture-now-requested",
+  );
+
+  // Tray or Meetings page "Record in person". Never a stop: the tray disables
+  // the item while recording, and the page's button is a start only.
+  useTauriEvent(
+    CAPTURE_IN_PERSON_REQUESTED,
+    () => {
+      if (!isMeetingRecording) captureNow("in_person");
+    },
+    "OverlayRoot: listen capture-in-person-requested",
   );
 
   const dismissChatOverlay = useCallback(() => {
@@ -1014,6 +1039,7 @@ export function OverlayRoot() {
           limitReached={chat.limitReached}
           lane={chat.lane}
           companionAvatar={generalSettings.showCompanionAvatar ? generalSettings.companionAvatar : null}
+          emailSignature={resolveEmailSignature(generalSettings.emailSignature, user?.displayName)}
           onHeightChange={setChatSlotHeight}
         />
       )}
@@ -1075,6 +1101,7 @@ export function OverlayRoot() {
       {!lowerCardsHidden &&meetingPromptOnScreen && (
         <MeetingPromptCard prompt={meetingPrompt} leaving={meetingPromptPresence.leaving} />
       )}
+      {!lowerCardsHidden && showMeetingSilence && <MeetingSilenceCard silence={meetingSilence} />}
       {!lowerCardsHidden &&showScreenContextConsent && (
         <ScreenContextConsentCard
           onAllow={allowScreenContext}

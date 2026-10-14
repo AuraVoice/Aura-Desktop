@@ -89,6 +89,13 @@ flacenc = "0.5"
 # Rust, no C deps, same reason as the encoder above. Storage stays FLAC.
 claxon = "0.4"
 
+# Meeting Notes "Upload recording" (meeting/import.rs): decode whatever a phone
+# or lecture recorder saved (mp3, m4a/AAC, ogg/Vorbis, wav, flac) and resample
+# it to the 16 kHz the segment pipeline carries. Both pure Rust, no C deps, for
+# the same reason as the FLAC crates above.
+symphonia = { version = "0.5", default-features = false, features = ["mp3", "aac", "isomp4", "mkv", "ogg", "vorbis", "wav", "pcm", "flac"] }
+rubato = "0.16"
+
 # Dictation's cloud speech recognition (dictation/asr/deepgram.rs): one
 # WebSocket per hold to Deepgram's streaming endpoint. rustls, never native
 # OpenSSL, and deliberately the same rustls 0.23 / tokio-rustls 0.26 pair

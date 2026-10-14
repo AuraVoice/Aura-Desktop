@@ -1,8 +1,11 @@
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { UpcomingMeeting, UpcomingMeetings } from "../../lib/calendar";
+import { getMeetingBrief, type MeetingBrief } from "../../lib/dashboardApi";
 import { logError } from "../../lib/log";
 import { timeOfDay } from "../format";
+import { meetingPath } from "../pages/MeetingsPage";
 
 const MAX_EVENTS = 4;
 const JOIN_LEAD_MS = 10 * 60_000;
@@ -40,6 +43,29 @@ function placeLabel(event: UpcomingMeeting): string {
   return link ? "Online meeting" : "";
 }
 
+/** One quiet line under an event when Aura recorded something related: the
+ *  last meeting of its series, else the latest meeting with the same people. */
+function briefLine(brief: MeetingBrief | undefined): { text: string; meetingId: string } | null {
+  if (!brief) return null;
+  if (brief.last) {
+    const date = brief.last.date
+      ? new Date(brief.last.date).toLocaleDateString(undefined, { month: "short", day: "numeric" })
+      : "";
+    const open = brief.last.actionItems.length;
+    const detail = open
+      ? `${open} action item${open === 1 ? "" : "s"} from last time`
+      : brief.last.summary;
+    return { text: `Last time${date ? `, ${date}` : ""}: ${detail}`, meetingId: brief.last.meetingId };
+  }
+  const [latest] = brief.related;
+  if (!latest) return null;
+  const others = brief.related.length - 1;
+  return {
+    text: `You met with them in ${latest.title || "a recorded meeting"}${others > 0 ? ` and ${others} more` : ""}`,
+    meetingId: latest.meetingId,
+  };
+}
+
 /** Today's agenda, drawn like a calendar: a date tile, then each event with
  * its start and end, length, place and a countdown. Join shows only when a
  * call is about to start or already running. */
@@ -58,6 +84,22 @@ export function UpNextList({
   const upcoming = (calendar?.events ?? []).filter((event) => new Date(event.endTime).getTime() > now);
   const events = upcoming.slice(0, MAX_EVENTS);
   const hidden = upcoming.length - events.length;
+
+  // One brief per shown event, fetched once per set of events. Failures and
+  // empty briefs simply show nothing.
+  const [briefs, setBriefs] = useState<Record<string, MeetingBrief>>({});
+  const eventKey = events.map((event) => event.id).join("|");
+  useEffect(() => {
+    if (!eventKey) return;
+    const controller = new AbortController();
+    void Promise.all(
+      eventKey.split("|").map(async (id) => [id, await getMeetingBrief(id, controller.signal)] as const),
+    ).then((pairs) => {
+      if (controller.signal.aborted) return;
+      setBriefs(Object.fromEntries(pairs.filter((pair): pair is readonly [string, MeetingBrief] => pair[1] !== null)));
+    });
+    return () => controller.abort();
+  }, [eventKey]);
 
   return (
     <section className="db-home-panel" aria-labelledby="db-home-upnext-title">
@@ -125,6 +167,7 @@ export function UpNextList({
                 const soon = live || start - now <= JOIN_LEAD_MS;
                 const link = event.meetingLink || event.htmlLink;
                 const details = [placeLabel(event), durationLabel(event)].filter(Boolean).join(" · ");
+                const brief = briefLine(briefs[event.id]);
                 return (
                   <li className={`db-home-cal-event${soon ? " is-soon" : ""}`} key={event.id}>
                     <span className="db-home-cal-time">
@@ -136,6 +179,15 @@ export function UpNextList({
                       <span className="db-home-cal-title">{event.title || "Untitled event"}</span>
                       {details && <span className="db-home-cal-detail">{details}</span>}
                       <span className="db-home-cal-countdown">{countdownLabel(event, now)}</span>
+                      {brief && (
+                        <button
+                          type="button"
+                          className="db-home-cal-brief"
+                          onClick={() => navigate(meetingPath(brief.meetingId))}
+                        >
+                          {brief.text}
+                        </button>
+                      )}
                     </span>
                     {soon && link && (
                       <button

@@ -11,6 +11,7 @@ const OPEN_BUDDY: &str = "open_buddy";
 const OPEN_DASHBOARD: &str = "open_dashboard";
 const OPEN_NOTIFICATIONS: &str = "open_notifications";
 const CAPTURE_NOW: &str = "capture_now";
+const CAPTURE_IN_PERSON: &str = "capture_in_person";
 const PAUSE_RECORDING: &str = "pause_recording";
 const SIGN_OUT: &str = "sign_out";
 const AUTOSTART: &str = "autostart";
@@ -54,6 +55,11 @@ pub struct CaptureMenuItem(pub MenuItem<Wry>);
 /// recording" and the tooltip to match.
 pub struct PauseMenuItem(pub MenuItem<Wry>);
 
+/// "Record in person": a capture of the microphone alone, for a lecture or a
+/// conversation in the room. Disabled while any capture is live, since Stop
+/// recording on the item above ends that one.
+pub struct InPersonMenuItem(pub MenuItem<Wry>);
+
 pub fn build(app: &AppHandle) -> tauri::Result<()> {
     let open_buddy = MenuItem::with_id(app, OPEN_BUDDY, "Talk to Buddy", true, None::<&str>)?;
     let open_dashboard =
@@ -65,6 +71,8 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     // the OPEN_NOTIFICATIONS shape: Rust only fires the intent.
     let capture_now_item =
         MenuItem::with_id(app, CAPTURE_NOW, "Capture now", true, None::<&str>)?;
+    let in_person_item =
+        MenuItem::with_id(app, CAPTURE_IN_PERSON, "Record in person", true, None::<&str>)?;
     let pause_item =
         MenuItem::with_id(app, PAUSE_RECORDING, "Pause recording", false, None::<&str>)?;
     let sign_out_item = MenuItem::with_id(app, SIGN_OUT, "Sign out", true, None::<&str>)?;
@@ -102,6 +110,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             &open_dashboard,
             &notifications_item,
             &capture_now_item,
+            &in_person_item,
             &pause_item,
             &autostart_item,
             &version_item,
@@ -115,6 +124,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
     app.manage(AutostartMenuItem(autostart_item));
     app.manage(NotificationsMenuItem(notifications_item));
     app.manage(CaptureMenuItem(capture_now_item));
+    app.manage(InPersonMenuItem(in_person_item));
     app.manage(PauseMenuItem(pause_item));
 
     // The menu bar gets its own asset rather than the app icon. tray-icon
@@ -184,6 +194,12 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
                     error!("tray: failed to emit capture-now-requested: {e}");
                 }
             }
+            CAPTURE_IN_PERSON => {
+                overlay::summon(app);
+                if let Err(e) = app.emit(crate::events::CAPTURE_IN_PERSON_REQUESTED, ()) {
+                    error!("tray: failed to emit capture-in-person-requested: {e}");
+                }
+            }
             // Same entry point the sign-out shortcut uses: it revokes the native command
             // surface BEFORE asking the webview to sign out, so a stalled JS leg
             // still leaves the sensitive commands locked.
@@ -222,6 +238,11 @@ pub fn set_recording(app: &AppHandle, active: bool) {
         let label = if active { "Stop recording" } else { "Capture now" };
         if let Err(e) = item.0.set_text(label) {
             error!("tray: failed to relabel capture item: {e}");
+        }
+    }
+    if let Some(item) = app.try_state::<InPersonMenuItem>() {
+        if let Err(e) = item.0.set_enabled(!active) {
+            error!("tray: failed to toggle in-person item: {e}");
         }
     }
     if let Some(item) = app.try_state::<PauseMenuItem>() {

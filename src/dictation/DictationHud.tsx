@@ -36,7 +36,8 @@ export type DictationPhase =
   | "error"
   | "recovery"
   | "pending"
-  | "consent";
+  | "consent"
+  | "signIn";
 
 interface DictationUpdate {
   phase: DictationPhase;
@@ -390,6 +391,60 @@ function DictationRecovery({ text, message }: { text: string; message?: string }
   );
 }
 
+/// The chord was pressed while signed out. Sign in opens the dashboard, which
+/// is where the signed-out flow lives, then takes the card down; the X just
+/// takes it down.
+function DictationSignIn({ message }: { message?: string }) {
+  const [busy, setBusy] = useState(false);
+
+  const dismiss = () => {
+    void invoke("dictation_dismiss_sign_in").catch((error) =>
+      logError("DictationSignIn: dismiss", error),
+    );
+  };
+
+  const signIn = () => {
+    setBusy(true);
+    void invoke("open_dashboard_window")
+      .then(dismiss)
+      .catch((error) => {
+        logError("DictationSignIn: open dashboard", error);
+        setBusy(false);
+      });
+  };
+
+  return (
+    <GlassSurface className="dictation-message is-sign-in" draggable={false}>
+      <div className="dictation-message__row">
+        <span className="dictation-message__dot" aria-hidden="true" />
+        <span className="dictation-message__label">
+          {message ?? "Sign in to use dictation."}
+        </span>
+        <button
+          type="button"
+          className="dictation-message__close"
+          onClick={dismiss}
+          aria-label="Dismiss"
+        >
+          {/* Lucide "x" */}
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M18 6 6 18" />
+            <path d="m6 6 12 12" />
+          </svg>
+        </button>
+      </div>
+      <button
+        type="button"
+        className="dictation-message__copy"
+        onClick={signIn}
+        disabled={busy}
+      >
+        Sign in
+      </button>
+    </GlassSurface>
+  );
+}
+
 /// Held text: the words are waiting for a text box, and the user can either
 /// click into one (Rust types them there) or copy them now. Copying tells Rust
 /// to end the hold, so a paste can never be followed by the same words typed a
@@ -532,6 +587,10 @@ export function DictationHud() {
 
   if (update.phase === "consent") {
     return carry(<DictationConsent />);
+  }
+
+  if (update.phase === "signIn") {
+    return carry(<DictationSignIn message={update.message} />);
   }
 
   // Held text: the transcript is shown because the user has to know both that

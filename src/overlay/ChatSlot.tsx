@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import type { ChangeEvent, ClipboardEvent, CSSProperties, PointerEvent } from "react";
 import { currentMonitor } from "@tauri-apps/api/window";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { BuddyAvatar } from "../components/BuddyAvatar";
 import type { CompanionAvatarId } from "../components/buddy/avatars";
 import {
@@ -29,12 +30,14 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import Markdown, { type Components } from "react-markdown";
+import Markdown, { defaultUrlTransform, type Components } from "react-markdown";
+import { openDashboardWindow } from "../lib/dashboardWindow";
 import remarkGfm from "remark-gfm";
 import { clearChatDraft, readChatDraft, storeChatDraft } from "./chatDraft";
 import { BarIconButton } from "./BarIconButton";
 import { GlassSurface } from "./GlassSurface";
 import { logError } from "../lib/log";
+import { emailWithSignature, gmailComposeUrl } from "../lib/emailDraft";
 import { invoke } from "@tauri-apps/api/core";
 import {
   DICTATION_COMPOSER_INSERT,
@@ -82,6 +85,13 @@ export interface ChatReminder {
   receiptStatus: "created" | "updated";
 }
 
+/** An email the turn drafted. The body ends before the sign-off; the card adds
+ * the user's signature. */
+export interface ChatEmailDraft {
+  subject: string;
+  body: string;
+}
+
 export interface ChatMessage {
   id: string;
   turnId?: string;
@@ -105,6 +115,10 @@ export interface ChatMessage {
   running?: boolean;
   ok?: boolean;
   reminder?: ChatReminder;
+  /** Draws this `text` row as the email card. `text` stays the model's own
+   * reply, so history, the cache and a follow-up "make it shorter" are
+   * unchanged; a row restored without this falls back to that prose. */
+  emailDraft?: ChatEmailDraft;
   /** Files the user attached to this turn: what the bubble draws, never the
    * bytes. Absent on rows restored from the cache or the server. */
   attachments?: ChatMessageAttachment[];
@@ -361,6 +375,8 @@ interface ChatSlotProps {
   screen: ChatScreenState;
   /** Buddy's face for the thinking row, or null to show plain dots. */
   companionAvatar: CompanionAvatarId | null;
+  /** Appended under every email card, already resolved (resolveEmailSignature). */
+  emailSignature: string;
   /** Reports the card's measured height so OverlayRoot can size the window to
    * the transcript instead of reserving a fixed block of empty glass. */
   onHeightChange?: (height: number) => void;
@@ -544,6 +560,83 @@ function CodeCopyButton({ text }: { text: string }) {
   );
 }
 
+/** A copy button for the email card, with the same clipboard path and flash as
+ * CodeCopyButton. `label` renders beside the icon; omitted, it is icon-only. */
+function EmailCopyButton({ text, title, label }: { text: string; title: string; label?: string }) {
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+  }, []);
+
+  const Icon = copied ? Check : Copy;
+
+  return (
+    <button
+      type="button"
+      className={`chat-email-button${label ? "" : " is-icon"}${copied ? " is-copied" : ""}`}
+      title={copied ? "Copied" : title}
+      aria-label={copied ? "Copied" : title}
+      onClick={() => {
+        writeText(text)
+          .then(() => {
+            setCopied(true);
+            if (timerRef.current) clearTimeout(timerRef.current);
+            timerRef.current = setTimeout(() => {
+              timerRef.current = null;
+              setCopied(false);
+            }, COPIED_FLASH_MS);
+          })
+          .catch((err) => logError("ChatSlot: copy email draft", err));
+      }}
+    >
+      <Icon size={12} aria-hidden="true" />
+      {label && <span>{copied ? "Copied" : label}</span>}
+    </button>
+  );
+}
+
+/** An email the turn drafted: subject, body, the user's signature, and a way
+ * out to Gmail. Every control is a real <button> so the overlay's deep drag
+ * region leaves the clicks alone. */
+function EmailDraftCard({ draft, signature }: { draft: ChatEmailDraft; signature: string }) {
+  const fullEmail = emailWithSignature(draft.body, signature);
+  return (
+    <div className="chat-email-card">
+      <div className="chat-email-head">
+        <Mail size={13} aria-hidden="true" />
+        <span>Email draft</span>
+      </div>
+      {draft.subject && (
+        <div className="chat-email-subject-row">
+          <span className="chat-email-field">Subject</span>
+          <span className="chat-email-subject">{draft.subject}</span>
+          <EmailCopyButton text={draft.subject} title="Copy subject" />
+        </div>
+      )}
+      <div className="chat-email-body">
+        {draft.body}
+        {signature && <div className="chat-email-signature">{signature}</div>}
+      </div>
+      <div className="chat-email-actions">
+        <EmailCopyButton text={fullEmail} title="Copy email" label="Copy email" />
+        <button
+          type="button"
+          className="chat-email-button is-primary"
+          onClick={() => {
+            void openUrl(gmailComposeUrl(draft.subject, fullEmail))
+              .catch((err) => logError("ChatSlot: open Gmail compose", err));
+          }}
+        >
+          <Mail size={12} aria-hidden="true" />
+          <span>Open in Gmail</span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 /** The block's source text, read off the hast node react-markdown hands the
  * component. Taken from the tree rather than from `children`, which by that
  * point is React elements whose text is not addressable. */
@@ -553,6 +646,15 @@ function hastText(node: unknown): string {
   if (typeof candidate.value === "string") return candidate.value;
   if (!Array.isArray(candidate.children)) return "";
   return candidate.children.map(hastText).join("");
+}
+
+/** The one link model prose may carry: a recorded meeting, optionally at a
+ * second (`aura://meetings/<id>?t=<s>`, from the search_meetings and
+ * get_meeting tools). Every other link is still flattened to its text. */
+const MEETING_LINK = /^aura:\/\/meetings\/([A-Za-z0-9]{1,64})(?:\?t=(\d{1,6}))?$/;
+
+function keepMeetingLinks(url: string): string {
+  return MEETING_LINK.test(url) ? url : defaultUrlTransform(url);
 }
 
 /** Module scope so the object identity is stable: a new object here would make
@@ -565,6 +667,22 @@ const MARKDOWN_COMPONENTS: Components = {
         <pre>{children}</pre>
         {source && <CodeCopyButton text={source} />}
       </div>
+    );
+  },
+  a({ href, children }) {
+    const match = MEETING_LINK.exec(href ?? "");
+    if (!match) return <>{children}</>;
+    const [, meetingId, second] = match;
+    return (
+      <button
+        type="button"
+        className="chat-meeting-link"
+        onClick={() =>
+          void openDashboardWindow("/meetings", second ? `${meetingId}:${second}` : meetingId)
+        }
+      >
+        {children}
+      </button>
     );
   },
 };
@@ -594,6 +712,7 @@ const MessageRow = memo(function MessageRow({
   sending,
   lane,
   companionAvatar,
+  emailSignature,
   onRetry,
   onClarification,
 }: {
@@ -602,6 +721,7 @@ const MessageRow = memo(function MessageRow({
   sending: boolean;
   lane: ChatLane;
   companionAvatar: CompanionAvatarId | null;
+  emailSignature: string;
   onRetry: (messageId: string) => void;
   onClarification: (messageId: string, selectedOptions: string[]) => void;
 }) {
@@ -653,13 +773,16 @@ const MessageRow = memo(function MessageRow({
           ) : (
             <ReminderCard reminder={item.reminder} />
           )
+        ) : item.emailDraft && item.state === "complete" ? (
+          <EmailDraftCard draft={item.emailDraft} signature={emailSignature} />
         ) : markdown ? (
           <div className="chat-markdown">
             <Markdown
               remarkPlugins={REMARK_PLUGINS}
               components={MARKDOWN_COMPONENTS}
               skipHtml
-              disallowedElements={["a", "img"]}
+              urlTransform={keepMeetingLinks}
+              disallowedElements={["img"]}
               unwrapDisallowed
             >
               {text}
@@ -810,6 +933,7 @@ export function ChatSlot({
   onSeedAttached,
   screen,
   companionAvatar,
+  emailSignature,
   onHeightChange,
 }: ChatSlotProps) {
   const [message, setMessage] = useState(readChatDraft);
@@ -1174,6 +1298,7 @@ export function ChatSlot({
               sending={sending}
               lane={lane}
               companionAvatar={companionAvatar}
+              emailSignature={emailSignature}
               onRetry={onRetry}
               onClarification={onClarification}
             />

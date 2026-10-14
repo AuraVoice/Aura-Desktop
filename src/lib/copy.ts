@@ -113,10 +113,6 @@ export const onboarding = {
     headingAccent: "Meet Buddy",
     headingTail: `, your AI companion on this ${deviceNoun()}.`,
     body: "Talk things through, get help, and complete tasks without leaving the screen you're on.",
-    // Matches the mobile paywall's framing (paywall_screen.dart's default
-    // subtitle) so the two surfaces tell the same story. The backend grants the
-    // trial on the first GET /entitlement; nothing here creates it.
-    trialNote: "45 days free while we're in beta. No card needed.",
     // Takes the live trigger phrase (voiceTriggerPhrase in lib/hotkeys.ts)
     // rather than primaryModifierLabel(): the trigger is user-configurable, and
     // the macOS default is now a chord, so neither the verb "Double-tap" nor a

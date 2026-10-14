@@ -95,6 +95,21 @@ pub fn open_dashboard_route(
         }
     } else if route == "/research" || route == "/browser-agent" {
         run.map(|run| format!("{route}?run={run}")).unwrap_or_else(|| route.to_string())
+    } else if route == "/meetings" {
+        // "<meeting id>" or "<meeting id>:<second>", from a chat citation. Both
+        // halves are checked here rather than trusted from the webview.
+        let (id, second) = resource_id
+            .unwrap_or_default()
+            .split_once(':')
+            .map(|(id, second)| (id, Some(second)))
+            .unwrap_or((resource_id.unwrap_or_default(), None));
+        let valid_id = !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric());
+        let valid_second = second.filter(|s| !s.is_empty() && s.len() <= 6 && s.chars().all(|c| c.is_ascii_digit()));
+        match (valid_id, valid_second) {
+            (true, Some(second)) => format!("{route}?id={id}&t={second}"),
+            (true, None) => format!("{route}?id={id}"),
+            _ => route.to_string(),
+        }
     } else {
         route.to_string()
     };

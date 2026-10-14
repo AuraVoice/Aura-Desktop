@@ -16,8 +16,31 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+### Added
+
+- Ask Aura in text chat to write an email and it now arrives as an email card instead of a block of text: a subject you can copy on its own, the message, your signature, a Copy email button, and Open in Gmail, which starts a new Gmail message with the subject and text already filled in. Set your signature in Settings > General > Email drafts; until you do, Aura signs with your first name.
+- Meeting notes now know who was invited and what the calendar invite said, so action items and decisions can name the right people and topics.
+- Ask Aura in chat about your past meetings ("what did we decide about the midterm?") and it searches your notes and transcripts, quotes what was said, and links each meeting. The link opens the note at that moment.
+- The Meetings page has search, which finds meetings by what was said rather than exact words, plus filters for each kind of meeting and a Load more button for older notes.
+- Draft follow-up on a meeting writes the thank-you and recap email from its notes, addressed to everyone invited. Edit it right there, then Open in Gmail starts the message with everything filled in, ready for you to send.
+- Send to Notion, in a meeting's menu, saves the notes as a page in an "Aura Meeting Notes" database in your Notion, with action items as checkboxes. Aura asks before it saves.
+- Notes for a recurring meeting (a weekly standup, a lecture series, a regular 1:1) now open with "Since last time": what happened to the last session's action items and open questions.
+- Upcoming events on Home show what Aura already knows: the last session of a recurring meeting, or your last recorded meeting with the same people. Click it to open that meeting.
+- Record in person, from the tray or the Meetings page, records a class, study group or conversation in the room using just your microphone. Notes label each voice Speaker 1, Speaker 2 and so on, and sound playing on your computer is left out.
+- Upload recording on the Meetings page turns a lecture or voice memo you already have (mp3, m4a, wav, ogg, flac or webm, up to 2 hours) into notes. Aura reads the file first and tells you how long it is before it uses one of your monthly meetings.
+- A recording that has heard no one talking for 10 minutes shows "No one's talking" with Keep recording, and stops on its own a minute later, so a forgotten recording no longer runs to the time limit.
+- Slack on the Connectors page. Once it's connected, Send to Slack in a meeting's menu posts the notes to a channel you pick, as you, after you confirm.
+- Coding agents on the Connectors page lets Claude Code, Cursor or Codex read your meeting notes. Connect gives you a setup line to paste, and Revoke cuts the agent off. Agents can only read notes, never change them.
+- Settings > General > Meeting Notes has a "Words Aura should know" list. Add names, course codes and jargon, and your meeting transcripts spell them the way you typed them.
+
+### Changed
+
+- Meeting Notes now records meetings, classes and lectures up to 2 hours long, up from 1 hour.
+
 ### Fixed
 
+- On Windows, double-tapping Left Ctrl on the onboarding "try your hotkey" screen now lights the tile and moves you on. It also starts a call while the dashboard or chat card is in front, where it used to do nothing.
+- A desktop task can no longer take an Allow you clicked on an approval card that had already timed out and use it as the answer to the next, different question. Every new question waits for its own answer.
 - Disconnecting Notion, LinkedIn or X on the Connectors page now really disconnects it, like Google Calendar, Gmail and GitHub already do. Connecting again starts from scratch in your browser, so you can pick a different account or workspace instead of Aura quietly reusing the old one. GitHub now always asks which account to use.
 
 ## [0.18.1] - 2026-10-13

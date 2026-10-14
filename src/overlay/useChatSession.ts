@@ -36,6 +36,7 @@ import { logError } from "../lib/log";
 import { captureException } from "../lib/sentry";
 import {
   MAX_MESSAGE_LENGTH,
+  type ChatEmailDraft,
   type ChatLane,
   type ChatMessage,
   type ChatReminder,
@@ -268,6 +269,17 @@ function normalizeTurnFailures(messages: ChatMessage[]): ChatMessage[] {
       ? { ...message, state: "failed" as const }
       : message,
   );
+}
+
+/** `done.metadata.draft`, or null for anything that is not an email with a body. */
+function toChatEmailDraft(draft: unknown): ChatEmailDraft | null {
+  if (typeof draft !== "object" || draft === null) return null;
+  const raw = draft as Record<string, unknown>;
+  if (raw.skill_id !== "email") return null;
+  const body = typeof raw.body === "string" ? raw.body.trim() : "";
+  if (!body) return null;
+  const subject = typeof raw.subject === "string" ? raw.subject.trim() : "";
+  return { subject, body };
 }
 
 function toChatReminder(reminder: Record<string, unknown>, animate = false): ChatReminder {
@@ -742,6 +754,33 @@ export function useChatSession({ enabled, uid, resolveAttachments }: UseChatSess
               }
             : message,
         ));
+      }
+      const emailDraft = metadata.reminder ? null : toChatEmailDraft(metadata.draft);
+      if (emailDraft) {
+        // The row keeps the model's prose as its text. When the model said
+        // nothing, finishAssistantText has already dropped the row, so it is
+        // rebuilt with the draft itself as the text history will carry.
+        const fallbackText = emailDraft.subject
+          ? `Subject: ${emailDraft.subject}\n\n${emailDraft.body}`
+          : emailDraft.body;
+        setMessages((current) => {
+          if (!current.some((message) => message.id === assistantId)) {
+            return [...current, {
+              id: assistantId,
+              turnId: clientMessageId,
+              role: "assistant",
+              text: fallbackText,
+              state: "complete",
+              kind: "text",
+              emailDraft,
+            }];
+          }
+          return current.map((message) =>
+            message.id === assistantId
+              ? { ...message, text: message.text || fallbackText, state: "complete", emailDraft }
+              : message,
+          );
+        });
       }
     };
 

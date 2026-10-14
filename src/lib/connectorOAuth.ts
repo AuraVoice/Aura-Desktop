@@ -7,6 +7,7 @@ const KNOWN_CONNECTORS: ReadonlySet<string> = new Set<ConnectorName>([
   "github",
   "linkedin",
   "x",
+  "slack",
 ]);
 
 export interface ConnectorOAuthCompletion {

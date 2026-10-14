@@ -50,12 +50,13 @@ export interface AccountConnectorStatus {
   bookmarkCount: number | null;
 }
 
-export type AccountConnectorName = "github" | "linkedin" | "x";
+export type AccountConnectorName = "github" | "linkedin" | "x" | "slack";
 
 export const ACCOUNT_CONNECTOR_NAMES: readonly AccountConnectorName[] = [
   "github",
   "linkedin",
   "x",
+  "slack",
 ];
 
 export interface ConnectorsCatalog {
@@ -91,12 +92,14 @@ const TRUSTED_AUTH_HOSTS: Record<ConnectorName, string> = {
   github: "github.com",
   linkedin: "www.linkedin.com",
   x: "x.com",
+  slack: "slack.com",
 };
 
 const ACCOUNT_CONNECTOR_PATHS: Record<AccountConnectorName, string> = {
   github: "github",
   linkedin: "linkedin",
   x: "x",
+  slack: "slack",
 };
 
 export interface ConnectorOAuthAuthorization {
@@ -211,8 +214,32 @@ export function parseConnectorsCatalog(raw: unknown): ConnectorsCatalog {
       github: parseAccountStatus(data.github),
       linkedin: parseAccountStatus(data.linkedin),
       x: parseAccountStatus(data.x),
+      slack: parseAccountStatus(data.slack),
     },
   };
+}
+
+export interface SlackChannel {
+  id: string;
+  name: string;
+  isPrivate: boolean;
+}
+
+/** Channels the user is in, for Send to Slack. Throws
+ *  ConnectorReauthorizationRequiredError when Slack needs reconnecting. */
+export async function fetchSlackChannels(): Promise<SlackChannel[]> {
+  const response = await authFetch("/connectors/slack/channels");
+  if (response.status === 409) throw new ConnectorReauthorizationRequiredError("slack");
+  if (!response.ok) throw new Error(`Slack channels failed (${response.status})`);
+  const body = (await response.json()) as { channels?: unknown };
+  return Array.isArray(body.channels)
+    ? body.channels.flatMap((raw) => {
+        const row = raw as Record<string, unknown> | null;
+        return row && typeof row.id === "string" && typeof row.name === "string"
+          ? [{ id: row.id, name: row.name, isPrivate: row.is_private === true }]
+          : [];
+      })
+    : [];
 }
 
 /** One reader for every connector action response: the 409 reauthorization

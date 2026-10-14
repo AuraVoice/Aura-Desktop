@@ -74,6 +74,7 @@ export function noteMarkdown(meeting: MeetingDoc, dateLabel: string): string {
   let out = `# ${meeting.title || "Untitled meeting"}\n\n`;
   if (dateLabel) out += `${dateLabel}\n\n`;
   if (note.summary) out += `## Summary\n\n${note.summary}\n\n`;
+  out += section(meetingNotes.sinceLastTimeHeading, note.sinceLastTime);
   out += section(meetingNotes.keyPointsHeading, note.keyPoints);
   if (note.kind === "interview" && note.debrief.length) {
     out += `## ${meetingNotes.debriefHeading}\n\n`;

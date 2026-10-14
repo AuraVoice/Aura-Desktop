@@ -164,9 +164,12 @@ body,
   user-select: none;
 }
 
-/* Held text: the label and the words stack, so the transcript gets the width. */
+/* Held text: the label and the words stack, so the transcript gets the width.
+   The sign-in card stacks the same way: caption row on top, button below. Its
+   height is SIGN_IN_HEIGHT in hud.rs. */
 .dictation-message.is-pending,
-.dictation-message.is-recovery {
+.dictation-message.is-recovery,
+.dictation-message.is-sign-in {
   flex-direction: column;
   align-items: stretch;
   gap: 6px;
@@ -202,6 +205,48 @@ body,
   color: #111;
   font: 600 12px/1 var(--font-body);
   cursor: pointer;
+}
+
+.dictation-message__copy:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* The sign-in card's close button, at the right end of the top row. */
+.dictation-message__close {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin: -4px -6px 0 0;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--glass-text-dim);
+  cursor: pointer;
+}
+
+.dictation-message__close svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.dictation-message__close:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--glass-text-bright);
+}
+
+.dictation-message__close:focus-visible {
+  outline: 2px solid var(--glass-text-bright);
+  outline-offset: 1px;
 }
 
 .dictation-message__copy-check {

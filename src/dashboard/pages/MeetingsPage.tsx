@@ -14,14 +14,18 @@ import {
   FileJson,
   FileText,
   HardDrive,
+  Hash,
   LoaderCircle,
+  Mail,
   MessageCircleQuestion,
+  NotebookPen,
   MessageSquareText,
   Pencil,
   Pin,
   PinOff,
   RefreshCw,
   RotateCcw,
+  Search,
   Sparkles,
   Trash2,
   TriangleAlert,
@@ -30,15 +34,28 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { trackEvent } from "../../lib/analytics";
-import { getMeeting, getMeetings } from "../../lib/dashboardApi";
+import {
+  getMeeting,
+  getMeetings,
+  searchMeetings,
+  type MeetingSearchResult,
+} from "../../lib/dashboardApi";
 import { CHAT_ATTACH_REQUESTED, type ChatAttachRequest } from "../../lib/ipcEvents";
 import { logError } from "../../lib/log";
 import {
   meetingActionFailureCopy,
   meetingFailureCopy,
   meetingKindLabels,
+  meetingFollowUpCopy,
   meetingNotes,
+  meetingSearchCopy,
+  meetingShareCopy,
 } from "../../lib/meetingCopy";
+import { fetchConnectors } from "../../lib/connectors";
+import type { PendingActionTool } from "../../lib/pendingActions";
+import { MeetingCaptureButtons, MeetingCaptureStatus, useMeetingCaptureModes } from "./MeetingCaptureModes";
+import { MeetingFollowUp } from "./MeetingFollowUp";
+import { MeetingSendToSlack, MeetingShare } from "./MeetingShare";
 import {
   canExportSubtitles,
   clockStamp,
@@ -69,7 +86,9 @@ import {
 import { CardGrid } from "../components/CardGrid";
 import type { CardModel } from "../components/DashboardCard";
 import { EmptyState } from "../components/EmptyState";
+import { ExpandingSearch } from "../components/ExpandingSearch";
 import { PageError } from "../components/PageError";
+import { ChipStrip } from "../components/RangeChips";
 import { RefreshIndicator } from "../components/RefreshIndicator";
 import { RowMenu, type RowMenuItem } from "../components/RowMenu";
 import { SlidingTabs, useTabStage } from "../components/SlidingTabs";
@@ -279,6 +298,12 @@ function MeetingInsights({
         <section className="db-meeting-section">
           <h2>Summary</h2>
           <p className="db-detail-text">{note.summary}</p>
+        </section>
+      )}
+      {note.sinceLastTime.length > 0 && (
+        <section className="db-meeting-section">
+          <h2>{meetingNotes.sinceLastTimeHeading}</h2>
+          <NoteList items={note.sinceLastTime} />
         </section>
       )}
       {note.chapters.length > 0 && onChapter && (
@@ -519,11 +544,14 @@ function actionErrorText(err: unknown): string {
 function MeetingDetail({
   meeting,
   local,
+  initialSecond,
   onBack,
   onListReload,
 }: {
   meeting: MeetingDoc;
   local?: LocalRecording;
+  /** Open at this moment of the transcript: a chat citation or a search hit. */
+  initialSecond?: number | null;
   onBack: () => void;
   onListReload: () => void;
 }) {
@@ -552,6 +580,23 @@ function MeetingDetail({
   const [copied, setCopied] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [jump, setJump] = useState<{ index: number; nonce: number } | null>(null);
+  // One panel under the actions bar at a time: the follow-up email or a send.
+  const [panel, setPanel] = useState<null | "followUp" | PendingActionTool>(null);
+  // Which destinations the user has connected; read once per opened meeting.
+  const [connected, setConnected] = useState({ notion: false, slack: false });
+  useEffect(() => {
+    let cancelled = false;
+    fetchConnectors()
+      .then((catalog) => {
+        if (!cancelled) {
+          setConnected({ notion: catalog.notion.enabled, slack: catalog.accounts.slack.enabled });
+        }
+      })
+      .catch((err) => logError("MeetingsPage: connector status", err));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const note = current.note ? shownNote(current.note, current.editedNote) : null;
   const turns = current.note?.transcript ?? [];
@@ -664,14 +709,46 @@ function MeetingDetail({
     else regenerate(kind);
   };
 
-  const openChapter = (startS: number) => {
+  const jumpToSecond = (startS: number) => {
     setJump({ index: chapterTurnIndex(turns, startS), nonce: Date.now() });
     if (stacked && pane.tab !== "transcript") pane.switchTab("transcript");
+  };
+
+  const openChapter = (startS: number) => {
+    jumpToSecond(startS);
     trackEvent("meeting_chapter_opened", {});
   };
 
+  // A link that names a moment jumps there once, as soon as the transcript
+  // has loaded; later re-renders of the same meeting leave the view alone.
+  const jumpedForRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (initialSecond == null || turns.length === 0) return;
+    const key = `${current.meetingId}:${initialSecond}`;
+    if (jumpedForRef.current === key) return;
+    jumpedForRef.current = key;
+    jumpToSecond(initialSecond);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialSecond, turns.length, current.meetingId]);
+
   const menuItems: RowMenuItem[] = note
     ? [
+        ...(connected.notion
+          ? [{
+              label: meetingShareCopy.notion,
+              Icon: NotebookPen,
+              disabled: busy !== "",
+              onSelect: () => setPanel("notion_save_meeting"),
+            }]
+          : []),
+        ...(connected.slack
+          ? [{
+              label: meetingShareCopy.slack,
+              Icon: Hash,
+              disabled: busy !== "",
+              onSelect: () => setPanel("slack_post_meeting"),
+            }]
+          : []),
         { label: meetingNotes.exportMarkdown, Icon: FileText, onSelect: () => void exportAs("md") },
         {
           label: meetingNotes.exportText,
@@ -770,6 +847,15 @@ function MeetingDetail({
           </button>
           <button
             type="button"
+            className={`db-secondary-btn${panel === "followUp" ? " is-active" : ""}`}
+            aria-pressed={panel === "followUp"}
+            onClick={() => setPanel(panel === "followUp" ? null : "followUp")}
+          >
+            <Mail size={15} />
+            {meetingFollowUpCopy.button}
+          </button>
+          <button
+            type="button"
             className="db-secondary-btn"
             disabled={editing || busy !== ""}
             onClick={() => {
@@ -805,6 +891,15 @@ function MeetingDetail({
         </div>
       )}
 
+      {state === "ready" && note && panel === "followUp" && (
+        <MeetingFollowUp meetingId={current.meetingId} onClose={() => setPanel(null)} />
+      )}
+      {state === "ready" && note && panel === "slack_post_meeting" && (
+        <MeetingSendToSlack meeting={current} onClose={() => setPanel(null)} />
+      )}
+      {state === "ready" && note && panel && panel !== "followUp" && panel !== "slack_post_meeting" && (
+        <MeetingShare meeting={current} tool={panel} onClose={() => setPanel(null)} />
+      )}
       {pendingKind && (
         <div className="db-meeting-action-status" role="alert">
           <span>{meetingNotes.regenerateReplacesEdits}</span>
@@ -1277,27 +1372,99 @@ export function meetingPath(meetingId: string): string {
   return `/meetings?id=${encodeURIComponent(meetingId)}`;
 }
 
+type KindFilter = MeetingKind | "all";
+
+const KIND_FILTER_OPTIONS: { value: KindFilter; label: string }[] = [
+  { value: "all", label: "All" },
+  ...MEETING_KINDS.map((kind) => ({ value: kind, label: meetingKindLabels[kind] ?? kind })),
+];
+
+/** Typing pauses this long before a search runs, so a query is one request. */
+const SEARCH_DEBOUNCE_MS = 400;
+
 export function MeetingsPage() {
+  const [kind, setKind] = useState<KindFilter>("all");
   const res = useDashboardResource<MeetingDoc[]>(
-    "meetings",
-    (signal) => getMeetings(signal),
+    kind === "all" ? "meetings" : `meetings:${kind}`,
+    (signal) => getMeetings(signal, { kind: kind === "all" ? "" : kind }),
   );
   const local = useLocalRecordings();
+  const captureModes = useMeetingCaptureModes(() => {
+    res.reload();
+    local.loadRecordings();
+  });
   const [searchParams, setSearchParams] = useSearchParams();
   const paramId = searchParams.get("id");
+  const paramSecond = Number.parseInt(searchParams.get("t") ?? "", 10);
   const [selectedId, setSelectedIdState] = useState<string | null>(paramId);
-  // An unknown or deleted id simply matches nothing and the list shows.
+  const [openSecond, setOpenSecond] = useState<number | null>(
+    Number.isFinite(paramSecond) ? paramSecond : null,
+  );
   useEffect(() => {
-    if (paramId) setSelectedIdState(paramId);
-  }, [paramId]);
-  const setSelectedId = (id: string | null) => {
+    if (!paramId) return;
+    setSelectedIdState(paramId);
+    setOpenSecond(Number.isFinite(paramSecond) ? paramSecond : null);
+  }, [paramId, paramSecond]);
+  const setSelectedId = (id: string | null, second: number | null = null) => {
     setSelectedIdState(id);
+    setOpenSecond(second);
     if (!id && paramId) setSearchParams({}, { replace: true });
   };
   const [pendingMeetingDelete, setPendingMeetingDelete] = useState<MeetingDoc | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  const meetings = useMemo(() => res.data ?? [], [res.data]);
+
+  // "Load more" pages, appended after the first page the resource owns. A
+  // filter change starts over.
+  const [morePages, setMorePages] = useState<MeetingDoc[]>([]);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [noMore, setNoMore] = useState(false);
+  useEffect(() => {
+    setMorePages([]);
+    setNoMore(false);
+  }, [kind, res.data]);
+
+  const [query, setQuery] = useState("");
+  const [search, setSearch] = useState<{
+    query: string;
+    results: MeetingSearchResult[] | null;
+    error: boolean;
+  }>({ query: "", results: null, error: false });
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (!trimmed) {
+      setSearch({ query: "", results: null, error: false });
+      return;
+    }
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      searchMeetings(trimmed, controller.signal)
+        .then((results) => {
+          setSearch({ query: trimmed, results, error: false });
+          trackEvent("meetings_searched", { results: results.length });
+        })
+        .catch((err) => {
+          if (controller.signal.aborted) return;
+          logError("MeetingsPage: search", err);
+          setSearch({ query: trimmed, results: [], error: true });
+        });
+    }, SEARCH_DEBOUNCE_MS);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [query]);
+
+  // A link (chat citation, notification, Home) can name a meeting older than
+  // any loaded page; fetch it on its own so the link always opens it.
+  const [linked, setLinked] = useState<MeetingDoc | null>(null);
+
+  const listed = useMemo(() => [...(res.data ?? []), ...morePages], [res.data, morePages]);
+  const searching = search.results !== null;
+  const meetings = useMemo(
+    () => (searching ? (search.results ?? []).map((result) => result.meeting) : listed),
+    [searching, search.results, listed],
+  );
   const localByMeeting = useMemo(() => {
     const map = new Map<string, LocalRecording>();
     for (const recording of local.recordings) {
@@ -1307,14 +1474,59 @@ export function MeetingsPage() {
   }, [local.recordings]);
   const models = useMemo(
     () =>
-      meetings.map((meeting) =>
-        meetingToCard(meeting, localByMeeting.get(meeting.meetingId), setPendingMeetingDelete),
-      ),
-    [meetings, localByMeeting],
+      searching
+        ? (search.results ?? []).map((result) => ({
+            ...meetingToCard(result.meeting, localByMeeting.get(result.meeting.meetingId), setPendingMeetingDelete),
+            preview: result.excerpt || result.meeting.note?.summary || "",
+          }))
+        : meetings.map((meeting) =>
+            meetingToCard(meeting, localByMeeting.get(meeting.meetingId), setPendingMeetingDelete),
+          ),
+    [searching, search.results, meetings, localByMeeting],
   );
-  const selectedMeeting = selectedId
-    ? meetings.find((meeting) => meeting.meetingId === selectedId) ?? null
+  const known = selectedId
+    ? meetings.find((meeting) => meeting.meetingId === selectedId)
+      ?? listed.find((meeting) => meeting.meetingId === selectedId)
+      ?? (linked?.meetingId === selectedId ? linked : null)
     : null;
+  const selectedMeeting = known ?? null;
+
+  useEffect(() => {
+    if (!selectedId || known || res.loading) return;
+    let cancelled = false;
+    getMeeting(selectedId)
+      .then((meeting) => {
+        if (!cancelled) setLinked(meeting);
+      })
+      .catch((err) => logError("MeetingsPage: open linked meeting", err));
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedId, known, res.loading]);
+
+  const loadMore = async () => {
+    const last = listed[listed.length - 1];
+    if (!last || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const page = await getMeetings(undefined, {
+        kind: kind === "all" ? "" : kind,
+        before: last.createdAt,
+      });
+      setMorePages((current) => [...current, ...page]);
+      if (page.length < 20) setNoMore(true);
+    } catch (err) {
+      logError("MeetingsPage: load more", err);
+      setNotice("Aura couldn't load more meetings. Try again.");
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
+  const openFromList = (id: string) => {
+    const hit = search.results?.find((result) => result.meeting.meetingId === id);
+    setSelectedId(id, hit && hit.matchStartS > 0 ? hit.matchStartS : null);
+  };
 
   const removeMeeting = async (meeting: MeetingDoc) => {
     setDeleting(true);
@@ -1355,42 +1567,91 @@ export function MeetingsPage() {
         <MeetingDetail
           meeting={selectedMeeting}
           local={localByMeeting.get(selectedMeeting.meetingId)}
+          initialSecond={openSecond}
           onBack={() => setSelectedId(null)}
           onListReload={res.reload}
         />
       ) : (
         <>
           <LocalRecoverySection {...local} onListReload={res.reload} />
-          <div className="db-page-toolbar db-page-toolbar-end">
-            <RefreshIndicator
-              refreshing={res.refreshing}
-              stale={res.stale}
-              cachedAt={res.cachedAt}
-              onRetry={res.reload}
-            />
+          <div className="db-page-toolbar">
+            {searching ? (
+              <span className="db-meeting-search-summary" role="status">
+                {search.error
+                  ? meetingSearchCopy.failed
+                  : meetingSearchCopy.results(search.results?.length ?? 0, search.query)}
+              </span>
+            ) : (
+              <ChipStrip
+                label={meetingSearchCopy.kindLabel}
+                options={KIND_FILTER_OPTIONS}
+                value={kind}
+                onChange={setKind}
+              />
+            )}
+            <div className="db-meeting-toolbar-end">
+              <MeetingCaptureButtons modes={captureModes} />
+              <ExpandingSearch
+                value={query}
+                onChange={setQuery}
+                placeholder={meetingSearchCopy.placeholder}
+                label={meetingSearchCopy.label}
+              />
+              <RefreshIndicator
+                refreshing={res.refreshing}
+                stale={res.stale}
+                cachedAt={res.cachedAt}
+                onRetry={res.reload}
+              />
+            </div>
           </div>
 
+          <MeetingCaptureStatus modes={captureModes} />
           {notice && (
             <p className="db-local-recordings-message" role="status">
               {notice}
             </p>
           )}
-          {res.error ? (
+          {res.error && !searching ? (
             <PageError authExpired={res.authExpired} onRetry={res.reload} />
           ) : (
             <CardGrid
               models={models}
-              loading={res.loading}
+              loading={!searching && res.loading}
               columns="three"
-              onOpen={setSelectedId}
+              onOpen={openFromList}
               empty={
-                <EmptyState
-                  Icon={Video}
-                  heading="No meetings yet"
-                  copy="Turn on meeting notes during a call and your notes will show up here."
-                />
+                searching ? (
+                  <EmptyState
+                    Icon={Search}
+                    heading={meetingSearchCopy.emptyHeading}
+                    copy={meetingSearchCopy.emptyCopy}
+                  />
+                ) : (
+                  <EmptyState
+                    Icon={Video}
+                    heading={kind === "all" ? "No meetings yet" : meetingSearchCopy.noKind}
+                    copy={
+                      kind === "all"
+                        ? "Turn on meeting notes during a call and your notes will show up here."
+                        : meetingSearchCopy.noKindCopy
+                    }
+                  />
+                )
               }
             />
+          )}
+          {!searching && !res.error && !noMore && (res.data?.length ?? 0) >= 20 && (
+            <div className="db-meeting-load-more">
+              <button
+                type="button"
+                className="db-secondary-btn"
+                disabled={loadingMore}
+                onClick={() => void loadMore()}
+              >
+                {loadingMore ? meetingSearchCopy.loadingMore : meetingSearchCopy.loadMore}
+              </button>
+            </div>
           )}
         </>
       )}

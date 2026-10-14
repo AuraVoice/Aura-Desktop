@@ -1,5 +1,4 @@
 import { Check, CircleAlert, FolderGit2, LoaderCircle, RefreshCw } from "lucide-react";
-import type { ComponentType } from "react";
 import { useEffect, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type {
@@ -20,28 +19,14 @@ import {
   GmailBrandIcon,
   GoogleCalendarBrandIcon,
   NotionBrandIcon,
-  SlackBrandIcon,
 } from "../components/connectorBrandIcons";
 import { DetailModal } from "../components/DetailModal";
+import { CodingAgentsRow } from "./CodingAgentsRow";
 import {
   useConnectors,
   type ConnectorBanner,
   type GitHubReposError,
 } from "../useConnectors";
-
-const COMING_SOON_CONNECTORS: Array<{
-  id: "gmail" | "slack";
-  Icon: ComponentType<{ size?: number; className?: string }>;
-  name: string;
-  copy: string;
-}> = [
-  {
-    id: "slack",
-    Icon: SlackBrandIcon,
-    name: "Slack",
-    copy: "Keep Buddy in the loop with your team conversations.",
-  },
-];
 
 export function ConnectorsPage() {
   const connectors = useConnectors();
@@ -165,9 +150,7 @@ export function ConnectorsPage() {
             />
           ))}
 
-          {COMING_SOON_CONNECTORS.map((connector) => (
-            <ComingSoonConnector key={connector.id} {...connector} />
-          ))}
+          <CodingAgentsRow />
         </section>
       )}
 
@@ -553,29 +536,6 @@ function AccountConnectorRow({
           onToggle={onToggle}
         />
       </div>
-    </article>
-  );
-}
-
-function ComingSoonConnector({
-  Icon,
-  name,
-  copy,
-}: {
-  Icon: ComponentType<{ size?: number; className?: string }>;
-  name: string;
-  copy: string;
-}) {
-  return (
-    <article className="db-panel db-connector-row">
-      <span className="db-connector-icon">
-        <Icon size={21} aria-hidden />
-      </span>
-      <div className="db-connector-row-copy">
-        <h2>{name}</h2>
-        <p>{copy}</p>
-      </div>
-      <span className="db-connector-coming-soon">Coming soon</span>
     </article>
   );
 }

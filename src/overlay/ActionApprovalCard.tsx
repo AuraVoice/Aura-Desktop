@@ -56,6 +56,7 @@ export function ActionApprovalCard({
   const name = CONNECTOR_NAMES[action.connector];
   const showingOutcome = actions.showingOutcome;
   const overLimit = action.preview.charLimit !== null && action.preview.chars > action.preview.charLimit;
+  const email = action.connector === "gmail";
 
   return (
     <GlassSurface className="action-card ph-no-capture" draggable={false}>
@@ -80,15 +81,21 @@ export function ActionApprovalCard({
           </p>
         ) : (
           <>
+            {email && (
+              <p className="action-card-meta">
+                To {action.preview.to}
+                {action.preview.subject && <><br />Subject: {action.preview.subject}</>}
+              </p>
+            )}
             {action.preview.text && <p className="action-card-text">{action.preview.text}</p>}
-            <p className="action-card-meta">
+            {!email && <p className="action-card-meta">
               {action.preview.charLimit !== null
                 ? `${action.preview.chars} / ${action.preview.charLimit} characters`
                 : `${action.preview.chars} characters`}
               {action.connector === "x" && action.preview.hasLink && (
                 <span className="action-card-warning">Has a link</span>
               )}
-            </p>
+            </p>}
           </>
         )}
 
@@ -117,7 +124,7 @@ export function ActionApprovalCard({
                 disabled={actions.busy || overLimit || action.status !== "pending"}
                 onClick={() => actions.approve(action.approvalId)}
               >
-                {actions.busy ? "Working" : "Post"}
+                {actions.busy ? "Working" : email ? "Send" : "Post"}
               </button>
               <button
                 type="button"

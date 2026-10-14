@@ -110,13 +110,20 @@ const MAX_LIVE_WORKERS: usize = 3;
 pub struct NativeUi {
     jobs: Mutex<Sender<Job>>,
     live: Arc<AtomicUsize>,
+    /// Every worker swapped in since launch, so a task can say in its trace
+    /// which step the swap happened on.
+    restarts: AtomicUsize,
 }
 
 impl NativeUi {
     pub fn start() -> Self {
         let live = Arc::new(AtomicUsize::new(0));
         let jobs = spawn_worker(&live).unwrap_or_else(|| mpsc::channel().0);
-        Self { jobs: Mutex::new(jobs), live }
+        Self { jobs: Mutex::new(jobs), live, restarts: AtomicUsize::new(0) }
+    }
+
+    pub fn restarts(&self) -> usize {
+        self.restarts.load(Ordering::SeqCst)
     }
 
     fn send(&self, job: Job) -> Result<(), Job> {
@@ -134,6 +141,7 @@ impl NativeUi {
         match spawn_worker(&self.live) {
             Some(fresh) => {
                 *jobs = fresh;
+                self.restarts.fetch_add(1, Ordering::SeqCst);
                 warn!("native_ui: worker restarted reason={reason} alive={}", self.live.load(Ordering::SeqCst));
                 true
             }

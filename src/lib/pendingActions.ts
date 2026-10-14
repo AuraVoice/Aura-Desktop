@@ -3,25 +3,44 @@ import { AuthRequiredError, authFetchWithTimeout } from "./api";
 /**
  * Approval cards for connector writes (juno-backend services/pending_actions.py).
  *
- * A post to LinkedIn or X is only ever PROPOSED by a tool or a draft's Post
- * button. The backend stores the exact arguments and a
+ * A post to LinkedIn or X, or an email from desktop chat, is only ever PROPOSED by
+ * a tool or a draft's Post button. The backend stores the exact arguments and a
  * preview; nothing reaches the provider until the user clicks on the card,
  * which calls approve. The preview shown here always comes from the backend
  * over the user's own token, never from the voice agent's data message, so the
  * card and the executed action cannot disagree.
  */
 
-export type PendingActionTool = "post_to_x" | "post_to_linkedin" | "swarm_calendar_hold" | "github_create_issue";
+export type PendingActionTool =
+  | "post_to_x"
+  | "post_to_linkedin"
+  | "swarm_calendar_hold"
+  | "github_create_issue"
+  | "send_email"
+  | "notion_save_meeting"
+  | "slack_post_meeting";
 
 export const PENDING_ACTION_TOOLS: ReadonlySet<string> = new Set<PendingActionTool>([
   "post_to_x",
   "post_to_linkedin",
   "swarm_calendar_hold",
   "github_create_issue",
+  "send_email",
+  "notion_save_meeting",
+  "slack_post_meeting",
 ]);
 
-export type PendingActionConnector = "x" | "linkedin" | "google_calendar" | "github";
-const CONNECTORS: ReadonlySet<string> = new Set<PendingActionConnector>(["x", "linkedin", "google_calendar", "github"]);
+export type PendingActionConnector =
+  | "x" | "linkedin" | "google_calendar" | "github" | "gmail" | "notion" | "slack";
+const CONNECTORS: ReadonlySet<string> = new Set<PendingActionConnector>([
+  "x", "linkedin", "google_calendar", "github", "gmail", "notion", "slack",
+]);
+
+/** Where an action is confirmed. The overlay card and Home's Needs you list
+ *  show only "chat" ones; Swarm and the Meetings page render their own. */
+export function confirmedElsewhere(action: PendingAction): boolean {
+  return action.origin === "swarm" || action.origin === "meetings";
+}
 
 export type PendingActionStatus =
   | "pending"
@@ -49,6 +68,11 @@ export interface PendingActionPreview {
   repo: string;
   issueTitle: string;
   labels: string[];
+  /** Emails only: the recipient and the subject line, exactly as they will be sent. */
+  to: string;
+  subject: string;
+  /** Meeting sends to Slack only: the channel's name. */
+  channel: string;
 }
 
 export interface PendingAction {
@@ -120,6 +144,9 @@ export function parsePendingAction(raw: unknown): PendingAction | null {
       repo: str(preview.repo),
       issueTitle: tool === "github_create_issue" ? str(preview.title) : "",
       labels: Array.isArray(preview.labels) ? preview.labels.filter((l): l is string => typeof l === "string") : [],
+      to: str(preview.to),
+      subject: str(preview.subject),
+      channel: str(preview.channel),
     },
     createdAt: str(data.created_at),
     expiresAt: str(data.expires_at),
@@ -135,6 +162,9 @@ export const CONNECTOR_NAMES: Record<PendingActionConnector, string> = {
   linkedin: "LinkedIn",
   google_calendar: "Google Calendar",
   github: "GitHub",
+  gmail: "Gmail",
+  notion: "Notion",
+  slack: "Slack",
 };
 
 /** What happened after Approve, from the action's own status and result reason. One copy
@@ -143,9 +173,21 @@ export function pendingActionOutcomeCopy(action: PendingAction): string {
   const name = CONNECTOR_NAMES[action.connector];
   const calendar = action.connector === "google_calendar";
   const issue = action.connector === "github";
-  const nothing = calendar ? "Nothing was booked." : issue ? "Nothing was opened." : "Nothing was posted.";
+  const email = action.connector === "gmail";
+  const saved = action.tool === "notion_save_meeting";
+  const nothing = calendar
+    ? "Nothing was booked."
+    : issue
+      ? "Nothing was opened."
+      : email
+        ? "Nothing was sent."
+        : saved
+          ? "Nothing was saved."
+          : "Nothing was posted.";
   if (action.status === "done") {
     if (issue) return `Opened in ${action.preview.repo || name}.`;
+    if (email) return `Sent to ${action.preview.to} from ${name}.`;
+    if (saved) return `Saved to ${name}, in Aura Meeting Notes.`;
     return calendar ? `Added to ${name}.` : `Posted to ${name}.`;
   }
   if (action.status === "expired") return "This expired. Ask again to prepare it.";
@@ -166,6 +208,11 @@ export function pendingActionOutcomeCopy(action: PendingAction): string {
       return "GitHub has to allow Aura to open issues first. Accept the new permission for the Aura app on GitHub, then review it again.";
     case "repo_not_granted":
       return "The Aura app on GitHub cannot see that repository. Add it to the app's repositories, then review it again.";
+    case "channel_not_found":
+    case "not_in_channel":
+      return "You're not in that Slack channel any more. Pick another one.";
+    case "meeting_not_ready":
+      return "This meeting's notes are gone, so nothing was sent.";
     default:
       return `${name} didn't accept it. ${nothing}`;
   }
@@ -221,6 +268,7 @@ export async function proposeAction(
   tool: PendingActionTool,
   args: Record<string, string>,
   requestId: string,
+  origin: "chat" | "meetings" = "chat",
 ): Promise<ProposeResult> {
   let response: Response;
   try {
@@ -229,7 +277,7 @@ export async function proposeAction(
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tool, args, request_id: requestId }),
+        body: JSON.stringify({ tool, args, request_id: requestId, origin }),
       },
       LIST_TIMEOUT_MS,
     );

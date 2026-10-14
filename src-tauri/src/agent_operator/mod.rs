@@ -572,6 +572,32 @@ fn wait_for_answer(commands: &mpsc::Receiver<RuntimeCommand>, wait: Duration) ->
     }
 }
 
+/// Drops any answer still queued from an earlier card, right before a new one
+/// is shown. An Allow clicked on a card that had already timed out arrives
+/// late, and without this the NEXT question, about a different action, would
+/// read it as its own yes. False when a Stop was among them.
+fn discard_stale_answers(commands: &mpsc::Receiver<RuntimeCommand>) -> bool {
+    while let Ok(command) = commands.try_recv() {
+        if matches!(command, RuntimeCommand::Stop) {
+            return false;
+        }
+    }
+    true
+}
+
+/// `result` with a note of every UI worker swapped in since the last trace
+/// line, so a step that stalled the worker says so in the stored trace.
+fn with_restart_note(ui: &NativeUi, traced: &mut usize, result: String) -> String {
+    let now = ui.restarts();
+    let fresh = now.saturating_sub(*traced);
+    *traced = now;
+    match fresh {
+        0 => result,
+        1 => format!("{result}; ui worker restarted"),
+        n => format!("{result}; ui worker restarted x{n}"),
+    }
+}
+
 /// The window list the model sees, as `[wN] app: "title"` lines, with the map
 /// the next `focus_window` resolves against.
 fn windows_block(windows: &[WindowEntry]) -> (String, HashMap<String, WindowEntry>) {
@@ -670,6 +696,8 @@ fn drive(
     let mut allowed_hosts: HashSet<String> = HashSet::new();
     // Input ticks Aura itself caused end here; anything after is the person.
     let mut input_mark = native_ui::last_input_tick();
+    // Worker restarts already written to a trace line.
+    let mut restarts_traced = ui.restarts();
 
     loop {
         while let Ok(command) = commands.try_recv() {
@@ -880,6 +908,9 @@ fn drive(
         if !takes_screen {
             input_mark = native_ui::last_input_tick();
         } else if native_ui::last_input_tick() != input_mark {
+            if !discard_stale_answers(commands) {
+                return Outcome::stopped();
+            }
             emit_progress(app, spec.epoch, "awaiting_checkin", step, &target_app);
             let _ = app.emit(
                 CHECKIN_EVENT,
@@ -936,6 +967,9 @@ fn drive(
                 false
             }
             Gate::NeedsApproval { description } => {
+                if !discard_stale_answers(commands) {
+                    return Outcome::stopped();
+                }
                 emit_progress(app, spec.epoch, "awaiting_approval", step, &target_app);
                 let _ = app.emit(
                     APPROVAL_EVENT,
@@ -975,7 +1009,7 @@ fn drive(
                             tokens_in,
                             tokens_out,
                             cost_microusd: cost,
-                            result: result.clone(),
+                            result: with_restart_note(&ui, &mut restarts_traced, result.clone()),
                             model: model.clone(),
                             progressed,
                         });
@@ -1079,7 +1113,7 @@ fn drive(
                         tokens_in,
                         tokens_out,
                         cost_microusd: cost,
-                        result: "ok".to_string(),
+                        result: with_restart_note(&ui, &mut restarts_traced, "ok".to_string()),
                         model,
                         progressed,
                     });
@@ -1095,7 +1129,7 @@ fn drive(
                         tokens_in,
                         tokens_out,
                         cost_microusd: cost,
-                        result: action.reason.clone(),
+                        result: with_restart_note(&ui, &mut restarts_traced, action.reason.clone()),
                         model,
                         progressed,
                     });
@@ -1144,7 +1178,7 @@ fn drive(
             tokens_in,
             tokens_out,
             cost_microusd: cost,
-            result: result.clone(),
+            result: with_restart_note(&ui, &mut restarts_traced, result.clone()),
             model,
             progressed,
         });
@@ -1180,6 +1214,9 @@ fn drive(
 
         if checkin_due {
             info!("agent_operator: spend check-in step={step} spent_microusd={}", governor.spent_microusd());
+            if !discard_stale_answers(commands) {
+                return Outcome::stopped();
+            }
             emit_progress(app, spec.epoch, "awaiting_checkin", step, &acted_app);
             let _ = app.emit(
                 CHECKIN_EVENT,

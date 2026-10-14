@@ -11,7 +11,7 @@ import {
   type AmbientRekeyPayload,
 } from "../lib/ipcEvents";
 import type { UpcomingMeeting } from "../lib/calendar";
-import { callLabel } from "../lib/meetingCopy";
+import { callLabel, meetingCaptureModeCopy } from "../lib/meetingCopy";
 import { sameCallFamily } from "../lib/meetingCallFamily";
 import {
   claimMeeting,
@@ -167,8 +167,9 @@ export interface MeetingCaptureState {
   capBlocked: boolean;
   dismissCapBlocked: () => void;
   /** Manual "Capture this call" entry from the tray, for calls the scanner
-   * does not know. Sets no call key, so a call going away never stops it. */
-  captureNow: () => void;
+   * does not know. Sets no call key, so a call going away never stops it.
+   * "in_person" records the microphone alone (tray or Meetings page). */
+  captureNow: (source: "call" | "in_person") => void;
   /** The "Record this meeting?" card's Record button: attaches to `event`
    * when the call overlaps an eligible calendar meeting, else a manual
    * capture labelled with the app. The capture stops when that call's
@@ -340,6 +341,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
       title: string,
       startTime: string,
       endTime: string,
+      source: "call" | "in_person" = "call",
     ): Promise<RecordCallOutcome> => {
       if (!uid || !ownsRuntime || recordingRef.current || claimInFlightRef.current) {
         return "skipped";
@@ -362,6 +364,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
               installationId: runtimeStatus.installationId,
               runtimeInstanceId: runtimeStatus.runtimeInstanceId,
               kind: "auto",
+              source,
             });
             if (!isCurrent()) return "skipped";
             claimsRef.current.set(eventId, claim);
@@ -373,6 +376,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
               captureRunId: claim.captureRunId,
               captureFence: claim.captureFence,
               eventId,
+              source,
             });
             if (!isCurrent()) return "skipped";
             recordActivity({
@@ -467,16 +471,21 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
     [ownsRuntime, startCaptureFor],
   );
 
-  const captureNow = useCallback(() => {
+  const captureNow = useCallback((source: "call" | "in_person") => {
     if (!ownsRuntime || recordingRef.current || !uidRef.current) return;
     const eventId = `manual:${crypto.randomUUID()}`;
     const now = new Date();
-    trackEvent("meeting_capture_manual", {});
+    trackEvent("meeting_capture_manual", { source });
     void startCaptureFor(
       eventId,
-      "Manual capture",
+      source === "in_person"
+        ? meetingCaptureModeCopy.inPersonTitle(
+            now.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" }),
+          )
+        : "Manual capture",
       now.toISOString(),
       new Date(now.getTime() + MANUAL_WINDOW_MS).toISOString(),
+      source,
     );
   }, [ownsRuntime, startCaptureFor]);
 
@@ -939,7 +948,7 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
   // Dev harness (see meetingDebug.ts).
   useEffect(() => {
     if (!import.meta.env.DEV || !ownsRuntime) return;
-    return installMeetingDebug({ captureNow, stopCapture, pump: () => void pump() });
+    return installMeetingDebug({ captureNow: () => captureNow("call"), stopCapture, pump: () => void pump() });
   }, [ownsRuntime, captureNow, stopCapture, pump]);
 
   const retryNow = useCallback(

@@ -2680,3 +2680,34 @@ Justification: a permission ask costs a full 24 h park and returns no informatio
 one question that must be stopped in code, the way _FINDABLE already stops asks a read can
 answer. And a session's wall clock is not its work time once it can wait on a person.
 ================================================================================
+2026-10-13: The Left Ctrl double-tap was deaf on every Aura window, onboarding test included (#25)
+Problem: on Windows the onboarding "try your hotkey" step never lit for the default voice trigger.
+Double-tapping Left Ctrl did nothing, so a new user's first try of Aura looked broken.
+Issue: Windows stops calling a WH_KEYBOARD_LL hook while a WebView2 window has focus, and the
+setup panel is focused on purpose. voice_toggle_key.rs already had the fix for this (the 15 ms
+GetAsyncKeyState focus poller), but it only fed the dictation and region chord machines. The
+double-tap TapState was fed by the hook alone, so it never saw a tap while any Aura window was
+in front: the onboarding test, the dashboard, the chat card. The test id, the owner and the
+prune were all fine; nothing was reaching hotkeys::intercept_voice_test at all.
+Solution: the poller also reads the toggle key into its own TapState, cancels the tap when any
+other keyboard key is down during the hold (the hook's chord rule), and honours a chord engaged
+on the same tick. Both sources send through send_tap, which drops a tap from one source that
+lands within 80 ms of one from the other, so a press the hook did hear is not counted twice and
+turned into a double-tap.
+Justification: a workaround for a deaf input path has to cover every consumer of that path. The
+poller was written for the chord, and the gesture that shares the same hook was left out.
+================================================================================
+2026-10-13: A late Allow on a timed-out card could approve the Operator's next question (#31)
+Problem: auditing whether an Allow "sticks" across pauses turned up the opposite risk. The
+Operator's approval, spend check-in and input-pause cards all answer through one mpsc channel
+with a bare Approve(bool).
+Issue: an approval times out at 60 s as a deny. A click on Allow that lands just after (the card
+is still on screen until the next status event arrives) sits in the channel. The loop-top drain
+only runs before the model request; an answer queued during that up-to-90 s request was still
+there when the guard asked about a DIFFERENT risky action, and wait_for_answer returned it at
+once. The user never saw the second card.
+Solution: discard_stale_answers drains the channel right before each card is emitted, keeping a
+Stop if one is in there. An answer can now only be read by the question it was clicked for.
+Justification: a deny must never turn into an allow. An untagged reply channel shared by several
+questions needs a drain at the point each question is asked, not only at the top of the loop.
+================================================================================

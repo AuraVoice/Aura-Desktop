@@ -46,6 +46,9 @@ export interface GeneralSettings {
    * through him. Read by Rust (dictation/hud.rs) at every placement, so the
    * key name is shared. Means nothing while showCompanionAvatar is off. */
   companionOnDesktop: boolean;
+  /** Appended under every email Aura drafts in text chat. Empty means "Best,"
+   * over the account's first name (resolveEmailSignature). */
+  emailSignature: string;
 }
 
 // Launch-at-login is deliberately absent: autostart.rs owns it in a different
@@ -89,6 +92,7 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   // the kind of thing a user has to choose, and mergeSettings folds the new
   // key into an existing store without a migration.
   companionOnDesktop: false,
+  emailSignature: "",
 };
 
 function mergeSettings(saved: GeneralSettings | null | undefined): GeneralSettings {

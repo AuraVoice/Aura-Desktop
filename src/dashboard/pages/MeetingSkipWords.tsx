@@ -3,14 +3,43 @@ import { X } from "lucide-react";
 import { trackEvent } from "../../lib/analytics";
 import { logError } from "../../lib/log";
 import { meetingActionFailureCopy, meetingSettingsCopy as copy } from "../../lib/meetingCopy";
-import { getExcludeKeywords, MeetingActionError, putExcludeKeywords } from "../../lib/meetings";
+import {
+  getMeetingWordList,
+  MeetingActionError,
+  putMeetingWordList,
+  type MeetingWordListName,
+} from "../../lib/meetings";
 
-/** Settings > Data and privacy > Private meetings. The words live on the
- *  server (users/{uid}/settings/meeting_notes) because synthesis is what reads
- *  them; every change is saved at once and the server's normalised list is
- *  what the chips show afterwards. */
-export function MeetingSkipWords() {
-  const [keywords, setKeywords] = useState<string[] | null>(null);
+/** How each list reads and normalises. Skip words match titles case-blind,
+ *  so they are stored lower-case; vocabulary keeps the user's casing because
+ *  the transcriber spells a term exactly as given. */
+const LISTS: Record<
+  MeetingWordListName,
+  { label: string; hint: string; placeholder: string; normalize: (word: string) => string }
+> = {
+  exclude_keywords: {
+    label: copy.skipLabel,
+    hint: copy.skipHint,
+    placeholder: copy.addPlaceholder,
+    normalize: (word) => word.toLowerCase(),
+  },
+  vocabulary: {
+    label: copy.vocabularyLabel,
+    hint: copy.vocabularyHint,
+    placeholder: copy.vocabularyPlaceholder,
+    normalize: (word) => word,
+  },
+};
+
+/** One editable word list under /meetings/settings: Settings > Data and
+ *  privacy > Private meetings (skip words), and Settings > General > Meeting
+ *  Notes (vocabulary). The words live on the server
+ *  (users/{uid}/settings/meeting_notes) because synthesis is what reads them;
+ *  every change is saved at once and the server's normalised list is what
+ *  the chips show afterwards. */
+export function MeetingWordList({ list }: { list: MeetingWordListName }) {
+  const spec = LISTS[list];
+  const [words, setWords] = useState<string[] | null>(null);
   const [draft, setDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -18,12 +47,12 @@ export function MeetingSkipWords() {
 
   useEffect(() => {
     let cancelled = false;
-    getExcludeKeywords()
+    getMeetingWordList(list)
       .then((loaded) => {
-        if (!cancelled) setKeywords(loaded);
+        if (!cancelled) setWords(loaded);
       })
       .catch((err) => {
-        logError("MeetingSkipWords: load", err);
+        logError(`MeetingWordList(${list}): load`, err);
         if (!cancelled) {
           setError(meetingActionFailureCopy(err instanceof MeetingActionError ? err.code : ""));
         }
@@ -31,19 +60,19 @@ export function MeetingSkipWords() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [list]);
 
   const save = async (next: string[]): Promise<boolean> => {
     setSaving(true);
     setError(null);
     setSaved(false);
     try {
-      setKeywords(await putExcludeKeywords(next));
+      setWords(await putMeetingWordList(list, next));
       setSaved(true);
-      trackEvent("meeting_exclude_keywords_saved", { count: next.length });
+      trackEvent(`meeting_${list}_saved`, { count: next.length });
       return true;
     } catch (err) {
-      logError("MeetingSkipWords: save", err);
+      logError(`MeetingWordList(${list}): save`, err);
       setError(meetingActionFailureCopy(err instanceof MeetingActionError ? err.code : ""));
       return false;
     } finally {
@@ -52,32 +81,32 @@ export function MeetingSkipWords() {
   };
 
   const add = async () => {
-    const word = draft.trim().replace(/\s+/g, " ").toLowerCase();
-    if (!word || !keywords) return;
-    if (keywords.includes(word)) {
+    const word = spec.normalize(draft.trim().replace(/\s+/g, " "));
+    if (!word || !words) return;
+    if (words.some((item) => item.toLowerCase() === word.toLowerCase())) {
       setDraft("");
       return;
     }
-    if (await save([...keywords, word])) setDraft("");
+    if (await save([...words, word])) setDraft("");
   };
 
   return (
     <div className="db-panel db-settings-panel">
       <div className="db-setting-row db-skip-words">
         <span>
-          <span className="db-setting-label">{copy.skipLabel}</span>
-          <span className="db-setting-description">{copy.skipHint}</span>
-          {keywords && (
+          <span className="db-setting-label">{spec.label}</span>
+          <span className="db-setting-description">{spec.hint}</span>
+          {words && (
             <span className="db-skip-words-chips">
-              {keywords.length === 0 && <span className="db-setting-description">{copy.empty}</span>}
-              {keywords.map((word) => (
+              {words.length === 0 && <span className="db-setting-description">{copy.empty}</span>}
+              {words.map((word) => (
                 <span key={word} className="db-skip-word">
                   {word}
                   <button
                     type="button"
                     aria-label={copy.remove(word)}
                     disabled={saving}
-                    onClick={() => void save(keywords.filter((item) => item !== word))}
+                    onClick={() => void save(words.filter((item) => item !== word))}
                   >
                     <X size={12} />
                   </button>
@@ -96,8 +125,8 @@ export function MeetingSkipWords() {
               className="db-skip-words-input"
               value={draft}
               maxLength={40}
-              placeholder={copy.addPlaceholder}
-              disabled={saving || keywords === null}
+              placeholder={spec.placeholder}
+              disabled={saving || words === null}
               onChange={(event) => {
                 setDraft(event.target.value);
                 setSaved(false);
@@ -106,7 +135,7 @@ export function MeetingSkipWords() {
             <button
               type="submit"
               className="db-secondary-btn"
-              disabled={saving || keywords === null || draft.trim().length === 0}
+              disabled={saving || words === null || draft.trim().length === 0}
             >
               {copy.add}
             </button>

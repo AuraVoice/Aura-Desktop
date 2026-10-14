@@ -26,6 +26,7 @@ pub(crate) mod audio;
 pub(crate) mod crypto;
 mod app_icon;
 pub mod detect;
+pub mod import;
 pub(crate) mod session;
 
 use std::sync::{Arc, Condvar, Mutex};
@@ -363,8 +364,12 @@ pub async fn start_meeting_capture(
     capture_run_id: String,
     capture_fence: i64,
     event_id: String,
+    // "in_person" records the microphone alone (audio.rs single_source);
+    // anything else, including an older caller that omits it, is a call.
+    source: Option<String>,
 ) -> Result<(), String> {
     require_runtime_owner(&app)?;
+    let single_source = source.as_deref() == Some("in_person");
     let ticket = crate::security::authorize(&app, crate::security::Operation::StartMeetingCapture)?;
     let owner_uid = ticket.uid().to_string();
     queue::validate_meeting_id(&meeting_id)?;
@@ -432,6 +437,7 @@ pub async fn start_meeting_capture(
                 next_seq,
                 timeline_base_ms,
                 finalization.clone(),
+                single_source,
             )
             .map_err(|e| {
                 // Init failures stay silent to the user (ambient-surface
@@ -522,6 +528,13 @@ pub async fn stop_meeting_capture(app: AppHandle, reason: String) -> Result<(), 
             None => Ok(()), // already stopped - a double click is not an error
         }
     }
+}
+
+/// The silence card's Keep recording: restart the engine's silence clock. A
+/// no-op with no live capture.
+#[tauri::command]
+pub fn meeting_keep_recording() {
+    audio::KEEP_RECORDING.store(true, std::sync::atomic::Ordering::Relaxed);
 }
 
 #[derive(Clone, Serialize)]

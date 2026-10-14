@@ -42,6 +42,13 @@ export const DICTATION_CREDENTIAL_NEEDED = "dictation-credential-needed";
 export const MEETING_CAPTURE_STATE = "meeting-capture-state";
 export const MEETING_JOIN_DETECTED = "meeting-join-detected";
 export const MEETING_SEGMENT_READY = "meeting-segment-ready";
+/** Rust's silence auto-stop: `warning` true means the capture stops in
+ *  `stopsInS` unless someone speaks or the user keeps recording. */
+export const MEETING_SILENCE = "meeting-silence";
+export interface MeetingSilencePayload {
+  warning: boolean;
+  stopsInS: number;
+}
 export const MEETING_LEFT = "meeting-left";
 // The ambient scanner saw a call window appear / disappear (detect.rs).
 export const MEETING_CALL_SEEN = "meeting-call-seen";
@@ -56,6 +63,8 @@ export const INTERVIEW_RESUME_UPDATED = "interview-resume-updated";
 // tray.rs
 export const OPEN_NOTIFICATIONS_REQUESTED = "open-notifications-requested";
 export const CAPTURE_NOW_REQUESTED = "capture-now-requested";
+/** Tray or Meetings page "Record in person" (a microphone-only capture). */
+export const CAPTURE_IN_PERSON_REQUESTED = "capture-in-person-requested";
 
 // updater.rs, toast.rs, connector_oauth.rs, dashboard.rs, status_pill.rs
 export const UPDATE_READY = "update-ready";

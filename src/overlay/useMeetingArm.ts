@@ -11,18 +11,17 @@ import { localDateString } from "../lib/memory";
 import { trackEvent } from "../lib/analytics";
 import { logError } from "../lib/log";
 
-/** TEMPORARY 60-MINUTE CLAMP (product decision 2026-07-11): meeting notes
- * only supports meetings up to one hour for now. Longer events (classes,
- * workshops, all-day blocks with an auto-attached Meet link) are not
- * armable at all - not silently truncated - until long-meeting support
- * lands. The Rust capture engine and the backend synthesis caps carry the
- * same clamp; this is the earliest gate of the three. */
-export const MAX_NOTES_MEETING_MINUTES = 60;
+/** 120-MINUTE CLAMP (product decision 2026-10-13, raised from one hour so a
+ * 75-90 minute lecture fits). Longer events (workshops, all-day blocks with
+ * an auto-attached Meet link) are not armable at all - not silently
+ * truncated. The Rust capture engine and the backend synthesis caps carry
+ * the same clamp; this is the earliest gate of the three. */
+export const MAX_NOTES_MEETING_MINUTES = 120;
 
 /** Whether an event can carry meeting notes at all: it needs a conferencing
  * link (in-person events have nothing to capture from loopback) and a
  * scheduled duration within the clamp. An unparseable end time is allowed
- * through - the capture engine's own 60-minute hard stop bounds it. */
+ * through - the capture engine's own 120-minute hard stop bounds it. */
 export function isEligibleForNotes(event: UpcomingMeeting): boolean {
   if (!event.meetingLink) return false;
   const start = Date.parse(event.startTime);

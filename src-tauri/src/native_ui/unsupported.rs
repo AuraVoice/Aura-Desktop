@@ -20,6 +20,10 @@ impl NativeUi {
     pub fn act(&self, _hwnd: isize, _action: UiAction) -> Result<String, String> {
         Err(UNSUPPORTED.to_string())
     }
+
+    pub fn restarts(&self) -> usize {
+        0
+    }
 }
 
 pub fn window_exists(_hwnd: isize) -> bool {

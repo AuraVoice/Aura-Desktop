@@ -51,13 +51,11 @@ const SEGMENT_FRAMES: usize = SAMPLE_RATE * 300;
 /// Flush every valid captured frame. A short tail may contain the final words
 /// of a meeting and must not disappear merely because it is under two seconds.
 const MIN_SEGMENT_FRAMES: usize = 1;
-/// Hard capture ceiling, every tier. TEMPORARILY CLAMPED to 60 minutes
-/// (product decision 2026-07-11): meetings longer than an hour are out of
-/// scope until long-meeting support lands, and capturing audio the backend
-/// would discard past its own 60-minute synthesis cap is pure wasted upload.
-/// The design ceiling to restore later is 4 hours (MEETING_NOTES_PLAN.md
-/// section 4); the backend's caps in services/meetings/fields.py carry the
-/// matching clamp note.
+/// Hard capture ceiling, every tier: 120 minutes (product decision
+/// 2026-10-13, raised from one hour so a 75-90 minute lecture fits).
+/// Capturing audio the backend would discard past its own synthesis cap is
+/// pure wasted upload; the backend's caps in services/meetings/fields.py
+/// carry the matching clamp, and must be deployed first.
 const MAX_CAPTURE: Duration =
     Duration::from_millis(super::evidence_store::MAX_CAPTURE_DURATION_MS as u64);
 /// The reported capture length, held to MAX_CAPTURE. The backend rejects a
@@ -83,27 +81,76 @@ const FILL_GUARD_FRAMES: usize = SAMPLE_RATE / 5; // 200ms
 /// hours of zeros and stamp audio the machine never captured. Reset the
 /// stream clock instead and mark the segment incomplete.
 const DISCONTINUITY_FRAMES: usize = SAMPLE_RATE * 10; // 10s
+/// No speech on any listened channel for this long raises the "No one's
+/// talking" card; the capture stops SILENCE_GRACE later unless someone speaks
+/// or the user keeps recording. Paused time never counts.
+const SILENCE_WARN_AFTER: Duration = Duration::from_secs(10 * 60);
+const SILENCE_GRACE: Duration = Duration::from_secs(60);
+/// Set by `meeting_keep_recording` (the card's Keep recording); the engine
+/// takes it on its next tick and restarts the silence clock.
+pub(crate) static KEEP_RECORDING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Spawns the engine (which spawns the two capture threads). Returns
 /// immediately; capture-init failures surface asynchronously as a
 /// `capture_failed` finalize, matching the ambient-surface rule. The caller
 /// must have set the managed ActiveCapture state BEFORE calling, so the
 /// failure path's finalize always has state to clear.
+///
+/// `single_source` is an in-person capture: everyone is on the microphone,
+/// system audio is dropped on arrival (never written, so a video playing on
+/// the laptop is not in the recording), and channel 1 is the zero fill.
 pub fn spawn_engine(
     app: AppHandle,
     run: super::queue::CaptureRunRef,
     next_seq: u32,
     timeline_base_ms: i64,
     finalization: super::FinalizationSignal,
+    single_source: bool,
 ) -> Result<Sender<String>, String> {
     let (stop_tx, stop_rx) = std::sync::mpsc::channel::<String>();
     super::session::ensure_watcher();
+    KEEP_RECORDING.store(false, Ordering::Relaxed);
     std::thread::Builder::new()
         .name("meeting-engine".to_string())
         .spawn(move || {
-            engine_thread(app, run, next_seq, timeline_base_ms, stop_rx, finalization)
+            engine_thread(
+                app,
+                run,
+                next_seq,
+                timeline_base_ms,
+                stop_rx,
+                finalization,
+                single_source,
+            )
         })
         .map_err(|e| format!("failed to spawn engine thread: {e}"))?;
     Ok(stop_tx)
+}
+
+/// Whether any 20 ms window of `samples` clears the same energy floor the
+/// segment VAD uses (`channel_metrics`), roughly -40 dBFS.
+fn has_speech(samples: &[f32]) -> bool {
+    samples.chunks(SAMPLE_RATE / 50).any(|window| {
+        let energy = window.iter().map(|s| s * s).sum::<f32>() / window.len().max(1) as f32;
+        energy.sqrt() >= 0.01
+    })
+}
+
+fn emit_silence(app: &AppHandle, warning: bool) {
+    #[derive(Clone, serde::Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct SilencePayload {
+        warning: bool,
+        stops_in_s: u64,
+    }
+    use tauri::Emitter;
+    if let Err(e) = app.emit(
+        crate::events::MEETING_SILENCE,
+        SilencePayload { warning, stops_in_s: SILENCE_GRACE.as_secs() },
+    ) {
+        error!("meeting.audio: failed to emit silence state: {e}");
+    }
 }
 
 /// Everything the engine tracks for one channel between segment closes.
@@ -117,6 +164,9 @@ struct ChannelState {
     produced: usize,
     epoch: Instant,
     device_id_hash: String,
+    /// Real (not fill) samples drained since the engine last looked carried
+    /// speech; read and cleared by the silence check each tick.
+    heard: bool,
 }
 
 impl ChannelState {
@@ -128,6 +178,7 @@ impl ChannelState {
             produced: 0,
             epoch: Instant::now(),
             device_id_hash: String::new(),
+            heard: false,
         }
     }
 
@@ -144,6 +195,9 @@ impl ChannelState {
         let drained = std::mem::take(&mut self.pending);
         if discard {
             return false;
+        }
+        if !self.heard && has_speech(&drained) {
+            self.heard = true;
         }
         self.produced += drained.len();
         self.acc.extend(
@@ -177,10 +231,18 @@ impl ChannelState {
     }
 }
 
-fn accept_frame(frame: PcmFrame, mic: &mut ChannelState, loopback: &mut ChannelState) {
+fn accept_frame(
+    frame: PcmFrame,
+    mic: &mut ChannelState,
+    loopback: &mut ChannelState,
+    single_source: bool,
+) {
     let _captured_at_ms = frame.captured_at_ms;
     let channel = match frame.source {
         AudioSource::Microphone => mic,
+        // In person, system audio is not part of the conversation: drop it
+        // here so it is never written. The wall-clock fill keeps ch1 aligned.
+        AudioSource::Loopback if single_source => return,
         AudioSource::Loopback => loopback,
     };
     channel.pending.extend(frame.samples.iter().copied());
@@ -199,10 +261,11 @@ fn drain_capture_events(
     loopback: &mut ChannelState,
     segment_incomplete: &mut bool,
     final_drain: bool,
+    single_source: bool,
 ) -> bool {
     loop {
         match capture.try_recv() {
-            Ok(CaptureEvent::Frame(frame)) => accept_frame(frame, mic, loopback),
+            Ok(CaptureEvent::Frame(frame)) => accept_frame(frame, mic, loopback, single_source),
             Ok(CaptureEvent::DeviceBound {
                 source,
                 device_id_hash,
@@ -242,6 +305,7 @@ fn engine_thread(
     timeline_base_ms: i64,
     stop_rx: Receiver<String>,
     finalization: super::FinalizationSignal,
+    single_source: bool,
 ) {
     let started_at_ms = super::now_ms();
     // A rejoin continues the first session's seq numbering and timeline
@@ -294,6 +358,8 @@ fn engine_thread(
     let mut seen_rebound_ms = LAST_REBOUND_MS.load(Ordering::Relaxed);
     let mut last_rebound_notice_ms = 0u64;
     let mut paused = false;
+    let mut last_speech = Instant::now();
+    let mut silence_warned = false;
 
     let mut stop_reason: String = 'run: loop {
         // 1. External stop?
@@ -312,6 +378,7 @@ fn engine_thread(
             &mut loop_state,
             &mut segment_incomplete,
             false,
+            single_source,
         ) {
             break 'run "capture_failed".to_string();
         }
@@ -373,6 +440,26 @@ fn engine_thread(
         if discontinuity {
             segment_incomplete = true;
         }
+        // 6b. Silence. A capture nobody is talking in (a forgotten Capture
+        //     now, a call that ended without the window closing) warns at
+        //     SILENCE_WARN_AFTER and stops SILENCE_GRACE later. Speech on
+        //     any listened channel, Keep recording, or a pause resets it.
+        let heard = mic_state.heard || (!single_source && loop_state.heard);
+        mic_state.heard = false;
+        loop_state.heard = false;
+        if paused || heard || KEEP_RECORDING.swap(false, Ordering::Relaxed) {
+            last_speech = Instant::now();
+            if silence_warned {
+                silence_warned = false;
+                emit_silence(&app, false);
+            }
+        } else if last_speech.elapsed() >= SILENCE_WARN_AFTER + SILENCE_GRACE {
+            break 'run "silence".to_string();
+        } else if !silence_warned && last_speech.elapsed() >= SILENCE_WARN_AFTER {
+            silence_warned = true;
+            info!("meeting.audio: no speech for {}s, warning before stop", SILENCE_WARN_AFTER.as_secs());
+            emit_silence(&app, true);
+        }
         // 7. Segment full? A persistence failure (disk full, key unwrap,
         //    encode) is NOT survivable-quietly: audio is being lost while the
         //    indicator claims otherwise, so the capture stops honestly.
@@ -398,12 +485,16 @@ fn engine_thread(
     // Final flush + teardown, one funnel for every stop reason. The teardown
     // close's own failure is logged inside; the capture is ending either way.
     capture.stop();
+    if silence_warned {
+        emit_silence(&app, false);
+    }
     if !drain_capture_events(
         &capture,
         &mut mic_state,
         &mut loop_state,
         &mut segment_incomplete,
         true,
+        single_source,
     ) {
         stop_reason = "capture_failed".to_string();
     }
@@ -566,7 +657,7 @@ fn segment_audio_metrics(
 /// Returns RMS dBFS, clipping ratio, zero-sample ratio, and a conservative
 /// energy-derived VAD duration. The VAD is diagnostic evidence and a backend
 /// quality-gate input, not a speech transcription decision.
-fn channel_metrics(samples: &[i16]) -> (f64, f64, f64, i64) {
+pub(super) fn channel_metrics(samples: &[i16]) -> (f64, f64, f64, i64) {
     if samples.is_empty() {
         return (-120.0, 0.0, 1.0, 0);
     }

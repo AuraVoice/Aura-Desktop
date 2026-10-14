@@ -137,7 +137,7 @@ export function CalendarAgendaCard({
               const today = isToday(ev.startTime, todayKey);
               const started = Date.parse(ev.startTime) < Date.now();
               const target = ev.meetingLink ?? ev.htmlLink;
-              // Long meetings (past the 60-minute clamp) and linkless events
+              // Long meetings (past the 120-minute clamp) and linkless events
               // get no arm toggle at all - not armable, not truncated.
               const armable = isEligibleForNotes(ev);
               const armed = armable && arm.isArmed(ev.id);

@@ -4964,6 +4964,44 @@
   font-weight: 600;
   color: var(--db-text-dim);
 }
+/* Coding agents: the one-time setup lines and the list of live keys. */
+.db-coding-agents-setup,
+.db-coding-agents-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.db-coding-agents-line {
+  display: grid;
+  grid-template-columns: 90px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.db-coding-agents-line code {
+  overflow: hidden;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--db-text) 5%, transparent);
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.db-coding-agents-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--db-text-dim);
+}
+.db-coding-agents-setup > .db-secondary-btn {
+  align-self: flex-start;
+}
 .db-connector-row-controls {
   display: flex;
   align-items: center;
@@ -5876,6 +5914,47 @@
 }
 .db-page-toolbar-end {
   justify-content: flex-end;
+}
+
+/* Meetings: kind chips (or the search summary) on the left, search and the
+   refresh state on the right. */
+.db-meeting-toolbar-end {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+.db-meeting-search-summary {
+  color: var(--db-text-dim);
+  font-size: 13px;
+}
+/* Record in person / Upload recording, ahead of search in the toolbar. */
+.db-meeting-capture-modes {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.db-meeting-capture-modes .db-secondary-btn {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  gap: 6px;
+  border-radius: 999px;
+  padding: 7px 13px;
+  white-space: nowrap;
+}
+/* A narrow window drops the actions onto a second row instead of overflowing. */
+.db-page-toolbar:has(.db-meeting-capture-modes) {
+  flex-wrap: wrap;
+  row-gap: 10px;
+}
+.db-page-toolbar + .db-meeting-action-status {
+  margin: -4px 0 18px;
+}
+.db-meeting-load-more {
+  display: flex;
+  justify-content: center;
+  margin-top: 18px;
 }
 
 /* Range chips */
@@ -7205,6 +7284,36 @@
   justify-content: flex-end;
   gap: 8px;
 }
+.db-meeting-channel-select {
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 1px solid color-mix(in srgb, var(--db-text) 14%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--db-text) 3%, transparent);
+  color: var(--db-text);
+  font: inherit;
+  font-size: 12px;
+}
+/* Draft follow-up: To, Subject and the email under the actions bar. */
+.db-meeting-follow-up {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 14px 0 0;
+}
+.db-meeting-follow-up h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+.db-meeting-follow-up-field {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--db-text-dim);
+}
 /* Settings > Data and privacy > Private meetings. */
 .db-setting-row.db-skip-words > span:first-child {
   flex: 1;
@@ -7272,6 +7381,24 @@
 .db-skip-words-error {
   color: #a33232;
   font-size: 12px;
+}
+/* Settings > General > Email drafts. Tokens only, so dark needs no twin. */
+.db-signature-input {
+  flex: 0 0 260px;
+  min-height: 72px;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--db-text) 14%, transparent);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--db-text) 3%, transparent);
+  color: var(--db-text);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+  resize: none;
+}
+.db-signature-input:focus {
+  border-color: color-mix(in srgb, var(--db-teal, #2fb3a3) 60%, transparent);
+  outline: none;
 }
 /* Draft body with an in-corner copy icon */
 .db-draft-body {

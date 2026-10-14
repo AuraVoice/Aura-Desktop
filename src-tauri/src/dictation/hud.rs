@@ -53,6 +53,9 @@ const MESSAGE_WIDTH: f64 = 340.0;
 const MESSAGE_HEIGHT: f64 = 44.0;
 const PENDING_HEIGHT: f64 = 112.0;
 const RECOVERY_HEIGHT: f64 = 112.0;
+/// The signed-out card: the caption row with its close button, then the Sign
+/// in button. Must agree with `.dictation-message.is-sign-in` in DictationHud.css.
+const SIGN_IN_HEIGHT: f64 = 92.0;
 /// The one-time online-dictation consent prompt. Wider and taller than any
 /// other state because it is the only one that has to carry a disclosure the
 /// user is expected to read and two buttons they have to be able to hit.
@@ -420,6 +423,10 @@ pub enum HudPhase {
     /// microphone was opened and no audio exists; this asks, and nothing else
     /// happens until it is answered. The second interactive phase after Idle.
     Consent,
+    /// The chord was pressed while signed out. A caption alone left the user
+    /// with nowhere to go, so this card carries a Sign in button (opens the
+    /// dashboard, where the signed-out flow lives) and a close button.
+    SignIn,
 }
 
 /// Whether the HUD should receive mouse input in this phase.
@@ -427,21 +434,26 @@ pub enum HudPhase {
 /// Almost every phase is a passive caption that must not steal clicks from the
 /// window underneath, which is the whole point of a dictation HUD. The
 /// exceptions need clicks to do their job: the resting pill's hover affordance,
-/// the Copy button on the pending and recovery cards, and the consent prompt's
-/// buttons.
+/// the Copy button on the pending and recovery cards, the consent prompt's
+/// buttons, and the sign-in card's Sign in and close buttons.
 fn accepts_clicks(phase: HudPhase) -> bool {
     matches!(
         phase,
-        HudPhase::Idle | HudPhase::Pending | HudPhase::Recovery | HudPhase::Consent
+        HudPhase::Idle
+            | HudPhase::Pending
+            | HudPhase::Recovery
+            | HudPhase::Consent
+            | HudPhase::SignIn
     )
 }
 
 /// Whether this phase should borrow the notch edge from the Bar. A hold that
 /// targets the overlay window keeps it visible (the insert needs its focus,
 /// and the chat card renders its own chip for error, recovery and pending), so
-/// it never takes the edge; the consent question is the one exception because
-/// it must be seen and clicked. `Pending` cannot occur for a self target: the
-/// focus probe refuses to judge our own process and `Unknown` types.
+/// it never takes the edge; the consent question and the sign-in card are the
+/// exceptions because they must be seen and clicked. `Pending` cannot occur
+/// for a self target: the focus probe refuses to judge our own process and
+/// `Unknown` types.
 fn edge_wanted(phase: HudPhase) -> bool {
     if phase == HudPhase::Idle {
         return false;
@@ -449,7 +461,7 @@ fn edge_wanted(phase: HudPhase) -> bool {
     if !TARGET_IS_SELF.load(Ordering::Relaxed) {
         return true;
     }
-    phase == HudPhase::Consent
+    matches!(phase, HudPhase::Consent | HudPhase::SignIn)
 }
 
 /// Phases whose window grows into a caption card rather than staying a pill.
@@ -469,6 +481,7 @@ fn resizes_into_card(phase: HudPhase) -> bool {
             | HudPhase::Pending
             | HudPhase::Recovery
             | HudPhase::Consent
+            | HudPhase::SignIn
     )
 }
 
@@ -580,7 +593,7 @@ fn build_window(app: &AppHandle) -> Result<(), String> {
 
 /// Whether this phase needs the window to be activatable.
 ///
-/// Pending, Recovery and Consent have controls. Every other phase is hover only or
+/// Pending, Recovery, Consent and SignIn have controls. Every other phase is hover only or
 /// click-through, which is why `apply_no_activate` was safe to set once at build
 /// and forget: a window that cannot activate cannot hand its WebView2 child
 /// focus, and a click into an unfocused WebView2 never reaches the DOM. That is
@@ -592,8 +605,10 @@ fn build_window(app: &AppHandle) -> Result<(), String> {
 /// same predicate drives the panel's `canBecomeKeyWindow` through
 /// `prepare_activation`.
 fn needs_activation(phase: HudPhase) -> bool {
-    matches!(phase, HudPhase::Pending | HudPhase::Recovery | HudPhase::Consent)
-        || (phase == HudPhase::Idle && MENU_OPEN.load(Ordering::Relaxed))
+    matches!(
+        phase,
+        HudPhase::Pending | HudPhase::Recovery | HudPhase::Consent | HudPhase::SignIn
+    ) || (phase == HudPhase::Idle && MENU_OPEN.load(Ordering::Relaxed))
 }
 
 /// The half of activation that has to run BEFORE `window.show()`. On macOS
@@ -822,6 +837,7 @@ fn surface_size(
         HudPhase::Recovery => LogicalSize::new(MESSAGE_WIDTH, RECOVERY_HEIGHT),
         HudPhase::Pending => LogicalSize::new(MESSAGE_WIDTH, PENDING_HEIGHT),
         HudPhase::Consent => LogicalSize::new(CONSENT_WIDTH, CONSENT_HEIGHT),
+        HudPhase::SignIn => LogicalSize::new(MESSAGE_WIDTH, SIGN_IN_HEIGHT),
         _ => oriented_size(edge, ACTIVE_WIDTH, ACTIVE_HEIGHT),
     }
 }
@@ -847,6 +863,7 @@ fn companion_size(phase: HudPhase) -> LogicalSize<f64> {
         HudPhase::Recovery => LogicalSize::new(MESSAGE_WIDTH, RECOVERY_HEIGHT + COMPANION_CARRY),
         HudPhase::Pending => LogicalSize::new(MESSAGE_WIDTH, PENDING_HEIGHT + COMPANION_CARRY),
         HudPhase::Consent => LogicalSize::new(CONSENT_WIDTH, CONSENT_HEIGHT + COMPANION_CARRY),
+        HudPhase::SignIn => LogicalSize::new(MESSAGE_WIDTH, SIGN_IN_HEIGHT + COMPANION_CARRY),
     }
 }
 

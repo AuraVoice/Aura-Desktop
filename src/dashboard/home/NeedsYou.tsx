@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Check, ListChecks } from "lucide-react";
 import {
   approvePendingAction,
+  confirmedElsewhere,
   CONNECTOR_NAMES,
   pendingActionOutcomeCopy,
   rejectPendingAction,
@@ -34,9 +35,9 @@ export function NeedsYou({
   const navigate = useNavigate();
   const cutoff = Date.now() - ACTION_ITEM_WINDOW_MS;
   const rows: Row[] = [
-    // A Swarm draft's approval lives in its report, same filter as the overlay card.
+    // Swarm and Meetings page approvals live where they were made, same filter as the overlay card.
     ...(approvals.data ?? [])
-      .filter((action) => action.status === "pending" && action.origin !== "swarm")
+      .filter((action) => action.status === "pending" && !confirmedElsewhere(action))
       .map((action): Row => ({ kind: "approval", at: action.createdAt, action })),
     ...(meetings.data ?? [])
       .filter((meeting) =>

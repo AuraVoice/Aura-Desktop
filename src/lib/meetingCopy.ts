@@ -95,6 +95,7 @@ export const meetingNotes = {
   // Meetings page detail
   keyPointsHeading: "Key points",
   blockersHeading: "Blockers",
+  sinceLastTimeHeading: "Since last time",
   openQuestionsHeading: "Open questions",
   chaptersHeading: "Chapters",
   copyNotes: "Copy notes",
@@ -147,6 +148,12 @@ const actionFailureCopy: Record<string, string> = {
   exclude_keyword_too_short: "Each word needs at least 3 characters.",
   exclude_keyword_too_long: "Each entry can be at most 40 characters.",
   exclude_keywords_too_many: "You can add up to 20 words.",
+  vocabulary_term_too_short: "Each word needs at least 2 characters.",
+  vocabulary_term_too_long: "Each entry can be at most 40 characters.",
+  vocabulary_too_many: "You can add up to 50 words.",
+  note_missing: "This meeting has no notes to write a follow-up from.",
+  follow_up_failed: "Aura couldn't write the follow-up. Try again in a moment.",
+  follow_up_timeout: "Writing the follow-up took too long. Try again.",
   settings_unavailable: "Aura couldn't load these settings. Try again in a moment.",
 };
 
@@ -156,6 +163,91 @@ export function meetingActionFailureCopy(code: string): string {
   if (/_item_too_long$/.test(code)) return "One item is too long. Keep each under 500 characters.";
   return "Aura couldn't do that. Try again.";
 }
+
+/** The notch card when a live recording has heard no one for ten minutes. */
+export const meetingSilenceCopy = {
+  title: "No one's talking",
+  detail: (seconds: number) => `Aura stops recording in ${seconds} seconds.`,
+  keepRecording: "Keep recording",
+  stopNow: "Stop now",
+} as const;
+
+/** Record in person and Upload recording, on the Meetings page. */
+export const meetingCaptureModeCopy = {
+  inPerson: "Record in person",
+  inPersonTitle: (time: string) => `In person, ${time}`,
+  upload: "Upload recording",
+  preparing: "Reading the recording...",
+  confirm: (name: string, duration: string) =>
+    `"${name}" is ${duration} long. Transcribing it uses one of this month's meetings.`,
+  transcribe: "Transcribe",
+  cancel: "Cancel",
+  queued: "Uploading. Your notes will appear here when they are ready.",
+  capReached: "You've used this month's meetings. Upgrade for unlimited.",
+  failed: "Aura couldn't start that. Try again in a moment.",
+  refusal: {
+    unsupported_format: "Aura can't read this file. Try an mp3, m4a, wav, ogg, flac or webm recording.",
+    no_audio: "Aura couldn't find any speech in this file.",
+    too_long: "This recording is longer than 2 hours. Trim it and try again.",
+    decode_failed: "This file looks damaged. Try exporting it again.",
+    import_expired: "That took too long. Choose the file again.",
+  } as Record<string, string>,
+} as const;
+
+/** The Meetings page's follow-up email. */
+export const meetingFollowUpCopy = {
+  button: "Draft follow-up",
+  heading: "Follow-up email",
+  drafting: "Writing a follow-up from these notes...",
+  to: "To",
+  toPlaceholder: "Add email addresses",
+  subject: "Subject",
+  body: "Email",
+  copy: "Copy",
+  copied: "Copied",
+  openGmail: "Open in Gmail",
+  retry: "Try again",
+  close: "Close",
+} as const;
+
+/** Send to Notion / Slack from the Meetings page. */
+export const meetingShareCopy = {
+  notion: "Send to Notion",
+  confirmNotion: (title: string, workspace: string) =>
+    `Save "${title}" to ${workspace ? `${workspace}'s` : "your"} Aura Meeting Notes in Notion?`,
+  slack: "Send to Slack",
+  confirmSlack: (title: string, channel: string) =>
+    `Post the notes from "${title}" to #${channel} as you?`,
+  pickChannel: "Post to which channel?",
+  loadingChannels: "Loading your Slack channels...",
+  noChannels: "You're not in any Slack channels Aura can see.",
+  channelsFailed: "Aura couldn't load your Slack channels. Try again in a moment.",
+  reconnectSlack: "Slack needs to be reconnected under Connectors.",
+  next: "Next",
+  save: "Save",
+  cancel: "Cancel",
+  close: "Close",
+  saving: "Saving...",
+  open: "Open",
+  notConnected: "Connect Notion under Connectors first.",
+  failed: "Aura couldn't prepare that. Try again in a moment.",
+} as const;
+
+/** Meetings page search, kind chips and paging. */
+export const meetingSearchCopy = {
+  label: "Search meetings",
+  placeholder: "Search what was said",
+  kindLabel: "Kind of meeting",
+  results: (count: number, query: string) =>
+    count === 0 ? `Nothing found for "${query}"` : `${count} ${count === 1 ? "meeting" : "meetings"} about "${query}"`,
+  failed: "Aura couldn't search your meetings. Try again in a moment.",
+  emptyHeading: "No matching meetings",
+  emptyCopy: "Try other words. Search looks through notes and transcripts by meaning, not exact words.",
+  noKind: "None of this kind yet",
+  noKindCopy: "Pick All to see every meeting.",
+  loadMore: "Load more",
+  loadingMore: "Loading...",
+} as const;
 
 /** Settings > Data and privacy > Private meetings. */
 export const meetingSettingsCopy = {
@@ -169,6 +261,12 @@ export const meetingSettingsCopy = {
   remove: (keyword: string) => `Remove ${keyword}`,
   empty: "No words yet.",
   saved: "Saved",
+  vocabularyHeading: "Meeting Notes",
+  vocabularyDescription: "Help Aura get names and terms right in your meeting transcripts.",
+  vocabularyLabel: "Words Aura should know",
+  vocabularyHint:
+    "Names, course codes, product names and jargon. Aura spells them the way you type them here.",
+  vocabularyPlaceholder: "Add a name or term, then press Enter",
 } as const;
 
 const failureCopy: Record<string, string> = {

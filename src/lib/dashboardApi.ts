@@ -1,6 +1,6 @@
 import { authGetJson as authGetJsonBase } from "./api";
 import type { DraftChannel, DraftLength } from "./draft";
-import { parseMeetingDoc, type MeetingDoc } from "./meetings";
+import { parseMeetingDoc, type MeetingDoc, type MeetingKind } from "./meetings";
 
 /**
  * Typed client for the desktop dashboard's data, layered on authFetch (Firebase
@@ -212,11 +212,97 @@ interface RawMeetingsResponse {
   items?: unknown;
 }
 
-export async function getMeetings(signal?: AbortSignal): Promise<MeetingDoc[]> {
-  const raw = await authGetJson<RawMeetingsResponse>("/meetings/recent?limit=20", signal);
+/** One page of meetings, newest first. `kind` keeps one resolved note kind;
+ *  `before` is the previous page's last createdAt ("Load more"). */
+export async function getMeetings(
+  signal?: AbortSignal,
+  options: { kind?: MeetingKind | ""; before?: string } = {},
+): Promise<MeetingDoc[]> {
+  const params = new URLSearchParams({ limit: "20" });
+  if (options.kind) params.set("kind", options.kind);
+  if (options.before) params.set("before", options.before);
+  const raw = await authGetJson<RawMeetingsResponse>(`/meetings/recent?${params}`, signal);
   return Array.isArray(raw.items)
     ? raw.items.map(parseMeetingDoc).filter((meeting): meeting is MeetingDoc => meeting !== null)
     : [];
+}
+
+export interface MeetingBrief {
+  /** The previous recorded meeting in this event's calendar series. */
+  last: {
+    meetingId: string;
+    title: string;
+    date: string;
+    summary: string;
+    actionItems: string[];
+    openQuestions: string[];
+  } | null;
+  /** Other recorded meetings with the same invitees, newest first. */
+  related: { meetingId: string; title: string; date: string }[];
+}
+
+/** What Aura already knows before an upcoming event. Null on any failure:
+ *  the brief is extra context on Home, never something to show an error for. */
+export async function getMeetingBrief(eventId: string, signal?: AbortSignal): Promise<MeetingBrief | null> {
+  try {
+    const raw = await authGetJson<{ last?: Record<string, unknown> | null; related?: unknown }>(
+      `/meetings/brief?event_id=${encodeURIComponent(eventId)}`,
+      signal,
+    );
+    const text = (value: unknown) => (typeof value === "string" ? value : "");
+    const list = (value: unknown) =>
+      Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+    const last = raw.last && text(raw.last.meeting_id)
+      ? {
+          meetingId: text(raw.last.meeting_id),
+          title: text(raw.last.title),
+          date: text(raw.last.date),
+          summary: text(raw.last.summary),
+          actionItems: list(raw.last.action_items),
+          openQuestions: list(raw.last.open_questions),
+        }
+      : null;
+    const related = Array.isArray(raw.related)
+      ? raw.related.flatMap((item) => {
+          const row = item as Record<string, unknown> | null;
+          return row && text(row.meeting_id)
+            ? [{ meetingId: text(row.meeting_id), title: text(row.title), date: text(row.date) }]
+            : [];
+        })
+      : [];
+    return { last, related };
+  } catch {
+    return null;
+  }
+}
+
+export interface MeetingSearchResult {
+  meeting: MeetingDoc;
+  /** Where the best-matching excerpt starts, and the excerpt itself. */
+  matchStartS: number;
+  excerpt: string;
+}
+
+/** Meetings matching a query by meaning (note and transcript), best first. */
+export async function searchMeetings(
+  query: string,
+  signal?: AbortSignal,
+): Promise<MeetingSearchResult[]> {
+  const raw = await authGetJson<RawMeetingsResponse>(
+    `/meetings/search?q=${encodeURIComponent(query)}`,
+    signal,
+  );
+  if (!Array.isArray(raw.items)) return [];
+  return raw.items.flatMap((item) => {
+    const meeting = parseMeetingDoc(item);
+    if (!meeting) return [];
+    const match = (item as { match?: { start_s?: unknown; excerpt?: unknown } }).match ?? {};
+    return [{
+      meeting,
+      matchStartS: typeof match.start_s === "number" ? match.start_s : 0,
+      excerpt: typeof match.excerpt === "string" ? match.excerpt : "",
+    }];
+  });
 }
 
 export async function getMeeting(

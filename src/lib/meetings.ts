@@ -85,6 +85,9 @@ export interface TranscriptTurn {
 
 export type MeetingKind = "meeting" | "interview" | "lecture" | "one_on_one" | "standup";
 
+/** Where a recording's audio came from (backend fields.py SOURCE). */
+export type MeetingSource = "call" | "in_person" | "upload";
+
 export const MEETING_KINDS: readonly MeetingKind[] = [
   "meeting",
   "interview",
@@ -138,6 +141,9 @@ export interface MeetingNote {
   /** What is stopping people; a "standup" note fills these. */
   blockers: string[];
   chapters: MeetingChapter[];
+  /** What became of the last meeting in the same calendar series' action items
+   *  and open questions. Empty for a one-off meeting. */
+  sinceLastTime: string[];
 }
 
 export type MeetingStatus =
@@ -213,6 +219,9 @@ export async function claimMeeting(args: {
   /** What the client already knows this call is. Omitted, the backend decides
    * from the transcript ("auto"). */
   kind?: MeetingKind | "auto";
+  /** "in_person" (microphone alone) and "upload" (a file) are diarized on the
+   *  backend instead of read as You and Others. Omitted is a call. */
+  source?: MeetingSource;
 }): Promise<MeetingClaim> {
   const response = await authFetch("/meetings/claim", {
     method: "POST",
@@ -225,6 +234,7 @@ export async function claimMeeting(args: {
       installation_id: args.installationId,
       runtime_instance_id: args.runtimeInstanceId,
       ...(args.kind ? { kind: args.kind } : {}),
+      ...(args.source && args.source !== "call" ? { source: args.source } : {}),
     }),
   });
   if (response.status === 402) {
@@ -619,6 +629,7 @@ function parseNote(raw: unknown): MeetingNote | null {
       : [],
     keyPoints: strings(row.key_points),
     blockers: strings(row.blockers),
+    sinceLastTime: strings(row.since_last_time),
     chapters: Array.isArray(row.chapters)
       ? row.chapters.flatMap((item) => {
           const entry = item as Record<string, unknown> | null;
@@ -834,18 +845,53 @@ export async function regenerateMeetingNote(
   ));
 }
 
-export async function getExcludeKeywords(): Promise<string[]> {
-  const data = await meetingAction("/meetings/settings", jsonInit("GET"), MEETING_ACTION_TIMEOUT_MS);
-  return strings((data as { exclude_keywords?: unknown })?.exclude_keywords);
+/** Writing a draft is a full model call while the request is open. */
+const MEETING_FOLLOW_UP_TIMEOUT_MS = 45_000;
+
+export interface MeetingFollowUp {
+  /** The calendar invitees, lower-case, the user themself left out. */
+  to: string[];
+  subject: string;
+  /** Ends before any sign-off: the caller appends the user's signature. */
+  body: string;
 }
 
-export async function putExcludeKeywords(keywords: string[]): Promise<string[]> {
+/** A follow-up email drafted from the note. Nothing is stored or sent. */
+export async function draftMeetingFollowUp(meetingId: string): Promise<MeetingFollowUp> {
+  const data = (await meetingAction(
+    `/meetings/${encodeURIComponent(meetingId)}/follow-up`,
+    jsonInit("POST", {}),
+    MEETING_FOLLOW_UP_TIMEOUT_MS,
+  )) as { to?: unknown; subject?: unknown; body?: unknown } | null;
+  const body = typeof data?.body === "string" ? data.body : "";
+  if (!body) throw new MeetingActionError("follow_up_failed", 200, true);
+  return {
+    to: strings(data?.to),
+    subject: typeof data?.subject === "string" ? data.subject : "",
+    body,
+  };
+}
+
+/** The two word lists under /meetings/settings: titles to skip, and names
+ *  and jargon the transcriber should spell right. */
+export type MeetingWordListName = "exclude_keywords" | "vocabulary";
+
+export async function getMeetingWordList(list: MeetingWordListName): Promise<string[]> {
+  const data = await meetingAction("/meetings/settings", jsonInit("GET"), MEETING_ACTION_TIMEOUT_MS);
+  return strings((data as Record<string, unknown> | null)?.[list]);
+}
+
+/** Replaces one list; the other is left as it is on the server. */
+export async function putMeetingWordList(
+  list: MeetingWordListName,
+  words: string[],
+): Promise<string[]> {
   const data = await meetingAction(
     "/meetings/settings",
-    jsonInit("PUT", { exclude_keywords: keywords }),
+    jsonInit("PUT", { [list]: words }),
     MEETING_ACTION_TIMEOUT_MS,
   );
-  return strings((data as { exclude_keywords?: unknown })?.exclude_keywords);
+  return strings((data as Record<string, unknown> | null)?.[list]);
 }
 
 /** Ambient-surface read (null on every failure), like fetchUpcomingMeetings:

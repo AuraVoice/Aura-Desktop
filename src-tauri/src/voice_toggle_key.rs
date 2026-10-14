@@ -587,8 +587,10 @@ mod platform {
     /// One poll: every chord key whose physical state changed since the last
     /// poll goes through both chord machines exactly as a hook event would,
     /// minus the injected check (insertion only ever injects Win key-ups after
-    /// the chord is fully released, which reads as no change here).
-    fn poll_chord_keys(previous: &mut u8) {
+    /// the chord is fully released, which reads as no change here). True when
+    /// a chord that should silence the voice toggle engaged on this tick.
+    fn poll_chord_keys(previous: &mut u8) -> bool {
+        let mut engaged = false;
         for (index, vk) in POLLED_CHORD_KEYS.iter().enumerate() {
             let vk = *vk as u32;
             let mask = 1u8 << index;
@@ -610,6 +612,89 @@ mod platform {
             if let Some(signal) = region.signal {
                 crate::region::signal(signal);
             }
+            engaged |= (DICTATION_CHORD.suppresses_voice_toggle() && dictation.engaged)
+                || (crate::region::REGION_CHORD.suppresses_voice_toggle() && region.engaged);
+        }
+        engaged
+    }
+
+    /// Where a finished tap was seen. The hook and the focus poller can both
+    /// see the same press, so a tap from one source right after one from the
+    /// other is the same tap twice.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum TapSource {
+        Hook,
+        Poll,
+    }
+
+    /// The poller trails the hook by at most one 15 ms tick; two real taps
+    /// released this close together are not something a hand does.
+    const SAME_TAP_WINDOW_MS: u64 = 80;
+
+    /// Hands one finished tap to the classifier, unless the other source
+    /// already reported it.
+    fn send_tap(source: TapSource) {
+        let now = crate::util::now_ms_u64();
+        let duplicate = LAST_TAP.with(|last| {
+            let duplicate = last.get().is_some_and(|(at, from)| {
+                from != source && now.saturating_sub(at) < SAME_TAP_WINDOW_MS
+            });
+            if !duplicate {
+                last.set(Some((now, source)));
+            }
+            duplicate
+        });
+        if duplicate {
+            return;
+        }
+        EVENT_SENDER.with(|sender| {
+            if let Some(sender) = sender.borrow().as_ref() {
+                let _ = sender.send(());
+            }
+        });
+    }
+
+    /// Any keyboard key other than the toggle key physically down. Mouse
+    /// buttons (below 0x08) and the side-less Shift/Ctrl/Alt codes, which
+    /// mirror the toggle key itself, are left out.
+    fn other_key_down(toggle_vk: u32) -> bool {
+        (0x08u32..=0xFE)
+            .filter(|vk| *vk != toggle_vk && !(0x10..=0x12).contains(vk))
+            .any(key_physically_down)
+    }
+
+    /// The double-tap half of the focus poller. The deaf hook means a Left
+    /// Ctrl double-tap never reached the classifier while an Aura window was
+    /// in front, so the onboarding hotkey test (the setup panel is focused)
+    /// could never pass (issue #25). Edges of the toggle key go through their
+    /// own TapState exactly as hook events would; a press of any other key
+    /// during the hold cancels the tap the way the hook's chord rule does.
+    fn poll_toggle_key(previous: &mut bool, chord_engaged: bool) {
+        let vk = VOICE_TOGGLE_VK.load(Ordering::Relaxed);
+        if vk == 0 {
+            *previous = false;
+            return;
+        }
+        let down = key_physically_down(vk);
+        let should_emit = POLL_TAP_STATE.with(|state| {
+            let mut state = state.borrow_mut();
+            // The down edge first: a fresh hold clears `suppressed`, and a
+            // chord engaged on this same tick has to survive that.
+            if down && !*previous {
+                state.observe(true, true, false, false);
+            }
+            if chord_engaged {
+                state.observe(false, false, false, true);
+            }
+            if (down || *previous) && other_key_down(vk) {
+                state.observe(false, true, false, false);
+            }
+            let released = !down && *previous;
+            *previous = down;
+            released && state.observe(true, false, true, false)
+        });
+        if should_emit {
+            send_tap(TapSource::Poll);
         }
     }
 
@@ -748,6 +833,8 @@ mod platform {
         static TAP_STATE: RefCell<TapState> = RefCell::new(TapState::default());
         static CHORD_STATE: RefCell<ChordState> = const { RefCell::new(ChordState::new(DICTATION_CHORD)) };
         static REGION_CHORD_STATE: RefCell<ChordState> = const { RefCell::new(ChordState::new(crate::region::REGION_CHORD)) };
+        static POLL_TAP_STATE: RefCell<TapState> = RefCell::new(TapState::default());
+        static LAST_TAP: std::cell::Cell<Option<(u64, TapSource)>> = const { std::cell::Cell::new(None) };
     }
 
     unsafe extern "system" fn keyboard_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -884,11 +971,7 @@ mod platform {
                 )
             });
             if should_emit {
-                EVENT_SENDER.with(|sender| {
-                    if let Some(sender) = sender.borrow().as_ref() {
-                        let _ = sender.send(());
-                    }
-                });
+                send_tap(TapSource::Hook);
             }
         }
 
@@ -968,6 +1051,7 @@ mod platform {
                 // that exists only while an Aura window is in front.
                 let mut poll_timer: usize = 0;
                 let mut polled: u8 = 0;
+                let mut polled_toggle = false;
 
                 let _ = startup_tx.send(Ok(thread_id));
                 let mut message = MaybeUninit::<MSG>::zeroed();
@@ -984,11 +1068,14 @@ mod platform {
                         && message.wParam.0 == poll_timer
                     {
                         if own_window_in_front() {
-                            poll_chord_keys(&mut polled);
+                            let engaged = poll_chord_keys(&mut polled);
+                            poll_toggle_key(&mut polled_toggle, engaged);
                         } else {
                             let _ = unsafe { KillTimer(None, poll_timer) };
                             poll_timer = 0;
                             polled = 0;
+                            polled_toggle = false;
+                            POLL_TAP_STATE.with(|state| *state.borrow_mut() = TapState::default());
                             info!("voice_toggle_key: Aura window left the front, chord keys back on the hook alone");
                         }
                         continue;
@@ -1006,7 +1093,8 @@ mod platform {
                                 info!("voice_toggle_key: Aura window in front, also reading chord keys directly");
                                 // A chord already held when focus arrived arms now
                                 // rather than on the next tick.
-                                poll_chord_keys(&mut polled);
+                                let engaged = poll_chord_keys(&mut polled);
+                                poll_toggle_key(&mut polled_toggle, engaged);
                             }
                         }
                         if !forced {

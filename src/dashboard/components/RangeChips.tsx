@@ -38,6 +38,28 @@ export function RangeChips({
   value: RangeKey;
   onChange: (range: RangeKey) => void;
 }) {
+  return (
+    <ChipStrip
+      label="Time range"
+      options={RANGE_ORDER.map((range) => ({ value: range, label: RANGE_LABEL[range] }))}
+      value={value}
+      onChange={onChange}
+    />
+  );
+}
+
+/** A single-choice chip strip with one sliding active fill. */
+export function ChipStrip<T extends string>({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  options: { value: T; label: string }[];
+  value: T;
+  onChange: (value: T) => void;
+}) {
   const stripRef = useRef<HTMLDivElement | null>(null);
 
   // The active fill is one sliding bar behind the chips; measure the selected
@@ -58,17 +80,17 @@ export function RangeChips({
   }, [value]);
 
   return (
-    <div className="db-chips" role="tablist" aria-label="Time range" ref={stripRef}>
-      {RANGE_ORDER.map((range) => (
+    <div className="db-chips" role="tablist" aria-label={label} ref={stripRef}>
+      {options.map((option) => (
         <button
-          key={range}
+          key={option.value}
           type="button"
           role="tab"
-          aria-selected={range === value}
-          className={`db-chip${range === value ? " db-chip-active" : ""}`}
-          onClick={() => onChange(range)}
+          aria-selected={option.value === value}
+          className={`db-chip${option.value === value ? " db-chip-active" : ""}`}
+          onClick={() => onChange(option.value)}
         >
-          {RANGE_LABEL[range]}
+          {option.label}
         </button>
       ))}
     </div>

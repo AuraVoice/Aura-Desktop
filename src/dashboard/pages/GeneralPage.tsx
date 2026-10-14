@@ -33,7 +33,10 @@ import {
 } from "../components/SettingsPageLayout";
 import { AppearancePicker } from "../components/AppearancePicker";
 import { meetingSettingsCopy } from "../../lib/meetingCopy";
-import { MeetingSkipWords } from "./MeetingSkipWords";
+import { MeetingWordList } from "./MeetingSkipWords";
+import { resolveEmailSignature } from "../../lib/emailDraft";
+
+const EMAIL_SIGNATURE_MAX_LENGTH = 300;
 
 function ToggleRow({
   label,
@@ -89,6 +92,11 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
   const [settings, setSettings] = useState<GeneralSettings>(DEFAULT_GENERAL_SETTINGS);
   const [loaded, setLoaded] = useState(false);
   const [saveError, setSaveError] = useState(false);
+  // Edited locally and saved on blur, so typing never rewrites the store per key.
+  const [signatureDraft, setSignatureDraft] = useState("");
+  useEffect(() => {
+    setSignatureDraft(settings.emailSignature);
+  }, [settings.emailSignature]);
   // Launch-at-startup is NOT part of GeneralSettings: autostart.rs owns it in
   // its own store and the checkbox reflects the real registry entry, so a
   // failed write shows as off instead of lying. Same source of truth as the
@@ -249,6 +257,46 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
               onChange={(value) => void update("calendarOverlay", value)}
             />
           </div>
+        </SettingsSection>
+      )}
+
+      {section === "general" && (
+        <SettingsSection
+          title="Email drafts"
+          description="When you ask Aura in text chat to write an email, this signature goes at the end."
+        >
+          <div className="db-panel db-settings-panel">
+            <label className="db-setting-row db-signature-row">
+              <span>
+                <span className="db-setting-label">Signature</span>
+                <span className="db-setting-description">
+                  Leave it empty to sign as "{resolveEmailSignature("", user?.displayName).replace("\n", " ")}".
+                </span>
+              </span>
+              <textarea
+                className="db-signature-input"
+                rows={3}
+                maxLength={EMAIL_SIGNATURE_MAX_LENGTH}
+                placeholder={resolveEmailSignature("", user?.displayName)}
+                value={signatureDraft}
+                onChange={(event) => setSignatureDraft(event.target.value)}
+                onBlur={() => {
+                  if (signatureDraft !== settings.emailSignature) {
+                    void update("emailSignature", signatureDraft);
+                  }
+                }}
+              />
+            </label>
+          </div>
+        </SettingsSection>
+      )}
+
+      {section === "general" && (
+        <SettingsSection
+          title={meetingSettingsCopy.vocabularyHeading}
+          description={meetingSettingsCopy.vocabularyDescription}
+        >
+          <MeetingWordList list="vocabulary" />
         </SettingsSection>
       )}
 
@@ -544,7 +592,7 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
             title={meetingSettingsCopy.heading}
             description={meetingSettingsCopy.description}
           >
-            <MeetingSkipWords />
+            <MeetingWordList list="exclude_keywords" />
           </SettingsSection>
 
           <SettingsSection

@@ -116,6 +116,7 @@ const PROVIDER_NAMES: Record<ConnectorName, string> = {
   github: ACCOUNT_CONNECTOR_BY_NAME.github.providerName,
   linkedin: ACCOUNT_CONNECTOR_BY_NAME.linkedin.providerName,
   x: ACCOUNT_CONNECTOR_BY_NAME.x.providerName,
+  slack: ACCOUNT_CONNECTOR_BY_NAME.slack.providerName,
 };
 
 const CONNECTED_MESSAGES: Record<ConnectorName, string> = {
@@ -125,6 +126,7 @@ const CONNECTED_MESSAGES: Record<ConnectorName, string> = {
   github: ACCOUNT_CONNECTOR_BY_NAME.github.connectedMessage,
   linkedin: ACCOUNT_CONNECTOR_BY_NAME.linkedin.connectedMessage,
   x: ACCOUNT_CONNECTOR_BY_NAME.x.connectedMessage,
+  slack: ACCOUNT_CONNECTOR_BY_NAME.slack.connectedMessage,
 };
 
 // A background recheck runs at most this often, so switching windows back
@@ -139,6 +141,7 @@ function reconnectableByName(catalog: ConnectorsCatalog): Record<ConnectorName, 
     github: catalog.accounts.github.canReconnect,
     linkedin: catalog.accounts.linkedin.canReconnect,
     x: catalog.accounts.x.canReconnect,
+    slack: catalog.accounts.slack.canReconnect,
   };
 }
 
@@ -150,6 +153,7 @@ function connectedByName(catalog: ConnectorsCatalog): Record<ConnectorName, bool
     github: catalog.accounts.github.enabled,
     linkedin: catalog.accounts.linkedin.enabled,
     x: catalog.accounts.x.enabled,
+    slack: catalog.accounts.slack.enabled,
   };
 }
 

@@ -5,6 +5,7 @@ import { AuthRequiredError, routeToDashboardForExpiredSession } from "../lib/api
 import { logError } from "../lib/log";
 import {
   approvePendingAction,
+  confirmedElsewhere,
   fetchPendingActions,
   proposeAction,
   rejectPendingAction,
@@ -54,9 +55,9 @@ export function usePendingActions(room: Room | null, uid: string | null): Pendin
     fetchPendingActions()
       .then((next) => {
         if (seq !== requestSeq.current || uidRef.current !== requestUid) return;
-        // A Swarm draft's approval belongs to its report; the backend already leaves it
-        // out of this list, and this keeps an older backend from popping it up here.
-        setItems(next.filter((item) => item.origin !== "swarm"));
+        // A Swarm draft's approval belongs to its report, and a Meetings page send is
+        // confirmed on that page; neither pops up here.
+        setItems(next.filter((item) => !confirmedElsewhere(item)));
       })
       .catch((err) => {
         if (err instanceof AuthRequiredError) return;

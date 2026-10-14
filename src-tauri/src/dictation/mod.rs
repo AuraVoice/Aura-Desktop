@@ -169,6 +169,9 @@ mod platform {
     const CAPTION_LINGER: Duration = Duration::from_millis(2200);
     const FAILURE_LINGER: Duration = Duration::from_millis(4000);
     const RECOVERY_LINGER: Duration = Duration::from_millis(15_000);
+    /// The signed-out card carries a button, so it stays up long enough to
+    /// reach it. It has its own close button for anyone who wants it gone now.
+    const SIGN_IN_LINGER: Duration = Duration::from_millis(15_000);
     /// How long the one-time consent pill stays up. Much longer than a failure
     /// caption because it is asking a question rather than reporting an
     /// outcome, and the user has to read it before answering. It auto-dismisses
@@ -914,18 +917,35 @@ mod platform {
         category: &'static str,
         message: &'static str,
     ) {
+        hold_failure_card(
+            app,
+            generation,
+            failed,
+            samples,
+            category,
+            HudUpdate::new(HudPhase::Error).with_message(message),
+            FAILURE_LINGER,
+        );
+    }
+
+    /// `hold_failure` with the card chosen by the caller, for failures that
+    /// need more than a caption (the signed-out card's Sign in button).
+    fn hold_failure_card(
+        app: &AppHandle,
+        generation: u64,
+        failed: &mut Option<FailedUtterance>,
+        samples: Vec<f32>,
+        category: &'static str,
+        card: HudUpdate,
+        linger: Duration,
+    ) {
         warn!(
             "dictation: run={} phase=failure failure={category} frames={}",
             current_run_id(),
             samples.len()
         );
         emit_hold_completed(app, HoldCompleted::failed(category));
-        finish_with(
-            app,
-            generation,
-            HudUpdate::new(HudPhase::Error).with_message(message),
-            FAILURE_LINGER,
-        );
+        finish_with(app, generation, card, linger);
         *failed = Some(FailedUtterance {
             samples,
             expires_at: Instant::now() + FAILURE_LINGER,
@@ -1197,13 +1217,15 @@ mod platform {
             None => {
                 let shutting_down = drain_until_release(rx);
                 hud::show(app, target);
-                hold_failure(
+                hold_failure_card(
                     app,
                     generation,
                     failed,
                     Vec::new(),
                     AsrError::NotAuthenticated.category(),
-                    AsrError::NotAuthenticated.hud_message(),
+                    HudUpdate::new(HudPhase::SignIn)
+                        .with_message(AsrError::NotAuthenticated.hud_message()),
+                    SIGN_IN_LINGER,
                 );
                 refresh_status(app, status);
                 return shutting_down;
@@ -2359,6 +2381,16 @@ pub async fn dictation_refresh_hud(app: tauri::AppHandle) {
 #[tauri::command]
 pub fn dictation_held_text_copied() {
     held_text_copied();
+}
+
+/// The sign-in card's close button, and its Sign in button once the dashboard
+/// is open. Only takes the sign-in card down: a click that raced a new hold
+/// must not wipe the listening pill that replaced it.
+#[tauri::command]
+pub fn dictation_dismiss_sign_in(app: tauri::AppHandle) {
+    if hud::last_update().phase == hud::HudPhase::SignIn {
+        hud::publish(&app, hud::HudUpdate::new(hud::HudPhase::Idle));
+    }
 }
 
 /// React reports chat-composer focus so a hold started there is delivered into
