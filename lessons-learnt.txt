@@ -2734,3 +2734,17 @@ echo is recoverable after the fact, which also repairs recordings made before th
 errs safer than merging: a split person can be renamed to one name, a merged pair cannot be
 told apart again.
 ================================================================================
+2026-10-14: An open chat card took dictation aimed at another app's text field
+Problem: with the overlay chat card open, clicking into a text field in another app and holding
+the dictation key typed the words into the chat composer instead of that field.
+Issue: chat_sink in dictation/mod.rs treated chat_slot_open() alone as "this hold goes to the
+chat", for any foreground target. Issue #28 had already carved the dashboard out of that rule
+but left every third-party app inside it: the same class, fixed for one instance.
+Solution: the chat is the sink only when the composer had focus at hold start (latched into
+HOLD_COMPOSER_FOCUSED next to the target snapshot) or the hold started on the overlay window
+with the chat open. A merely open card no longer captures anything.
+Justification: the target snapshot at hold start is where the user's caret was, which is the
+only honest signal of intent. Latching the composer flag with it keeps the original reason for
+chat_slot_open covered: a hold that starts in the chat stays in the chat even if the OS
+foreground drifts off the overlay while the user speaks.
+================================================================================

@@ -363,7 +363,7 @@ mod platform {
     /// non-editable body, seen as `role=Pane`).
     static COMPOSER_FOCUSED: AtomicBool = AtomicBool::new(false);
 
-    /// Read by `hud::show` and the insert step to route a hold into the chat.
+    /// Read once at hold start into HOLD_COMPOSER_FOCUSED, which `chat_sink` uses.
     pub fn composer_focused() -> bool {
         COMPOSER_FOCUSED.load(Ordering::Relaxed)
     }
@@ -374,13 +374,17 @@ mod platform {
         COMPOSER_FOCUSED.store(focused, Ordering::Relaxed);
     }
 
+    /// COMPOSER_FOCUSED as it stood when the current hold began, latched with
+    /// the target. The composer blurs if the OS foreground drifts off the
+    /// overlay mid-hold, and reading it live at insert would then send a hold
+    /// that started in the chat to the app behind it.
+    static HOLD_COMPOSER_FOCUSED: AtomicBool = AtomicBool::new(false);
+
     /// True while the chat slot is mounted at all, reported from React
-    /// (`dictation_set_chat_open`). Coarser than COMPOSER_FOCUSED: an open
-    /// chat is THE dictation sink for every hold, regardless of which window
-    /// the OS calls foreground, because the always-on-top overlay rarely owns
-    /// focus and routing on the foreground target sent holds into whichever
-    /// app sat behind the chat. `hud::show` keeps the overlay up for such a
-    /// hold and the insert step routes into the composer.
+    /// (`dictation_set_chat_open`). Coarser than COMPOSER_FOCUSED: a hold that
+    /// starts on the overlay window with the chat open goes to the composer
+    /// even if the composer itself is not focused (a click on the chat's body),
+    /// since keystrokes there would land on a non-editable pane.
     static CHAT_SLOT_OPEN: AtomicBool = AtomicBool::new(false);
 
     pub fn chat_slot_open() -> bool {
@@ -391,13 +395,20 @@ mod platform {
         CHAT_SLOT_OPEN.store(open, Ordering::Relaxed);
     }
 
-    /// The chat composer is this hold's sink: the chat flags say so AND the
-    /// foreground window is not some other Aura window (the dashboard), which
-    /// has its own text fields and must not be hijacked by an open chat card.
+    /// The chat composer is this hold's sink only when the user is actually in
+    /// the chat: the composer has focus, or the hold started on the overlay
+    /// window with the chat open. A chat card that is merely open never takes
+    /// a hold aimed at another app's field, and no other Aura window (the
+    /// dashboard) is ever hijacked by it. `target` is the foreground at hold
+    /// start, so the answer does not change if focus drifts while speaking.
     /// Read by `hud::show`, the command brain gate and the insert step so the
     /// three never disagree about where a hold is going (issue #28).
     pub fn chat_sink(app: &AppHandle, target: isize) -> bool {
-        (composer_focused() || chat_slot_open()) && !hud::target_is_other_own_window(app, target)
+        if hud::target_is_other_own_window(app, target) {
+            return false;
+        }
+        HOLD_COMPOSER_FOCUSED.load(Ordering::Relaxed)
+            || (chat_slot_open() && hud::target_is_overlay(app, target))
     }
 
     /// The webview's view of the network (`navigator.onLine`), reported from
@@ -1129,6 +1140,7 @@ mod platform {
         // Snapshot the target BEFORE the HUD exists on screen, so nothing this
         // module does can change what "the app the user was in" means.
         let target = insert::foreground_window();
+        HOLD_COMPOSER_FOCUSED.store(composer_focused(), Ordering::Relaxed);
         let app_key = crate::system_control::process_stem_for_window(target);
         // One id for the whole hold: every phase line below, the hold event,
         // the polish request and the history row's metrics carry it.

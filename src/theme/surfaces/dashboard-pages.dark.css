@@ -84,6 +84,17 @@
   background: #922b2b;
   box-shadow: 0 10px 24px rgba(0, 0, 0, 0.45), var(--dk-glass-inset);
 }
+/* --db-active is near the panel colour in dark, so the main action inverts. */
+:root[data-theme="dark"] .db-local-confirm-primary {
+  border-color: transparent;
+  background: #ececee;
+  color: #0b0b0c;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+}
+:root[data-theme="dark"] .db-local-confirm-primary:hover:not(:disabled) {
+  background: #ffffff;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+}
 
 /* ── Meeting detail ── */
 :root[data-theme="dark"] .db-meeting-caveats {
@@ -104,10 +115,8 @@
 :root[data-theme="dark"] .db-meeting-retry-error {
   color: var(--dk-danger);
 }
-:root[data-theme="dark"] .db-meeting-actions .db-secondary-btn.is-active,
-:root[data-theme="dark"] .db-meeting-actions .db-secondary-btn.is-active:hover:not(:disabled) {
-  border-color: var(--dk-accent-ring);
-  background: var(--dk-accent-soft);
+:root[data-theme="dark"] .db-meeting-actions .db-row-action.is-active,
+:root[data-theme="dark"] .db-meeting-actions .db-row-action.is-active:hover:not(:disabled) {
   color: var(--dk-accent-text);
 }
 :root[data-theme="dark"] .db-skip-words-error {

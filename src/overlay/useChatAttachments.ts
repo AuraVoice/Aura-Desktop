@@ -9,8 +9,8 @@ import { logError } from "../lib/log";
 
 export interface ChatAttachmentsState {
   items: PendingAttachment[];
-  /** The last refusal, shown under the composer until the next successful add
-   * or an explicit dismiss. */
+  /** The last refusal, shown under the composer until the next successful add,
+   * a removal, or an explicit dismiss. */
   error: string | null;
   /** True while a picked file is being decoded and encoded. */
   processing: boolean;
@@ -62,6 +62,9 @@ export function useChatAttachments(): ChatAttachmentsState {
     if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
     itemsRef.current = itemsRef.current.filter((item) => item.id !== id);
     setItems(itemsRef.current);
+    // A refusal describes the strip as it was; once the user changes it, the
+    // old "Max 5" line would sit under an emptier strip it no longer fits.
+    setError(null);
   }, []);
 
   const clear = useCallback((options?: { keepPreviews?: boolean }) => {

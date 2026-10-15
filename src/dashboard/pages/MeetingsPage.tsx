@@ -61,7 +61,7 @@ import {
   WhoIsCard,
   type WhoIsState,
 } from "./MeetingSpeakers";
-import { MeetingSendToSlack, MeetingShare } from "./MeetingShare";
+import { MeetingDialog, MeetingSendToSlack, MeetingShare } from "./MeetingShare";
 import {
   canExportSubtitles,
   clockStamp,
@@ -757,9 +757,14 @@ const MeetingTranscript = memo(function MeetingTranscript({
 });
 
 type ActionStatus =
-  | { tone: "info"; text: string; path?: string }
+  | { tone: "info"; text: string }
   | { tone: "error"; text: string }
   | null;
+
+/** The last segment of a saved file's path, for the export dialog. */
+function fileName(path: string): string {
+  return path.split(/[\\/]/).pop() || path;
+}
 
 function actionErrorText(err: unknown): string {
   return meetingActionFailureCopy(err instanceof MeetingActionError ? err.code : "");
@@ -818,6 +823,8 @@ function MeetingDetail({
   const [regeneratingKind, setRegeneratingKind] = useState<MeetingKind | null>(null);
   const [pendingKind, setPendingKind] = useState<MeetingKind | null>(null);
   const [status, setStatus] = useState<ActionStatus>(null);
+  // The file an export just wrote; shown in a dialog with Open.
+  const [saved, setSaved] = useState<{ path: string; format: MeetingExportFormat } | null>(null);
   const [copied, setCopied] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [jump, setJump] = useState<{ index: number; nonce: number } | null>(null);
@@ -950,12 +957,14 @@ function MeetingDetail({
     }
   };
 
+  // Copies whichever tab is open: the whole transcript, or the whole note.
+  const copyTranscript = turns.length > 0 && pane.tab === "transcript";
   const copyNotes = async () => {
     try {
-      await writeText(noteMarkdown(current, dateLabel));
+      await writeText(copyTranscript ? transcriptText(turns) : noteMarkdown(current, dateLabel));
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1500);
-      trackEvent("meeting_notes_copied", {});
+      trackEvent("meeting_notes_copied", { tab: copyTranscript ? "transcript" : "insights" });
     } catch (err) {
       logError("MeetingsPage: copy notes", err);
       setStatus({ tone: "error", text: "Aura couldn't copy the notes. Try again." });
@@ -972,7 +981,7 @@ function MeetingDetail({
           ? transcriptVtt(turns)
           : transcriptText(turns);
       const path = await saveMeetingFile(current.title || "Meeting notes", format, text);
-      setStatus({ tone: "info", text: meetingNotes.savedTo("Downloads, Aura Documents"), path });
+      setSaved({ path, format });
       trackEvent("meeting_exported", { format });
     } catch (err) {
       logError("MeetingsPage: export meeting", err);
@@ -1041,6 +1050,18 @@ function MeetingDetail({
 
   const menuItems: RowMenuItem[] = note
     ? [
+        {
+          label: meetingNotes.edit,
+          Icon: Pencil,
+          disabled: editing || busy !== "",
+          onSelect: () => {
+            setStatus(null);
+            setPendingKind(null);
+            setEditing(true);
+            // The editor lives on the Insights tab.
+            if (pane.tab !== "insights") pane.switchTab("insights");
+          },
+        },
         ...(connected.notion
           ? [{
               label: meetingShareCopy.notion,
@@ -1092,6 +1113,21 @@ function MeetingDetail({
       ]
     : [];
 
+  // Sits on the tab row's right edge and copies whichever tab is open.
+  const copyButton = (
+    <button
+      type="button"
+      className="db-row-action db-meeting-copy"
+      title={copied
+        ? meetingNotes.copied
+        : copyTranscript ? meetingNotes.copyTranscript : meetingNotes.copyNotes}
+      aria-label={copyTranscript ? meetingNotes.copyTranscript : meetingNotes.copyNotes}
+      onClick={() => void copyNotes()}
+    >
+      {copied ? <Check size={17} /> : <Copy size={17} />}
+    </button>
+  );
+
   const insights = note ? (
     editing ? (
       <MeetingNoteEditor
@@ -1136,68 +1172,51 @@ function MeetingDetail({
             {state === "ready" && retention && <> · {retention}</>}
           </p>
         </div>
-        <div className="db-meeting-tags">
-          {state === "ready" && note && <span className="db-tag">{kindLabel(note.kind)}</span>}
-          {state === "ready" && note?.edited && <span className="db-tag">{meetingNotes.editedTag}</span>}
-          <span className={`db-tag db-tag-${state}`}>{statusLabel(current)}</span>
-        </div>
-      </div>
-
-      {state === "ready" && note && (
-        <div className="db-meeting-actions">
-          <button type="button" className="db-secondary-btn" onClick={() => void copyNotes()}>
-            {copied ? <Check size={15} /> : <Copy size={15} />}
-            {copied ? meetingNotes.copied : meetingNotes.copyNotes}
-          </button>
-          <button type="button" className="db-secondary-btn" onClick={() => void askAura()}>
-            <MessageCircleQuestion size={15} />
-            {meetingNotes.askAura}
-          </button>
-          <button
-            type="button"
-            className={`db-secondary-btn${followUpOpen ? " is-active" : ""}`}
-            aria-pressed={followUpOpen}
-            onClick={() => setFollowUpOpen((open) => !open)}
-          >
-            <Mail size={15} />
-            {meetingFollowUpCopy.button}
-          </button>
-          <button
-            type="button"
-            className="db-secondary-btn"
-            disabled={editing || busy !== ""}
-            onClick={() => {
-              setStatus(null);
-              setPendingKind(null);
-              setEditing(true);
-            }}
-          >
-            <Pencil size={15} />
-            {meetingNotes.edit}
-          </button>
-          {canPin && (
+        {state === "ready" && note && (
+          <div className="db-meeting-actions">
             <button
               type="button"
-              className={`db-secondary-btn${current.pinned ? " is-active" : ""}`}
-              aria-pressed={current.pinned}
-              title={current.pinned ? undefined : meetingNotes.pinHint}
-              disabled={busy !== ""}
-              onClick={() => {
-                const pinned = !current.pinned;
-                void runAction(
-                  "pin",
-                  () => setMeetingPinned(current.meetingId, pinned),
-                  () => trackEvent("meeting_pinned", { pinned }),
-                );
-              }}
+              className="db-row-action"
+              title={meetingNotes.askAura}
+              aria-label={meetingNotes.askAura}
+              onClick={() => void askAura()}
             >
-              {current.pinned ? <PinOff size={15} /> : <Pin size={15} />}
-              {current.pinned ? meetingNotes.pinned : meetingNotes.pin}
+              <MessageCircleQuestion size={17} />
             </button>
-          )}
-          <RowMenu items={menuItems} open={menuOpen} onOpenChange={setMenuOpen} />
-        </div>
-      )}
+            <button
+              type="button"
+              className={`db-row-action${followUpOpen ? " is-active" : ""}`}
+              title={meetingFollowUpCopy.button}
+              aria-label={meetingFollowUpCopy.button}
+              aria-pressed={followUpOpen}
+              onClick={() => setFollowUpOpen((open) => !open)}
+            >
+              <Mail size={17} />
+            </button>
+            {canPin && (
+              <button
+                type="button"
+                className={`db-row-action${current.pinned ? " is-active" : ""}`}
+                aria-pressed={current.pinned}
+                aria-label={current.pinned ? meetingNotes.pinned : meetingNotes.pin}
+                title={current.pinned ? meetingNotes.pinned : meetingNotes.pinHint}
+                disabled={busy !== ""}
+                onClick={() => {
+                  const pinned = !current.pinned;
+                  void runAction(
+                    "pin",
+                    () => setMeetingPinned(current.meetingId, pinned),
+                    () => trackEvent("meeting_pinned", { pinned }),
+                  );
+                }}
+              >
+                {current.pinned ? <PinOff size={17} /> : <Pin size={17} />}
+              </button>
+            )}
+            <RowMenu items={menuItems} open={menuOpen} onOpenChange={setMenuOpen} />
+          </div>
+        )}
+      </div>
 
       {state === "ready" && note && followUpOpen && (
         <MeetingFollowUp meetingId={current.meetingId} onClose={() => setFollowUpOpen(false)} />
@@ -1231,44 +1250,69 @@ function MeetingDetail({
           role={status.tone === "error" ? "alert" : "status"}
         >
           <span>{status.text}</span>
-          {status.tone === "info" && status.path && (
-            <button
-              type="button"
-              className="db-secondary-btn"
-              onClick={() => {
-                const path = status.path;
-                if (!path) return;
-                void openPath(path).catch(() =>
-                  setStatus({ tone: "error", text: "Aura couldn't open it. Find it in Downloads, Aura Documents." }),
-                );
-              }}
-            >
-              Open
-            </button>
-          )}
         </div>
+      )}
+      {saved && (
+        <MeetingDialog
+          title={meetingNotes.exportedTitle(saved.format)}
+          onDismiss={() => setSaved(null)}
+          actions={
+            <>
+              <button type="button" className="db-local-confirm-cancel" onClick={() => setSaved(null)}>
+                {meetingNotes.close}
+              </button>
+              <button
+                type="button"
+                className="db-local-confirm-primary"
+                autoFocus
+                onClick={() => {
+                  const path = saved.path;
+                  setSaved(null);
+                  void openPath(path).catch(() =>
+                    setStatus({ tone: "error", text: meetingNotes.openFailed("Downloads, Aura Documents") }),
+                  );
+                }}
+              >
+                {meetingNotes.open}
+              </button>
+            </>
+          }
+        >
+          <p>{meetingNotes.savedFile(fileName(saved.path), "Downloads, Aura Documents")}</p>
+        </MeetingDialog>
       )}
 
       {state === "ready" && note ? (
         turns.length === 0 ? (
-          <div className="db-detail">{insights}</div>
+          <div className="db-detail">
+            <div className="db-meeting-tab-row">
+              <span />
+              <span />
+              {copyButton}
+            </div>
+            {insights}
+          </div>
         ) : (
           <div className="db-detail">
-            <SlidingTabs
-              tabs={[
-                {
-                  value: "transcript",
-                  label: "Transcript",
-                  Icon: MessageSquareText,
-                  count: turns.length,
-                },
-                { value: "insights", label: "Insights", Icon: Sparkles },
-              ]}
-              value={pane.tab}
-              onChange={pane.switchTab}
-              ariaLabel="Meeting detail"
-              idPrefix="meeting"
-            />
+            <div className="db-meeting-tab-row">
+              <span />
+              <SlidingTabs
+                tabs={[
+                  {
+                    value: "transcript",
+                    label: "Transcript",
+                    Icon: MessageSquareText,
+                    count: turns.length,
+                  },
+                  { value: "insights", label: "Insights", Icon: Sparkles },
+                ]}
+                value={pane.tab}
+                onChange={pane.switchTab}
+                ariaLabel="Meeting detail"
+                idPrefix="meeting"
+              />
+              {copyButton}
+            </div>
             <div className={`db-tab-stage is-${pane.transition}`}>
               {pane.renderedTab === "transcript" ? (
                 <div id="meeting-transcript-panel" role="tabpanel" aria-labelledby="meeting-transcript-tab">

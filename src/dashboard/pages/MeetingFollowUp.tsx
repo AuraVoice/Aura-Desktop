@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Check, ChevronUp, Copy, LoaderCircle, Mail, Minus, X } from "lucide-react";
+import { Check, ChevronUp, Copy, Mail, Minus, X } from "lucide-react";
 import { trackEvent } from "../../lib/analytics";
 import { emailWithSignature, gmailComposeUrl, resolveEmailSignature } from "../../lib/emailDraft";
 import { logError } from "../../lib/log";
@@ -105,12 +105,7 @@ ${body}` : body)
         </button>
       </header>
 
-      {!minimized && state === "drafting" && (
-        <p className="db-compose-state" role="status">
-          <LoaderCircle size={15} className="db-meeting-spin" />
-          {copy.drafting}
-        </p>
-      )}
+      {!minimized && state === "drafting" && <ComposeThinking key={attempt} />}
       {!minimized && state === "error" && (
         <div className="db-compose-state is-error" role="alert">
           <span>{error}</span>
@@ -176,4 +171,28 @@ ${body}` : body)
   // window and keeps the dashboard's tokens and hidden scrollbars.
   const host = document.querySelector(".db-app") ?? document.body;
   return createPortal(card, host);
+}
+
+const THINKING_STEP_MS = 2600;
+
+/** The drafting state: centred in the card, stepping through what Aura is
+ *  doing and holding on the last line rather than looping back to the first. */
+function ComposeThinking() {
+  const [step, setStep] = useState(0);
+  const last = copy.thinking.length - 1;
+
+  useEffect(() => {
+    if (step >= last) return;
+    const timer = window.setTimeout(() => setStep((value) => value + 1), THINKING_STEP_MS);
+    return () => window.clearTimeout(timer);
+  }, [step, last]);
+
+  return (
+    <div className="db-compose-thinking" role="status" aria-live="polite">
+      <span className="db-compose-thinking-orb" aria-hidden="true" />
+      <p key={step} className="db-compose-thinking-line">
+        {copy.thinking[step]}
+      </p>
+    </div>
+  );
 }

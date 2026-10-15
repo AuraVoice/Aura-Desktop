@@ -6880,7 +6880,8 @@
   margin-top: 24px;
 }
 .db-local-confirm-cancel,
-.db-local-confirm-delete {
+.db-local-confirm-delete,
+.db-local-confirm-primary {
   display: inline-flex;
   min-height: 42px;
   align-items: center;
@@ -6914,18 +6915,106 @@
   background: #922b2b;
   box-shadow: 0 10px 24px rgba(146, 43, 43, 0.24), inset 0 1px 0 rgba(255, 255, 255, 0.16);
 }
+/* The non-destructive confirm (Save to Notion, Post to Slack). */
+.db-local-confirm-primary {
+  border: 1px solid transparent;
+  background: var(--db-active);
+  color: #fff;
+  box-shadow: 0 8px 20px rgba(31, 35, 40, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+.db-local-confirm-primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--db-active) 86%, #fff);
+}
+/* Meetings' Send to Notion / Slack dialog: no icon medallion, so the title
+   needs no room above it. */
+.db-share-dialog h2 {
+  margin-top: 0;
+}
+.db-share-dialog-waiting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.db-share-dialog-field {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  color: var(--db-text-dim);
+  font-size: 14px;
+}
+/* Slack channel picker: rows inside one hairline box, scrolling past six. */
+.db-channel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 248px;
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid color-mix(in srgb, var(--db-text) 12%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--db-text) 2%, transparent);
+}
+.db-channel-option {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  color: var(--db-text-dim);
+  font: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.12s var(--db-ease), color 0.12s var(--db-ease);
+}
+.db-channel-option:hover {
+  background: var(--db-hover);
+  color: var(--db-text);
+}
+.db-channel-option.is-picked {
+  background: color-mix(in srgb, var(--db-teal) 12%, transparent);
+  color: var(--db-text);
+  font-weight: 600;
+}
+.db-channel-option:focus-visible {
+  outline: 2px solid var(--db-teal);
+  outline-offset: -2px;
+}
+.db-channel-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.db-channel-tag {
+  color: var(--db-text-mute);
+  font-size: 11.5px;
+  font-weight: 400;
+}
+.db-channel-check {
+  flex: none;
+  color: var(--db-teal-deep-a);
+}
 .db-local-confirm-cancel:active:not(:disabled),
-.db-local-confirm-delete:active:not(:disabled) {
+.db-local-confirm-delete:active:not(:disabled),
+.db-local-confirm-primary:active:not(:disabled) {
   transform: scale(0.98);
 }
 .db-local-delete:focus-visible,
 .db-local-confirm-cancel:focus-visible,
-.db-local-confirm-delete:focus-visible {
+.db-local-confirm-delete:focus-visible,
+.db-local-confirm-primary:focus-visible {
   outline: 2px solid var(--db-teal);
   outline-offset: 2px;
 }
 .db-local-confirm-cancel:disabled,
-.db-local-confirm-delete:disabled {
+.db-local-confirm-delete:disabled,
+.db-local-confirm-primary:disabled {
   cursor: wait;
   opacity: 0.6;
 }
@@ -6934,7 +7023,8 @@
     flex-direction: column-reverse;
   }
   .db-local-confirm-cancel,
-  .db-local-confirm-delete {
+  .db-local-confirm-delete,
+  .db-local-confirm-primary {
     width: 100%;
   }
 }
@@ -7387,21 +7477,34 @@
     transform: rotate(360deg);
   }
 }
-/* Ready-note toolbar: copy, ask, edit, pin, then the overflow menu. */
-.db-meeting-tags {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 6px;
-}
+/* Ready-note toolbar, top right of the heading: copy, ask, follow-up, pin,
+   then the overflow menu (which also holds Edit). */
 .db-meeting-actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-shrink: 0;
   align-items: center;
-  gap: 8px;
-  padding-top: 16px;
+  gap: 2px;
 }
-.db-meeting-actions .db-secondary-btn,
+.db-meeting-actions .db-row-action:hover:not(:disabled) {
+  background: var(--db-hover);
+}
+.db-meeting-actions .db-row-action.is-active {
+  color: var(--db-teal-deep-a);
+}
+/* The tab pill stays centred; Copy sits on the same row at the right edge,
+   lined up with the transcript bubbles and the insight cards below it. */
+.db-meeting-tab-row {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 12px;
+}
+.db-meeting-tab-row > .db-meeting-copy {
+  justify-self: end;
+}
+.db-meeting-copy:hover:not(:disabled) {
+  background: var(--db-hover);
+}
 .db-meeting-action-status .db-secondary-btn,
 .db-meeting-action-status .db-primary-btn,
 .db-meeting-editor-actions .db-secondary-btn,
@@ -7413,11 +7516,6 @@
   border-radius: 999px;
   padding: 6px 13px;
   font-size: 12px;
-}
-.db-meeting-actions .db-secondary-btn.is-active {
-  border-color: color-mix(in srgb, var(--db-teal, #2fb3a3) 45%, transparent);
-  background: color-mix(in srgb, var(--db-teal, #2fb3a3) 12%, transparent);
-  color: var(--db-teal-deep-a);
 }
 .db-meeting-action-status {
   display: flex;
@@ -7512,16 +7610,6 @@
   display: flex;
   justify-content: flex-end;
   gap: 8px;
-}
-.db-meeting-channel-select {
-  min-height: 32px;
-  padding: 4px 10px;
-  border: 1px solid color-mix(in srgb, var(--db-text) 14%, transparent);
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--db-text) 3%, transparent);
-  color: var(--db-text);
-  font: inherit;
-  font-size: 12px;
 }
 /* Draft follow-up: a mail-style compose card pinned to the window's bottom
    right. It floats over varied page content, so it is one of the surfaces
@@ -7665,6 +7753,45 @@
 }
 .db-compose-state.is-error {
   color: #a33232;
+}
+/* Drafting: the whole body area, with the status centred in it. */
+.db-compose-thinking {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 24px;
+  text-align: center;
+}
+.db-compose-thinking-orb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--db-teal);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--db-teal) 45%, transparent);
+  animation: db-compose-orb 1.8s ease-out infinite;
+}
+@keyframes db-compose-orb {
+  70% {
+    box-shadow: 0 0 0 12px color-mix(in srgb, var(--db-teal) 0%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--db-teal) 0%, transparent);
+  }
+}
+.db-compose-thinking-line {
+  margin: 0;
+  color: var(--db-text-dim);
+  font-size: 14px;
+  animation: db-compose-line-in 0.35s var(--db-ease) both;
+}
+@keyframes db-compose-line-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
 }
 .db-compose-link {
   padding: 0;
