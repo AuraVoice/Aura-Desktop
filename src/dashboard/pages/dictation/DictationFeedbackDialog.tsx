@@ -2,6 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Flag, ShieldCheck } from "lucide-react";
 import { logError } from "../../../lib/log";
+import { deviceNoun } from "../../../lib/platformKeys";
 import { sendDictationFeedback } from "../../../lib/dictationFeedback";
 import type { DictationHistoryEntry } from "../../../lib/dictationHistory";
 
@@ -96,7 +97,7 @@ export function DictationFeedbackDialog({
           <ShieldCheck size={14} />
           The transcript you flagged is sent with your report so we can see what
           went wrong, along with the original speech text when AI formatting
-          changed it. The audio is never uploaded and stays on this PC.
+          changed it. The audio is never uploaded and stays on this {deviceNoun()}.
         </p>
         {error && <p className="db-trace-note">{error}</p>}
         <div className="db-local-confirm-actions">

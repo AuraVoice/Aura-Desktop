@@ -12,7 +12,12 @@ import { trackEvent } from "../lib/analytics";
 import { trackOnboardingStepCompleted } from "../lib/acquisitionAnalytics";
 import { recordDesktopOnboardingEvent } from "../lib/profile";
 import { logError } from "../lib/log";
-import { requestMicrophoneStream, resetMicrophonePermission } from "../lib/microphoneAccess";
+import {
+  openMicrophoneSettings,
+  microphoneSettingsLabel,
+  requestMicrophoneStream,
+  resetMicrophonePermission,
+} from "../lib/microphoneAccess";
 import "./PrivacySetupStep.css";
 
 type MicrophoneStatus = "idle" | "checking" | "granted" | "denied" | "unavailable";
@@ -81,6 +86,17 @@ export function PrivacySetupStep({
       return;
     }
     const retryingDeniedPermission = microphoneStatus === "denied";
+    if (retryingDeniedPermission && isMac) {
+      // macOS has no reset to call: the grant lives in System Settings, so
+      // send the user there and re-check on their next click.
+      setMicrophoneStatus("idle");
+      try {
+        await openMicrophoneSettings();
+      } catch (err) {
+        logError("PrivacySetupStep: open microphone settings", err);
+      }
+      return;
+    }
     setMicrophoneStatus("checking");
     try {
       if (retryingDeniedPermission) await resetMicrophonePermission();
@@ -148,7 +164,7 @@ export function PrivacySetupStep({
     : microphoneStatus === "granted"
       ? "Ready"
       : microphoneStatus === "denied"
-        ? "Try again"
+        ? (isMac ? microphoneSettingsLabel() : "Try again")
         : "Check microphone";
 
   return (

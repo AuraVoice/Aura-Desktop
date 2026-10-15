@@ -15,10 +15,11 @@ pub fn plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
         ])
         .level(log::LevelFilter::Info)
         // Bound the on-disk log: previously it grew unbounded across sessions.
-        // Rotate at ~5 MB and keep only the one prior file, so the durable log is
-        // capped at ~10 MB while still holding plenty of recent sessions.
+        // Rotate at ~5 MB and keep two prior files, capping the durable log at
+        // ~15 MB. KeepOne is not "keep one prior": it deletes the old file on
+        // rotation, so right after a rotate the log held almost nothing.
         .max_file_size(5_000_000)
-        .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepOne)
+        .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(2))
         .build()
 }
 

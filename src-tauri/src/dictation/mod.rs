@@ -2198,6 +2198,7 @@ fn with_listener_health(app: &tauri::AppHandle, mut status: DictationStatus) -> 
                 .to_string(),
         );
         status.biasing_available = false;
+        status.blocker = Some("accessibility");
     }
     status
 }

@@ -30,6 +30,7 @@ import { AuthRequiredError } from "../lib/api";
 import { trackEvent } from "../lib/analytics";
 import { logError, logInfo } from "../lib/log";
 import { showStatusPill } from "../lib/statusPill";
+import { isMac, platformTag } from "../lib/platformKeys";
 import { installMeetingDebug } from "../debug/meetingDebug";
 import {
   bindMeetingActivityOwner,
@@ -143,6 +144,8 @@ interface CaptureStatePayload {
   queuedForUpload: boolean;
   /** On a stop: under 5 s, so Rust already deleted it locally and nothing uploads. */
   discarded: boolean;
+  /** On a `capture_failed` stop: Rust's own error text, when it sends one. */
+  error?: string | null;
 }
 
 // Same transport normalization as useScreenSight's asArrayBuffer: the IPC
@@ -896,7 +899,28 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
             }
           }
           if (payload.reason === "capture_failed") {
-            trackEvent("meeting_capture_failed", {});
+            const cause = (payload.error ?? "").slice(0, 200);
+            trackEvent("meeting_capture_failed", {
+              reason: cause || payload.reason,
+              platform: platformTag(),
+            });
+            const systemAudio = /system audio|process tap|aggregate/i.test(cause);
+            void notifyLocal(
+              {
+                type: "meeting_needs_attention",
+                severity: "error",
+                title: "Meeting recording stopped",
+                body: isMac() && systemAudio
+                  ? "Aura could not hear the call audio. Allow Aura under System Settings > Privacy & Security > Screen & System Audio Recording, then record again."
+                  : "Aura lost the audio for this meeting and stopped recording. You can start recording again.",
+                dedupKey: `meeting:${payload.captureRunId ?? payload.meetingId ?? "unknown"}:capture_failed`,
+                action: payload.meetingId ? "view_meeting" : null,
+                resourceId: payload.meetingId,
+                toastPolicy: "always",
+                sensitive: true,
+              },
+              { appHidden: appHiddenRef.current, ownerUid: payload.ownerUid },
+            ).catch((err) => logError("useMeetingCapture: capture-failed notification", err));
           }
         }
       }),

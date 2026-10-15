@@ -637,12 +637,14 @@ fn remove_legacy_screenshots(base_dir: &Path) -> Result<bool, String> {
     Ok(true)
 }
 
-/// Raises the macOS Screen Recording prompt, once per process, when the user
-/// arms Screen Sight (`security::emit_screen_sight_armed`).
+/// Raises the macOS Screen Recording prompt, once per process, at a moment
+/// the user started something that looks at the screen: arming Screen Sight
+/// (`security::emit_screen_sight_armed`), a call starting with screen context
+/// on (`security::note_voice_active`), or arming Guide (`guide::arm_guide`).
 ///
 /// The prompt is one-shot per app identity and macOS ignores every later
-/// call, so it is only ever raised here, at a moment the user can connect it
-/// to what they just did; the capture path below never requests. Without a
+/// call, so it is only ever raised from those moments, which the user can
+/// connect to what they just did; the capture path below never requests. Without a
 /// request the app never appears in System Settings > Screen Recording at
 /// all, and the only way in is the list's "+" button. A fresh grant applies
 /// after a relaunch, which the preflight error below already says.

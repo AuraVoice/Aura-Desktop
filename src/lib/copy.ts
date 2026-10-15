@@ -88,6 +88,8 @@ export const dictationChord = {
   allowInputMonitoring: "Allow in System Settings",
   restart: "Restart Aura",
   restartNote: "Turn on Aura under Input Monitoring, then restart Aura to finish.",
+  /** macOS only: the Accessibility grant that lets Aura type into other apps. */
+  openAccessibility: "Open Settings",
 } as const;
 
 export const regionChord = {

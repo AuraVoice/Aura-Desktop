@@ -93,6 +93,9 @@ pub fn open_dashboard_route(
             (None, Some(run)) => format!("{route}?run={run}"),
             (None, None) => route.to_string(),
         }
+    } else if route == "/billing" && tab == Some("plans") {
+        // The overlay's Upgrade lands on the Plans dialog, not a bare page.
+        format!("{route}?plans=1")
     } else if route == "/research" || route == "/browser-agent" {
         run.map(|run| format!("{route}?run={run}")).unwrap_or_else(|| route.to_string())
     } else if route == "/meetings" {

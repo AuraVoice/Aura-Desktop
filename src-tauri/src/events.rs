@@ -113,5 +113,6 @@ pub const UPDATE_DISMISSED: &str = "update-dismissed";
 pub const UPDATE_CHECK_RESULT: &str = "update-check-result";
 pub const NOTIFICATION_TOAST_ACTIVATED: &str = "notification-toast-activated";
 pub const CONNECTOR_OAUTH_COMPLETE: &str = "connector-oauth-complete";
+pub const ENTITLEMENT_REFRESH: &str = "entitlement-refresh";
 pub const DASHBOARD_NAVIGATE: &str = "dashboard-navigate";
 pub const STATUS_PILL_UPDATE: &str = "status-pill-update";

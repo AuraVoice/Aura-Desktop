@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { emit } from "@tauri-apps/api/event";
 import { Store } from "@tauri-apps/plugin-store";
@@ -26,7 +26,8 @@ import {
   termsUrl,
 } from "../../lib/copy";
 import { regionKeysOf, useRegionStatus } from "../../lib/regionStatus";
-import { osName } from "../../lib/platformKeys";
+import { isMac, openScreenRecordingSettings, osName } from "../../lib/platformKeys";
+import { trackEvent } from "../../lib/analytics";
 import { resetHotkeyBindings } from "../../lib/hotkeys";
 import { useHotkeyBindings } from "../../state/useHotkeyBindings";
 import { ShortcutEditorDialog } from "../../overlay/ShortcutEditorDialog";
@@ -107,6 +108,17 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
   const [launchAtStartup, setLaunchAtStartup] = useState(false);
   const dictationStatus = useDictationStatus();
   const regionStatus = useRegionStatus();
+  const screenRecordingReported = useRef(false);
+  // Once per mount: the region status is what tells the UI the grant is missing.
+  useEffect(() => {
+    if (regionStatus?.blocker !== "screenRecording" || screenRecordingReported.current) return;
+    screenRecordingReported.current = true;
+    trackEvent("desktop_permission_result", {
+      permission: "screen_recording",
+      granted: false,
+      surface: "system_settings",
+    });
+  }, [regionStatus?.blocker]);
   const pageCopy = PAGE_COPY[section];
 
   useEffect(() => {
@@ -326,12 +338,14 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
                 checked={launchAtStartup}
                 onChange={(value) => void updateLaunchAtStartup(value)}
               />
-              <ToggleRow
-                label="Show Aura in the taskbar"
-                description="Give this window a taskbar button. Aura stays reachable from the tray either way."
-                checked={settings.showInTaskbar}
-                onChange={(value) => void updateTaskbarVisibility(value)}
-              />
+              {!isMac() && (
+                <ToggleRow
+                  label="Show Aura in the taskbar"
+                  description="Give this window a taskbar button. Aura stays reachable from the tray either way."
+                  checked={settings.showInTaskbar}
+                  onChange={(value) => void updateTaskbarVisibility(value)}
+                />
+              )}
               <ToggleRow
                 label="Allow screenshots in text chat"
                 description="Lets the text chat composer attach what's on screen, and lets asking for a screenshot in a message take one. Off means no text chat message can carry your screen."
@@ -395,12 +409,14 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
                 checked={settings.dictationSounds}
                 onChange={(value) => void update("dictationSounds", value)}
               />
-              <ToggleRow
-                label="Mute other apps while dictating"
-                description="Silence music and other audio for the length of a dictation, then restore it."
-                checked={settings.muteOthersWhileDictating}
-                onChange={(value) => void update("muteOthersWhileDictating", value)}
-              />
+              {!isMac() && (
+                <ToggleRow
+                  label="Mute other apps while dictating"
+                  description="Silence music and other audio for the length of a dictation, then restore it."
+                  checked={settings.muteOthersWhileDictating}
+                  onChange={(value) => void update("muteOthersWhileDictating", value)}
+                />
+              )}
             </div>
           </SettingsSection>
 
@@ -549,6 +565,19 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
                       ? regionCopy.statusReady
                       : regionStatus.reason}
                 </span>
+                {isMac() && regionStatus?.blocker === "screenRecording" && (
+                  <button
+                    type="button"
+                    className="db-shortcut-change"
+                    onClick={() =>
+                      void openScreenRecordingSettings().catch((err) =>
+                        logError("GeneralPage: open screen recording", err),
+                      )
+                    }
+                  >
+                    Open Settings
+                  </button>
+                )}
               </div>
             </div>
           </SettingsSection>

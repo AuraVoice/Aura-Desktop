@@ -12,6 +12,8 @@ import {
 import type { User } from "firebase/auth";
 import { Store } from "@tauri-apps/plugin-store";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { isMac } from "../lib/platformKeys";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { Sidebar } from "./Sidebar";
 import { AccountMenu, NotificationBell } from "./TopBar";
@@ -184,6 +186,19 @@ export function DashboardApp() {
   const uid = user?.uid ?? null;
   const currentUidRef = useRef(uid);
   currentUidRef.current = uid;
+
+  // macOS: Cmd+W closes the window, the same close the title bar's X runs.
+  useEffect(() => {
+    if (!isMac()) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+      if (event.key.toLowerCase() !== "w") return;
+      event.preventDefault();
+      getCurrentWindow().close().catch((err) => logError("DashboardApp: close on Cmd+W", err));
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   const loadAccountOnboarding = useCallback(async (accountUid: string) => {
     const requestId = ++accountRequestRef.current;

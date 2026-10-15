@@ -173,6 +173,9 @@ pub struct CaptureStatePayload {
     /// Only on a stop: the whole meeting was shorter than MIN_KEPT_CAPTURE_MS,
     /// so its local audio is already being deleted and nothing will upload.
     pub discarded: bool,
+    /// Only on a `capture_failed` stop with a cause the user can fix, today a
+    /// macOS System Audio Recording refusal. Plain copy, shown in the notice.
+    pub error: Option<String>,
 }
 
 /// Under this the capture is a blip (a call detected and gone, a misclick),
@@ -513,6 +516,7 @@ pub async fn start_meeting_capture(
                 reason: "started".to_string(),
                 queued_for_upload: false,
                 discarded: false,
+                error: None,
             },
         );
 
@@ -1186,6 +1190,7 @@ pub(crate) fn notify_paused(app: &AppHandle, paused: bool, reason: &str) {
                     reason: reason.to_string(),
                     queued_for_upload: false,
                     discarded: false,
+                    error: None,
                 })
             }
             None => None,
@@ -1216,6 +1221,7 @@ pub(crate) fn notify_device_rebound(app: &AppHandle) {
             reason: "device_rebound".to_string(),
             queued_for_upload: false,
             discarded: false,
+            error: None,
         })
     };
     if let Some(payload) = payload {
@@ -1275,10 +1281,19 @@ pub(crate) fn finalize_capture(
     info!(
         "meeting: capture finished meeting={meeting_id} run={capture_run_id} fence={capture_fence} reason={final_reason}"
     );
+    #[cfg(target_os = "macos")]
+    let error = (reason == "capture_failed" && crate::macos_audio::take_system_audio_refusal()).then(|| {
+        "Aura could not record the meeting audio because System Audio Recording is off.          Allow Aura under System Settings > Privacy & Security > Screen & System Audio Recording."
+            .to_string()
+    });
+    #[cfg(not(target_os = "macos"))]
+    let error: Option<String> = None;
     if reason == "capture_failed" && !cfg!(debug_assertions) {
-        sentry::capture_message(
-            &format!("meeting capture failed mid-session for {meeting_id}"),
-            sentry::Level::Error,
+        // One fixed message so every failure groups into one issue; the id
+        // rides as a tag instead of splitting the feed per meeting.
+        sentry::with_scope(
+            |scope| scope.set_tag("meeting_id", meeting_id),
+            || sentry::capture_message("meeting capture failed mid-session", sentry::Level::Error),
         );
     }
     emit_capture_state(
@@ -1295,6 +1310,7 @@ pub(crate) fn finalize_capture(
             reason: final_reason.to_string(),
             queued_for_upload: persistence.is_ok() && !discarded,
             discarded,
+            error,
         },
     );
     persistence.map(|_| ())

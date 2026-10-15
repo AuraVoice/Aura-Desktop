@@ -21,6 +21,7 @@ const CHECKOUT_FAILURE_COPY: Record<CheckoutFailure | "open_failed", string> = {
   billing_not_configured: "Buying a plan isn't available right now. Nothing was charged.",
   entitlement_unavailable: "Aura couldn't check your current plan, so checkout didn't open. Try again in a minute.",
   checkout_failed: "The payment page didn't open. Try again in a minute.",
+  price_not_approved: "This plan is not available right now. Please pick another plan or contact support.",
   unavailable: "Checkout couldn't start. Check your connection and try again.",
   open_failed: "Your browser didn't open the payment page. Try again.",
 };

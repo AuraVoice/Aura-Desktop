@@ -360,4 +360,5 @@ opt-level = 3
 overflow-checks = true
 lto = true
 codegen-units = 1
-strip = "symbols"
+# Keep the symbol table so panic backtraces and minidumps name functions.
+strip = "debuginfo"

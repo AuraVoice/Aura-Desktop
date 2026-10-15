@@ -12,6 +12,15 @@ pub struct ConnectorOAuthState {
 
 pub fn ingest_urls(app: &AppHandle, urls: &[Url]) {
     for url in urls {
+        // Aura-Web's checkout success page opens aura://checkout. It carries
+        // nothing to trust: it only tells every window to re-read the plan
+        // from the backend now, instead of after the 12 h cache expires.
+        if url.scheme() == "aura" && url.host_str() == Some("checkout") {
+            if let Err(error) = app.emit(crate::events::ENTITLEMENT_REFRESH, ()) {
+                log::error!("checkout deep link: failed to emit refresh: {error}");
+            }
+            continue;
+        }
         if url.scheme() != "aura"
             || url.host_str() != Some("connectors")
             || url.path() != "/complete"

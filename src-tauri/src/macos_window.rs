@@ -350,6 +350,10 @@ fn apply_panel_style(ns_window: &NSWindow) {
     // an always-on-top companion means it vanishes the moment the user clicks
     // anything else - the exact opposite of what it is for.
     ns_window.setHidesOnDeactivate(false);
+    // Cmd+H on the dashboard runs [NSApp hide:], which hides every window that
+    // can hide. Without this the notch and the dictation HUD vanish with it and
+    // the chat summon and dictation look dead until the Dock icon is clicked.
+    ns_window.setCanHide(false);
 }
 
 /// Temporarily drops the overlay below the level a native Open panel renders

@@ -69,6 +69,11 @@ export function BillingPage() {
   // straight away instead of asking for a second click.
   const location = useLocation();
   const [plansOpen, setPlansOpen] = useState(() => new URLSearchParams(location.search).get("plans") === "1");
+  // A later "See plans" while this page is already mounted (the overlay's
+  // Upgrade, a paywall) is a new navigation with a new key, so it opens too.
+  useEffect(() => {
+    if (new URLSearchParams(location.search).get("plans") === "1") setPlansOpen(true);
+  }, [location.key, location.search]);
 
   const openBillingPortal = async () => {
     if (portalBusy) return;

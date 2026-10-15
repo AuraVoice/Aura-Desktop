@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ShieldCheck } from "lucide-react";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { logError } from "../../../lib/log";
+import { trackEvent } from "../../../lib/analytics";
 import { requestDoubleTapPermission } from "../../../lib/hotkeys";
 import {
   loadDictationConsent,
@@ -24,7 +25,11 @@ import {
 import { dictationConsent as consentCopy, dictationChord as chordCopy } from "../../../lib/copy";
 import { chordKeysOf, useDictationStatus } from "../../../lib/dictationStatus";
 import { bytes as formatBytes } from "../../format";
-import { deviceNoun } from "../../../lib/platformKeys";
+import {
+  deviceNoun,
+  openAccessibilitySettings,
+  openInputMonitoringSettings,
+} from "../../../lib/platformKeys";
 import { dictationSharingActive } from "../../../lib/generalSettings";
 import { useGeneralSettings } from "../../../state/useGeneralSettings";
 
@@ -104,6 +109,18 @@ export function DictationSettingsRail({
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [permissionAsked, setPermissionAsked] = useState(false);
+  const accessibilityReported = useRef(false);
+
+  // Once per mount: the status is what tells the UI Accessibility is missing.
+  useEffect(() => {
+    if (dictationStatus?.blocker !== "accessibility" || accessibilityReported.current) return;
+    accessibilityReported.current = true;
+    trackEvent("desktop_permission_result", {
+      permission: "accessibility",
+      granted: false,
+      surface: "dictation_settings",
+    });
+  }, [dictationStatus?.blocker]);
 
   useEffect(() => {
     let active = true;
@@ -217,6 +234,11 @@ export function DictationSettingsRail({
                 void requestDoubleTapPermission().catch((err) =>
                   logError("DictationSettingsRail: input monitoring", err),
                 );
+                // IOHIDRequestAccess prompts only once per install, so the
+                // pane is the only route after that first refusal.
+                void openInputMonitoringSettings().catch((err) =>
+                  logError("DictationSettingsRail: open input monitoring", err),
+                );
               }}
             >
               {chordCopy.allowInputMonitoring}
@@ -229,6 +251,21 @@ export function DictationSettingsRail({
                 </button>
               </>
             )}
+          </div>
+        )}
+        {dictationStatus?.blocker === "accessibility" && (
+          <div className="db-trace-actions">
+            <button
+              type="button"
+              className="db-trace-action"
+              onClick={() =>
+                void openAccessibilitySettings().catch((err) =>
+                  logError("DictationSettingsRail: open accessibility", err),
+                )
+              }
+            >
+              {chordCopy.openAccessibility}
+            </button>
           </div>
         )}
         {dictationStatus?.blocker === "relaunch" && (

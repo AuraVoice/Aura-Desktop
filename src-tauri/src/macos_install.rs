@@ -404,10 +404,14 @@ fn xattr(args: &[&str], bundle: &Path) -> Result<bool, std::io::Error> {
 /// again.
 fn relaunch_and_exit(dest: &Path) -> ! {
     stamp_relaunch();
-    let script = format!("sleep 2; /usr/bin/open \"{}\"", dest.display());
+    // The path rides as $1, never inside the script text: the bundle's file
+    // name is attacker-controllable (a renamed download keeps its signature),
+    // so interpolating it would hand the shell a command to run.
     match Command::new("/bin/sh")
         .arg("-c")
-        .arg(script)
+        .arg("sleep 2; exec /usr/bin/open \"$1\"")
+        .arg("sh")
+        .arg(dest)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())

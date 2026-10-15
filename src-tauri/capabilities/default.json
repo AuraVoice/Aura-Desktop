@@ -14,7 +14,8 @@
       "identifier": "opener:allow-open-url",
       "allow": [
         { "url": "ms-settings:privacy-microphone" },
-        { "url": "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone" }
+        { "url": "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone" },
+        { "url": "x-apple.systempreferences:com.apple.preference.security?Privacy_*" }
       ]
     },
     {

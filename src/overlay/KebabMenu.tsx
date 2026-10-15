@@ -18,16 +18,10 @@ import { notifications as notifCopy } from "../lib/notificationCopy";
 import { sendFeedback } from "../lib/feedback";
 import { openDashboardWindow } from "../lib/dashboardWindow";
 import { logError } from "../lib/log";
-import type { CheckoutPhase, EntitlementState } from "../state/useEntitlement";
+import type { EntitlementState } from "../state/useEntitlement";
 import "./KebabMenu.css";
 
 const FEEDBACK_SENT_FLASH_MS = 2500;
-
-// The desktop's single upgrade default: Companion, yearly (the featured,
-// best-value plan across mobile + web). The Dodo-hosted page and the web
-// pricing/dashboard cover Pro and monthly for anyone who wants them.
-const UPGRADE_TIER = "companion" as const;
-const UPGRADE_PERIOD = "yearly" as const;
 
 /**
  * The overflow menu behind the bar's kebab, rendered below the bar in the
@@ -94,8 +88,6 @@ export function KebabMenu({
   }
 
   const showPlan = entitlement.loaded && entitlement.status !== "unknown";
-  const checkoutBusy =
-    entitlement.checkout.phase === "opening" || entitlement.checkout.phase === "polling";
 
   function handleCaptureNow() {
     onClose();
@@ -106,10 +98,12 @@ export function KebabMenu({
     onCaptureNow();
   }
 
+  // Upgrade opens the plans in the dashboard, the same "See plans" every other
+  // surface uses, so the user picks the tier and period instead of being sent
+  // straight to one checkout.
   function handleUpgrade() {
-    if (checkoutBusy || entitlement.checkout.phase === "upgraded") return;
-    entitlement.startCheckout(UPGRADE_TIER, UPGRADE_PERIOD);
     onClose();
+    void openDashboardWindow("/billing", null, "plans");
   }
 
   return (
@@ -125,9 +119,8 @@ export function KebabMenu({
                     type="button"
                     className="kebab-menu-upgrade"
                     onClick={handleUpgrade}
-                    disabled={checkoutBusy || entitlement.checkout.phase === "upgraded"}
                   >
-                    {upgradeLabelFor(entitlement.checkout)}
+                    {subCopy.upgrade}
                   </button>
                 )}
               </div>
@@ -224,19 +217,4 @@ function planLineFor(entitlement: EntitlementState): string {
   const name = entitlement.tier === "pro" ? "Pro" : entitlement.tier === "companion" ? "Companion" : null;
   if (!name) return subCopy.freePlan;
   return entitlement.status === "gracePeriod" ? subCopy.paymentIssue(name) : subCopy.paidPlan(name);
-}
-
-function upgradeLabelFor(checkout: CheckoutPhase): string {
-  switch (checkout.phase) {
-    case "opening":
-      return subCopy.upgradeOpening;
-    case "polling":
-      return subCopy.upgradeWaiting;
-    case "upgraded":
-      return subCopy.upgraded;
-    case "error":
-      return subCopy.upgradeFailed;
-    default:
-      return subCopy.upgrade;
-  }
 }

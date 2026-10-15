@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { AuthRequiredError, routeToDashboardForExpiredSession } from "../lib/api";
 import {
@@ -16,6 +17,7 @@ import {
 } from "../lib/entitlement";
 import { logError, logInfo } from "../lib/log";
 import { trackEvent } from "../lib/analytics";
+import { ENTITLEMENT_REFRESH } from "../lib/ipcEvents";
 
 // The desktop has no push channel, so a periodic re-read (plus the next-launch
 // read) is how renewals/downgrades land - SUBSCRIPTION_PLAN.md Flow 2's TTL
@@ -29,6 +31,10 @@ const REFRESH_INTERVAL_MS = 12 * 60 * 60 * 1000;
 const POLL_INITIAL_DELAY_MS = 5_000;
 const POLL_INTERVAL_MS = 3_000;
 const POLL_DEADLINE_MS = 10 * 60 * 1000;
+
+// Coming back to a window re-reads the plan if the last good read is older
+// than this, so a purchase or cancel made in the browser shows up on return.
+const FOCUS_REFRESH_AFTER_MS = 60_000;
 
 /** Wire shape of the Rust `cached_entitlement` command: the stored JSON body
  * plus whether it is still < 12h old. */
@@ -121,6 +127,7 @@ export function useEntitlement({
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const deadlineRef = useRef<number | null>(null);
   const requestedTierRef = useRef<CheckoutTier | null>(null);
+  const lastFetchAtRef = useRef(0);
 
   const setEntitlementSafely = useCallback((next: Entitlement | null) => {
     entitlementRef.current = next;
@@ -174,6 +181,7 @@ export function useEntitlement({
       logError("useEntitlement: fetch failed", err);
       return null;
     }
+    lastFetchAtRef.current = Date.now();
     setEntitlementSafely(fetched);
     setLoaded(true);
     if (uid) {
@@ -299,6 +307,29 @@ export function useEntitlement({
     const id = setInterval(() => void refresh(), REFRESH_INTERVAL_MS);
     return () => clearInterval(id);
   }, [signedIn, uid, initialLoad, refresh, clearPoll]);
+
+  // Rust emits ENTITLEMENT_REFRESH when an aura://checkout deep link lands.
+  // `refresh` always goes to the network, never the 12h Rust cache.
+  useEffect(() => {
+    if (!signedIn) return;
+    let disposed = false;
+    let unlisten: (() => void) | null = null;
+    listen(ENTITLEMENT_REFRESH, () => void refresh())
+      .then((fn) => {
+        if (disposed) fn();
+        else unlisten = fn;
+      })
+      .catch((err) => logError("useEntitlement: listen entitlement-refresh", err));
+    const onFocus = () => {
+      if (Date.now() - lastFetchAtRef.current > FOCUS_REFRESH_AFTER_MS) void refresh();
+    };
+    window.addEventListener("focus", onFocus);
+    return () => {
+      disposed = true;
+      unlisten?.();
+      window.removeEventListener("focus", onFocus);
+    };
+  }, [signedIn, refresh]);
 
   useEffect(() => {
     isMountedRef.current = true;

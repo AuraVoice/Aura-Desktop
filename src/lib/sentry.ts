@@ -1,6 +1,6 @@
 import * as Sentry from "@sentry/browser";
 import packageJson from "../../package.json";
-import { osName } from "./platformKeys";
+import { platformTag } from "./platformKeys";
 
 // Public/client-safe ingestion key, not a secret to protect - same Sentry
 // project the Rust side reports to (see sentry_setup.rs), same reasoning
@@ -68,7 +68,7 @@ export function initSentryForWindow(label: string, enabled: boolean): void {
       environment: import.meta.env.MODE,
       sendDefaultPii: false,
       initialScope: {
-        tags: { window_label: label, app_version: packageJson.version, os: osName() },
+        tags: { window_label: label, app_version: packageJson.version, os: platformTag() },
       },
       beforeSend: scrubEvent,
     });

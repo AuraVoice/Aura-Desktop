@@ -2821,3 +2821,16 @@ could close right beside the binding <user_answer> blocks, now share one per-pro
 Justification: the class is "third-party words in this turn's context reach a write that persists
 or reaches someone else"; each surface's list must name every source in that class.
 ================================================================================
+2026-10-15: On macOS, one failed key-file read would have replaced the key for good
+Problem: the macOS launch audit found crypto::load_or_create_key_at minting a fresh key on ANY
+read error (`if let Ok(stored) = fs::read(path)`), not only on a missing file. EACCES, EIO or
+EMFILE in a busy process fell through to "first use".
+Issue: the same publish behaves differently per OS. On Windows fsx::durable_rename is
+MoveFileExW without REPLACE_EXISTING, so the overwrite failed and the error surfaced; on macOS it
+is rename(2), which silently replaces the old key file. Every dictation, meeting and chat row
+sealed under it would have become unreadable while new writes looked healthy. The salt path next
+to it already got this right, which is why nobody looked.
+Solution: match the read; mint only on ErrorKind::NotFound, every other error returns Err.
+Justification: "fail closed" has to hold at the read, not only at the unwrap, because the write
+primitive under it is fail-open on one platform.
+================================================================================

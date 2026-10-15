@@ -7,22 +7,17 @@
       tauri.conf.json. These entitlements re-open the specific holes the app
       genuinely needs. Nothing here is optional decoration.
 
-      The three JIT/memory keys are the ones WKWebView-hosting apps commonly
-      declare. They have NOT been proven necessary here: WKWebView runs its
-      JIT inside Apple's own WebContent XPC process, and Tauri's signing docs
-      require no entitlements for notarization; the "crashes after
-      notarization" story comes from Electron, whose V8 runs in-process.
-      BEFORE PUBLIC LAUNCH: run the release workflow's full_build dry run with
-      allow-dyld-environment-variables and allow-unsigned-executable-memory
-      removed, launch the notarized bundle on a clean Mac, and keep only what
-      that launch actually needs. Each key left in is a hole in the hardened
-      runtime.
+      allow-jit is the one JIT key left. WKWebView runs its JIT inside
+      Apple's own WebContent XPC process, so it is probably unneeded too, but
+      it is the cheapest to keep while the launch build is proven.
+      allow-unsigned-executable-memory (turns off W^X) and
+      allow-dyld-environment-variables (lets DYLD_* steer a binary that holds
+      four TCC grants) were removed for the public launch (2026-10-15): the
+      "crashes after notarization" story they answered comes from Electron,
+      whose V8 runs in-process, not from a WKWebView app. If a notarized
+      build ever fails to launch, add back only the key that launch needs.
     -->
     <key>com.apple.security.cs.allow-jit</key>
-    <true/>
-    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
-    <true/>
-    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
     <true/>
 
     <!--
@@ -31,6 +26,16 @@
       actually reads in the prompt. Both are required.
     -->
     <key>com.apple.security.device.audio-input</key>
+    <true/>
+
+    <!--
+      Apple Events. After a voice web search, dictation's command brain asks
+      System Events (via osascript) to move the browser window to half the
+      screen, and asks Finder for the desktop bounds. Under the hardened
+      runtime those events fail with -1743 unless this is declared; the user
+      still sees the NSAppleEventsUsageDescription prompt first.
+    -->
+    <key>com.apple.security.automation.apple-events</key>
     <true/>
 
     <!--

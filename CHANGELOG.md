@@ -16,6 +16,25 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+### Changed
+
+- Upgrade in the notch menu opens the Plans window, so you see every plan and price before you pay.
+- On a Mac, Buddy no longer offers to open apps, switch windows or control music, which only work on Windows for now.
+- On a Mac, the taskbar and "mute other apps while dictating" settings are hidden, since neither applies there.
+
+### Fixed
+
+- A plan you just bought shows up as soon as you come back from the browser, instead of up to 12 hours later.
+- On a Mac, starting a voice call that can see your screen, or starting Guide Mode, now asks for Screen Recording, so Aura appears in System Settings and Buddy can actually see your screen.
+- On a Mac, Guide Mode reports that Screen Recording is off instead of coaching you on a picture of your wallpaper.
+- On a Mac, trying again after blocking the microphone during setup opens the microphone settings instead of failing every time.
+- On a Mac, the dictation settings open System Settings for Input Monitoring and Accessibility when one of them is missing.
+- On a Mac, a meeting recording that stops because System Audio Recording is off tells you so, and says where to turn it on.
+- On a Mac, Cmd+H no longer hides the notch and dictation, and Cmd+W closes the dashboard.
+- On a Mac, a screen capture that fails in chat says Screen Recording is off instead of a generic error.
+- Keys and labels on a Mac read Ctrl + Cmd and "Mac" instead of Windows names.
+- Buying a plan whose price is not available now says so, instead of asking you to check your connection.
+
 ## [0.20.2] - 2026-10-15
 
 ### Added

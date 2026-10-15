@@ -182,6 +182,11 @@ export function useChatScreenCapture(open: boolean, enabled: boolean) {
       return [screenAttachment(data)];
     } catch (err) {
       logError("useChatScreenCapture: resolveForSend", err);
+      // Tauri rejects with the bare Rust string. A missing Screen Recording
+      // grant carries its own fix after the prefix, so show that, not a guess.
+      if (explicitlyRequested && typeof err === "string" && err.startsWith("permission_denied:")) {
+        throw new Error(err.slice("permission_denied:".length).trim());
+      }
       if (explicitlyRequested) throw err;
       return [];
     } finally {

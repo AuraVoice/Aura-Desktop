@@ -548,8 +548,9 @@ struct ArmedPayload {
 /// regardless of trigger (hotkey, native command, voice end, sign-out). JS
 /// mirrors this instead of owning a competing boolean.
 pub(crate) fn emit_screen_sight_armed(app: &AppHandle, armed: bool) {
-    // Arming is the one moment the user can connect a Screen Recording prompt
-    // to what they just did, so it is the only place the request is raised.
+    // Arming is a moment the user can connect a Screen Recording prompt to
+    // what they just did. The others are a call starting with screen context
+    // on (note_voice_active) and Guide arming (guide::arm_guide).
     if armed {
         crate::screenshot::request_screen_capture_access_once();
     }
@@ -725,13 +726,21 @@ pub fn session_changed(app: &AppHandle, signed_in: bool, uid: Option<String>) {
 /// overlay's native voice-end paths (Esc / summon hotkey), so a hung webview
 /// can't leave voice authorization latched.
 pub fn note_voice_active(app: &AppHandle, active: bool) {
-    let transition = {
+    let (transition, screen_context_live) = {
         let Some(handle) = handle(app) else {
             return;
         };
         let mut state = handle.0.lock().unwrap_or_else(|e| e.into_inner());
-        state.set_voice(active)
+        let transition = state.set_voice(active);
+        let live = active && state.authorize(Operation::CaptureTurnScreen).is_ok();
+        (transition, live)
     };
+    // A call that will look at the screen is a moment the user can connect a
+    // Screen Recording prompt to. Without a request here, a fresh Mac with the
+    // default settings is never asked and Aura never appears in the pane.
+    if screen_context_live {
+        crate::screenshot::request_screen_capture_access_once();
+    }
     if transition.screen_sight_disarmed {
         info!("security: voice session ended - screen sight disarmed");
         emit_screen_sight_armed(app, false);

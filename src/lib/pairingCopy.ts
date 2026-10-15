@@ -8,7 +8,7 @@ export const pairingErrorCopy = {
   timeout: "Linking timed out. Check your connection and try again.",
   network: "Couldn't reach Aura. Check your connection and try again.",
   signInFailed:
-    "Got the code, but sign-in tripped. Check your PC's date and time are right, then try again.",
+    `Got the code, but sign-in tripped. Check your ${deviceNoun()}'s date and time are right, then try again.`,
 } as const;
 
 export const pairingCodeLength = 8;

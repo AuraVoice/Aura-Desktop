@@ -75,6 +75,8 @@ export const UPDATE_DISMISSED = "update-dismissed";
 export const UPDATE_CHECK_RESULT = "update-check-result";
 export const NOTIFICATION_TOAST_ACTIVATED = "notification-toast-activated";
 export const CONNECTOR_OAUTH_COMPLETE = "connector-oauth-complete";
+/** An aura://checkout deep link landed: re-read the plan from the network. */
+export const ENTITLEMENT_REFRESH = "entitlement-refresh";
 export const DASHBOARD_NAVIGATE = "dashboard-navigate";
 export const STATUS_PILL_UPDATE = "status-pill-update";
 

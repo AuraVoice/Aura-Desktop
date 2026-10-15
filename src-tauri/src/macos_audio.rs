@@ -24,6 +24,16 @@ use std::ptr::NonNull;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
+/// Set when the last process-tap start was refused, read once by the meeting
+/// stop so its notice can name the grant. The capture event that carries the
+/// failure is shared with Windows and has no room for a cause, so this rides
+/// beside it rather than changing that contract.
+static SYSTEM_AUDIO_REFUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn take_system_audio_refusal() -> bool {
+    SYSTEM_AUDIO_REFUSED.swap(false, std::sync::atomic::Ordering::Relaxed)
+}
+
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::AllocAnyThread;
@@ -542,6 +552,7 @@ impl SystemAudioCapture {
         // THIS is the call that prompts for System Audio Recording, and the
         // one that fails when the user has said no.
         let status = unsafe { AudioDeviceStart(aggregate_id, io_proc) };
+        SYSTEM_AUDIO_REFUSED.store(status != 0, std::sync::atomic::Ordering::Relaxed);
         if status != 0 {
             unsafe {
                 objc2_core_audio::AudioDeviceDestroyIOProcID(aggregate_id, io_proc);

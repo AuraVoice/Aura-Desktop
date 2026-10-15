@@ -1,4 +1,5 @@
 import { platform } from "@tauri-apps/plugin-os";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 /** The ONE place user-facing copy asks which OS it is running on and what the
  * platform calls its keys. Everything that used to hardcode "Windows", "Win",
@@ -76,4 +77,28 @@ export function defaultVoiceKeyLabel(): string {
  * to say aloud. One Control+Alt+KeyS accelerator in hotkeys.rs on both. */
 export function screenSightSpokenKey(): string {
   return isMac() ? "Control Option S" : "Control Alt S";
+}
+
+/** macOS System Settings > Privacy & Security panes, for a grant only the user
+ * can give there. Each one resolves without doing anything off macOS, where
+ * these grants do not exist. */
+const MAC_PRIVACY_PANE = "x-apple.systempreferences:com.apple.preference.security?";
+
+function openMacPrivacyPane(pane: string): Promise<void> {
+  return isMac() ? openUrl(MAC_PRIVACY_PANE + pane) : Promise.resolve();
+}
+
+/** Privacy & Security > Input Monitoring (the dictation chord's event tap). */
+export function openInputMonitoringSettings(): Promise<void> {
+  return openMacPrivacyPane("Privacy_ListenEvent");
+}
+
+/** Privacy & Security > Accessibility (typing dictated text into other apps). */
+export function openAccessibilitySettings(): Promise<void> {
+  return openMacPrivacyPane("Privacy_Accessibility");
+}
+
+/** Privacy & Security > Screen & System Audio Recording. */
+export function openScreenRecordingSettings(): Promise<void> {
+  return openMacPrivacyPane("Privacy_ScreenCapture");
 }

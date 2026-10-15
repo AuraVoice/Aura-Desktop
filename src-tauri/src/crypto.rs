@@ -51,7 +51,16 @@ const KEY_FILE_MAGIC: &[u8; 8] = b"AURAKW\x02\x00";
 /// never clobber each other's freshly minted key. The caller owns creating
 /// the parent directory.
 pub fn load_or_create_key_at(path: &Path, label: &str) -> Result<[u8; 32], String> {
-    if let Ok(stored) = std::fs::read(path) {
+    // Only a genuinely absent file may mint. Any other read error (EACCES,
+    // EIO, EMFILE in a busy process) must fail closed: on macOS the publish
+    // below is a rename that REPLACES the existing key file, so minting on a
+    // transient read failure would orphan every row sealed under the old key.
+    let stored = match std::fs::read(path) {
+        Ok(stored) => Some(stored),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(format!("stored {label} key could not be read: {e}")),
+    };
+    if let Some(stored) = stored {
         match stored.strip_prefix(KEY_FILE_MAGIC) {
             Some(wrapped) => {
                 let key_bytes = keywrap::unwrap(wrapped)

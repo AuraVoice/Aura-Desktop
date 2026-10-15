@@ -22,6 +22,8 @@
  * because the webview is not a trust boundary (see security.rs).
  */
 
+import { isMac } from "./platformKeys";
+
 export interface DesktopCapability {
   /** Stable verb id shared with the backend catalog and system_control.rs. */
   readonly id: string;
@@ -34,6 +36,8 @@ export interface DesktopCapability {
    * forward to the native command, or null to drop the message entirely.
    */
   validate(args: Record<string, unknown>): Record<string, unknown> | null;
+  /** The OSes whose native executor implements this verb. Absent means all. */
+  readonly platforms?: readonly ("windows" | "macos")[];
 }
 
 // Generous vs. any real URL, tight enough that a hostile publisher can't stuff
@@ -100,6 +104,7 @@ const CAPABILITIES: readonly DesktopCapability[] = [
       "Send a media/volume key. action: play_pause | next | previous | stop | volume_up | volume_down | mute",
     argKeys: ["action"],
     validate: validateMediaControl,
+    platforms: ["windows"],
   },
   {
     id: "focus_window",
@@ -107,6 +112,7 @@ const CAPABILITIES: readonly DesktopCapability[] = [
       "Bring an already-running app to the foreground. app: chrome | edge | firefox | spotify | slack | discord | notion | vscode | explorer",
     argKeys: ["app"],
     validate: validateAppKey,
+    platforms: ["windows"],
   },
   {
     id: "launch_app",
@@ -114,6 +120,7 @@ const CAPABILITIES: readonly DesktopCapability[] = [
       "Launch an app. app: chrome | edge | firefox | spotify | explorer | notepad | calculator. To also start playback etc., follow with a separate media_control call.",
     argKeys: ["app"],
     validate: validateAppKey,
+    platforms: ["windows"],
   },
   {
     id: "browser_task",
@@ -148,8 +155,14 @@ function validateBrief(args: Record<string, unknown>): Record<string, unknown> |
   return { brief };
 }
 
+/** Verbs this OS can run. A Windows-only verb is never offered to Buddy on a
+ * Mac, and never dispatched there either. */
+const AVAILABLE_CAPABILITIES: readonly DesktopCapability[] = CAPABILITIES.filter(
+  (capability) => !capability.platforms || capability.platforms.includes(isMac() ? "macos" : "windows"),
+);
+
 export const DESKTOP_CAPABILITIES: ReadonlyMap<string, DesktopCapability> = new Map(
-  CAPABILITIES.map((capability) => [capability.id, capability]),
+  AVAILABLE_CAPABILITIES.map((capability) => [capability.id, capability]),
 );
 
 /** Bumped when the manifest shape (not its contents) changes, so the backend
@@ -167,7 +180,7 @@ export interface CapabilityManifest {
 export function advertiseManifest(): CapabilityManifest {
   return {
     manifest_version: MANIFEST_VERSION,
-    capabilities: CAPABILITIES.map((capability) => ({
+    capabilities: AVAILABLE_CAPABILITIES.map((capability) => ({
       id: capability.id,
       description: capability.description,
       arg_keys: [...capability.argKeys],

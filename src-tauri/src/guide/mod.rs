@@ -303,6 +303,9 @@ fn capture_tick(
     pinned: &PinnedMonitor,
     allow_unchanged: bool,
 ) -> Result<Option<CapturedMonitor>, String> {
+    // Without the grant macOS hands back the wallpaper and Aura's own windows
+    // rather than an error, and Guide would coach on that picture.
+    crate::screenshot::screen_capture_permitted()?;
     let monitor = find_monitor(pinned)?;
     let left = monitor.x().map_err(|e| e.to_string())?;
     let top = monitor.y().map_err(|e| e.to_string())?;
@@ -478,6 +481,9 @@ fn complete_arm_transaction(
 
 #[tauri::command]
 pub async fn arm_guide(app: AppHandle) -> Result<GuideArmedPayload, String> {
+    // The user just asked Guide to watch, so this is a moment they can connect
+    // the Screen Recording prompt to. Once per process, a no-op off macOS.
+    crate::screenshot::request_screen_capture_access_once();
     let (cursor_x, cursor_y) = crate::screenshot::cursor_point(&app)?;
     let monitor = tauri::async_runtime::spawn_blocking(move || resolve_monitor(cursor_x, cursor_y))
         .await

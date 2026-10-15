@@ -36,12 +36,14 @@
     <string>Aura reads your screen only when you use Screen Sight or Guide Mode, so Buddy can see what you are working on.</string>
 
     <!--
-      Aura sends synthetic keystrokes to insert dictated text and reads the
-      focused element to avoid typing into password fields. Both go through the
-      Accessibility grant.
+      Apple Events, NOT Accessibility (Accessibility has no usage string; its
+      prompt is the system's own). After a voice web search, dictation asks
+      System Events to place the browser window on half the screen and asks
+      Finder for the desktop size (dictation/command_brain.rs). This string is
+      the "Aura wants to control System Events" prompt.
     -->
     <key>NSAppleEventsUsageDescription</key>
-    <string>Aura needs accessibility access to type dictated text into the app you are using and to avoid typing into password fields.</string>
+    <string>Aura places the browser window it opened for you on half of your screen, so you can see your search next to what you were doing.</string>
 
     <!--
       No LSUIElement. The app is a Regular activation policy app so it has a

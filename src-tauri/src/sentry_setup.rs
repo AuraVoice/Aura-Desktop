@@ -49,10 +49,11 @@ pub fn init() -> sentry::ClientInitGuard {
         debug: cfg!(debug_assertions),
         transport: Some(Arc::new(TimedTransportFactory)),
         shutdown_timeout: SHUTDOWN_TIMEOUT,
-        before_send: Some(std::sync::Arc::new(|event| {
+        before_send: Some(std::sync::Arc::new(|mut event| {
             if drop_for_dictation_privacy(&event) {
                 None
             } else {
+                scrub_identity(&mut event);
                 Some(event)
             }
         })),
@@ -83,6 +84,22 @@ impl sentry::TransportFactory for TimedTransportFactory {
                 .with_client(client)
                 .build(),
         )
+    }
+}
+
+/// The contexts integration fills `server_name` with the machine hostname
+/// ("Varuns-MacBook-Pro"), and error strings carry `/Users/<name>/` paths.
+/// Integrations run before `before_send`, so clearing here sticks. Messages
+/// and exception values go through the same redaction the log reader uses.
+fn scrub_identity(event: &mut sentry::protocol::Event<'static>) {
+    event.server_name = None;
+    if let Some(message) = event.message.as_mut() {
+        *message = crate::redact::redact_line(message);
+    }
+    for exception in event.exception.values.iter_mut() {
+        if let Some(value) = exception.value.as_mut() {
+            *value = crate::redact::redact_line(value);
+        }
     }
 }
 

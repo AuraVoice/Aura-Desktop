@@ -9,6 +9,7 @@ import {
   type GeneralSettings,
 } from "../../lib/generalSettings";
 import { logError } from "../../lib/log";
+import { chordKeysOf, useDictationStatus } from "../../lib/dictationStatus";
 import { CompanionAvatarPicker } from "../components/CompanionAvatarPicker";
 import { SegmentedChoice } from "../components/SegmentedChoice";
 import { SettingsPageLayout, SettingsSection } from "../components/SettingsPageLayout";
@@ -18,6 +19,7 @@ export function CompanionPage() {
   const [settings, setSettings] = useState<GeneralSettings>(DEFAULT_GENERAL_SETTINGS);
   const [loaded, setLoaded] = useState(false);
   const [saveError, setSaveError] = useState(false);
+  const dictationChord = chordKeysOf(useDictationStatus()).join("+");
   // Rust owns the corner (it is window geometry, kept beside the notch edge),
   // so it is read and written through its own commands, not the settings store.
   const [corner, setCorner] = useState<CompanionCorner>("bottomLeft");
@@ -129,7 +131,7 @@ export function CompanionPage() {
           </SettingsSection>
           <SettingsSection
             title="On the desktop"
-            description="Ctrl+Win dictation shows through him, and he hides whenever Aura's bar is up."
+            description={`${dictationChord} dictation shows through him, and he hides whenever Aura's bar is up.`}
           >
             <div className="db-panel db-settings-panel">
               <label className="db-setting-row">

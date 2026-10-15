@@ -15,6 +15,28 @@ vi.mock("@tauri-apps/plugin-store", () => ({
   },
 }));
 vi.mock("./useDashboardUser", () => ({ useDashboardUser: () => mocks.user }));
+// The real hook listens for window focus, and this suite runs without a DOM.
+vi.mock("../state/useEntitlement", () => ({
+  useEntitlement: () => ({
+    loaded: false,
+    known: false,
+    tier: "free",
+    effectiveTier: "free",
+    status: "unknown",
+    trialDaysLeft: 0,
+    trialEndDate: null,
+    cancelAtPeriodEnd: false,
+    billingManageable: null,
+    isTrialing: false,
+    isPurchased: false,
+    checkoutAvailable: null,
+    trialDeniedReason: null,
+    checkout: { phase: "idle" },
+    startCheckout: () => {},
+    cancelCheckout: () => {},
+    refresh: () => {},
+  }),
+}));
 vi.mock("./AccountOnboarding", () => ({
   hasConfirmedAccountOnboarding: vi.fn(async () => mocks.accountComplete),
   fetchAccountOnboarding: vi.fn(async () => ({ complete: mocks.accountComplete })),

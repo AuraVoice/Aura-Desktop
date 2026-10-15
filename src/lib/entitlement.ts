@@ -98,6 +98,7 @@ export type CheckoutFailure =
   | "billing_not_configured"
   | "entitlement_unavailable"
   | "checkout_failed"
+  | "price_not_approved"
   | "unavailable";
 
 export class CheckoutError extends Error {
@@ -112,6 +113,7 @@ const CHECKOUT_FAILURES: readonly string[] = [
   "billing_not_configured",
   "entitlement_unavailable",
   "checkout_failed",
+  "price_not_approved",
 ];
 
 /** POST /billing/checkout: returns the Dodo hosted-checkout URL to open in the
