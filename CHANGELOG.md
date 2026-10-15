@@ -16,15 +16,18 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+## [0.20.2] - 2026-10-15
+
 ### Added
 
 - On a voice call, ask Buddy to start or stop recording a meeting. Buddy tells you if the recording could not start, for example when this month's recordings are used up.
-- See plans opens a Plans window with Companion and Pro, their live monthly and annual prices, and what each includes. You can buy from the app, even during your trial: your remaining trial days carry over and you aren't charged until they end.
+- See plans opens a Plans window with Companion and Pro, their live monthly prices, and what each includes. You can buy from the app, even during your trial: your remaining trial days carry over and you aren't charged until they end.
 - Delete your account from Settings > Account. It cancels a plan you bought on the website, deletes your data on Aura's servers and this account's data on this computer, then signs you out.
 - The Privacy Policy and Terms of Service are linked from the Account and Data and Privacy pages.
 
 ### Changed
 
+- Plans now share their descriptions, included usage and device availability with the website and phone, with monthly checkout prices and separate plan and billing actions.
 - Signing in with Google shows a short code in Aura that you type into the browser page, so a sign-in link someone else sent you can't connect your account to their computer.
 - Every plan has a daily fair-use limit set well above normal use. If you reach one for chat, voice, interview prep or Swarm, Aura says so and when it resets, instead of showing an error.
 - Companion includes 20 meeting notes a month, up from 5.

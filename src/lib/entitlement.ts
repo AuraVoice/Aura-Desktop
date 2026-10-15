@@ -151,8 +151,75 @@ export interface PlanOption {
   currency: string;
 }
 
+export interface MarketingPlan {
+  tier: EntitlementTier;
+  name: string;
+  order: number;
+  description: string;
+  inherits: string | null;
+  features: string[];
+  cta: string;
+  badge: string | null;
+  marketing_price: { amount_minor: number; currency: string; period: "monthly" };
+  yearly_price: { amount_minor: number; currency: string; period: "yearly" } | null;
+  allowances: { id: string; label: string; value: string }[];
+  availability: { id: string; label: string; platforms: string[]; note: string }[];
+}
+
+export interface MarketingCatalog {
+  schema_version: 1;
+  headline: string;
+  subtitle: string;
+  footnote: string;
+  plans: MarketingPlan[];
+  platforms: { id: string; label: string }[];
+  notices: string[];
+}
+
+function parseMarketingCatalog(value: unknown): MarketingCatalog {
+  const catalog = value as MarketingCatalog | null;
+  if (!catalog || catalog.schema_version !== 1 ||
+      typeof catalog.headline !== "string" || typeof catalog.subtitle !== "string" ||
+      typeof catalog.footnote !== "string" || !Array.isArray(catalog.plans) ||
+      catalog.plans.length !== 3 || !Array.isArray(catalog.platforms) ||
+      !catalog.platforms.every(p => p && typeof p.id === "string" && typeof p.label === "string") ||
+      !Array.isArray(catalog.notices) || !catalog.notices.every(n => typeof n === "string")) {
+    throw new PlanCatalogError("catalog_unavailable", 200);
+  }
+  const tiers = new Set<string>();
+  for (const plan of catalog.plans) {
+    if (!plan || !TIERS.includes(plan.tier) || tiers.has(plan.tier) ||
+        typeof plan.name !== "string" || !Number.isFinite(plan.order) ||
+        typeof plan.description !== "string" || typeof plan.cta !== "string" ||
+        (plan.inherits !== null && typeof plan.inherits !== "string") ||
+        (plan.badge !== null && typeof plan.badge !== "string") ||
+        !Array.isArray(plan.features) || !plan.features.every(f => typeof f === "string") ||
+        !plan.marketing_price || !Number.isSafeInteger(plan.marketing_price.amount_minor) ||
+        plan.marketing_price.amount_minor < 0 || plan.marketing_price.currency !== "USD" ||
+        plan.marketing_price.period !== "monthly" ||
+        (plan.yearly_price !== null && (!plan.yearly_price ||
+          !Number.isSafeInteger(plan.yearly_price.amount_minor) || plan.yearly_price.amount_minor <= 0 ||
+          plan.yearly_price.currency !== "USD" || plan.yearly_price.period !== "yearly")) ||
+        !Array.isArray(plan.allowances) || !plan.allowances.every(a =>
+          a && typeof a.id === "string" && typeof a.label === "string" && typeof a.value === "string") ||
+        !Array.isArray(plan.availability) || !plan.availability.every(a =>
+          a && typeof a.id === "string" && typeof a.label === "string" && typeof a.note === "string" &&
+          Array.isArray(a.platforms) && a.platforms.every(p => typeof p === "string"))) {
+      throw new PlanCatalogError("catalog_unavailable", 200);
+    }
+    tiers.add(plan.tier);
+  }
+  return { ...catalog, plans: [...catalog.plans].sort((a, b) => a.order - b.order) };
+}
+
 export interface PlanCatalog {
   plans: PlanOption[];
+  catalog: MarketingCatalog;
+  checkoutAvailable: boolean;
+  checkoutError: string | null;
+  purchasedTier: EntitlementTier | null;
+  hasActiveSubscription: boolean | null;
+  subscriptionSource: string | null;
   /** Days a purchase now would carry over before its first charge; null when the
    * backend could not read the account's trial. */
   trialDaysRemaining: number | null;
@@ -188,19 +255,25 @@ export async function fetchPlans(): Promise<PlanCatalog> {
     if (
       (tier === "companion" || tier === "pro") &&
       (period === "monthly" || period === "yearly") &&
-      typeof priceMinor === "number" && priceMinor > 0
+      typeof priceMinor === "number" && Number.isSafeInteger(priceMinor) && priceMinor > 0 &&
+      typeof row.currency === "string" && /^[A-Z]{3}$/.test(row.currency)
     ) {
       plans.push({
         tier,
         period,
         priceMinor,
-        currency: typeof row.currency === "string" ? row.currency : "USD",
+        currency: row.currency as string,
       });
     }
   }
-  if (plans.length === 0) throw new PlanCatalogError("catalog_unavailable", response.status);
   return {
     plans,
+    catalog: parseMarketingCatalog(body.catalog),
+    checkoutError: typeof body.checkout_error === "string" ? body.checkout_error : null,
+    checkoutAvailable: body.checkout_available === true,
+    purchasedTier: typeof body.purchased_tier === "string" && TIERS.includes(body.purchased_tier) ? body.purchased_tier as EntitlementTier : null,
+    hasActiveSubscription: typeof body.has_active_subscription === "boolean" ? body.has_active_subscription : null,
+    subscriptionSource: typeof body.subscription_source === "string" ? body.subscription_source : null,
     trialDaysRemaining: typeof body.trial_days_remaining === "number" ? body.trial_days_remaining : null,
     trialEndDate: typeof body.trial_end_date === "string" ? body.trial_end_date : null,
   };

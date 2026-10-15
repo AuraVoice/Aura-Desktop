@@ -9,7 +9,6 @@ import {
   fetchPlans,
   type CheckoutFailure,
   type CheckoutPeriod,
-  type CheckoutTier,
   type PlanCatalog,
 } from "../../lib/entitlement";
 import { logError } from "../../lib/log";
@@ -17,53 +16,8 @@ import { useEntitlementState } from "../../state/EntitlementProvider";
 import { type EntitlementState } from "../../state/useEntitlement";
 import "./PlansDialog.css";
 
-/** What each plan includes. Every line is what juno-backend actually enforces
- * (services/fair_use.py ceilings, meetings/fields.py caps, research credits,
- * agent quotas), and the website's pricing page says the same. Change both. */
-const PLAN_DETAILS: Record<"free" | CheckoutTier, { lead: string; stat: string; statLabel: string; features: string[] }> = {
-  free: {
-    lead: "To get started:",
-    stat: "10 min",
-    statLabel: "of voice with Buddy a day",
-    features: [
-      "25 chats a day",
-      "10 web searches a day",
-      "Memory and reminders",
-      "5 meeting notes a month, kept 7 days",
-      "Dictation in any app",
-    ],
-  },
-  companion: {
-    lead: "Everything in Free, and:",
-    stat: "3 hours",
-    statLabel: "of voice a day, chat within fair use",
-    features: [
-      "Unlimited web search",
-      "Calendar and posting to X",
-      "Premium voices",
-      "20 meeting notes a month",
-      "Deep research, 5 a day",
-      "Browser agent, 300 steps a month",
-    ],
-  },
-  pro: {
-    lead: "Everything in Companion, and:",
-    stat: "Unlimited",
-    statLabel: "meeting notes, kept forever",
-    features: [
-      "4 hours of voice a day",
-      "Deep research, 10 a day",
-      "Browser agent, 600 steps a month",
-      "Desktop Operator, 5,000 steps a month",
-      "Higher daily fair-use limits",
-    ],
-  },
-};
-
-const PLAN_NAMES: Record<"free" | CheckoutTier, string> = { free: "Free", companion: "Companion", pro: "Pro" };
-
 const CHECKOUT_FAILURE_COPY: Record<CheckoutFailure | "open_failed", string> = {
-  already_subscribed: "This account already has a plan. Use Manage plan to change it.",
+  already_subscribed: "This account already has a plan. Use Manage billing to change it.",
   billing_not_configured: "Buying a plan isn't available right now. Nothing was charged.",
   entitlement_unavailable: "Aura couldn't check your current plan, so checkout didn't open. Try again in a minute.",
   checkout_failed: "The payment page didn't open. Try again in a minute.",
@@ -98,17 +52,6 @@ function shortDate(iso: string | null): string {
     : date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-/** "Your plan: ..." for the header chip. */
-function currentPlanChip(entitlement: EntitlementState): string {
-  if (entitlement.isTrialing) {
-    return entitlement.trialDaysLeft > 0
-      ? `Your plan: Pro trial, ${entitlement.trialDaysLeft} ${entitlement.trialDaysLeft === 1 ? "day" : "days"} left`
-      : "Your plan: Pro trial";
-  }
-  if (entitlement.isPurchased) return `Your plan: ${PLAN_NAMES[entitlement.tier === "pro" ? "pro" : "companion"]}`;
-  return "Your plan: Free";
-}
-
 /** A note about the account's state, or "" when there is nothing to say. */
 function accountNote(entitlement: EntitlementState): string {
   if (entitlement.trialDeniedReason === "install_trial_used") {
@@ -132,26 +75,34 @@ function accountNote(entitlement: EntitlementState): string {
  */
 export function PlansDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const entitlement = useEntitlementState();
-  const [period, setPeriod] = useState<CheckoutPeriod>("monthly");
   const [catalog, setCatalog] = useState<PlanCatalog | null>(null);
   const [catalogError, setCatalogError] = useState<unknown>(null);
   const [portalError, setPortalError] = useState("");
   const [portalBusy, setPortalBusy] = useState(false);
+  const [period, setPeriod] = useState<CheckoutPeriod>("monthly");
   const panelRef = useRef<HTMLDivElement | null>(null);
+  const requestRef = useRef(0);
 
   const loadCatalog = useCallback(() => {
+    const request = ++requestRef.current;
+    setCatalog(null);
     setCatalogError(null);
     fetchPlans()
-      .then(setCatalog)
+      .then((result) => { if (request === requestRef.current) setCatalog(result); })
       .catch((err) => {
+        if (request !== requestRef.current) return;
         logError("PlansDialog: fetchPlans", err);
         setCatalogError(err);
       });
   }, []);
 
   useEffect(() => {
-    if (open && !catalog) loadCatalog();
-  }, [open, catalog, loadCatalog]);
+    if (!open) return;
+    loadCatalog();
+    // Account-specific offers are memory-only and refreshed while visible.
+    const timer = window.setInterval(loadCatalog, 5 * 60 * 1000);
+    return () => { window.clearInterval(timer); requestRef.current++; };
+  }, [open, loadCatalog]);
 
   useEffect(() => {
     if (!open) return;
@@ -171,19 +122,26 @@ export function PlansDialog({ open, onClose }: { open: boolean; onClose: () => v
 
   if (!open) return null;
 
+  const shared = catalog?.catalog;
   const annual = period === "yearly";
-  const trialing = entitlement.isTrialing;
   const trialEnd = shortDate(catalog?.trialEndDate ?? entitlement.trialEndDate);
   const checkout = entitlement.checkout;
   const busyTier = checkout.phase === "opening" || checkout.phase === "polling" ? checkout.tier : null;
   const note = accountNote(entitlement);
+  const purchased = catalog?.hasActiveSubscription === true;
+  const accountKnown = catalog?.hasActiveSubscription !== null && catalog !== null;
+  const currentTier = purchased ? catalog?.purchasedTier : "free";
+  const currentPlan = shared?.plans.find(plan => plan.tier === currentTier);
+  const currentOrder = currentPlan?.order ?? 0;
 
   const manageBilling = async () => {
     if (portalBusy) return;
     setPortalBusy(true);
     setPortalError("");
     try {
-      await openUrl(await fetchBillingPortal());
+      await openUrl(catalog?.subscriptionSource === "apple"
+        ? "https://apps.apple.com/account/subscriptions"
+        : await fetchBillingPortal());
     } catch (err) {
       logError("PlansDialog: open billing portal", err);
       setPortalError(
@@ -195,11 +153,6 @@ export function PlansDialog({ open, onClose }: { open: boolean; onClose: () => v
       setPortalBusy(false);
     }
   };
-
-  const priceOf = (tier: CheckoutTier) =>
-    catalog?.plans.find((plan) => plan.tier === tier && plan.period === period) ?? null;
-  const monthlyOf = (tier: CheckoutTier) =>
-    catalog?.plans.find((plan) => plan.tier === tier && plan.period === "monthly") ?? null;
 
   const target = document.querySelector(".db-app") ?? document.body;
 
@@ -215,8 +168,8 @@ export function PlansDialog({ open, onClose }: { open: boolean; onClose: () => v
         onClick={(event) => event.stopPropagation()}
       >
         <header className="db-plans-head">
-          <span className="db-plans-chip">{currentPlanChip(entitlement)}</span>
-          <h2 id="db-plans-title">One plan for Aura on your computer and phone.</h2>
+          {accountKnown && currentPlan && <span className="db-plans-chip">Your plan: {currentPlan.name}</span>}
+          <h2 id="db-plans-title">{shared?.headline ?? "Plans"}</h2>
           <div className="db-plans-toggle" role="group" aria-label="Billing period">
             <button type="button" aria-pressed={!annual} className={!annual ? "is-on" : ""} onClick={() => setPeriod("monthly")}>
               Monthly
@@ -229,66 +182,73 @@ export function PlansDialog({ open, onClose }: { open: boolean; onClose: () => v
             <X size={18} aria-hidden />
           </button>
         </header>
-
+        {shared && <p className="db-plans-subtitle">{shared.subtitle}</p>}
+        {entitlement.isTrialing && <p className="db-plans-fine">
+          Your existing trial continues{trialEnd ? ` until ${trialEnd}` : ""}. Purchased plan and trial access are shown separately.
+        </p>}
+        {!catalog && catalogError === null && <p role="status">Loading plans...</p>}
         {catalogError !== null && (
           <div className="db-plans-status" role="alert">
             <span>{catalogErrorCopy(catalogError)}</span>
             <button type="button" onClick={loadCatalog}>Try again</button>
           </div>
         )}
+        {catalog && !catalog.checkoutAvailable && <div className="db-plans-status" role="status">
+          <span>{catalog.checkoutError === "price_not_approved" ? "These prices aren't set up at checkout yet." : "Checkout prices are unavailable."} Your current plan and trial are unaffected.</span>
+          <button type="button" onClick={loadCatalog}>Refresh prices</button>
+        </div>}
 
         <div className="db-plans-grid">
-          {(["free", "companion", "pro"] as const).map((id) => {
-            const details = PLAN_DETAILS[id];
+          {shared?.plans.map((plan) => {
+            const id = plan.tier;
             const paid = id !== "free";
-            const option = paid ? priceOf(id) : null;
-            const monthly = paid ? monthlyOf(id) : null;
-            const featured = id === "companion";
+            const option = catalog?.plans.find(price => price.tier === id && price.period === period);
+            const featured = Boolean(plan.badge);
             const mine = busyTier === id;
-            let offer = "";
-            if (id === "free") offer = "Yours to keep, no card needed";
-            else if (option && trialing && trialEnd) {
-              offer = `Free until ${trialEnd}, then ${money(option.priceMinor, option.currency)} ${annual ? "a year" : "a month"}`;
-            } else if (option && annual && monthly) {
-              const saved = Math.round((1 - option.priceMinor / (monthly.priceMinor * 12)) * 100);
-              offer = `About ${money(Math.round(option.priceMinor / 12), option.currency)} a month${saved > 0 ? `, ${saved}% off` : ""}`;
-            } else if (option) {
-              offer = "Billed monthly. Cancel anytime.";
-            }
-
-            let cta: string;
+            const current = accountKnown && currentTier === id;
+            const inherited = shared.plans.find(other => other.tier === plan.inherits);
+            let cta = plan.cta;
             let action: (() => void) | null = null;
-            if (!paid) {
-              cta = entitlement.isPurchased ? "Free plan" : trialing ? "Included after your trial" : "Your current plan";
-            } else if (entitlement.isPurchased) {
-              cta = entitlement.tier === id ? "Manage plan" : `Switch to ${PLAN_NAMES[id]}`;
-              action = () => void manageBilling();
+            if (!accountKnown) {
+              cta = "Plan status unavailable";
+            } else if (current) {
+              cta = "Current plan";
+            } else if (purchased) {
+              cta = plan.order > currentOrder ? "Upgrade" : "Switch plan";
+              if (entitlement.billingManageable !== false || catalog?.subscriptionSource === "apple") {
+                action = () => void manageBilling();
+              }
             } else if (mine && checkout.phase === "opening") {
               cta = "Opening checkout...";
             } else if (mine && checkout.phase === "polling") {
               cta = "Waiting for payment...";
-            } else {
-              cta = `Get ${PLAN_NAMES[id]}`;
-              action = () => entitlement.startCheckout(id, period);
+            } else if (paid) {
+              cta = "Upgrade";
+              if (option && catalog?.checkoutAvailable) action = () => entitlement.startCheckout(id, period);
             }
-            const disabled = action === null || (busyTier !== null && !entitlement.isPurchased) || (paid && !option && !entitlement.isPurchased);
+            const disabled = action === null || portalBusy || busyTier !== null;
 
             return (
               <article key={id} className={`db-plans-card${featured ? " is-featured" : ""}`}>
                 <div className="db-plans-card-head">
-                  <h3>{PLAN_NAMES[id]}</h3>
-                  {featured && <span className="db-plans-badge">Most popular</span>}
+                  <h3>{plan.name}</h3>
+                  {plan.badge && <span className="db-plans-badge">{plan.badge}</span>}
                 </div>
                 <div className="db-plans-price">
                   <span className="db-plans-amount">
-                    {paid ? (option ? money(option.priceMinor, option.currency) : "...") : "$0"}
+                    {paid ? (option ? money(option.priceMinor, option.currency) : "Unavailable")
+                      : money(plan.marketing_price.amount_minor, plan.marketing_price.currency)}
                   </span>
-                  <span className="db-plans-per">{annual ? "/year" : "/month"}</span>
+                  {paid && option && <span className="db-plans-per">{annual ? "/year" : "/month"}</span>}
                 </div>
-                <p className="db-plans-offer">{offer}</p>
+                {paid && option && annual &&
+                  <p className="db-plans-fine">About {money(Math.round(option.priceMinor / 12), option.currency)} a month, billed yearly.</p>}
+                <p className="db-plans-offer">{plan.description}</p>
+                {paid && option && !purchased && entitlement.isTrialing && trialEnd &&
+                  <p className="db-plans-fine">First charge after your trial ends on {trialEnd}.</p>}
                 <button
                   type="button"
-                  className={`db-plans-cta${featured && paid && !entitlement.isPurchased ? " is-primary" : ""}`}
+                  className={`db-plans-cta${featured && paid && !purchased ? " is-primary" : ""}`}
                   disabled={disabled}
                   onClick={action ?? undefined}
                 >
@@ -300,15 +260,10 @@ export function PlansDialog({ open, onClose }: { open: boolean; onClose: () => v
                     <button type="button" onClick={entitlement.cancelCheckout}>Cancel</button>
                   </div>
                 )}
-                <div className="db-plans-stat">
-                  <span className="db-plans-lead">{details.lead}</span>
-                  <span className="db-plans-stat-value">{details.stat}</span>
-                  <span>{details.statLabel}</span>
-                </div>
                 <div className="db-plans-features">
-                  <span className="db-plans-features-head">What's included</span>
+                  <span className="db-plans-features-head">{inherited ? `Everything in ${inherited.name}, plus:` : "What's included"}</span>
                   <ul>
-                    {details.features.map((feature) => (
+                    {plan.features.map((feature) => (
                       <li key={feature}>
                         <svg aria-hidden="true" width="16" height="16" viewBox="0 0 16 16">
                           <path d="M3.2 8.4l3.1 3.1 6.5-7" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
@@ -323,6 +278,38 @@ export function PlansDialog({ open, onClose }: { open: boolean; onClose: () => v
           })}
         </div>
 
+        {shared && <>
+          <p className="db-plans-fine">{shared.footnote}</p>
+          <details className="db-plans-comparison">
+            <summary>Compare usage</summary>
+            <div className="db-plans-grid">
+              {shared.plans.map(plan => <section key={plan.tier}>
+                <h3>{plan.name}</h3>
+                <dl>{plan.allowances.map(allowance => <div key={allowance.id}>
+                  <dt>{allowance.label}</dt><dd>{allowance.value}</dd>
+                </div>)}</dl>
+              </section>)}
+            </div>
+          </details>
+          <details className="db-plans-comparison">
+            <summary>Platform availability</summary>
+            <div className="db-plans-grid">
+              {shared.plans.map(plan => <section key={plan.tier}>
+                <h3>{plan.name}</h3>
+                <dl>{plan.availability.map(feature => <div key={feature.id}>
+                  <dt>{feature.label}</dt>
+                  <dd>{feature.platforms.map(id => shared.platforms.find(p => p.id === id)?.label ?? id).join(", ")}
+                    {feature.note && <p>{feature.note}</p>}</dd>
+                </div>)}</dl>
+              </section>)}
+            </div>
+          </details>
+          {shared.notices.map(notice => <p className="db-plans-fine" key={notice}>{notice}</p>)}
+        </>}
+        {purchased && (entitlement.billingManageable !== false || catalog?.subscriptionSource === "apple") &&
+          <button type="button" className="db-plans-cta" disabled={portalBusy} onClick={() => void manageBilling()}>
+            {portalBusy ? "Opening billing..." : "Manage billing"}
+          </button>}
         {checkout.phase === "error" && (
           <p className="db-plans-status is-error" role="alert">{CHECKOUT_FAILURE_COPY[checkout.reason]}</p>
         )}
@@ -331,12 +318,9 @@ export function PlansDialog({ open, onClose }: { open: boolean; onClose: () => v
         )}
         {portalError && <p className="db-plans-status is-error" role="alert">{portalError}</p>}
         {note && <p className="db-plans-status" role="status">{note}</p>}
-
         <p className="db-plans-fine">
-          Prices are in {catalog?.plans[0]?.currency ?? "USD"} and don't include taxes where they apply. Plans renew
-          automatically until you cancel. Cancel anytime from Manage plan, at least 24 hours before renewal, and you
-          keep your plan until the period ends. Every plan has a daily fair-use limit set well above normal use; if you
-          reach it, Aura tells you when it resets. Payments are handled by Dodo Payments.
+          Paid prices come from Dodo Payments. Checkout confirms applicable taxes and the amount charged.
+          Existing subscriptions keep their purchased terms. Manage billing with the provider you purchased from.
         </p>
       </div>
     </div>,

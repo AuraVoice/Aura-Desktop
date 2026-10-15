@@ -1,7 +1,7 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useLocation } from "react-router-dom";
-import { BillingPortalError, fetchBillingPortal } from "../../lib/entitlement";
+import { BillingPortalError, fetchBillingPortal, fetchPlans, type PlanCatalog } from "../../lib/entitlement";
 import { logError } from "../../lib/log";
 import { useEntitlementState } from "../../state/EntitlementProvider";
 import { type EntitlementState } from "../../state/useEntitlement";
@@ -12,14 +12,6 @@ import {
   SettingsSection,
 } from "../components/SettingsPageLayout";
 import { type AsyncState } from "../useAsyncData";
-
-/** The plan as people say it, never the raw tier id: a trial is "Pro (trial)". */
-function planLabel(entitlement: EntitlementState): string {
-  if (entitlement.isTrialing) return "Pro (trial)";
-  if (entitlement.effectiveTier === "pro") return "Pro";
-  if (entitlement.effectiveTier === "companion") return "Companion";
-  return "Free";
-}
 
 /** Copy for each reason the billing portal could not open. "Try again" only
  * where a retry can actually succeed. */
@@ -48,6 +40,19 @@ function statusLabel(entitlement: EntitlementState): string {
 
 export function BillingPage() {
   const entitlement = useEntitlementState();
+  const [catalog, setCatalog] = useState<PlanCatalog | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    setCatalog(null);
+    fetchPlans().then(value => { if (!cancelled) setCatalog(value); })
+      .catch(error => logError("BillingPage: fetch plans", error));
+    return () => { cancelled = true; };
+  }, [entitlement.tier, entitlement.status]);
+  const purchasedTier = catalog?.hasActiveSubscription ? catalog.purchasedTier : "free";
+  const name = catalog?.hasActiveSubscription !== null
+    ? catalog?.catalog.plans.find(plan => plan.tier === purchasedTier)?.name
+    : null;
+  const apple = catalog?.subscriptionSource === "apple";
   // The same four states DataView renders everywhere else, sourced from the
   // shared entitlement rather than a second GET /entitlement. `loaded && !known`
   // is the real error case: the fetch failed AND no cached copy was inside the
@@ -70,7 +75,7 @@ export function BillingPage() {
     setPortalBusy(true);
     setPortalError("");
     try {
-      await openUrl(await fetchBillingPortal());
+      await openUrl(apple ? "https://apps.apple.com/account/subscriptions" : await fetchBillingPortal());
     } catch (err) {
       logError("BillingPage: open billing portal", err);
       setPortalError(portalErrorCopy(err));
@@ -90,7 +95,7 @@ export function BillingPage() {
             <div className="db-panel db-billing-summary">
               <div>
                 <span className="db-eyebrow">Current plan</span>
-                <h3>{planLabel(entitlement)}</h3>
+                <h3>{name ?? "Plan unavailable"}</h3>
                 <p>One subscription covers Aura on desktop and mobile.</p>
                 {entitlement.trialDeniedReason === "install_trial_used" && (
                   <p>
@@ -98,7 +103,7 @@ export function BillingPage() {
                     starts on Free. You can still pick a plan.
                   </p>
                 )}
-                {entitlement.checkoutAvailable !== false && (
+                {(
                   <button type="button" className="db-primary-btn db-billing-see-plans" onClick={() => setPlansOpen(true)}>
                     {entitlement.isPurchased ? "See all plans" : "See plans"}
                   </button>
@@ -122,7 +127,7 @@ export function BillingPage() {
               <div className="db-panel db-details">
                 <div className="db-details-row">
                   <span className="db-details-label">Plan</span>
-                  <span className="db-details-value">{planLabel(entitlement)}</span>
+                  <span className="db-details-value">{name ?? "Plan unavailable"}</span>
                 </div>
                 <div className="db-details-row">
                   <span className="db-details-label">Status</span>
@@ -141,7 +146,7 @@ export function BillingPage() {
                     Your plan will end at the close of the current billing period.
                   </p>
                 )}
-                {entitlement.tier !== "free" && entitlement.billingManageable !== false && (
+                {(apple || entitlement.billingManageable === true) && (
                   <button
                     type="button"
                     className="db-primary-btn"
@@ -151,7 +156,7 @@ export function BillingPage() {
                     {portalBusy ? "Opening billing..." : "Manage billing"}
                   </button>
                 )}
-                {entitlement.tier !== "free" && entitlement.billingManageable === false && (
+                {entitlement.tier !== "free" && entitlement.billingManageable === false && !apple && (
                   <p className="db-muted db-details-note">
                     This plan wasn't bought through Aura checkout, so there is no billing to manage.
                   </p>
