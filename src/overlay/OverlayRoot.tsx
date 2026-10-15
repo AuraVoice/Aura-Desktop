@@ -14,8 +14,10 @@ import {
   OPEN_NOTIFICATIONS_REQUESTED,
   OVERLAY_CHANGED,
   START_VOICE_REQUESTED,
+  VOICE_MEETING_CAPTURE_REQUESTED,
   type ChatAttachRequest,
 } from "../lib/ipcEvents";
+import { publishMeetingCaptureResult } from "./meetingCaptureResult";
 import { useVoiceBar } from "./useVoiceBar";
 import { useNotchGesture } from "./useNotchGesture";
 import { useOnboardingTail } from "./useOnboardingTail";
@@ -731,7 +733,7 @@ export function OverlayRoot() {
       stopMeetingCapture();
       return;
     }
-    captureNow("call");
+    void captureNow("call");
   }, [captureNow, isMeetingRecording, stopMeetingCapture]);
 
   useTauriEvent(
@@ -745,9 +747,41 @@ export function OverlayRoot() {
   useTauriEvent(
     CAPTURE_IN_PERSON_REQUESTED,
     () => {
-      if (!isMeetingRecording) captureNow("in_person");
+      if (!isMeetingRecording) void captureNow("in_person");
     },
     "OverlayRoot: listen capture-in-person-requested",
+  );
+
+  // Buddy's meeting_capture verb (system_control.rs): a spoken "record this" or
+  // "stop recording" during a live call. Never a toggle. The outcome goes back to
+  // the call as desktop.result, which is how Buddy learns a start was refused (the
+  // monthly cap, a capture that failed) instead of assuming it began.
+  useTauriEvent<{ action?: string; source?: string }>(
+    VOICE_MEETING_CAPTURE_REQUESTED,
+    (payload) => {
+      const room = voice.room;
+      const report = (status: string) => {
+        if (!room) return;
+        void publishMeetingCaptureResult(room, status).catch((err) =>
+          logError("OverlayRoot: publish meeting_capture result", err),
+        );
+      };
+      if (payload?.action === "stop") {
+        if (!isMeetingRecording) {
+          report("not_recording");
+          return;
+        }
+        stopMeetingCapture();
+        report("stopped");
+        return;
+      }
+      if (isMeetingRecording) {
+        report("already_recording");
+        return;
+      }
+      void captureNow(payload?.source === "in_person" ? "in_person" : "call").then(report);
+    },
+    "OverlayRoot: listen voice-meeting-capture-requested",
   );
 
   const dismissChatOverlay = useCallback(() => {

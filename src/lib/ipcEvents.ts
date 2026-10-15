@@ -66,6 +66,9 @@ export const CAPTURE_NOW_REQUESTED = "capture-now-requested";
 /** Tray or Meetings page "Record in person" (a microphone-only capture). */
 export const CAPTURE_IN_PERSON_REQUESTED = "capture-in-person-requested";
 
+// system_control.rs: Buddy's `meeting_capture` verb (start or stop, never a toggle).
+export const VOICE_MEETING_CAPTURE_REQUESTED = "voice-meeting-capture-requested";
+
 // updater.rs, toast.rs, connector_oauth.rs, dashboard.rs, status_pill.rs
 export const UPDATE_READY = "update-ready";
 export const UPDATE_DISMISSED = "update-dismissed";

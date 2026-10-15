@@ -173,8 +173,10 @@ export interface MeetingCaptureState {
   dismissCapBlocked: () => void;
   /** Manual "Capture this call" entry from the tray, for calls the scanner
    * does not know. Sets no call key, so a call going away never stops it.
-   * "in_person" records the microphone alone (tray or Meetings page). */
-  captureNow: (source: "call" | "in_person") => void;
+   * "in_person" records the microphone alone (tray or Meetings page).
+   * Resolves with the outcome so a caller that has to answer for it (Buddy's
+   * meeting_capture verb) can; the tray and the page ignore it. */
+  captureNow: (source: "call" | "in_person") => Promise<RecordCallOutcome>;
   /** The "Record this meeting?" card's Record button: attaches to `event`
    * when the call overlaps an eligible calendar meeting, else a manual
    * capture labelled with the app. The capture stops when that call's
@@ -476,12 +478,12 @@ export function useMeetingCapture(inputs: MeetingCaptureInputs): MeetingCaptureS
     [ownsRuntime, startCaptureFor],
   );
 
-  const captureNow = useCallback((source: "call" | "in_person") => {
-    if (!ownsRuntime || recordingRef.current || !uidRef.current) return;
+  const captureNow = useCallback(async (source: "call" | "in_person"): Promise<RecordCallOutcome> => {
+    if (!ownsRuntime || recordingRef.current || !uidRef.current) return "skipped";
     const eventId = `manual:${crypto.randomUUID()}`;
     const now = new Date();
     trackEvent("meeting_capture_manual", { source });
-    void startCaptureFor(
+    return startCaptureFor(
       eventId,
       source === "in_person"
         ? meetingCaptureModeCopy.inPersonTitle(

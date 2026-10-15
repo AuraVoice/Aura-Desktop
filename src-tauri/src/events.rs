@@ -103,6 +103,10 @@ pub const CAPTURE_NOW_REQUESTED: &str = "capture-now-requested";
 /// Tray or Meetings page "Record in person": a microphone-only capture.
 pub const CAPTURE_IN_PERSON_REQUESTED: &str = "capture-in-person-requested";
 
+// system_control.rs: Buddy's `meeting_capture` verb. Unlike the tray item it is
+// never a toggle, so a spoken "start" during a recording cannot stop it.
+pub const VOICE_MEETING_CAPTURE_REQUESTED: &str = "voice-meeting-capture-requested";
+
 // updater.rs, toast.rs, connector_oauth.rs, dashboard.rs, status_pill.rs
 pub const UPDATE_READY: &str = "update-ready";
 pub const UPDATE_DISMISSED: &str = "update-dismissed";

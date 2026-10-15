@@ -122,7 +122,23 @@ const CAPABILITIES: readonly DesktopCapability[] = [
     argKeys: ["brief"],
     validate: validateBrief,
   },
+  {
+    id: "meeting_capture",
+    description:
+      "Start or stop a Meeting Notes recording, only when the user asks you to record or stop recording. action: start | stop. source: call (an online meeting, the default) | in_person (microphone only, a meeting in the room).",
+    argKeys: ["action", "source"],
+    validate: validateMeetingCapture,
+  },
 ];
+
+function validateMeetingCapture(args: Record<string, unknown>): Record<string, unknown> | null {
+  const action = typeof args.action === "string" ? args.action.trim().toLowerCase() : "";
+  if (action !== "start" && action !== "stop") return null;
+  const rawSource = typeof args.source === "string" ? args.source.trim().toLowerCase() : "";
+  const source = rawSource === "" ? "call" : rawSource;
+  if (source !== "call" && source !== "in_person") return null;
+  return { action, source };
+}
 
 const BRIEF_MAX_LENGTH = 500;
 

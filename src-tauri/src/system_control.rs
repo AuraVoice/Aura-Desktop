@@ -62,11 +62,42 @@ pub async fn run_desktop_capability(app: AppHandle, id: String, args: Value) -> 
         "media_control" => media_control(&args),
         "focus_window" => focus_window(&args).await,
         "launch_app" => launch_app(&app, &args, &ticket).await,
+        "meeting_capture" => meeting_capture(&app, &args),
         other => {
             warn!("system_control: unknown capability id={other}");
             Err(format!("unknown capability: {other}"))
         }
     }
+}
+
+/// meeting_capture: start or stop a Meeting Notes recording because the user
+/// asked Buddy to, out loud, during a live call (the DesktopControl gate above).
+/// Capture itself is a JS concern, as for the tray's Capture now: useMeetingCapture
+/// owns the claim, the cap and the upload queue, so Rust validates and hands the
+/// intent over. It is a separate event from the tray's toggle, so "start" can never
+/// stop a recording that is already running.
+fn meeting_capture(app: &AppHandle, args: &Value) -> Result<(), String> {
+    use tauri::Emitter;
+
+    let action = args.get("action").and_then(Value::as_str).unwrap_or_default();
+    if action != "start" && action != "stop" {
+        warn!("system_control: meeting_capture unknown action={action}");
+        return Err(format!("meeting_capture: unknown action: {action}"));
+    }
+    let source = match args.get("source").and_then(Value::as_str).unwrap_or("call") {
+        "in_person" => "in_person",
+        "call" | "" => "call",
+        other => {
+            warn!("system_control: meeting_capture unknown source={other}");
+            return Err(format!("meeting_capture: unknown source: {other}"));
+        }
+    };
+    info!("system_control: meeting_capture action={action} source={source}");
+    app.emit(
+        crate::events::VOICE_MEETING_CAPTURE_REQUESTED,
+        serde_json::json!({ "action": action, "source": source }),
+    )
+    .map_err(|e| format!("meeting_capture: emit failed: {e}"))
 }
 
 /// open_url: open a web link in the user's default browser. Rust owns the

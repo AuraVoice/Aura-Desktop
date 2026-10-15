@@ -16,6 +16,10 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+### Added
+
+- On a voice call, ask Buddy to start or stop recording a meeting. Buddy tells you if the recording could not start, for example when this month's recordings are used up.
+
 ## [0.20.1] - 2026-10-14
 
 ### Changed
