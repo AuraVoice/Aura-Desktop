@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { OnboardingFlow } from "../overlay/OnboardingFlow";
 import { HotkeyTourStep } from "../overlay/HotkeyTourStep";
+import { DictationSetupStep, takeDictationResume } from "../overlay/DictationSetupStep";
 import { AgentDemoStep } from "../overlay/AgentDemoStep";
 import { ProfileSetupStep } from "../overlay/ProfileSetupStep";
 import { PrivacySetupStep } from "../overlay/PrivacySetupStep";
@@ -32,15 +33,29 @@ function DashboardTail({
 }) {
   const voice = useVoiceBar();
   useAnnounceTourOnScreen();
-  type DashboardTailStep = "profile" | "tour" | "privacy" | "voice" | "demo";
+  type DashboardTailStep = "profile" | "tour" | "dictation" | "privacy" | "voice" | "demo";
   const initialStepRef = useRef<DashboardTailStep>(needsProfile ? "profile" : "tour");
   const [step, setStep] = useState<DashboardTailStep>(initialStepRef.current);
   const [keyLabel, setKeyLabel] = useState<string | undefined>();
+  // The dictation step's restart comes back here rather than to the tour.
+  const [resumeChecked, setResumeChecked] = useState(false);
 
   useEffect(() => {
     invoke<VoiceToggleKeyStatus>("voice_toggle_key_status")
       .then((status) => setKeyLabel(status.keyLabel || undefined))
       .catch((err) => logError("DashboardTail: voice_toggle_key_status", err));
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void takeDictationResume().then((resume) => {
+      if (cancelled) return;
+      if (resume) setStep("dictation");
+      setResumeChecked(true);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   async function goBack() {
@@ -49,12 +64,16 @@ function DashboardTail({
       setStep("voice");
     } else if (step === "voice") {
       setStep("privacy");
-    } else if (step === "privacy") {
+    } else if (step === "privacy" || step === "dictation") {
+      // Never back into the dictation step: it skips itself whenever there
+      // is no grant to ask for, which would bounce Back straight forward.
       setStep("tour");
     } else if (step === "tour" && needsProfile) {
       setStep("profile");
     }
   }
+
+  if (!resumeChecked) return null;
 
   return (
     <div className="onboarding-flow">
@@ -75,8 +94,9 @@ function DashboardTail({
         />
       )}
       {step === "tour" && (
-        <HotkeyTourStep keyLabel={keyLabel} onContinue={() => setStep("privacy")} />
+        <HotkeyTourStep keyLabel={keyLabel} onContinue={() => setStep("dictation")} />
       )}
+      {step === "dictation" && <DictationSetupStep onContinue={() => setStep("privacy")} />}
       {step === "privacy" && (
         <PrivacySetupStep onContinue={() => setStep("voice")} />
       )}

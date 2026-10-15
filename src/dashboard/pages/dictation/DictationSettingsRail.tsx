@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { ShieldCheck } from "lucide-react";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { logError } from "../../../lib/log";
@@ -121,6 +122,23 @@ export function DictationSettingsRail({
       surface: "dictation_settings",
     });
   }, [dictationStatus?.blocker]);
+
+  // While the keystroke grant blocks dictation, re-read it. Once the switch is
+  // on, Rust starts the listener in this process when macOS allows it and
+  // publishes a new status, so the restart button is only the fallback.
+  const keystrokeBlocked =
+    dictationStatus?.blocker === "inputMonitoring" || dictationStatus?.blocker === "relaunch";
+  useEffect(() => {
+    if (!keystrokeBlocked) return;
+    const check = () => {
+      void invoke("input_monitoring_state").catch((err) =>
+        logError("DictationSettingsRail: input monitoring state", err),
+      );
+    };
+    check();
+    const timer = window.setInterval(check, 2_000);
+    return () => window.clearInterval(timer);
+  }, [keystrokeBlocked]);
 
   useEffect(() => {
     let active = true;

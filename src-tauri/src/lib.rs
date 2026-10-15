@@ -541,6 +541,7 @@ pub fn run() {
             voice_toggle_key::set_voice_toggle_key,
             voice_toggle_key::voice_toggle_key_permission,
             voice_toggle_key::voice_toggle_key_request_permission,
+            voice_toggle_key::input_monitoring_state,
             hotkeys::hotkey_bindings,
             hotkeys::set_hotkey_binding,
             hotkeys::reset_hotkey_bindings,

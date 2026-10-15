@@ -9,7 +9,12 @@ const CACHE_KEY = "aura.theme.resolved";
 /// ::view-transition duration in themes.css plus a frame of slack.
 const FALLBACK_SWITCH_MS = 360;
 
-type ViewTransitionHandle = { finished: Promise<void>; skipTransition: () => void };
+type ViewTransitionHandle = {
+  finished: Promise<void>;
+  ready: Promise<void>;
+  updateCallbackDone: Promise<void>;
+  skipTransition: () => void;
+};
 type TransitionDocument = Document & {
   startViewTransition?: (update: () => void) => ViewTransitionHandle;
 };
@@ -75,9 +80,16 @@ export function applyTheme(theme: ResolvedTheme, { animate }: { animate: boolean
   if (typeof doc.startViewTransition === "function") {
     const transition = doc.startViewTransition(() => paint(theme));
     activeTransition = transition;
-    void transition.finished.finally(() => {
+    // A second switch skips this one, and WebKit then rejects these promises
+    // with AbortError. Nothing awaits them, so unobserved they reached Sentry
+    // as unhandled rejections; the theme itself is already painted either way.
+    const ignore = () => {};
+    transition.ready?.catch(ignore);
+    transition.updateCallbackDone?.catch(ignore);
+    const settle = () => {
       if (activeTransition === transition) activeTransition = null;
-    });
+    };
+    void transition.finished.then(settle, settle);
     return;
   }
 

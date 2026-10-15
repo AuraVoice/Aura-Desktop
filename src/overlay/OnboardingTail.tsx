@@ -5,6 +5,7 @@ import { useTauriEvent } from "../lib/useTauriEvent";
 import { OVERLAY_CHANGED } from "../lib/ipcEvents";
 import type { VoiceToggleKeyStatus } from "../lib/hotkeys";
 import { HotkeyTourStep } from "./HotkeyTourStep";
+import { DictationSetupStep, takeDictationResume } from "./DictationSetupStep";
 import { AgentDemoStep } from "./AgentDemoStep";
 import { ProfileSetupStep } from "./ProfileSetupStep";
 import { PrivacySetupStep } from "./PrivacySetupStep";
@@ -12,7 +13,7 @@ import { VoiceSetupStep } from "./VoiceSetupStep";
 import type { VoiceBarState } from "./useVoiceBar";
 import "./OnboardingFlow.css";
 
-type TailStep = "profile" | "hotkeyTour" | "privacy" | "voice" | "agentDemo";
+type TailStep = "profile" | "hotkeyTour" | "dictation" | "privacy" | "voice" | "agentDemo";
 
 interface OverlaySnapshot {
   presentation: string;
@@ -42,6 +43,19 @@ export function OnboardingTail({
   const [step, setStep] = useState<TailStep>(initialStepRef.current);
   const [keyLabel, setKeyLabel] = useState<string | undefined>();
   const completedRef = useRef(false);
+  // The dictation step's restart comes back here rather than to the tour.
+  const [resumeChecked, setResumeChecked] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    void takeDictationResume().then((resume) => {
+      if (cancelled) return;
+      if (resume) setStep("dictation");
+      setResumeChecked(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Sign-in hid the window (set_panel_variant -> Hidden). Re-show it as a
   // panel-sized surface so the tour and demo are visible. The listener below is
@@ -65,7 +79,8 @@ export function OnboardingTail({
 
   // Mirror the step to Rust for parity, same as OnboardingFlow.
   useEffect(() => {
-    const nativeStep = step === "profile" ? "whereHeard" : step === "privacy" ? "link" : step;
+    const nativeStep =
+      step === "profile" ? "whereHeard" : step === "privacy" ? "link" : step === "dictation" ? "hotkeyTour" : step;
     invoke("set_onboarding_step", { step: nativeStep }).catch((err) =>
       logError("OnboardingTail: set_onboarding_step", err),
     );
@@ -97,12 +112,16 @@ export function OnboardingTail({
       setStep("voice");
     } else if (step === "voice") {
       setStep("privacy");
-    } else if (step === "privacy") {
+    } else if (step === "privacy" || step === "dictation") {
+      // Never back into the dictation step: it skips itself whenever there
+      // is no grant to ask for, which would bounce Back straight forward.
       setStep("hotkeyTour");
     } else if (step === "hotkeyTour" && needsProfile) {
       setStep("profile");
     }
   }
+
+  if (!resumeChecked) return null;
 
   return (
     <div className="onboarding-flow">
@@ -125,8 +144,11 @@ export function OnboardingTail({
       {step === "hotkeyTour" && (
         <HotkeyTourStep
           keyLabel={keyLabel}
-          onContinue={() => setStep("privacy")}
+          onContinue={() => setStep("dictation")}
         />
+      )}
+      {step === "dictation" && (
+        <DictationSetupStep onContinue={() => setStep("privacy")} />
       )}
       {step === "privacy" && (
         <PrivacySetupStep

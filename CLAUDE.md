@@ -76,11 +76,15 @@ insertion via CGEvent, and the focus probe); Input Monitoring (the CGEventTap th
 dictation chord and the optional double-tap voice trigger, the twin of the Windows keyboard
 hook); and System Audio Recording for Meeting Notes. The tap is built at launch whenever Input
 Monitoring is already granted. The prompt itself is only ever raised for something the user
-opted into: when dictation is turned on (`dictation_set_consent`), or at launch when dictation
-consent is already on or a double-tap trigger is bound, never for a fresh install. The grant
-lands only after a relaunch, so `DictationStatus.blocker` (`inputMonitoring` / `relaunch`) is
-how the Dictation page offers the right button; it is checked silently in `with_listener_health`
-and must never prompt from a status read. The last one has NO request API - its prompt only
+opted into: when dictation is turned on (`dictation_set_consent`, which onboarding's macOS-only
+`DictationSetupStep` calls right after the hotkey tour), or at launch when dictation consent is
+already on or a double-tap trigger is bound, never for a fresh install unasked. Consent cannot
+wait for the HUD's first-hold prompt on a Mac: no hold reaches Aura before the grant, so that
+prompt never appears. Once the grant reads as allowed, `input_monitoring_state` starts the tap in
+the running process (`platform::start_after_grant`); only when macOS refuses that does
+`DictationStatus.blocker` turn `relaunch`. `inputMonitoring` / `relaunch` is how the Dictation
+page offers the right button; it is checked silently in `with_listener_health` and must never
+prompt from a status read. The last one has NO request API - its prompt only
 fires when `AudioDeviceStart` runs on the tap-backed aggregate device, so the whole pipeline is
 built before macOS asks, and a refusal surfaces as a capture failure rather than a stall. The
 process-tap API exists from 14.2 but its TCC category only behaves correctly from 14.4, which

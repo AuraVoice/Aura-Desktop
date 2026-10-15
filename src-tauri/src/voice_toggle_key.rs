@@ -272,7 +272,59 @@ impl VoiceToggleKeyHandle {
                 status.reason = Some(reason);
             }
         }
+        // The launch-time handle stays idle when Input Monitoring was missing
+        // at launch. A listener started after the grant lives beside it.
+        #[cfg(target_os = "macos")]
+        if !status.available {
+            if let Some(live) = platform::live_status() {
+                status = live;
+            }
+        }
         status
+    }
+}
+
+/// Where the macOS keystroke grant stands, for the onboarding dictation step
+/// and the Dictation page. `listening` is the real test: the grant can read
+/// as allowed while the tap still refuses until a relaunch.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InputMonitoringState {
+    pub required: bool,
+    pub granted: bool,
+    pub listening: bool,
+}
+
+/// Silent check (never prompts). Once the grant reads as allowed it also tries
+/// to start the listener in this process, so the user does not have to
+/// restart; only when macOS refuses that does the UI fall back to a relaunch.
+#[tauri::command]
+pub async fn input_monitoring_state(app: AppHandle) -> InputMonitoringState {
+    #[cfg(target_os = "macos")]
+    {
+        let granted = platform::permission_granted();
+        let running = app
+            .try_state::<VoiceToggleKeyHandle>()
+            .is_some_and(|handle| handle.status().available);
+        let listening = if running || !granted {
+            running
+        } else {
+            let app = app.clone();
+            tauri::async_runtime::spawn_blocking(move || platform::start_after_grant(app))
+                .await
+                .unwrap_or(false)
+        };
+        // Publishes the move from "needs Input Monitoring" to either working
+        // or "restart to finish". The emit is deduplicated, so polls are cheap.
+        if granted {
+            crate::dictation::emit_status_changed(&app);
+        }
+        InputMonitoringState { required: true, granted, listening }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = app;
+        InputMonitoringState { required: false, granted: true, listening: true }
     }
 }
 
@@ -1671,6 +1723,47 @@ mod platform {
     /// polling for a change that cannot arrive.
     pub fn request_permission() -> bool {
         unsafe { IOHIDRequestAccess(IOHID_REQUEST_TYPE_LISTEN_EVENT) }
+    }
+
+    /// A listener started after launch, once Input Monitoring was granted
+    /// while Aura was running. Never dropped: it lives as long as the process,
+    /// the same as the launch-time one would have.
+    static LIVE: std::sync::Mutex<Option<VoiceToggleKeyHandle>> = std::sync::Mutex::new(None);
+    /// Set after one live start failed. macOS then wants a relaunch, and
+    /// retrying on every poll would only spawn threads and file reports.
+    static LIVE_START_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    pub fn live_status() -> Option<VoiceToggleKeyStatus> {
+        LIVE.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .filter(|handle| handle.status.available)
+            .map(|handle| handle.status.clone())
+    }
+
+    /// Starts the tap in this process if the grant now allows it. False means
+    /// the grant is missing or macOS refused the tap until a relaunch.
+    pub fn start_after_grant(app: AppHandle) -> bool {
+        if !permission_granted() {
+            return false;
+        }
+        let mut live = LIVE.lock().unwrap_or_else(|e| e.into_inner());
+        if live.as_ref().is_some_and(|handle| handle.status.available) {
+            return true;
+        }
+        if LIVE_START_FAILED.load(std::sync::atomic::Ordering::Relaxed) {
+            return false;
+        }
+        let handle = start(app);
+        if handle.status.available {
+            info!("voice_toggle_key: listener started after the Input Monitoring grant, no relaunch");
+            *live = Some(handle);
+            true
+        } else {
+            LIVE_START_FAILED.store(true, std::sync::atomic::Ordering::Relaxed);
+            info!("voice_toggle_key: live start refused after the grant, a relaunch is needed");
+            false
+        }
     }
 
     fn report_failure(reason: &str) {

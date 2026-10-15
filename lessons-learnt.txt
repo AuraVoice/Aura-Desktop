@@ -2834,3 +2834,22 @@ Solution: match the read; mint only on ErrorKind::NotFound, every other error re
 Justification: "fail closed" has to hold at the read, not only at the unwrap, because the write
 primitive under it is fail-open on one platform.
 ================================================================================
+2026-10-15: A fresh Mac could never turn dictation on
+Problem: Varun installed 0.20.1 from the website on a Mac and dictation never worked. Home said
+"Dictation needs Input Monitoring"; the Dictation page's button only flipped its copy to "turn on
+Aura under Input Monitoring, then restart" and never opened System Settings.
+Issue: a chicken-and-egg. On macOS the chord reaches Aura through a CGEventTap that needs Input
+Monitoring, and the grant was requested from dictation_set_consent. Consent was asked by the HUD
+on the first hold, and no hold can reach Aura without the grant, so neither ever happened. The
+onboarding tour tests only the voice and chat chords, which are registered shortcuts needing no
+grant, so nothing in setup ever touched it. IOHIDRequestAccess also shows its dialog once per
+install, so the button was a no-op after the first press. Windows never sees any of this: its
+keyboard hook needs no grant.
+Solution: a macOS-only DictationSetupStep after the hotkey tour records consent (which raises the
+prompt), opens the Input Monitoring pane, and polls input_monitoring_state, which starts the tap
+in the running process once the grant reads as allowed and falls back to a restart only if macOS
+refuses; a resume flag brings onboarding back to the step after that restart. The Dictation page
+polls the same command while blocked, and its button opens the pane.
+Justification: a permission gate must be reachable from a path that does not itself need the
+permission. Check every Mac-only grant for a prompt that sits behind the feature it unlocks.
+================================================================================

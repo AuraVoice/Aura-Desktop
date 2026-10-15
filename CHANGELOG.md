@@ -16,6 +16,12 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+## [0.20.3] - 2026-10-15
+
+### Added
+
+- On a Mac, setup now has a dictation step after the shortcut tour: turn dictation on, switch Aura on in Input Monitoring, and the step turns ready on its own. If macOS still wants a restart, one button restarts Aura and setup picks up where it left off.
+
 ### Changed
 
 - Upgrade in the notch menu opens the Plans window, so you see every plan and price before you pay.
@@ -34,6 +40,8 @@ was started and read like commit subjects rather than release notes.
 - On a Mac, a screen capture that fails in chat says Screen Recording is off instead of a generic error.
 - Keys and labels on a Mac read Ctrl + Cmd and "Mac" instead of Windows names.
 - Buying a plan whose price is not available now says so, instead of asking you to check your connection.
+- On a Mac, dictation starts working as soon as you switch Aura on in Input Monitoring, without restarting Aura when macOS allows it. "Allow in System Settings" on the Dictation page now opens the right pane.
+- Switching theme quickly in Settings no longer reports an error in the background.
 
 ## [0.20.2] - 2026-10-15
 
