@@ -44,12 +44,17 @@ const SETTINGS_FILE: &str = "polish.json";
 /// must not IPC to the webview to learn where the backend lives.
 const API_BASE_URL: &str = "https://juno-backend-620715294422.us-central1.run.app";
 
-/// Total wall-clock the worker will wait before typing the raw text instead.
-const WAIT_BUDGET: Duration = Duration::from_millis(2500);
-/// The HTTP client gives up slightly earlier so the channel send beats the
+/// Total wall-clock the worker will wait before typing the raw text instead:
+/// 2.5s plus 0.75s per 1000 characters, because the model writes the whole
+/// transcript back. Mirrors juno-backend's `_polish_budget_s` plus 0.5s, so
+/// the server's own fallback reply still arrives inside this window.
+fn wait_budget(chars: usize) -> Duration {
+    Duration::from_millis(2500 + 750 * chars.min(4000) as u64 / 1000)
+}
+/// The HTTP request gives up slightly earlier so the channel send beats the
 /// recv_timeout and the outcome is a categorized error, not a silent drop.
 const CONNECT_TIMEOUT: Duration = Duration::from_millis(1000);
-const REQUEST_TIMEOUT: Duration = Duration::from_millis(2300);
+const REQUEST_HEADROOM: Duration = Duration::from_millis(200);
 
 /// Where the dictation is going, so the formatter can match the destination
 /// instead of guessing from an exe name. The same shape the backend's
@@ -242,7 +247,6 @@ fn client() -> &'static reqwest::Client {
         reqwest::Client::builder()
             .default_headers(backend_headers())
             .connect_timeout(CONNECT_TIMEOUT)
-            .timeout(REQUEST_TIMEOUT)
             .build()
             .expect("polish http client")
     })
@@ -279,6 +283,7 @@ async fn request_polish(
     app_name: Option<String>,
     context: PolishContext,
 ) -> Result<String, PolishError> {
+    let timeout = wait_budget(text.chars().count()) - REQUEST_HEADROOM;
     let body = serde_json::json!({
         "text": text,
         "app": app_name,
@@ -286,6 +291,7 @@ async fn request_polish(
     });
     let response = client()
         .post(format!("{API_BASE_URL}/dictation/polish"))
+        .timeout(timeout)
         .bearer_auth(token)
         .json(&body)
         .send()
@@ -349,7 +355,7 @@ fn validate(input: &str, output: &str) -> Option<String> {
 }
 
 /// Formats the transcript, or returns None and the caller types the raw text.
-/// Blocks the worker for at most `WAIT_BUDGET`. Logs outcome, duration and
+/// Blocks the worker for at most `wait_budget`. Logs outcome, duration and
 /// character counts only.
 /// What polish produced and, when it produced nothing, why. `outcome` is the
 /// backend's `POLISH_OUTCOMES` vocabulary so the trace can store it as is.
@@ -379,11 +385,11 @@ pub fn polish_transcript(
         let result = request_polish(token, owned_text, owned_app, owned_context).await;
         let _ = tx.send(result);
     });
-    let result = match rx.recv_timeout(WAIT_BUDGET) {
+    let chars_in = text.chars().count();
+    let result = match rx.recv_timeout(wait_budget(chars_in)) {
         Ok(result) => result,
         Err(_) => Err(PolishError::Timeout),
     };
-    let chars_in = text.chars().count();
     let formatting_ms = started.elapsed().as_millis();
     if formatting_ms > 2000 {
         warn!("dictation: phase=polish target_miss=polish formatting_ms={formatting_ms}");
