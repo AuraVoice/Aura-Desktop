@@ -16,6 +16,8 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+## [0.20.1] - 2026-10-14
+
 ### Changed
 
 - A meeting's page is calmer: Ask Aura, follow-up and pin are icons at the top right, Edit lives in the ... menu, and the type and status tags are gone. Copy sits beside the Transcript and Insights tabs and copies whichever one is open, the whole transcript or the whole note.
@@ -26,7 +28,6 @@ was started and read like commit subjects rather than release notes.
 ### Fixed
 
 - Dictation clean up no longer answers, refuses or summarises a request you dictate to an AI ("I'm sorry, but I can't help with that"). It formats your words, keeps profanity as you said it, and splits long dictations into paragraphs in editors where a new line is safe.
-
 - Dictating into another app's text field now types there even while the chat card is open; the chat only takes dictation when you are typing in it.
 - The "Max 5 attachments" warning is now easy to read on the dark chat card, and it goes away once you remove an attachment instead of lingering under an empty composer.
 - Follow-up emails read like you wrote them: they greet people by name, and an interview gets a short thank-you note instead of a recap that explained the hiring process back to the recruiter.
