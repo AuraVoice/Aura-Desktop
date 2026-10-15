@@ -1,15 +1,25 @@
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useState } from "react";
+import { useLocation } from "react-router-dom";
 import { BillingPortalError, fetchBillingPortal } from "../../lib/entitlement";
 import { logError } from "../../lib/log";
 import { useEntitlementState } from "../../state/EntitlementProvider";
 import { type EntitlementState } from "../../state/useEntitlement";
 import { DataView } from "../DataView";
+import { PlansDialog } from "../components/PlansDialog";
 import {
   SettingsPageLayout,
   SettingsSection,
 } from "../components/SettingsPageLayout";
 import { type AsyncState } from "../useAsyncData";
+
+/** The plan as people say it, never the raw tier id: a trial is "Pro (trial)". */
+function planLabel(entitlement: EntitlementState): string {
+  if (entitlement.isTrialing) return "Pro (trial)";
+  if (entitlement.effectiveTier === "pro") return "Pro";
+  if (entitlement.effectiveTier === "companion") return "Companion";
+  return "Free";
+}
 
 /** Copy for each reason the billing portal could not open. "Try again" only
  * where a retry can actually succeed. */
@@ -50,6 +60,10 @@ export function BillingPage() {
   };
   const [portalBusy, setPortalBusy] = useState(false);
   const [portalError, setPortalError] = useState("");
+  // Every "See plans" in the app lands here with ?plans=1, so it opens the plans
+  // straight away instead of asking for a second click.
+  const location = useLocation();
+  const [plansOpen, setPlansOpen] = useState(() => new URLSearchParams(location.search).get("plans") === "1");
 
   const openBillingPortal = async () => {
     if (portalBusy) return;
@@ -76,8 +90,19 @@ export function BillingPage() {
             <div className="db-panel db-billing-summary">
               <div>
                 <span className="db-eyebrow">Current plan</span>
-                <h3>{entitlement.effectiveTier}</h3>
+                <h3>{planLabel(entitlement)}</h3>
                 <p>One subscription covers Aura on desktop and mobile.</p>
+                {entitlement.trialDeniedReason === "install_trial_used" && (
+                  <p>
+                    This computer already used Aura's free trial with another account, so this account
+                    starts on Free. You can still pick a plan.
+                  </p>
+                )}
+                {entitlement.checkoutAvailable !== false && (
+                  <button type="button" className="db-primary-btn db-billing-see-plans" onClick={() => setPlansOpen(true)}>
+                    {entitlement.isPurchased ? "See all plans" : "See plans"}
+                  </button>
+                )}
               </div>
               <span className={`db-status-pill${
                 entitlement.status === "active" || entitlement.status === "trialing"
@@ -97,7 +122,7 @@ export function BillingPage() {
               <div className="db-panel db-details">
                 <div className="db-details-row">
                   <span className="db-details-label">Plan</span>
-                  <span className="db-details-value">{entitlement.effectiveTier}</span>
+                  <span className="db-details-value">{planLabel(entitlement)}</span>
                 </div>
                 <div className="db-details-row">
                   <span className="db-details-label">Status</span>
@@ -141,6 +166,7 @@ export function BillingPage() {
           </>
         )}
       </DataView>
+      <PlansDialog open={plansOpen} onClose={() => setPlansOpen(false)} />
     </SettingsPageLayout>
   );
 }

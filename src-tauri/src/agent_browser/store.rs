@@ -368,3 +368,14 @@ pub fn retain_only_for_session(app: &AppHandle, uid: Option<&str>) {
         log::warn!("agent_browser.store: retain_only_for_session failed: {e}");
     }
 }
+
+/// Account deletion only (`security::purge_local_account_data`): drops every
+/// task of this one account, open rows included; a late checkpoint or finish
+/// only matches an open row, so it writes nothing back. Never call it from a
+/// session boundary.
+pub fn purge_uid(app: &AppHandle, uid: &str) -> Result<(), String> {
+    let conn = open(app)?;
+    conn.execute("DELETE FROM tasks WHERE uid = ?1", params![uid])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}

@@ -65,7 +65,10 @@ vi.mock("./useMeetings", () => ({ useMeetings: mocks.useMeetings }));
 vi.mock("./useMeetingCapture", () => ({ useMeetingCapture: mocks.useMeetingCapture }));
 vi.mock("./useMeetingExpiryWarnings", () => ({ useMeetingExpiryWarnings: vi.fn() }));
 vi.mock("./useMeetingPrompt", () => ({ useMeetingPrompt: mocks.useMeetingPrompt }));
-vi.mock("./useOnboardingTail", () => ({ useOnboardingTail: mocks.useOnboardingTail }));
+vi.mock("./useOnboardingTail", () => ({
+  useOnboardingTail: mocks.useOnboardingTail,
+  useDashboardTourOnScreen: () => false,
+}));
 vi.mock("./OnboardingTail", () => ({ OnboardingTail: () => <div>tail</div> }));
 vi.mock("./NotchBar", () => ({ NotchBar: () => <div>notch</div> }));
 vi.mock("./DraftCard", () => ({

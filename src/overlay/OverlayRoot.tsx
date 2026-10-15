@@ -20,7 +20,7 @@ import {
 import { publishMeetingCaptureResult } from "./meetingCaptureResult";
 import { useVoiceBar } from "./useVoiceBar";
 import { useNotchGesture } from "./useNotchGesture";
-import { useOnboardingTail } from "./useOnboardingTail";
+import { useDashboardTourOnScreen, useOnboardingTail } from "./useOnboardingTail";
 import { useScreenSight } from "./useScreenSight";
 import { useTurnScreenCapture } from "./useTurnScreenCapture";
 import { useSystemControl } from "./useSystemControl";
@@ -282,9 +282,12 @@ export function OverlayRoot() {
   // mid-onboarding); the notch itself is the drag handle.
   const notchMove = useNotchMove(presentation === "bar");
   const tail = useOnboardingTail(user?.uid ?? null);
+  const tourOnScreen = useDashboardTourOnScreen();
   // Suppress the double-tap-Ctrl notch gesture while dashboard-owned first-run
-  // onboarding is active. The native hotkey test consumes the gesture on its
+  // onboarding is on screen. The native hotkey test consumes the gesture on its
   // own screen; every other onboarding step keeps the hidden overlay dormant.
+  // "On screen", not merely unfinished: someone who closed the tour partway must
+  // still have a working voice shortcut (the dashboard's heartbeat says which).
   // Dismiss keys off actual overlay visibility, not one hardcoded presentation
   // or the voice-session state: any on-screen call/notch surface (bar, the
   // minimized-call pill which reports as "companion", or the drag-mode moving
@@ -296,7 +299,7 @@ export function OverlayRoot() {
   const notchGesture = useNotchGesture(
     user !== null,
     voice,
-    presentation === "pointing" || tail.status === "active",
+    presentation === "pointing" || (tail.status === "active" && tourOnScreen),
     overlayVisible && !visibleChatOpen,
   );
   // Desktop control: dispatches the agent's `desktop.run` messages to native

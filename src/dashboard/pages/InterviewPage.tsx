@@ -396,6 +396,8 @@ function briefFailureCopy(err: unknown): string {
       return "Aura could not turn this preparation into a clean brief. Try again, or trim the longest section.";
     case "invalid":
       return "Aura could not read this preparation. Check the fields, then build again.";
+    case "fair_use_reached":
+      return "You've reached today's fair-use limit for your plan. Your preparation is saved, so build it again tomorrow.";
     default:
       return "Aura could not build the interview brief. Your preparation is still here, so you can try again.";
   }
@@ -414,6 +416,8 @@ function researchFailureCopy(err: unknown): string {
       return "Aura could not read these inputs. Check the company website and job description, then try again.";
     case "too_large":
       return "The research found more than fits in one dossier. Shorten the job description, then try again.";
+    case "fair_use_reached":
+      return "You've reached today's fair-use limit for your plan. Your inputs are saved, so run the research again tomorrow.";
     default:
       return "Aura could not complete the company research. Your inputs are still here, so you can try again.";
   }
@@ -430,6 +434,8 @@ function prepFailureCopy(reason: InterviewBriefFailureReason): string {
       return "Your brief is ready. Aura could not turn it into a clean prep room, so try again.";
     case "invalid":
       return "Your brief is ready, but Aura could not read it back. Rebuild the brief, then try again.";
+    case "fair_use_reached":
+      return "Your brief is ready. You've reached today's fair-use limit, so the prep room can be written tomorrow.";
     default:
       return "Your brief is ready. The prep room could not be written right now, so try again shortly.";
   }

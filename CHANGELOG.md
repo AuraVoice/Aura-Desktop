@@ -19,6 +19,25 @@ was started and read like commit subjects rather than release notes.
 ### Added
 
 - On a voice call, ask Buddy to start or stop recording a meeting. Buddy tells you if the recording could not start, for example when this month's recordings are used up.
+- See plans opens a Plans window with Companion and Pro, their live monthly and annual prices, and what each includes. You can buy from the app, even during your trial: your remaining trial days carry over and you aren't charged until they end.
+- Delete your account from Settings > Account. It cancels a plan you bought on the website, deletes your data on Aura's servers and this account's data on this computer, then signs you out.
+- The Privacy Policy and Terms of Service are linked from the Account and Data and Privacy pages.
+
+### Changed
+
+- Signing in with Google shows a short code in Aura that you type into the browser page, so a sign-in link someone else sent you can't connect your account to their computer.
+- Every plan has a daily fair-use limit set well above normal use. If you reach one for chat, voice, interview prep or Swarm, Aura says so and when it resets, instead of showing an error.
+- Companion includes 20 meeting notes a month, up from 5.
+- The welcome screen asks you to confirm you're at least 13, or the age of digital consent where you live, matching the Terms. It asked for 18 before.
+- Plans and billing shows your plan by name, such as "Pro (trial)", and says so when this computer already used the free trial with another account.
+- Buddy opens a website on a voice call only when you name it out loud, or for well-known sites like YouTube and Google, so text on your screen can't make it open a link.
+- When Buddy reads a web page or something you attached in chat, it asks before saving a memory or creating a calendar event from it, instead of doing it in the same reply.
+
+### Fixed
+
+- The voice shortcut works again for anyone who closed the welcome tour before finishing it. It used to stay silent on every launch until the tour was done.
+- After you start a checkout, Aura no longer says you're upgraded before the payment goes through.
+- The desktop agent can no longer be pointed at devices on your own network through a web address that looks public.
 
 ## [0.20.1] - 2026-10-14
 

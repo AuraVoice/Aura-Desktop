@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./useDashboardUser", () => ({ useDashboardUser: () => mocks.user }));
 vi.mock("../overlay/useOnboardingTail", () => ({
   useOnboardingTail: () => ({ status: mocks.status, complete: mocks.complete }),
+  useAnnounceTourOnScreen: () => {},
 }));
 vi.mock("../overlay/OnboardingFlow", () => ({ OnboardingFlow: () => <div>overlay-flow</div> }));
 vi.mock("../overlay/HotkeyTourStep", () => ({ HotkeyTourStep: () => <div>hotkey-tour</div> }));

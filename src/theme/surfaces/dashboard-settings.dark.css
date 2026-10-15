@@ -310,6 +310,111 @@
   background: var(--dk-warning-soft);
   color: var(--dk-warning);
 }
+/* ── Plans dialog (matte, no glass) ── */
+:root[data-theme="dark"] .db-plans-scrim {
+  background: rgba(0, 0, 0, 0.6);
+}
+:root[data-theme="dark"] .db-plans-dialog {
+  border-color: var(--dk-border);
+  background: var(--dk-glass-fill);
+  color: var(--dk-text);
+  box-shadow: none;
+}
+:root[data-theme="dark"] .db-plans-chip,
+:root[data-theme="dark"] .db-plans-toggle {
+  border-color: var(--dk-border);
+  background: var(--dk-surface-2);
+}
+:root[data-theme="dark"] .db-plans-toggle button {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-plans-toggle button.is-on {
+  background: rgba(255, 255, 255, 0.12);
+  color: var(--dk-text);
+  box-shadow: none;
+}
+:root[data-theme="dark"] .db-plans-close {
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .db-plans-close:hover {
+  background: var(--dk-press);
+}
+:root[data-theme="dark"] .db-plans-card {
+  border-color: var(--dk-border);
+  background: var(--dk-surface-2);
+  box-shadow: none;
+}
+:root[data-theme="dark"] .db-plans-card.is-featured {
+  border-color: rgba(46, 224, 196, 0.32);
+}
+:root[data-theme="dark"] .db-plans-badge {
+  background: var(--dk-accent-soft);
+  color: var(--dk-accent-text);
+}
+:root[data-theme="dark"] .db-plans-per,
+:root[data-theme="dark"] .db-plans-lead,
+:root[data-theme="dark"] .db-plans-features-head,
+:root[data-theme="dark"] .db-plans-waiting,
+:root[data-theme="dark"] .db-plans-fine {
+  color: var(--dk-text-dim);
+}
+:root[data-theme="dark"] .db-plans-features-head {
+  border-bottom-color: var(--dk-border);
+}
+:root[data-theme="dark"] .db-plans-features svg {
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .db-plans-cta {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .db-plans-cta:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+}
+:root[data-theme="dark"] .db-plans-cta.is-primary {
+  background: var(--dk-text);
+  color: #0b0b0c;
+}
+:root[data-theme="dark"] .db-plans-cta.is-primary:hover:not(:disabled) {
+  background: #ffffff;
+  color: #0b0b0c;
+}
+:root[data-theme="dark"] .db-plans-waiting button,
+:root[data-theme="dark"] .db-plans-status button {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .db-plans-status {
+  background: var(--dk-surface-2);
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .db-plans-status.is-error {
+  background: var(--dk-danger-soft);
+  color: var(--dk-danger);
+}
+:root[data-theme="dark"] .db-account-delete-confirm input {
+  border-color: var(--dk-border-strong);
+  background: var(--dk-surface-2);
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .db-account-delete-actions button {
+  border-color: var(--dk-border-strong);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--dk-text);
+}
+:root[data-theme="dark"] .db-account-delete-actions button:hover:not(:disabled) {
+  background: var(--dk-press);
+}
+:root[data-theme="dark"] .db-account-delete-actions button.is-danger {
+  border-color: rgba(255, 138, 128, 0.28);
+  background: var(--dk-danger-soft);
+  color: var(--dk-danger);
+}
+:root[data-theme="dark"] .db-account-delete-actions button.is-danger:hover:not(:disabled) {
+  border-color: rgba(255, 138, 128, 0.4);
+  background: var(--dk-danger-soft);
+  color: var(--dk-danger);
+}
 
 /* ── Page toolbar and range chips ── */
 :root[data-theme="dark"] .db-page-toolbar::after {

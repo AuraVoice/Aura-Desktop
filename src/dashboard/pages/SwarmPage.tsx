@@ -188,6 +188,8 @@ function errorCopy(error: unknown, roster: SwarmRoster): string {
         return "A Swarm model is set up wrong on the server, so nothing could run. Nothing was charged.";
       case "wallet_exhausted":
         return "Today's Swarm budget is used up. Managers can work again after midnight UTC.";
+      case "fair_use_reached":
+        return "You've reached today's Swarm fair-use limit for your plan. Managers can work again after midnight UTC.";
       case "meter_unavailable":
         return "Aura could not check the Swarm budget, so nothing ran. Try again in a minute.";
       case "manager_busy":

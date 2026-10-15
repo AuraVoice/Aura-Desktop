@@ -15,9 +15,57 @@ import { syncProfileOnSignIn } from "../lib/profile";
 import {
   DESKTOP_ONBOARDING_COMPLETED as ONBOARDING_COMPLETED_EVENT,
   DESKTOP_ONBOARDING_REPLAY as ONBOARDING_REPLAY_EVENT,
+  DESKTOP_ONBOARDING_TOUR_ON_SCREEN as TOUR_ON_SCREEN_EVENT,
 } from "../lib/ipcEvents";
 
 export type OnboardingTailStatus = "unknown" | "active" | "done";
+
+/** How often the dashboard says its tour is on screen, and how long the overlay
+ * believes it. A heartbeat rather than a flag: a dashboard that is closed, hidden
+ * or crashed simply stops sending, so the voice shortcut is back within seconds.
+ * A flag that only cleared when the tour finished left the shortcut dead on every
+ * launch for anyone who closed the window partway through. */
+const TOUR_HEARTBEAT_MS = 2_000;
+const TOUR_ON_SCREEN_TTL_MS = 5_000;
+
+/** Dashboard side: send the heartbeat while this component is mounted and its
+ * window is visible. */
+export function useAnnounceTourOnScreen() {
+  useEffect(() => {
+    const beat = () => {
+      if (document.visibilityState !== "visible") return;
+      emit(TOUR_ON_SCREEN_EVENT).catch((err) => logError("useAnnounceTourOnScreen: emit", err));
+    };
+    beat();
+    const timer = window.setInterval(beat, TOUR_HEARTBEAT_MS);
+    return () => window.clearInterval(timer);
+  }, []);
+}
+
+/** Overlay side: true while a heartbeat arrived within the last few seconds. */
+export function useDashboardTourOnScreen(): boolean {
+  const [onScreen, setOnScreen] = useState(false);
+  useEffect(() => {
+    let expiry: number | undefined;
+    let unlisten: (() => void) | undefined;
+    let disposed = false;
+    listen(TOUR_ON_SCREEN_EVENT, () => {
+      setOnScreen(true);
+      window.clearTimeout(expiry);
+      expiry = window.setTimeout(() => setOnScreen(false), TOUR_ON_SCREEN_TTL_MS);
+    })
+      .then((fn) => {
+        if (disposed) fn(); else unlisten = fn;
+      })
+      .catch((err) => logError("useDashboardTourOnScreen: listen", err));
+    return () => {
+      disposed = true;
+      unlisten?.();
+      window.clearTimeout(expiry);
+    };
+  }, []);
+  return onScreen;
+}
 
 /** Decides whether the post-sign-in onboarding tail (hotkey tour + live demo)
  * should run. It's active only for desktop first-run: signed in and this UID

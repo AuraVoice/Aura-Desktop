@@ -9,6 +9,7 @@
 //! goes through juno-backend (`POST /agent/desktop-search`), never to a
 //! search engine from here.
 
+use std::net::ToSocketAddrs;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -44,10 +45,38 @@ fn is_private_host(host: &str) -> bool {
         return true;
     }
     match host.parse::<std::net::IpAddr>() {
-        Ok(std::net::IpAddr::V4(ip)) => ip.is_private() || ip.is_loopback() || ip.is_link_local() || ip.is_unspecified(),
-        Ok(std::net::IpAddr::V6(ip)) => {
-            ip.is_loopback() || ip.is_unspecified() || (ip.segments()[0] & 0xfe00) == 0xfc00 || (ip.segments()[0] & 0xffc0) == 0xfe80
-        }
+        Ok(ip) => is_private_ip(ip),
+        Err(_) => false,
+    }
+}
+
+/// The address ranges `is_private_host` refuses, for a literal and for what a
+/// name resolves to alike. An IPv4-mapped IPv6 address is judged as the IPv4
+/// address it carries, or `::ffff:127.0.0.1` would pass as public.
+fn is_private_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(ip) => ip.is_private() || ip.is_loopback() || ip.is_link_local() || ip.is_unspecified(),
+        std::net::IpAddr::V6(ip) => match ip.to_ipv4_mapped() {
+            Some(mapped) => is_private_ip(std::net::IpAddr::V4(mapped)),
+            None => {
+                ip.is_loopback() || ip.is_unspecified() || (ip.segments()[0] & 0xfe00) == 0xfc00 || (ip.segments()[0] & 0xffc0) == 0xfe80
+            }
+        },
+    }
+}
+
+/// The backend's url_policy rule on top of `is_private_host`: a name is refused
+/// when ANY address it resolves to is private, so a public-looking name pointed
+/// at 10.0.0.1 or 127.0.0.1 cannot pass where the literal would not. A name
+/// that does not resolve is not refused here; the request then fails as
+/// `unreachable`. The connect resolves again, so a name that changes its answer
+/// in between (DNS rebinding) is not covered. Blocking: a system DNS lookup.
+fn resolves_private(url: &url::Url) -> bool {
+    let Some(host) = url.host_str() else { return false };
+    let host = host.trim_start_matches('[').trim_end_matches(']');
+    let port = url.port_or_known_default().unwrap_or(443);
+    match (host, port).to_socket_addrs() {
+        Ok(addresses) => addresses.into_iter().any(|address| is_private_ip(address.ip())),
         Err(_) => false,
     }
 }
@@ -66,7 +95,13 @@ fn fetch_client() -> &'static reqwest::Client {
                     .map(|first| first.host_str() == attempt.url().host_str())
                     .unwrap_or(false);
                 if same_host && attempt.previous().len() < 10 {
-                    attempt.follow()
+                    // Same name, but it may answer differently now. This blocks
+                    // the thread awaiting the fetch, which is the Operator's own.
+                    if resolves_private(attempt.url()) {
+                        attempt.error("private_address")
+                    } else {
+                        attempt.follow()
+                    }
                 } else {
                     attempt.stop()
                 }
@@ -78,11 +113,26 @@ fn fetch_client() -> &'static reqwest::Client {
 
 /// Fetches a page and returns its readable text, headed by the final URL.
 pub async fn fetch(raw_url: &str) -> Result<String, String> {
+    if let Ok(url) = url::Url::parse(raw_url.trim()) {
+        let private = tauri::async_runtime::spawn_blocking(move || resolves_private(&url)).await.unwrap_or(true);
+        if private {
+            return Err("private_address".to_string());
+        }
+    }
     let mut response = fetch_client()
         .get(raw_url.trim())
         .send()
         .await
-        .map_err(|error| if error.is_timeout() { "timeout".to_string() } else { "unreachable".to_string() })?;
+        .map_err(|error| {
+            if error.is_timeout() {
+                "timeout".to_string()
+            } else if error.is_redirect() {
+                // The redirect policy errors only for a hop that resolves private.
+                "private_address".to_string()
+            } else {
+                "unreachable".to_string()
+            }
+        })?;
     let status = response.status();
     if status.is_redirection() {
         let location = response

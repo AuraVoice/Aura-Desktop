@@ -145,6 +145,10 @@ pub enum Operation {
     /// requirement for the same reason as StartBrowserTask. No model holds this
     /// as a tool: only `agent_operator::start` asks for it, from a Swarm Start card.
     OperatorTask,
+    /// Erase this account's data from every local store, once juno-backend has
+    /// deleted the account. Signed in is the whole gate: the uid erased is the
+    /// session's own, never one passed over IPC.
+    PurgeAccountData,
 }
 
 /// Proof of a successful `authorize` call, carrying the auth epoch it was
@@ -340,7 +344,9 @@ impl SecurityState {
             | Operation::StartJoinWatch
             | Operation::ReadLogs
             // A file the user clicked Save on, written only under Downloads/Aura Documents.
-            | Operation::SaveDocument => {}
+            | Operation::SaveDocument
+            // The Delete account flow, after the backend deleted the account.
+            | Operation::PurgeAccountData => {}
             Operation::StartBrowserTask => {
                 if !self.browser_task_consented {
                     return Err(Denied::BrowserTaskNotEnabled);
@@ -817,6 +823,70 @@ pub fn screen_sight_armed(app: AppHandle) -> bool {
     handle(&app)
         .map(|h| h.0.lock().unwrap_or_else(|e| e.into_inner()).screen_sight_armed)
         .unwrap_or(false)
+}
+
+/// What `purge_local_account_data` erased, by store. `failed` names the stores
+/// whose data may still be on this computer, so the page can say which.
+#[derive(Clone, Debug, Serialize)]
+pub struct PurgeReport {
+    pub purged: Vec<String>,
+    pub failed: Vec<String>,
+}
+
+/// The local half of Delete account, called once juno-backend's DELETE
+/// /account has succeeded and before the sign-out: erases the signed-in
+/// account's rows and files from every uid-scoped store on this computer.
+///
+/// The uid is the native session's, never one sent from JavaScript, and this
+/// command is the ONLY caller of the stores' `purge_uid`. Never call one from
+/// `session_changed` or any other session boundary: a boundary is not a
+/// request to erase, and deleting there destroyed data that existed nowhere
+/// else (2026-10-05).
+///
+/// A store that fails does not stop the rest; the report names it instead.
+/// The log carries store names and counts only.
+#[tauri::command]
+pub async fn purge_local_account_data(app: AppHandle) -> Result<PurgeReport, String> {
+    let ticket = authorize(&app, Operation::PurgeAccountData)?;
+    let uid = ticket.uid().to_string();
+    // A task still running would write its row straight back after the erase.
+    // A live recording is stopped inside `meeting::purge_uid`, which waits for it.
+    crate::agent_browser::request_stop(&app, "signed_out");
+    crate::agent_operator::request_stop(&app, "signed_out");
+    let report = tauri::async_runtime::spawn_blocking(move || {
+        type Purge = fn(&AppHandle, &str) -> Result<(), String>;
+        let stores: &[(&str, Purge)] = &[
+            ("chat", crate::chat_cache::purge_uid),
+            ("interview_preparations", crate::interview_prep_store::purge_uid),
+            ("browser_tasks", crate::agent_browser::store::purge_uid),
+            ("desktop_tasks", crate::agent_operator::store::purge_uid),
+            ("swarm_memory", crate::swarm_memory::store::purge_uid),
+            ("meetings", crate::meeting::purge_uid),
+            #[cfg(any(windows, target_os = "macos"))]
+            ("dictation_history", crate::dictation::history::purge_uid),
+            #[cfg(any(windows, target_os = "macos"))]
+            ("dictation_usage", crate::dictation::usage::purge_uid),
+        ];
+        let mut report = PurgeReport { purged: Vec::new(), failed: Vec::new() };
+        for (name, purge) in stores {
+            match purge(&app, &uid) {
+                Ok(()) => report.purged.push(name.to_string()),
+                Err(error) => {
+                    warn!("security: account purge of {name} failed: {error}");
+                    report.failed.push(name.to_string());
+                }
+            }
+        }
+        report
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    info!(
+        "security: account data purged from {} store(s), {} failed",
+        report.purged.len(),
+        report.failed.len()
+    );
+    Ok(report)
 }
 
 #[cfg(test)]

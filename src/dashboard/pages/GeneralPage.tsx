@@ -16,11 +16,14 @@ import { anySharingActive } from "../../lib/generalSettings";
 import { revokeTraceSharing } from "../../lib/dictationUpload";
 import { useAuth } from "../../state/AuthProvider";
 import { chordKeysOf, useDictationStatus } from "../../lib/dictationStatus";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   desktopOnboardingSeenForUidKey,
   dictationChord as chordCopy,
   overlayStorePath,
+  privacyUrl,
   regionChord as regionCopy,
+  termsUrl,
 } from "../../lib/copy";
 import { regionKeysOf, useRegionStatus } from "../../lib/regionStatus";
 import { osName } from "../../lib/platformKeys";
@@ -606,6 +609,28 @@ export function GeneralPage({ section = "general" }: { section?: GeneralPageSect
                 checked={settings.sensitiveNotificationPreviews}
                 onChange={(value) => void update("sensitiveNotificationPreviews", value)}
               />
+            </div>
+          </SettingsSection>
+
+          <SettingsSection
+            title="Legal"
+            description="The terms you agreed to, and how Aura handles your data."
+          >
+            <div className="db-panel db-settings-panel db-legal-links">
+              <button
+                type="button"
+                className="db-secondary-btn"
+                onClick={() => void openUrl(privacyUrl).catch((err) => logError("GeneralPage: open privacy", err))}
+              >
+                Privacy Policy
+              </button>
+              <button
+                type="button"
+                className="db-secondary-btn"
+                onClick={() => void openUrl(termsUrl).catch((err) => logError("GeneralPage: open terms", err))}
+              >
+                Terms of Service
+              </button>
             </div>
           </SettingsSection>
         </>

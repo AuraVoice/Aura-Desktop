@@ -23,6 +23,19 @@ const PLATFORM_HEADERS = {
 
 const CLAIM_TIMEOUT_MS = 15_000;
 
+/** This install's random id, read once. Sent as X-Aura-Install so the backend can give
+ * one free trial per install (services/entitlement.py); "" when the store cannot be
+ * read, which only means the request goes without it. */
+let installIdOnce: Promise<string> | null = null;
+function desktopInstallIdHeader(): Promise<string> {
+  installIdOnce ??= getOrCreateDesktopInstallId().catch((err) => {
+    logError("api: install id unavailable", err);
+    installIdOnce = null;
+    return "";
+  });
+  return installIdOnce;
+}
+
 /** Thrown when an authenticated call has no session, or the backend rejects
  * the ID token; callers must route back to the sign-in form, not retry. */
 export class AuthRequiredError extends Error {}
@@ -53,11 +66,12 @@ export async function authFetch(
     throw new AuthRequiredError("No signed-in user");
   }
 
-  const idToken = await user.getIdToken();
+  const [idToken, installId] = await Promise.all([user.getIdToken(), desktopInstallIdHeader()]);
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers: {
       ...PLATFORM_HEADERS,
+      ...(installId ? { "X-Aura-Install": installId } : {}),
       ...init?.headers,
       Authorization: `Bearer ${idToken}`,
     },
@@ -248,6 +262,9 @@ export class WebAuthError extends Error {
 export type WebAuthStartResult = {
   code: string;
   expiresInSeconds: number;
+  /** Shown on this screen and typed into the browser page, so a sign-in link sent
+   * by someone else cannot finish into their computer. Null from an older backend. */
+  matchCode: string | null;
 };
 
 /** Requests a fresh web-auth session code to embed in the browser URL. */
@@ -282,11 +299,12 @@ export async function startWebAuth(): Promise<WebAuthStartResult> {
     throw new WebAuthError("other", webAuthCopy.otherFailure);
   }
 
-  const data = (await response.json()) as { code?: string; expires_in_seconds?: number };
+  const data = (await response.json()) as { code?: string; expires_in_seconds?: number; match_code?: unknown };
   if (!data.code || !data.expires_in_seconds) {
     throw new WebAuthError("other", webAuthCopy.otherFailure);
   }
-  return { code: data.code, expiresInSeconds: data.expires_in_seconds };
+  const matchCode = typeof data.match_code === "string" && data.match_code ? data.match_code : null;
+  return { code: data.code, expiresInSeconds: data.expires_in_seconds, matchCode };
 }
 
 export type WebAuthStatusResult =

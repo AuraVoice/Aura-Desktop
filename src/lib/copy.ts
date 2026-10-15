@@ -16,7 +16,9 @@ export const createEventUrl = "https://calendar.google.com/calendar/u/0/r/evente
 export const consent = {
   heading: "Before we get started",
   body: "Aura Desktop uses your voice to power Buddy. Your screen is shared only when you attach it in text chat, turn on Screen Sight, or start Guide Mode. Aura also detects your configured voice shortcut to start or end voice, without storing or transmitting keyboard input. By continuing, you agree to Aura's Privacy Policy and Terms of Service, including the desktop addendum covering screen sight, global shortcuts, and telemetry.",
-  ageLabel: "I confirm I am 18 years of age or older",
+  // Matches the Terms (auravoiceapp.com/terms): 13 or older, or the local age of
+  // digital consent. The backend's minimum is 13 and it has a 13 to 17 band.
+  ageLabel: "I confirm I am at least 13 years old, or the minimum age of digital consent where I live",
   privacyLabel: "Privacy Policy",
   termsLabel: "Terms of Service",
   accept: "I agree, continue",
@@ -332,11 +334,13 @@ export const subscription = {
   upgradeWaiting: "Waiting for payment...",
   upgraded: "You're upgraded",
   upgradeFailed: "Try again",
-  trialBannerBody: "Everything paid is unlocked while we're in beta. You'll pick a plan only when it ends.",
+  trialBannerBody: "Your trial unlocks everything in Pro. Pick a plan any time and your trial days carry over.",
   trialBannerCta: "See plans",
   trialBannerDismiss: "Dismiss",
   voiceCapReached: "You've used today's free voice minutes. They reset tomorrow.",
-  voiceCapUpgradeTooltip: "Upgrade for unlimited voice",
+  voiceCapUpgradeTooltip: "Upgrade for more voice time",
+  // The daily fair-use ceiling on trial and paid plans (juno-backend services/fair_use.py).
+  voiceFairUseReached: "You've reached today's voice limit for your plan. It resets tomorrow.",
 } as const;
 
 export const meetingTicker = {

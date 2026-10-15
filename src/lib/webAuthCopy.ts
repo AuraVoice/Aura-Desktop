@@ -14,4 +14,14 @@ export const webAuthCopy = {
   network: "Couldn't reach Aura. Check your connection and try again.",
   timeout: "That took too long. Check your connection and try again.",
   tryAgain: "Try again",
+  matchCodeLabel: "Your code",
+  matchCodeHint: "When your browser asks for it, type this code there.",
+  matchCodeMismatch:
+    "The code typed in the browser didn't match this one, so the sign-in was stopped. Start again and type the code shown here.",
 } as const;
+
+/** The match code as people read it: "K7Q4MP" -> "K7Q-4MP". */
+export function formatMatchCode(code: string): string {
+  const clean = code.trim().toUpperCase();
+  return clean.length === 6 ? `${clean.slice(0, 3)}-${clean.slice(3)}` : clean;
+}

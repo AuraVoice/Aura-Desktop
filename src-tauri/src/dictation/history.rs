@@ -1333,6 +1333,32 @@ pub fn retain_only_for_session(app: &AppHandle, uid: Option<String>) {
     });
 }
 
+/// Account deletion only (`security::purge_local_account_data`): erases every
+/// dictation of this one account with its audio clips, plus its share ledger,
+/// deletion queue, counters and quota pause. Unlike Clear history it queues no
+/// remote deletion and drops the queued ones: the server's copies go with the
+/// account itself (juno-backend's DELETE /account), and no request signed by
+/// this account can succeed any more. Never call it from a session boundary.
+/// Rows first, files last, the same order as `dictation_history_clear`.
+pub fn purge_uid(app: &AppHandle, uid: &str) -> Result<(), String> {
+    let conn = open(app)?;
+    let doomed = clip_paths(&conn, Some(uid))?;
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    for table in ["transcripts", "share_deletions", "share_stats", "share_quota_pause", "share_uploaded"] {
+        tx.execute(&format!("DELETE FROM {table} WHERE uid = ?1"), params![uid])
+            .map_err(|e| e.to_string())?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    remove_clips(app, &doomed);
+    // remove_clips is best-effort, so say how many clips are still on disk.
+    let dir = dictation_dir(app)?;
+    let left = doomed.iter().filter(|relative| dir.join(relative).exists()).count();
+    if left > 0 {
+        return Err(format!("{left} audio clip(s) could not be deleted"));
+    }
+    Ok(())
+}
+
 // ----------------------------------------------------------------- exports
 
 /// Writes a decrypted copy into the user's Downloads folder and returns its

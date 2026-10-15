@@ -98,6 +98,9 @@ export const OPERATOR_TASK_CHECKIN = "operator-task-checkin";
 // JS-originated (no Rust twin)
 export const START_VOICE_REQUESTED = "start-voice-requested";
 export const DESKTOP_ONBOARDING_COMPLETED = "desktop-onboarding-completed";
+/** Heartbeat from the dashboard while its welcome tour is on screen, so the overlay
+ * keeps its voice shortcut quiet only for as long as the tour can actually be seen. */
+export const DESKTOP_ONBOARDING_TOUR_ON_SCREEN = "desktop-onboarding-tour-on-screen";
 export const DESKTOP_NOTIFICATION_LOCAL = "desktop-notification-local";
 export const TELEMETRY_CONSENT_CHANGED = "telemetry-consent-changed";
 /** The dashboard's "Ask Aura" on a meeting: hands the overlay a text file to

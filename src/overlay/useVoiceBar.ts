@@ -15,7 +15,12 @@ import { isOnline, OfflineError } from "../lib/connectivity";
 import { logError, logInfo } from "../lib/log";
 import { trackEvent } from "../lib/analytics";
 import { normalizedErrorCode } from "../lib/acquisitionAnalytics";
-import { micCaptureFailedCode, voiceCapReachedCode, voiceErrorMessageForCode } from "../lib/voiceErrorCopy";
+import {
+  micCaptureFailedCode,
+  voiceCapReachedCode,
+  voiceErrorMessageForCode,
+  voiceFairUseReachedCode,
+} from "../lib/voiceErrorCopy";
 import { decodeOpenSettings } from "../lib/clientControl";
 import { openSettingsRoute } from "../lib/dashboardWindow";
 import { shouldArmInitialAgentSilenceWatchdog } from "./voiceSessionTiming";
@@ -74,6 +79,7 @@ const NON_RETRYABLE_CODES = new Set<string>([
   "agent_join_timeout",
   "voice_start_failed",
   voiceCapReachedCode,
+  voiceFairUseReachedCode,
 ]);
 
 // Direct port of `_mapAgentState` - the agent reports its own state via a
@@ -767,9 +773,10 @@ export function useVoiceBar() {
           return;
         }
         if (err instanceof VoiceCapError) {
-          // Free-tier daily cap: a known state, not a failure. The code is
-          // non-retryable, so this shows the capped message and stays put.
-          enterErrorState(voiceCapReachedCode);
+          // A daily cap (Free's minutes, or a plan's fair-use ceiling): a known
+          // state, not a failure. Non-retryable, so this shows its message and
+          // stays put.
+          enterErrorState(err.code);
           return;
         }
         if (err instanceof OfflineError) {

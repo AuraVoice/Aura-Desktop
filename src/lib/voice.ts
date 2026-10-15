@@ -2,7 +2,7 @@ import { authFetch } from "./api";
 import { chatConversationId, postTextHandoff } from "./chatConversation";
 import { advertiseManifest } from "./desktopCapabilities";
 import { outputMuted } from "./outputMode";
-import { voiceCapReachedCode } from "./voiceErrorCopy";
+import { voiceCapReachedCode, voiceFairUseReachedCode } from "./voiceErrorCopy";
 
 export interface VoiceTokenResponse {
   token: string;
@@ -20,10 +20,14 @@ export type VoiceSessionMode = "standard" | "guide" | "onboarding";
 // AuthRequiredError), and infra layers can emit bare 429s of their own.
 export class VoiceCapError extends Error {
   secondsUntilReset: number | null;
+  /** voiceCapReachedCode (Free's 10 minutes) or voiceFairUseReachedCode (a plan's
+   * daily fair-use ceiling); each has its own copy. */
+  code: string;
 
-  constructor(secondsUntilReset: number | null) {
-    super("Voice token denied: daily free-tier cap reached");
+  constructor(code: string, secondsUntilReset: number | null) {
+    super(`Voice token denied: ${code}`);
     this.name = "VoiceCapError";
+    this.code = code;
     this.secondsUntilReset = secondsUntilReset;
   }
 }
@@ -33,9 +37,10 @@ export class VoiceCapError extends Error {
 async function parseCapDenial(response: Response): Promise<VoiceCapError | null> {
   try {
     const body = (await response.json()) as { detail?: { code?: unknown; seconds_until_reset?: unknown } };
-    if (body?.detail?.code !== voiceCapReachedCode) return null;
-    const seconds = body.detail.seconds_until_reset;
-    return new VoiceCapError(typeof seconds === "number" ? seconds : null);
+    const code = body?.detail?.code;
+    if (code !== voiceCapReachedCode && code !== voiceFairUseReachedCode) return null;
+    const seconds = body.detail?.seconds_until_reset;
+    return new VoiceCapError(code, typeof seconds === "number" ? seconds : null);
   } catch {
     return null;
   }

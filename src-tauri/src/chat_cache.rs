@@ -339,3 +339,13 @@ pub fn retain_only_for_session(app: &AppHandle, uid: Option<String>) {
         }
     });
 }
+
+/// Account deletion only (`security::purge_local_account_data`): drops every
+/// cached message of this one account. Never call it from a session boundary.
+/// Blocking, for `spawn_blocking`.
+pub fn purge_uid(app: &AppHandle, uid: &str) -> Result<(), String> {
+    let conn = open(app)?;
+    conn.execute("DELETE FROM messages WHERE uid = ?1", params![uid])
+        .map_err(|e| e.to_string())?;
+    Ok(())
+}

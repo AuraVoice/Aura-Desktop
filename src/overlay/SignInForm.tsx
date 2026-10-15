@@ -10,6 +10,7 @@ import { pairingCodeLength, pairingErrorCopy } from "../lib/pairingCopy";
 import { logError } from "../lib/log";
 import { beginDesktopSignIn } from "../lib/acquisitionAnalytics";
 import { useWebAuthSignIn } from "./useWebAuthSignIn";
+import { WebAuthMatchCode } from "./WebAuthMatchCode";
 import "./SignInForm.css";
 
 export type Mode = "pairing" | "email" | "google";
@@ -210,6 +211,9 @@ export function SignInForm({
             webAuth.state.phase === "waiting" ||
             webAuth.state.phase === "signing_in") && (
             <>
+              {webAuth.state.phase === "waiting" && webAuth.state.matchCode && (
+                <WebAuthMatchCode code={webAuth.state.matchCode} />
+              )}
               <p className="sign-in-prompt">
                 {webAuth.state.phase === "opening" ? webAuthCopy.opening : webAuthCopy.waiting}
               </p>
@@ -239,7 +243,9 @@ export function SignInForm({
                     ? webAuthCopy.cancelled
                     : webAuth.state.reason === "popup_blocked"
                       ? webAuthCopy.popupBlocked
-                      : webAuthCopy.otherFailure}
+                      : webAuth.state.reason === "match_code_mismatch"
+                        ? webAuthCopy.matchCodeMismatch
+                        : webAuthCopy.otherFailure}
               </p>
               <div className="sign-in-actions">
                 <button type="button" className="sign-in-submit" onClick={() => void webAuth.start()}>

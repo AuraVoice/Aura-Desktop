@@ -61,7 +61,7 @@ pub mod history;
 pub mod share;
 mod hud;
 pub(crate) mod insert;
-mod usage;
+pub(crate) mod usage;
 mod keystore;
 pub mod polish;
 pub mod edits;

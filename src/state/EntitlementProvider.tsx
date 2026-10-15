@@ -17,6 +17,8 @@ const UNRESOLVED: EntitlementState = {
   billingManageable: null,
   isTrialing: false,
   isPurchased: false,
+  checkoutAvailable: null,
+  trialDeniedReason: null,
   checkout: { phase: "idle" },
   startCheckout: () => {},
   cancelCheckout: () => {},

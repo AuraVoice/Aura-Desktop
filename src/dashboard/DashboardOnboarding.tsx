@@ -7,7 +7,7 @@ import { ProfileSetupStep } from "../overlay/ProfileSetupStep";
 import { PrivacySetupStep } from "../overlay/PrivacySetupStep";
 import { VoiceSetupStep } from "../overlay/VoiceSetupStep";
 import { useVoiceBar } from "../overlay/useVoiceBar";
-import { useOnboardingTail } from "../overlay/useOnboardingTail";
+import { useAnnounceTourOnScreen, useOnboardingTail } from "../overlay/useOnboardingTail";
 import { useDashboardUser } from "./useDashboardUser";
 import { AccountOnboarding, type AccountOnboardingState } from "./AccountOnboarding";
 import { logError } from "../lib/log";
@@ -31,6 +31,7 @@ function DashboardTail({
   onFinish: () => void;
 }) {
   const voice = useVoiceBar();
+  useAnnounceTourOnScreen();
   type DashboardTailStep = "profile" | "tour" | "privacy" | "voice" | "demo";
   const initialStepRef = useRef<DashboardTailStep>(needsProfile ? "profile" : "tour");
   const [step, setStep] = useState<DashboardTailStep>(initialStepRef.current);

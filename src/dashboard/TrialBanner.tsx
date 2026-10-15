@@ -69,7 +69,7 @@ export function TrialBanner({ uid }: { uid: string }) {
         <span>{copy.trialBannerBody}</span>
       </div>
       <div className="db-trial-banner-actions">
-        <button type="button" className="db-trial-banner-primary" onClick={() => navigate("/billing")}>
+        <button type="button" className="db-trial-banner-primary" onClick={() => navigate("/billing?plans=1")}>
           {copy.trialBannerCta}
         </button>
         <button type="button" className="db-trial-banner-dismiss" onClick={dismiss}>

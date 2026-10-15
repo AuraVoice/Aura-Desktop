@@ -2766,3 +2766,58 @@ Justification: the defect is a listener lifetime in the plugin, so it is fixed o
 only import point rather than by teaching every call site not to abort a finished request.
 Streams still stop on abort because the wrapper errors its body the moment the signal fires.
 ================================================================================
+2026-10-15: Leaving the welcome tour early left the voice shortcut dead on every launch
+Problem: anyone who signed in, then closed the dashboard or quit before the last step of the
+welcome tour, found the double-tap voice shortcut doing nothing, launch after launch.
+Issue: OverlayRoot suppressed the notch gesture while useOnboardingTail's status was "active",
+and that status only cleared when the tour's final step wrote the seen flag. "Not finished" was
+being used as "on screen", so the suppression meant for the tour outlived the tour itself.
+Solution: the dashboard tour sends a heartbeat (desktop-onboarding-tour-on-screen) every 2 s
+while it is mounted and its window is visible; the overlay suppresses only within 5 s of the
+last one, and only while the tail is still unfinished.
+Justification: a flag set by the dashboard could not be cleared by a window that was destroyed
+rather than unmounted, which is the same bug again. A heartbeat simply stops, so a closed,
+hidden or crashed dashboard gives the shortcut back within seconds.
+================================================================================
+2026-10-15: Deleting an account never cancelled its paid plan
+Problem: found in the pre-launch audit. DELETE /account removed the user's data and their
+Firebase sign-in but did nothing about a live Dodo subscription, so a deleted account would keep
+being billed with no account left to manage billing from. Harmless only because nobody could pay
+from the app yet; shipping in-app checkout would have made it real.
+Issue: account.py deleted users/{uid} (entitlement included) without reading it first, and the
+billing service had no cancel call at all.
+Solution: account.py reads the entitlement first; a web plan that would still charge is
+cancelled with PATCH /subscriptions/{id} {status: cancelled} before anything is deleted, and a
+failed cancel deletes nothing (502 subscription_cancel_failed). An App Store plan cannot be
+cancelled from the server, so the response says so and the desktop tells the user how.
+Justification: deletion is irreversible and billing is not, so the order must be cancel, then
+delete. A retry after a failed cancel is safe because nothing has moved yet.
+================================================================================
+2026-10-15: A free trial was unlimited Pro, for every new Google account
+Problem: the pre-launch audit found no ceiling on what one account could spend. A new account's
+45-day trial resolves as Pro, and every per-user limit (25 chats, 10 minutes of voice) applied
+to Free alone, so a trial could run chat at the top effort, unlimited voice, interview
+transcription credentials and Swarm, and a new email reset all of it. Chat and voice had no
+project-wide cap either.
+Issue: limits were modelled as "what Free does not get" rather than "what any one account may
+spend", so trial and paid had nothing.
+Solution: services/fair_use.py, one per-tier daily table (LLM spend, voice seconds, credential
+mints) read against counters that already existed (the cost ledger, the daily voice doc), checked
+by chat, the voice worker and token, interview routes, the realtime mint and Swarm admission.
+Ceilings sit above every real day in the 2026-10-15 data. Plus one trial per desktop install.
+Justification: one table over existing meters cannot drift the way per-feature counters would,
+and ceilings set from real use never touch a normal user while bounding the worst case.
+================================================================================
+2026-10-15: A web page read in a chat turn could steer a memory or calendar write
+Problem: voice refused a write in the same turn as an untrusted read (web_surf), but chat did not:
+CHAT_UNTRUSTED_CONNECTOR_READS listed connectors and meetings, never web_surf, reason_step or an
+attached file. A page Buddy read in chat could make it store_memory or create_calendar_event.
+Issue: the two lists were kept by hand and drifted; chat's was only ever extended for connectors.
+Solution: tool_executor adds CHAT_UNTRUSTED_WEB_READS (web_surf, and reason_step, which fetches
+pages internally) and treats an attached file as untrusted from the start of the turn, with copy
+that says where the text came from. Separately, Swarm's fixed <untrusted> tags, which page text
+could close right beside the binding <user_answer> blocks, now share one per-prompt nonce
+(services/prompt_fence.py), and meeting transcripts are fenced the same way.
+Justification: the class is "third-party words in this turn's context reach a write that persists
+or reaches someone else"; each surface's list must name every source in that class.
+================================================================================

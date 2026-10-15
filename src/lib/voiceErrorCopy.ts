@@ -10,6 +10,9 @@ export const micCaptureFailedCode = "mic_capture_failed";
 // cuts a live call at the cap - and both must render this exact copy. Port to
 // voice_error_copy.dart when backend Phase 1 ships.
 export const voiceCapReachedCode = "voice_cap_reached";
+// Trial and paid plans' daily fair-use ceiling. Same two routes in, no upgrade
+// offer: most people who reach it already have the plan.
+export const voiceFairUseReachedCode = "fair_use_reached";
 
 const CODE_MESSAGES: Record<string, string> = {
   agent_join_timeout: "Buddy's taking too long to pick up. Give it another tap?",
@@ -26,6 +29,7 @@ const CODE_MESSAGES: Record<string, string> = {
   [micCaptureFailedCode]:
     "Couldn't access your mic. Check it's plugged in and allowed in Settings, then try again.",
   [voiceCapReachedCode]: subscription.voiceCapReached,
+  [voiceFairUseReachedCode]: subscription.voiceFairUseReached,
 };
 
 const DEFAULT_MESSAGE = "Something went sideways with the call. Tap to try again?";

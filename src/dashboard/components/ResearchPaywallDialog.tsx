@@ -32,7 +32,7 @@ export function ResearchPaywallDialog({
   // the settings one instead of handing the user cleanly to Plans.
   const seePlans = () => {
     onClose();
-    navigate("/billing");
+    navigate("/billing?plans=1");
   };
 
   // `title` is what gives the dialog its aria-label, so it is passed even though the

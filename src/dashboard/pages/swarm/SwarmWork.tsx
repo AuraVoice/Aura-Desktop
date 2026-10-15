@@ -938,6 +938,8 @@ const ROUND_SKIP_COPY: Record<string, string> = {
   manager_paused: "paused",
   manager_not_found: "no longer exists",
   wallet_exhausted: "budget used up today",
+  fair_use_reached: "you reached today's fair-use limit",
+  meter_unavailable: "Aura could not check today's usage",
   models_unset: "Swarm is not set up yet",
   model_unpriced: "Swarm is not set up yet",
   model_unsupported: "Swarm is not set up yet",

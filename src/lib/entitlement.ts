@@ -29,6 +29,11 @@ export interface Entitlement {
   /** Whether Manage billing has a billing account to open. Null when the
    * backend predates the field, which keeps the old behaviour (show it). */
   billingManageable: boolean | null;
+  /** Whether a checkout can actually be created right now (Dodo configured). */
+  checkoutAvailable: boolean | null;
+  /** "install_trial_used" when this computer already used the free trial with
+   * another account, so this one started on Free. Null otherwise. */
+  trialDeniedReason: string | null;
   raw: unknown;
 }
 
@@ -63,6 +68,9 @@ export function parseEntitlement(json: unknown): Entitlement | null {
     trialEndDate: typeof obj.trial_end_date === "string" ? obj.trial_end_date : null,
     cancelAtPeriodEnd: obj.cancel_at_period_end === true,
     billingManageable: typeof obj.billing_manageable === "boolean" ? obj.billing_manageable : null,
+    checkoutAvailable: typeof obj.checkout_available === "boolean" ? obj.checkout_available : null,
+    trialDeniedReason:
+      typeof obj.trial_denied_reason === "string" && obj.trial_denied_reason ? obj.trial_denied_reason : null,
     raw: json,
   };
 }
@@ -82,9 +90,34 @@ export async function fetchEntitlement(): Promise<Entitlement> {
   return parsed;
 }
 
+/** Why POST /billing/checkout refused, from the backend's `error` field, so the
+ * Plans dialog says the real cause. Only checkout_failed and unavailable are
+ * worth a retry. */
+export type CheckoutFailure =
+  | "already_subscribed"
+  | "billing_not_configured"
+  | "entitlement_unavailable"
+  | "checkout_failed"
+  | "unavailable";
+
+export class CheckoutError extends Error {
+  constructor(readonly reason: CheckoutFailure, status: number) {
+    super(`postCheckout failed: ${status} ${reason}`);
+    this.name = "CheckoutError";
+  }
+}
+
+const CHECKOUT_FAILURES: readonly string[] = [
+  "already_subscribed",
+  "billing_not_configured",
+  "entitlement_unavailable",
+  "checkout_failed",
+];
+
 /** POST /billing/checkout: returns the Dodo hosted-checkout URL to open in the
  * system browser. The backend binds the caller's uid into the session metadata,
- * so paying on the web unlocks this desktop (and the phone) together. */
+ * so paying on the web unlocks this desktop (and the phone) together. During a
+ * trial the remaining days carry over, so the first charge lands when it ends. */
 export async function postCheckout(tier: CheckoutTier, period: CheckoutPeriod): Promise<string> {
   const response = await authFetchWithTimeout(
     "/billing/checkout",
@@ -96,13 +129,81 @@ export async function postCheckout(tier: CheckoutTier, period: CheckoutPeriod): 
     CHECKOUT_TIMEOUT_MS,
   );
   if (!response.ok) {
-    throw new Error(`postCheckout failed: ${response.status}`);
+    const body = (await response.json().catch(() => null)) as { error?: unknown } | null;
+    const code = typeof body?.error === "string" ? body.error : "";
+    const reason = (CHECKOUT_FAILURES.includes(code) ? code : "unavailable") as CheckoutFailure;
+    throw new CheckoutError(reason, response.status);
   }
   const data = (await response.json()) as { checkout_url?: string };
   if (!data.checkout_url) {
     throw new Error("postCheckout: response missing checkout_url");
   }
   return data.checkout_url;
+}
+
+/** One purchasable plan, priced by Dodo (the merchant of record), so a card can
+ * never show a price other than the one charged. */
+export interface PlanOption {
+  tier: CheckoutTier;
+  period: CheckoutPeriod;
+  /** In the currency's smallest unit (cents for USD), after the product's discount. */
+  priceMinor: number;
+  currency: string;
+}
+
+export interface PlanCatalog {
+  plans: PlanOption[];
+  /** Days a purchase now would carry over before its first charge; null when the
+   * backend could not read the account's trial. */
+  trialDaysRemaining: number | null;
+  trialEndDate: string | null;
+}
+
+/** Why GET /billing/plans refused. */
+export type PlanCatalogFailure = "billing_not_configured" | "catalog_unavailable" | "unavailable";
+
+export class PlanCatalogError extends Error {
+  constructor(readonly reason: PlanCatalogFailure, status: number) {
+    super(`fetchPlans failed: ${status} ${reason}`);
+    this.name = "PlanCatalogError";
+  }
+}
+
+/** GET /billing/plans: the plans the Plans dialog offers. Throws PlanCatalogError. */
+export async function fetchPlans(): Promise<PlanCatalog> {
+  const response = await authFetchWithTimeout("/billing/plans", undefined, FETCH_TIMEOUT_MS);
+  const body = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+  if (!response.ok || !body) {
+    const code = typeof body?.error === "string" ? body.error : "";
+    const reason: PlanCatalogFailure =
+      code === "billing_not_configured" || code === "catalog_unavailable" ? code : "unavailable";
+    throw new PlanCatalogError(reason, response.status);
+  }
+  const plans: PlanOption[] = [];
+  for (const item of Array.isArray(body.plans) ? body.plans : []) {
+    const row = item as Record<string, unknown>;
+    const tier = row.tier;
+    const period = row.period;
+    const priceMinor = row.price_minor;
+    if (
+      (tier === "companion" || tier === "pro") &&
+      (period === "monthly" || period === "yearly") &&
+      typeof priceMinor === "number" && priceMinor > 0
+    ) {
+      plans.push({
+        tier,
+        period,
+        priceMinor,
+        currency: typeof row.currency === "string" ? row.currency : "USD",
+      });
+    }
+  }
+  if (plans.length === 0) throw new PlanCatalogError("catalog_unavailable", response.status);
+  return {
+    plans,
+    trialDaysRemaining: typeof body.trial_days_remaining === "number" ? body.trial_days_remaining : null,
+    trialEndDate: typeof body.trial_end_date === "string" ? body.trial_end_date : null,
+  };
 }
 
 /** Why GET /billing/portal refused, from the backend's `error` field. Each one

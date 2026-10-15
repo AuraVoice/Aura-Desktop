@@ -267,6 +267,11 @@ pub fn request_local_deletion(
     Ok(())
 }
 
+/// Account deletion only, through `meeting::purge_uid`.
+pub fn purge_owner(app: &AppHandle, owner_uid: &str) -> Result<(), String> {
+    store(app)?.purge_owner(owner_uid)
+}
+
 pub fn export_bundle(
     app: &AppHandle,
     owner_uid: &str,

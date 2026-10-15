@@ -592,6 +592,19 @@ pub fn retain_only_for_session(app: &AppHandle, uid: Option<&str>) {
     }
 }
 
+/// Account deletion only (`security::purge_local_account_data`): drops every
+/// manager's rows, tombstones included, and every sweep cursor of this one
+/// account. Never call it from a session boundary.
+pub fn purge_uid(app: &AppHandle, uid: &str) -> Result<(), String> {
+    let conn = open(app)?;
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM rows WHERE uid = ?1", params![uid])
+        .map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM cursors WHERE uid = ?1", params![uid])
+        .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())
+}
+
 // ---- ISO 8601 helpers (no chrono in this crate) ----
 
 fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {

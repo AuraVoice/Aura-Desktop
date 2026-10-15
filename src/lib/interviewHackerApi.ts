@@ -768,7 +768,9 @@ export async function streamInterviewPrep({
   return collected.prep;
 }
 
-const BRIEF_FAILURE_REASONS = ["too_large", "timed_out", "invalid_output", "unavailable", "invalid"] as const;
+const BRIEF_FAILURE_REASONS = [
+  "too_large", "timed_out", "invalid_output", "unavailable", "invalid", "fair_use_reached",
+] as const;
 export type InterviewBriefFailureReason = (typeof BRIEF_FAILURE_REASONS)[number] | "unknown";
 
 function briefFailureReason(value: unknown): InterviewBriefFailureReason {

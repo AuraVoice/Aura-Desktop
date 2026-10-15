@@ -107,6 +107,23 @@ fn record(app: &AppHandle, uid: &str, words: u64) -> Result<(), String> {
         .map_err(|error| format!("could not save dictation usage: {error}"))
 }
 
+/// Account deletion only (`security::purge_local_account_data`): drops this one
+/// account's hourly counts. Never call it from a session boundary.
+pub fn purge_uid(app: &AppHandle, uid: &str) -> Result<(), String> {
+    let _guard = usage_lock()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let store = app
+        .store(USAGE_STORE)
+        .map_err(|error| format!("could not open the dictation usage store: {error}"))?;
+    if !store.delete(store_key(uid)) {
+        return Ok(());
+    }
+    store
+        .save()
+        .map_err(|error| format!("could not save dictation usage: {error}"))
+}
+
 pub fn entries(app: &AppHandle, uid: &str) -> Result<Vec<DictationUsageEntry>, String> {
     let _guard = usage_lock()
         .lock()

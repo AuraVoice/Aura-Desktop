@@ -3,9 +3,11 @@ import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { AuthRequiredError, routeToDashboardForExpiredSession } from "../lib/api";
 import {
+  CheckoutError,
   fetchEntitlement,
   parseEntitlement,
   postCheckout,
+  type CheckoutFailure,
   type CheckoutPeriod,
   type CheckoutTier,
   type Entitlement,
@@ -37,10 +39,18 @@ interface CachedEntitlementResult {
 
 export type CheckoutPhase =
   | { phase: "idle" }
-  | { phase: "opening" }
-  | { phase: "polling" }
+  | { phase: "opening"; tier: CheckoutTier }
+  | { phase: "polling"; tier: CheckoutTier }
   | { phase: "upgraded" }
-  | { phase: "error" };
+  /** `reason` is the backend's cause, or "open_failed" when the browser would not open. */
+  | { phase: "error"; reason: CheckoutFailure | "open_failed" };
+
+/** A paid tier that is live right now. A lapsed doc keeps its paid `tier` with
+ * status "expired", which is exactly what must not read as purchased. */
+function isLivePaid(entitlement: Entitlement | null): boolean {
+  if (!entitlement || entitlement.tier === "free") return false;
+  return entitlement.status === "active" || entitlement.status === "gracePeriod";
+}
 
 export interface EntitlementState {
   loaded: boolean;
@@ -60,9 +70,11 @@ export interface EntitlementState {
    * plan (a granted plan); null when it has not said. */
   billingManageable: boolean | null;
   isTrialing: boolean;
-  /** The purchased tier is paid (not merely trial-derived pro): drives the
-   * "show Upgrade" vs "show plan only" split in the UI. */
+  /** The purchased tier is paid AND live (not trial-derived pro, not lapsed):
+   * drives the "show Upgrade" vs "show plan only" split in the UI. */
   isPurchased: boolean;
+  checkoutAvailable: boolean | null;
+  trialDeniedReason: string | null;
   checkout: CheckoutPhase;
   startCheckout: (tier: CheckoutTier, period: CheckoutPeriod) => void;
   cancelCheckout: () => void;
@@ -108,6 +120,7 @@ export function useEntitlement({
   const entitlementRef = useRef<Entitlement | null>(null);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const deadlineRef = useRef<number | null>(null);
+  const requestedTierRef = useRef<CheckoutTier | null>(null);
 
   const setEntitlementSafely = useCallback((next: Entitlement | null) => {
     entitlementRef.current = next;
@@ -210,9 +223,12 @@ export function useEntitlement({
       return;
     }
     const fetched = await fetchAndCache();
-    if (fetched && fetched.tier !== "free") {
+    // The tier asked for, and live. "Anything but free" read a Companion account
+    // buying Pro as upgraded before the payment even started.
+    if (fetched && fetched.tier === requestedTierRef.current && isLivePaid(fetched)) {
       logInfo("useEntitlement: checkout", `upgrade detected, tier=${fetched.tier}`);
       trackEvent("desktop_checkout_upgraded", { tier: fetched.tier });
+      requestedTierRef.current = null;
       setCheckoutSafely({ phase: "upgraded" });
       return;
     }
@@ -222,7 +238,8 @@ export function useEntitlement({
   const startCheckout = useCallback(
     async (tier: CheckoutTier, period: CheckoutPeriod) => {
       clearPoll();
-      setCheckoutSafely({ phase: "opening" });
+      requestedTierRef.current = tier;
+      setCheckoutSafely({ phase: "opening", tier });
       trackEvent("desktop_checkout_started", { tier, period });
 
       let url: string;
@@ -235,7 +252,7 @@ export function useEntitlement({
           return;
         }
         logError("useEntitlement: postCheckout", err);
-        setCheckoutSafely({ phase: "error" });
+        setCheckoutSafely({ phase: "error", reason: err instanceof CheckoutError ? err.reason : "unavailable" });
         return;
       }
 
@@ -243,12 +260,12 @@ export function useEntitlement({
         await openUrl(url);
       } catch (err) {
         logError("useEntitlement: openUrl checkout", err);
-        setCheckoutSafely({ phase: "error" });
+        setCheckoutSafely({ phase: "error", reason: "open_failed" });
         return;
       }
 
       deadlineRef.current = Date.now() + POLL_DEADLINE_MS;
-      setCheckoutSafely({ phase: "polling" });
+      setCheckoutSafely({ phase: "polling", tier });
       pollTimerRef.current = setTimeout(() => void pollUpgrade(), POLL_INITIAL_DELAY_MS);
     },
     [clearPoll, pollUpgrade, setCheckoutSafely],
@@ -302,7 +319,9 @@ export function useEntitlement({
     cancelAtPeriodEnd: entitlement?.cancelAtPeriodEnd ?? false,
     billingManageable: entitlement?.billingManageable ?? null,
     isTrialing: entitlement?.status === "trialing",
-    isPurchased: (entitlement?.tier ?? "free") !== "free",
+    isPurchased: isLivePaid(entitlement),
+    checkoutAvailable: entitlement?.checkoutAvailable ?? null,
+    trialDeniedReason: entitlement?.trialDeniedReason ?? null,
     checkout,
     startCheckout: (tier, period) => void startCheckout(tier, period),
     cancelCheckout,

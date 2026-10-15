@@ -472,6 +472,7 @@ pub fn run() {
             security::set_auth_state,
             security::toggle_screen_sight_armed,
             security::screen_sight_armed,
+            security::purge_local_account_data,
             guide::arm_guide,
             guide::disarm_guide,
             guide::guide_armed_state,

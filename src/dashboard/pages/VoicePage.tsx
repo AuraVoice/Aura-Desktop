@@ -16,7 +16,7 @@ export function VoicePage() {
       >
         <VoicePickerCards
           surface="settings"
-          onLockedVoice={() => navigate("/billing")}
+          onLockedVoice={() => navigate("/billing?plans=1")}
         />
       </SettingsSection>
     </SettingsPageLayout>

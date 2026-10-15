@@ -532,5 +532,96 @@ impl Store {
         )?;
         tx.commit().map_err(db_error)
     }
+
+    /// Account deletion only: erases every capture run this account owns, with
+    /// its jobs, segments and audit events, and each run's whole directory
+    /// (segment files, sidecars, temporaries), quarantined copies included.
+    /// Unlike `request_local_deletion` it leaves no receipt, since the account
+    /// a receipt would name is what is being erased. Files go first: a failure
+    /// then leaves rows pointing at missing audio, never sidecars that
+    /// `reconcile` would import back on the next launch.
+    pub fn purge_owner(&self, owner_uid: &str) -> Result<(), String> {
+        self.initialize()?;
+        let mut conn = self.connect()?;
+        let runs: Vec<(String, String)> = {
+            let mut statement = conn
+                .prepare("SELECT capture_run_id, meeting_id FROM capture_runs WHERE owner_uid=?1")
+                .map_err(db_error)?;
+            let rows = statement
+                .query_map(params![owner_uid], |row| Ok((row.get(0)?, row.get(1)?)))
+                .map_err(db_error)?;
+            rows.map(|row| row.map_err(db_error)).collect::<Result<Vec<_>, String>>()?
+        };
+        let meetings: Vec<String> = {
+            let mut statement = conn
+                .prepare("SELECT meeting_id FROM meetings WHERE owner_uid=?1")
+                .map_err(db_error)?;
+            let rows = statement
+                .query_map(params![owner_uid], |row| row.get(0))
+                .map_err(db_error)?;
+            rows.map(|row| row.map_err(db_error)).collect::<Result<Vec<_>, String>>()?
+        };
+
+        // Quarantine keeps a moved file at quarantine/<stamp>/<its old path>.
+        let mut roots = vec![self.root.clone()];
+        if let Ok(entries) = std::fs::read_dir(self.root.join("quarantine")) {
+            roots.extend(entries.flatten().map(|entry| entry.path()).filter(|path| path.is_dir()));
+        }
+        let mut failed = 0u32;
+        for (capture_run_id, meeting_id) in &runs {
+            // Never a path built from an id that could climb out of the root.
+            if validate_identity(meeting_id, "meeting id").is_err()
+                || validate_identity(capture_run_id, "capture run id").is_err()
+            {
+                failed += 1;
+                continue;
+            }
+            for root in &roots {
+                match std::fs::remove_dir_all(root.join(meeting_id).join(capture_run_id)) {
+                    Ok(()) => {}
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(_) => failed += 1,
+                }
+            }
+        }
+        for meeting_id in &meetings {
+            if validate_identity(meeting_id, "meeting id").is_ok() {
+                // Only succeeds once the meeting's folder is empty.
+                for root in &roots {
+                    let _ = std::fs::remove_dir(root.join(meeting_id));
+                }
+            }
+        }
+        if failed > 0 {
+            return Err(format!("{failed} recording folder(s) could not be deleted"));
+        }
+
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
+            .map_err(db_error)?;
+        for (capture_run_id, _) in &runs {
+            for table in ["upload_jobs", "completion_jobs", "retention_jobs", "segments", "audit_events"] {
+                tx.execute(
+                    &format!("DELETE FROM {table} WHERE capture_run_id=?1"),
+                    params![capture_run_id],
+                )
+                .map_err(db_error)?;
+            }
+        }
+        tx.execute("DELETE FROM capture_runs WHERE owner_uid=?1", params![owner_uid])
+            .map_err(db_error)?;
+        for meeting_id in &meetings {
+            tx.execute("DELETE FROM audit_events WHERE meeting_id=?1", params![meeting_id])
+                .map_err(db_error)?;
+        }
+        tx.execute("DELETE FROM meetings WHERE owner_uid=?1", params![owner_uid])
+            .map_err(db_error)?;
+        tx.execute(
+            "DELETE FROM audit_events WHERE actor_identity_hash=?1",
+            params![actor_hash(owner_uid)],
+        )
+        .map_err(db_error)?;
+        tx.commit().map_err(db_error)
+    }
 }
 

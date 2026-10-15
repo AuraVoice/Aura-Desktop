@@ -256,6 +256,27 @@ pub fn request_stop(app: &AppHandle, reason: &str) {
     }
 }
 
+/// Account deletion only (`security::purge_local_account_data`): stops this
+/// account's live capture and waits for it to finalize, so no segment lands
+/// after the erase, then erases every capture the account owns. Never call it
+/// from a session boundary. Blocking, for `spawn_blocking`.
+pub fn purge_uid(app: &AppHandle, uid: &str) -> Result<(), String> {
+    require_runtime_owner(app)?;
+    let live = app.try_state::<MeetingCaptureHandle>().and_then(|handle| {
+        let guard = handle.0.lock().unwrap_or_else(|e| e.into_inner());
+        guard
+            .as_ref()
+            .filter(|active| active.owner_uid == uid)
+            .map(|active| (active.stop.clone(), active.finalization.clone()))
+    });
+    if let Some((stop, finalization)) = live {
+        info!("meeting: native stop requested (account deletion)");
+        let _ = stop.send("signed_out".to_string());
+        finalization.wait(Duration::from_secs(45))?;
+    }
+    queue::purge_owner(app, uid)
+}
+
 /// Cancels every native Zoom/Teams watcher. Authorization revocation calls
 /// this directly so a hung webview cannot leave background window scans
 /// running under the next account.

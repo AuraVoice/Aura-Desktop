@@ -20,6 +20,7 @@ import { logError, logInfo } from "../lib/log";
 import { webAuthCopy } from "../lib/webAuthCopy";
 import iconUrl from "../assets/icons/Aura-Icon.png";
 import { SignInForm } from "./SignInForm";
+import { WebAuthMatchCode } from "./WebAuthMatchCode";
 import { useWebAuthSignIn } from "./useWebAuthSignIn";
 import "./OnboardingFlow.css";
 
@@ -175,7 +176,9 @@ export function OnboardingFlow() {
           ? webAuthCopy.cancelled
           : webAuth.state.reason === "popup_blocked"
             ? webAuthCopy.popupBlocked
-            : webAuthCopy.otherFailure
+            : webAuth.state.reason === "match_code_mismatch"
+              ? webAuthCopy.matchCodeMismatch
+              : webAuthCopy.otherFailure
       : webAuth.state.phase === "error"
         ? webAuthCopy.otherFailure
         : null;
@@ -244,7 +247,10 @@ export function OnboardingFlow() {
         )}
 
         {webAuth.state.phase === "waiting" && (
-          <p className="onboarding-status" role="status">{webAuthCopy.waiting}</p>
+          <>
+            {webAuth.state.matchCode && <WebAuthMatchCode code={webAuth.state.matchCode} />}
+            <p className="onboarding-status" role="status">{webAuthCopy.waiting}</p>
+          </>
         )}
         {(consentError || authError) && (
           <p className="onboarding-error" role="alert">{consentError ?? authError}</p>

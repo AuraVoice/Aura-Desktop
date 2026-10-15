@@ -339,3 +339,16 @@ pub fn retain_only_for_session(app: &AppHandle, uid: Option<String>) {
         }
     });
 }
+
+/// Account deletion only (`security::purge_local_account_data`): drops every
+/// preparation of this one account and its meta row. Never call it from a
+/// session boundary. Blocking, for `spawn_blocking`.
+pub fn purge_uid(app: &AppHandle, uid: &str) -> Result<(), String> {
+    let conn = open(app)?;
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM preparations WHERE uid = ?1", params![uid])
+        .map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM workspace_meta WHERE uid = ?1", params![uid])
+        .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())
+}

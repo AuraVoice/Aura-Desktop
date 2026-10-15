@@ -20,7 +20,9 @@ const DEADLINE_BUFFER_SECONDS = 20;
 export type WebAuthState =
   | { phase: "idle" }
   | { phase: "opening" }
-  | { phase: "waiting" }
+  /** `matchCode` is shown on screen for the browser page to ask for (null from an
+   * older backend that issues none). */
+  | { phase: "waiting"; matchCode: string | null }
   | { phase: "signing_in" }
   | { phase: "expired" }
   | { phase: "failed"; reason: string }
@@ -125,7 +127,7 @@ export function useWebAuthSignIn() {
     signInAttemptRef.current = beginDesktopSignIn("google");
     safeSetState({ phase: "opening" });
     try {
-      const { code, expiresInSeconds } = await startWebAuth();
+      const { code, expiresInSeconds, matchCode } = await startWebAuth();
       codeRef.current = code;
       deadlineMsRef.current = Date.now() + (expiresInSeconds + DEADLINE_BUFFER_SECONDS) * 1000;
 
@@ -134,7 +136,7 @@ export function useWebAuthSignIn() {
       logInfo("useWebAuthSignIn: start", `browser opened, session expires in ${expiresInSeconds}s`);
       trackEvent("web_auth_started", { expiresInSeconds });
 
-      safeSetState({ phase: "waiting" });
+      safeSetState({ phase: "waiting", matchCode });
       pollTimerRef.current = setTimeout(poll, INITIAL_POLL_DELAY_MS);
     } catch (err) {
       logError("useWebAuthSignIn: start failed", err);

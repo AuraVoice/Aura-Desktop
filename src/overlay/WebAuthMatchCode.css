@@ -1,0 +1,30 @@
+/* Shown on the light dashboard welcome and on the dark overlay sign-in, so it
+   takes its colors from the surrounding text rather than either theme. */
+.web-auth-match-code {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0;
+  padding: 14px 18px;
+  border: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  border-radius: 18px;
+  text-align: center;
+}
+.web-auth-match-code-label {
+  font-size: 12px;
+  opacity: 0.7;
+}
+.web-auth-match-code-value {
+  font-family: var(--font-title, system-ui, sans-serif);
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  font-variant-numeric: tabular-nums;
+  user-select: all;
+}
+.web-auth-match-code-hint {
+  font-size: 12.5px;
+  line-height: 1.45;
+  opacity: 0.75;
+}
