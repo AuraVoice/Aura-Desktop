@@ -20,6 +20,7 @@ was started and read like commit subjects rather than release notes.
 
 ### Added
 
+- Pay yearly: switch the Plans window to Annual to see Companion at $182 a year and Pro at $470 a year, about 20% less than paying monthly.
 - On a voice call, ask Buddy to start or stop recording a meeting. Buddy tells you if the recording could not start, for example when this month's recordings are used up.
 - See plans opens a Plans window with Companion and Pro, their live monthly prices, and what each includes. You can buy from the app, even during your trial: your remaining trial days carry over and you aren't charged until they end.
 - Delete your account from Settings > Account. It cancels a plan you bought on the website, deletes your data on Aura's servers and this account's data on this computer, then signs you out.
