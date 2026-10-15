@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { fetch } from "@tauri-apps/plugin-http";
+import { fetch } from "./httpFetch";
 import { hostname } from "@tauri-apps/plugin-os";
 import packageJson from "../../package.json";
 import { auth } from "./firebase";

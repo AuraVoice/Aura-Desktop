@@ -1,4 +1,4 @@
-import { fetch as tauriFetch } from "@tauri-apps/plugin-http";
+import { fetch as tauriFetch } from "./httpFetch";
 import { authFetch } from "./api";
 import { logError, logInfo } from "./log";
 

@@ -2748,3 +2748,21 @@ only honest signal of intent. Latching the composer flag with it keeps the origi
 chat_slot_open covered: a hold that starts in the chat stays in the chat even if the OS
 foreground drifts off the overlay while the user speaks.
 ================================================================================
+2026-10-15: 319 "The resource id N is invalid." rejections from plugin-http aborts
+Problem: installed builds logged hundreds of unhandled rejections, "The resource id N is invalid.",
+in bursts of 2 to 12, 307 from the dashboard and 12 from the overlay, burying real errors.
+Issue: @tauri-apps/plugin-http 2.5.9 adds `signal.addEventListener('abort', () => void
+abort())` per request and never removes it, plus a second listener that drops the body. Rust
+frees the request id at fetch_send and the body id when the body ends, so any abort AFTER a
+request finished calls fetch_cancel and fetch_cancel_body on dead ids, and `void` leaves both
+rejections unhandled. Our cleanups abort unconditionally (SwarmPage, MeetingsPage search), and
+usePollWalk and realtime.ts share ONE signal across every request of a poll walk or a call, so
+a single abort replayed a cancel for every request that signal ever carried.
+Solution: src/lib/httpFetch.ts wraps the plugin's fetch for api.ts and realtime.ts. The plugin
+gets its own signal that follows the caller's only until headers arrive; after that a caller's
+abort cancels a wrapping body stream (the plugin's valid drop path), and the caller's signal
+is released when the body ends.
+Justification: the defect is a listener lifetime in the plugin, so it is fixed once at the
+only import point rather than by teaching every call site not to abort a finished request.
+Streams still stop on abort because the wrapper errors its body the moment the signal fires.
+================================================================================
