@@ -294,6 +294,13 @@
   font-weight: 650;
 }
 
+.db-interview-saved-note {
+  width: min(100%, 1100px);
+  margin: 0;
+  color: var(--db-text-mute);
+  font-size: 12.5px;
+}
+
 .db-interview-history-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));

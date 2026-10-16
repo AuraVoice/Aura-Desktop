@@ -23,6 +23,7 @@ was started and read like commit subjects rather than release notes.
 ### Fixed
 
 - Claude Code, Cursor and Codex can now connect with the setup line from Settings > Connectors. Before, the key was lost on the way and every connection was refused as unauthorized.
+- Interview research, briefs and prep rooms are saved to this device the moment they're ready, and the page says so. Leaving the Interview page, for example through a Swarm link, no longer loses a brief you just built.
 
 ## [0.20.3] - 2026-10-15
 

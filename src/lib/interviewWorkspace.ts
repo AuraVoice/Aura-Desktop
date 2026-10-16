@@ -513,6 +513,39 @@ export async function saveInterviewWorkspace(uid: string, value: InterviewWorksp
   return operation;
 }
 
+const IMMEDIATE_SAVE_TIMEOUT_MS = 10_000;
+
+/** Writes one record right now, outside the debounced autosave and its queue,
+ * for the moments that cost a model call: research back, brief back, prep room
+ * back, brief confirmed. The store refuses to move a row backwards, so a later
+ * autosave carrying an older copy cannot undo this write. Rejects with a reason
+ * the page can show, including a write that never answers. */
+export async function saveInterviewRecordNow(uid: string, record: InterviewWorkspaceRecord): Promise<void> {
+  const hash = hashRecord(record);
+  if (savedHashes.get(hashKey(uid, record.interviewId)) === hash) return;
+  let timer: number | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = window.setTimeout(
+      () => reject(new Error("the save did not finish within 10 seconds")),
+      IMMEDIATE_SAVE_TIMEOUT_MS,
+    );
+  });
+  try {
+    await Promise.race([
+      invoke("interview_prep_upsert", {
+        uid,
+        interviewId: record.interviewId,
+        updatedAtMs: record.updatedAtMs,
+        body: record,
+      }),
+      timeout,
+    ]);
+  } finally {
+    window.clearTimeout(timer);
+  }
+  savedHashes.set(hashKey(uid, record.interviewId), hash);
+}
+
 export async function clearInterviewWorkspace(uid: string): Promise<void> {
   const operation = mutationQueue.then(async () => {
     const stored = await invoke<PreparationWorkspace>("interview_prep_load", { uid });

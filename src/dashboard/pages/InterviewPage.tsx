@@ -65,11 +65,12 @@ import { readText as readClipboardText } from "@tauri-apps/plugin-clipboard-mana
 import { clearInterviewBrief, loadInterviewBrief, storeInterviewBrief } from "../../lib/interviewBriefMemory";
 import {
   loadInterviewWorkspace,
+  saveInterviewRecordNow,
   saveInterviewWorkspace,
   type InterviewWorkspace,
   type InterviewWorkspaceRecord,
 } from "../../lib/interviewWorkspace";
-import { logError } from "../../lib/log";
+import { logError, logInfo } from "../../lib/log";
 import { useAuth } from "../../state/AuthProvider";
 import "./InterviewPage.css";
 
@@ -1418,6 +1419,9 @@ export function InterviewPage() {
   const briefAbortRef = useRef<AbortController | null>(null);
   const briefCloseTimer = useRef<number | null>(null);
   const persistenceRevision = useRef(0);
+  const persistenceReadyRef = useRef(false);
+  const savedMilestones = useRef(new Map<string, string>());
+  const [savedInterviewId, setSavedInterviewId] = useState<string | null>(null);
   const workspaceRef = useRef(workspace);
   workspaceRef.current = workspace;
   const currentInterview = workspace.interviews.find(
@@ -1538,6 +1542,45 @@ export function InterviewPage() {
     }, 300);
     return () => window.clearTimeout(timer);
   }, [persistenceReady, uid, workspace]);
+
+  // Leaving the page must not drop a change still inside the 300 ms debounce.
+  persistenceReadyRef.current = persistenceReady;
+  useEffect(() => () => {
+    if (uid && persistenceReadyRef.current) void saveInterviewWorkspace(uid, workspaceRef.current);
+  }, [uid]);
+
+  // Research, the brief and the prep room each cost a model call, so they go to
+  // disk the moment they land rather than through the debounced autosave above,
+  // which waits for the restore to finish. A brief that only ever lived in
+  // memory vanished when a Swarm link reopened this page (2026-10-16).
+  useEffect(() => {
+    if (!uid) return;
+    for (const interview of workspace.interviews) {
+      if (!interview.research && !interview.draftBrief) continue;
+      const milestone = [
+        interview.research?.researchedAt ?? "",
+        interview.draftBrief?.briefId ?? "",
+        interview.draftBrief?.reviewedAtMs ?? "",
+        interview.prepRoom?.prepId ?? "",
+      ].join("|");
+      const key = `${uid}|${interview.interviewId}`;
+      if (savedMilestones.current.get(key) === milestone) continue;
+      savedMilestones.current.set(key, milestone);
+      void saveInterviewRecordNow(uid, interview).then(() => {
+        logInfo(
+          "InterviewPage: preparation saved",
+          `interview=${interview.interviewId} brief=${interview.draftBrief?.briefId ?? "none"} prep=${interview.prepRoom?.prepId ?? "none"}`,
+        );
+        setSavedInterviewId(interview.interviewId);
+      }, (err) => {
+        // Forget the milestone so the next change to this interview tries again.
+        savedMilestones.current.delete(key);
+        logError("InterviewPage: save preparation now", err);
+        const reason = err instanceof Error ? err.message : String(err);
+        setError(`Aura could not save this preparation on this device (${reason}). Keep this page open and try again.`);
+      });
+    }
+  }, [uid, workspace.interviews]);
 
   useEffect(() => () => {
     researchAbortRef.current?.abort();
@@ -2077,6 +2120,10 @@ export function InterviewPage() {
             </button>
           </div>
         </section>
+      )}
+
+      {brief && savedInterviewId === currentInterview.interviewId && (
+        <p className="db-interview-saved-note">Saved on this device</p>
       )}
 
       {brief && (

@@ -209,7 +209,10 @@ pub async fn interview_prep_load(app: AppHandle, uid: String) -> Result<Preparat
         .map_err(|e| e.to_string())?
 }
 
-/// Writes one record, replacing any previous version of it. Idempotent.
+/// Writes one record, replacing any previous version of it. Idempotent, and
+/// never moves a row backwards: the page writes a finished brief immediately,
+/// outside the debounced autosave, so an older autosave landing after it must
+/// not put the brief-less version back.
 #[tauri::command]
 pub async fn interview_prep_upsert(
     app: AppHandle,
@@ -234,7 +237,8 @@ pub async fn interview_prep_upsert(
              VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT (uid, interview_id) DO UPDATE SET
                 updated_at_ms = excluded.updated_at_ms,
-                body = excluded.body",
+                body = excluded.body
+             WHERE excluded.updated_at_ms >= preparations.updated_at_ms",
             params![uid, interview_id, updated_at_ms, sealed],
         )
         .map_err(|e| e.to_string())?;
