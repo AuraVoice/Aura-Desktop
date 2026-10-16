@@ -16,6 +16,8 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-10-16
+
 ### Added
 
 - Press and hold the dictation pill, or just drag it, to pick it up as the Aura icon, then drop it on any edge of the screen. The notch moves to the same edge.
