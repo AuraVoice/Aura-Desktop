@@ -1,6 +1,6 @@
 //! Tauri-facing facade over the SQLite meeting evidence store.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 
 pub use super::evidence_store::{
@@ -279,12 +279,8 @@ pub fn export_bundle(
     capture_run_id: &str,
     include_audio: bool,
     sanitized_log_lines: &[String],
+    destination_root: &Path,
 ) -> Result<ExportResult, String> {
-    let destination_root = app
-        .path()
-        .download_dir()
-        .map_err(|error| error.to_string())?
-        .join("Aura Recordings");
     let store = store(app)?;
     {
         let key = super::crypto::load_or_create_key(app)?;
@@ -293,7 +289,7 @@ pub fn export_bundle(
             meeting_id,
             capture_run_id,
             &ExportRequest {
-                destination_root: &destination_root,
+                destination_root,
                 include_audio,
                 sanitized_log_lines,
             },

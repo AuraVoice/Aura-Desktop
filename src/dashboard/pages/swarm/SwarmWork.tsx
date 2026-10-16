@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ComponentType, type ReactNode } from "react";
+import { ArrowUpRight } from "lucide-react";
 import {
   GitHubBrandIcon,
   GmailBrandIcon,
@@ -13,14 +14,14 @@ import {
   rejectPendingAction,
   type PendingAction,
 } from "../../../lib/pendingActions";
-import { openPath } from "@tauri-apps/plugin-opener";
-import { FORMAT_LABEL, saveDocumentDraft, type DocumentFormat } from "../../../lib/swarmDocumentFile";
+import { DocumentArtifact } from "./SwarmDocument";
 import type { SwarmManager, SwarmMessage, SwarmRoundMember, SwarmRoundView, SwarmRoutine, SwarmRoutineInput, SwarmSessionView } from "../../../lib/swarmApi";
 import { list, mapRoundMember, num, numbers, proposeDraft, str, strings, SwarmRequestError, TERMINAL_SESSION_STATES } from "../../../lib/swarmApi";
 import { ScheduleProposal, type ScheduleOffer } from "./SwarmManagerTools";
 import { SwarmOrb } from "./SwarmOrb";
 import type { OrbState, OrbTone } from "./swarmOrbRenderer";
-import { SWARM_CAPABILITIES, thinkingLine } from "./swarmThinking";
+import { SWARM_CAPABILITIES, stepTarget, thinkingLine, type StepSource } from "./swarmThinking";
+import { SiteIcon } from "../../components/SiteIcon";
 import { SwarmMarkdown } from "./SwarmMarkdown";
 import {
   BlockGlyph,
@@ -150,9 +151,12 @@ function ledgerRows(steps: SwarmMessage[]): LedgerRow[] {
   for (const step of steps) {
     const capability = str(step.data.capability_id);
     const prev = rows[rows.length - 1];
+    // A step that names its query or page is its own row: folding it would hide the name.
     if (
       prev &&
       capability &&
+      !stepTarget(step) &&
+      !stepTarget(prev.step) &&
       step.data.ok === true &&
       prev.step.data.ok === true &&
       str(prev.step.data.capability_id) === capability &&
@@ -176,20 +180,76 @@ function Ledger({
   managerId,
   granted,
   onGrant,
+  onOpenSource,
 }: {
   steps: SwarmMessage[];
   managerId: string;
   granted: string[];
   onGrant: (managerId: string, connector: string) => void;
+  onOpenSource: (url: string) => void;
 }) {
   const rows = ledgerRows(steps);
   if (rows.length === 0) return null;
   return (
     <ul className="db-swarm-ledger">
       {rows.map((row) => (
-        <StepRow key={row.key} row={row} managerId={managerId} granted={granted} onGrant={onGrant} />
+        <StepRow key={row.key} row={row} managerId={managerId} granted={granted} onGrant={onGrant} onOpenSource={onOpenSource} />
       ))}
     </ul>
+  );
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+/** A page with no title reads as its host and path, never a raw https:// string. */
+function pageLabel(url: string, title: string): string {
+  if (title.trim()) return title.trim();
+  try {
+    const parsed = new URL(url);
+    const path = decodeURIComponent(parsed.pathname).replace(/\/$/, "");
+    return `${parsed.hostname.replace(/^www\./, "")}${path}`;
+  } catch {
+    return url;
+  }
+}
+
+/** One web page the run touched: its favicon, its title, its site. Opens in the browser. */
+function SourceLine({ url, title, onOpen, icon = true }: { url: string; title: string; onOpen: (url: string) => void; icon?: boolean }) {
+  const host = hostOf(url);
+  return (
+    <button type="button" className="db-swarm-srcline" title={url} onClick={() => onOpen(url)}>
+      {icon && <SiteIcon host={host} size={16} radius="4px" />}
+      <span className="db-swarm-srcline-title">{pageLabel(url, title)}</span>
+      {host && <span className="db-swarm-srcline-host">{host}</span>}
+      <ArrowUpRight size={13} className="db-swarm-srcline-go" aria-hidden="true" />
+    </button>
+  );
+}
+
+/** How many results a search shows before "Show N more". */
+const RESULTS_SHOWN = 3;
+
+function SearchResults({ results, onOpen }: { results: StepSource[]; onOpen: (url: string) => void }) {
+  const [all, setAll] = useState(false);
+  const shown = all ? results : results.slice(0, RESULTS_SHOWN);
+  const rest = results.length - shown.length;
+  return (
+    <div className="db-swarm-results">
+      {shown.map((source) => (
+        <SourceLine key={source.id || source.url} url={source.url} title={source.title} onOpen={onOpen} />
+      ))}
+      {rest > 0 && (
+        <button type="button" className="db-swarm-results-more" onClick={() => setAll(true)}>
+          Show {rest} more
+        </button>
+      )}
+    </div>
   );
 }
 
@@ -204,6 +264,7 @@ function WorkFold({
   endedAt,
   granted,
   onGrant,
+  onOpenSource,
   settle,
 }: {
   managerId: string;
@@ -213,6 +274,7 @@ function WorkFold({
   endedAt: number;
   granted: string[];
   onGrant: (managerId: string, connector: string) => void;
+  onOpenSource: (url: string) => void;
   settle: boolean;
 }) {
   const [open, setOpen] = useState(settle);
@@ -223,6 +285,7 @@ function WorkFold({
   }, [settle]);
   if (!plan && steps.length === 0) return null;
   const summary = workSummary(steps);
+  const missed = steps.filter((step) => str(step.data.capability_id) === "web.read" && step.data.ok === false).length;
   const took = workDuration(startedAt, endedAt);
   return (
     <div className={`db-swarm-fold${open ? " is-open" : ""}`}>
@@ -231,12 +294,13 @@ function WorkFold({
         <span>
           {summary || "Worked on this"}
           {took && <span className="db-swarm-fold-sum"> in {took}</span>}
+          {missed > 0 && <span className="db-swarm-fold-miss"> · {missed} page{missed === 1 ? "" : "s"} couldn't be read</span>}
         </span>
       </button>
       {open && (
         <div className="db-swarm-fold-body">
           {plan?.text && <SwarmMarkdown className="db-swarm-run-plan" text={plan.text} />}
-          <Ledger steps={steps} managerId={managerId} granted={granted} onGrant={onGrant} />
+          <Ledger steps={steps} managerId={managerId} granted={granted} onGrant={onGrant} onOpenSource={onOpenSource} />
         </div>
       )}
     </div>
@@ -263,7 +327,7 @@ export function WorkingEmbed({
   session,
   reported,
   stopping,
-  onStop,
+  onOpenSource,
 }: {
   /** When the session's working message landed. */
   at: number;
@@ -278,8 +342,9 @@ export function WorkingEmbed({
   onGrant: (managerId: string, connector: string) => void;
   session: SwarmSessionView | undefined;
   reported: boolean;
+  /** Stop lives on the composer's send button (SwarmStream); this only shows it landing. */
   stopping: boolean;
-  onStop: () => void;
+  onOpenSource: (url: string) => void;
 }) {
   // Set once this card has rendered the run live, so its end settles open for a beat.
   const sawLive = useRef(false);
@@ -298,6 +363,7 @@ export function WorkingEmbed({
         endedAt={endedAt ? endedAt - waitedMs : 0}
         granted={granted}
         onGrant={onGrant}
+        onOpenSource={onOpenSource}
         settle={sawLive.current}
       />
     );
@@ -315,13 +381,8 @@ export function WorkingEmbed({
       <div className="db-swarm-run-head">
         <span className="db-swarm-run-now db-swarm-shimmer" aria-live="polite">{active}</span>
         {session && <Elapsed since={session.createdAt} />}
-        {session && (
-          <button type="button" className="db-swarm-run-stop" onClick={onStop} disabled={stopRequested}>
-            <HaltGlyph size={13} /> {stopRequested ? "Stopping" : "Stop"}
-          </button>
-        )}
       </div>
-      <Ledger steps={steps} managerId={managerId} granted={granted} onGrant={onGrant} />
+      <Ledger steps={steps} managerId={managerId} granted={granted} onGrant={onGrant} onOpenSource={onOpenSource} />
       {tasks.length > 1 && (
         <ul className="db-swarm-ledger is-lanes">
           {tasks.map((lane) => (
@@ -346,47 +407,96 @@ function StepRow({
   managerId,
   granted,
   onGrant,
+  onOpenSource,
 }: {
   row: LedgerRow;
   managerId: string;
   granted: string[];
   onGrant: (managerId: string, connector: string) => void;
+  onOpenSource: (url: string) => void;
 }) {
   const data = row.step.data;
   const capability = str(data.capability_id);
   const action = str(data.action);
   const ok = data.ok === true;
   const connector = str(data.connector);
-  const label = capability ? SWARM_CAPABILITIES[capability]?.done ?? "Used a tool" : action === "finish" ? "Finished its part" : "Step";
+  const target = stepTarget(row.step);
+  // A step that is not a tool call (a repeat, a nudge) says what happened in its own text.
+  const label = capability
+    ? SWARM_CAPABILITIES[capability]?.done ?? "Used a tool"
+    : action === "finish" ? "Finished its part" : row.step.text || "Changed approach";
   const sub = str(data.subagent_title);
   // The model's own "why" sits behind a hover, so the list stays one short line per row.
   const why = row.count === 1 ? str(data.why) || row.step.text : "";
   const gap = Boolean(capability) && !ok;
+  const gapLine = gap && str(data.gap_reason) && (
+    <span className="db-swarm-step-gap">
+      {str(data.gap_reason)}
+      {str(data.gap_code) === "connector_not_granted" && connector && !granted.includes(connector) && (
+        <button type="button" className="db-swarm-pill-btn is-small" onClick={() => onGrant(managerId, connector)}>
+          Grant {CONNECTOR_LABEL[connector] ?? connector}
+        </button>
+      )}
+    </span>
+  );
+  const via = sub && <span className="db-swarm-step-via">via {sub}</span>;
+
+  if (target?.kind === "read") {
+    // The page itself is the row: its favicon in the node, its title, its site.
+    return (
+      <li className={`db-swarm-step is-page${gap ? " is-gap" : ""}`} title={why || undefined}>
+        <span className="db-swarm-step-node" aria-hidden="true">
+          <SiteIcon host={hostOf(target.url)} size={16} radius="4px" />
+        </span>
+        <div className="db-swarm-step-body">
+          <span className="db-swarm-step-head">
+            <span className="db-swarm-step-verb">{gap ? "Couldn't read" : data.cached === true ? "Reread" : "Read"}</span>
+            <SourceLine url={target.url} title={target.title} onOpen={onOpenSource} icon={false} />
+            {via}
+          </span>
+          {gapLine}
+        </div>
+      </li>
+    );
+  }
+
+  if (target?.kind === "search") {
+    const found = num(data.sources_added) || target.results.length;
+    return (
+      <li className={`db-swarm-step is-search${gap ? " is-gap" : ""}`} title={why || undefined}>
+        <span className="db-swarm-step-node" aria-hidden="true"><CapabilityGlyph id={capability} size={14} /></span>
+        <div className="db-swarm-step-body">
+          <span className="db-swarm-step-head">
+            <span className="db-swarm-step-verb">Searched</span>
+            <span className="db-swarm-step-query">{target.query}</span>
+            {via}
+            <span className="db-swarm-step-meta">
+              {data.cached === true ? "searched already" : ok ? (found > 0 ? `${found} result${found === 1 ? "" : "s"}` : "nothing new") : ""}
+            </span>
+          </span>
+          {target.results.length > 0 && <SearchResults results={target.results} onOpen={onOpenSource} />}
+          {gapLine}
+        </div>
+      </li>
+    );
+  }
+
   return (
-    <li className={`db-swarm-step${gap ? " is-gap" : ""}`} title={why || undefined}>
+    <li className={`db-swarm-step${gap ? " is-gap" : ""}${capability ? "" : " is-note"}`} title={why || undefined}>
       <span className="db-swarm-step-node" aria-hidden="true">
-        {capability ? <CapabilityGlyph id={capability} size={13} /> : <TickGlyph size={12} />}
+        {capability ? <CapabilityGlyph id={capability} size={14} /> : <TickGlyph size={12} />}
       </span>
       <div className="db-swarm-step-body">
         <span className="db-swarm-step-head">
           <strong>{label}</strong>
           {row.count > 1 && <span className="db-swarm-step-count">×{row.count}</span>}
-          {sub && <span className="db-swarm-muted">via {sub}</span>}
+          {via}
           <span className="db-swarm-step-meta">
             {data.cached === true && <span>already read</span>}
             {row.added > 0 && <span>+{row.added} source{row.added === 1 ? "" : "s"}</span>}
           </span>
         </span>
-        {gap && str(data.gap_reason) && (
-          <span className="db-swarm-step-gap">
-            {str(data.gap_reason)}
-            {str(data.gap_code) === "connector_not_granted" && connector && !granted.includes(connector) && (
-              <button type="button" className="db-swarm-pill-btn is-small" onClick={() => onGrant(managerId, connector)}>
-                Grant {CONNECTOR_LABEL[connector] ?? connector}
-              </button>
-            )}
-          </span>
-        )}
+        {gapLine}
       </div>
     </li>
   );
@@ -408,6 +518,10 @@ export function QuestionEmbed({ message, open }: { message: SwarmMessage; open: 
 
 /** Why a run stopped short, from the session's stop_reason (runner.py _terminal_state_for
  * and the fallback paths). An unknown code adds nothing rather than a raw slug. */
+/** Gaps a report still lists: the ones the user can fix (grant or connect an account, or
+ * answer what it needed). Every other gap is a failed step, already shown in the trail. */
+const ACTIONABLE_GAPS: ReadonlySet<string> = new Set(["connector_not_granted", "connector_not_connected", "needs_input"]);
+
 const STOP_REASON_COPY: Record<string, string> = {
   missing_access: "Some accounts it needed are not connected to this manager.",
   no_progress: "It kept finding the same things, so it stopped.",
@@ -629,85 +743,6 @@ function DraftAction({
   );
 }
 
-const DOC_PREVIEW_CHARS = 700;
-const SAVE_FORMATS: DocumentFormat[] = ["docx", "pdf", "txt"];
-
-/** A document the manager wrote (a revised resume, a cover letter). It is saved on this
- * computer, never sent anywhere, so there is no approval step: the user reads it, can
- * edit it, and picks Word, PDF or text. The original file they attached is never touched. */
-function DocumentDraft({ draft }: { draft: Json }) {
-  const title = str(draft.title) || "Aura document";
-  const preferred = (SAVE_FORMATS as string[]).includes(str(draft.format)) ? (str(draft.format) as DocumentFormat) : "docx";
-  const formats = [preferred, ...SAVE_FORMATS.filter((f) => f !== preferred)];
-  const [text, setText] = useState(str(draft.body));
-  const [editing, setEditing] = useState(false);
-  const [expanded, setExpanded] = useState(false);
-  const [busy, setBusy] = useState<DocumentFormat | "">("");
-  const [saved, setSaved] = useState("");
-  const [error, setError] = useState("");
-  const long = text.length > DOC_PREVIEW_CHARS;
-
-  const save = async (format: DocumentFormat) => {
-    setBusy(format);
-    setError("");
-    try {
-      setSaved(await saveDocumentDraft(title, text, format));
-    } catch (err) {
-      setError(typeof err === "string" ? err : "Aura couldn't save that file. Try again in a moment.");
-    } finally {
-      setBusy("");
-    }
-  };
-
-  return (
-    <div className="db-swarm-doc">
-      <span className="db-swarm-doc-name">{title}</span>
-      {editing ? (
-        <textarea
-          className="db-swarm-doc-edit"
-          rows={Math.min(18, Math.max(6, text.split("\n").length + 1))}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-        />
-      ) : (
-        <p className={`db-swarm-doc-body${long && !expanded ? " is-clipped" : ""}`}>
-          {long && !expanded ? `${text.slice(0, DOC_PREVIEW_CHARS)}…` : text}
-        </p>
-      )}
-      <div className="db-swarm-act-row">
-        {formats.map((format, i) => (
-          <button
-            key={format}
-            type="button"
-            className={`db-swarm-pill-btn${i === 0 ? " is-primary" : ""}`}
-            disabled={busy !== "" || !text.trim()}
-            onClick={() => void save(format)}
-          >
-            {busy === format ? "Saving" : `Save as ${FORMAT_LABEL[format]}`}
-          </button>
-        ))}
-        <button type="button" className="db-swarm-pill-btn" onClick={() => setEditing((v) => !v)}>
-          {editing ? "Done editing" : "Edit"}
-        </button>
-        {long && !editing && (
-          <button type="button" className="db-swarm-pill-btn" onClick={() => setExpanded((v) => !v)}>
-            {expanded ? "Show less" : "Show all"}
-          </button>
-        )}
-      </div>
-      {saved && (
-        <div className="db-swarm-act-row">
-          <span className="db-swarm-muted">Saved to Downloads, Aura Documents.</span>
-          <button type="button" className="db-swarm-pill-btn" onClick={() => void openPath(saved).catch(() => setError("Aura couldn't open it. Find it in Downloads, Aura Documents."))}>
-            Open
-          </button>
-        </div>
-      )}
-      {error && <p className="db-swarm-note">{error}</p>}
-    </div>
-  );
-}
-
 /** The report. Every finding shows the sources it cites, a finding with none is marked
  * unsourced, and drafts are labelled as never sent. Gaps carry a Grant button when the
  * missing piece is a connector this manager was not given. */
@@ -742,7 +777,13 @@ export function ReportEmbed({
   const sources = new Map(list(data.sources).map((s) => [str(s.id), s]));
   const findings = list(report.findings);
   const drafts = list(report.drafts);
-  const gaps = list(report.gaps);
+  // A page that could not be read already sits in the run's trail above, beside the page
+  // itself; here are only the gaps the user can do something about.
+  const gaps = list(report.gaps).filter((g) => {
+    const code = str(g.code);
+    if (!ACTIONABLE_GAPS.has(code)) return false;
+    return !(code === "connector_not_granted" && granted.includes(str(g.connector)));
+  });
   const nextSteps = strings(report.next_steps);
   const question = (report.question && typeof report.question === "object" ? report.question : {}) as Json;
   const questionText = str(question.text);
@@ -756,7 +797,9 @@ export function ReportEmbed({
   // A report built with no model call (runner.py _fallback_report): its findings were
   // raw excerpt lines, so the sources it had are shown instead of prose that was never written.
   const fallback = report.fallback === true;
-  const stopCopy = state === "partial" || state === "failed" ? STOP_REASON_COPY[str(data.stop_reason)] ?? "" : "";
+  // "Some sources could not be read" is said once, on the run's fold line with a count.
+  const stopReason = str(data.stop_reason);
+  const stopCopy = (state === "partial" || state === "failed") && stopReason !== "incomplete" ? STOP_REASON_COPY[stopReason] ?? "" : "";
 
   // A source reads as what it is, never as "s3": the page's host for a web result, the
   // connector's own title (GitHub Aura-Desktop issues, Calendar) for a private read, which
@@ -777,7 +820,8 @@ export function ReportEmbed({
     }
     return url ? (
       <button key={ref} type="button" className="db-swarm-src" title={title} onClick={() => onOpenSource(url)}>
-        {label}
+        <SiteIcon host={label} size={14} />
+        <span className="db-swarm-src-label">{label}</span>
       </button>
     ) : (
       <span key={ref} className="db-swarm-src is-static" title={title}>{label}</span>
@@ -789,9 +833,10 @@ export function ReportEmbed({
 
   return (
     <section className={`db-swarm-report is-${state || "done"}`} aria-label="Report">
+      {/* Why a run stopped short belongs with how it went, above the answer, like the trail. */}
       {stopCopy && (
         <div className="db-swarm-report-status" role="note">
-          <SignalGlyph size={14} />
+          <SignalGlyph size={13} />
           <span>{stopCopy}</span>
         </div>
       )}
@@ -833,16 +878,19 @@ export function ReportEmbed({
           </span>
         )}
       </div>}
-      {drafts.map((d, i) => (
+      {drafts.map((d, i) => str(d.target) === "file" ? (
+        // A document is an artifact card of its own, not a draft waiting to be sent.
+        <DocumentArtifact key={i} draft={d} onOpenLink={onOpenSource} />
+      ) : (
         <article key={i} className={`db-swarm-draft-card${PUBLIC_TARGETS.has(str(d.target)) && actionable(d) ? " is-public" : ""}`}>
           <header className="db-swarm-draft-card-head">
             <span className="db-swarm-kicker">{DRAFT_KIND[str(d.kind)] ?? "Draft"}</span>
             {str(d.destination) && <span className="db-swarm-muted">to {str(d.destination)}</span>}
             <span className={`db-swarm-tag${actionable(d) ? " is-ask" : ""}`}>
-              {str(d.target) === "file" ? "Saved only on your computer" : actionable(d) ? "Needs your approval" : "Not sent"}
+              {actionable(d) ? "Needs your approval" : "Not sent"}
             </span>
           </header>
-          {str(d.target) === "file" ? <DocumentDraft draft={d} /> : <p className="db-swarm-draft-card-body">{str(d.body)}</p>}
+          <p className="db-swarm-draft-card-body">{str(d.body)}</p>
           {actionable(d) && message.sessionId && (
             <DraftAction
               sessionId={message.sessionId}
@@ -857,7 +905,7 @@ export function ReportEmbed({
         <div className="db-swarm-report-foot">
           {gaps.length > 0 && (
             <div className="db-swarm-report-line is-gap">
-              <span className="db-swarm-report-lead">Couldn't read</span>
+              <span className="db-swarm-report-lead">Needs you</span>
               {gaps.map((g, i) => {
                 const connector = str(g.connector);
                 return (

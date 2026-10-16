@@ -68,6 +68,7 @@ mod region;
 mod saved_images;
 mod screenshot;
 mod screenshot_store;
+mod save_dialog;
 mod sealed_store;
 mod security;
 mod sentry_setup;
@@ -413,6 +414,7 @@ pub fn run() {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .manage(OverlayStateHandle::default())
         .manage(hotkeys::HotkeyState::default())
         .manage(interview::InterviewHandle::default())
@@ -603,6 +605,7 @@ pub fn run() {
             interview::clear_interview_resume,
             interview::save_interview_prep,
             swarm_documents::save_swarm_document,
+            save_dialog::open_saved_file,
             swarm_memory::swarm_memory_recall,
             swarm_memory::swarm_memory_ingest,
             swarm_memory::swarm_memory_cursors,

@@ -907,10 +907,16 @@ pub async fn export_local_recording(
     meeting_id: String,
     capture_run_id: String,
     include_audio: bool,
-) -> Result<queue::ExportResult, String> {
+) -> Result<Option<queue::ExportResult>, String> {
     require_runtime_owner(&app)?;
     let ticket = crate::security::authorize(&app, crate::security::Operation::ReadSegment)?;
     let owner_uid = ticket.uid().to_string();
+    // The bundle is a folder of its own, made inside the folder the user picks.
+    let Some(destination_root) =
+        crate::save_dialog::ask_folder(&app, "Choose where to export the recording").await?
+    else {
+        return Ok(None);
+    };
     let blocking_app = app.clone();
     let result = tauri::async_runtime::spawn_blocking(move || {
         let logs = crate::logging::read_redacted_log_tail(&blocking_app, 200)
@@ -922,12 +928,15 @@ pub async fn export_local_recording(
             &capture_run_id,
             include_audio,
             &logs,
+            &destination_root,
         )
     })
     .await
     .map_err(|error| error.to_string())?;
     crate::security::recheck(&app, crate::security::Operation::ReadSegment, &ticket)?;
-    result
+    let exported = result?;
+    crate::save_dialog::allow_open(std::path::Path::new(&exported.path));
+    Ok(Some(exported))
 }
 
 #[tauri::command]

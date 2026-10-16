@@ -137,7 +137,7 @@ pub enum Operation {
     /// plus the one-time opt-in; deliberately NOT tied to a live voice call,
     /// because the task must outlive the call that started it.
     StartBrowserTask,
-    /// Write a document a Swarm manager drafted into Downloads/Aura Documents.
+    /// Write a document or export to a path the user picked in a Save As dialog.
     SaveDocument,
     /// Run commands, read the web, read, click and type in other applications'
     /// windows, and launch any installed app, for a desktop task the USER
@@ -343,7 +343,7 @@ impl SecurityState {
             | Operation::MarkMeetingAcked
             | Operation::StartJoinWatch
             | Operation::ReadLogs
-            // A file the user clicked Save on, written only under Downloads/Aura Documents.
+            // A file the user clicked Save on, written only where they chose in the Save As dialog.
             | Operation::SaveDocument
             // The Delete account flow, after the backend deleted the account.
             | Operation::PurgeAccountData => {}

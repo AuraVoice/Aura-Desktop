@@ -563,3 +563,18 @@
 :root[data-theme="dark"] .db-swarm-pill-btn.is-danger:hover {
   color: #2a0b07;
 }
+
+/* The Swarm document viewer is portaled out of .db-swarm, so its one literal colour needs a twin. */
+:root[data-theme="dark"] .db-doc-foot.is-error {
+  color: var(--dk-warning);
+}
+
+/* Dark is matte: the composer drops the light inset highlight and lift, and focus shows as
+   a slightly brighter hairline instead. */
+:root[data-theme="dark"] .db-swarm-compose-box {
+  box-shadow: none;
+}
+:root[data-theme="dark"] .db-swarm-compose-box:focus-within {
+  box-shadow: none;
+  border-color: var(--sw-accent-ring);
+}

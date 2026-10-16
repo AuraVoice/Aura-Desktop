@@ -148,11 +148,12 @@ export function PrepRoom({
 
   const download = async () => {
     try {
-      const { path } = await invoke<{ path: string }>("save_interview_prep", {
+      const saved = await invoke<{ path: string } | null>("save_interview_prep", {
         markdown: prepRoomMarkdown(company, meta, prep),
         company,
       });
-      flash(`Saved to ${path}`);
+      // Null is a cancelled Save As: nothing was written, so nothing to say.
+      if (saved) flash(`Saved to ${saved.path}`);
     } catch (err) {
       logError("PrepRoom: download", err);
       flash("Aura could not save the file. Copy it as Markdown instead.");

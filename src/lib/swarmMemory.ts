@@ -138,8 +138,9 @@ export function deleteManagerMemory(managerId: string): Promise<void> {
   return invoke("swarm_memory_delete_manager", { managerId });
 }
 
-export function exportMemory(managerId: string, title: string): Promise<{ path: string }> {
-  return invoke<{ path: string }>("swarm_memory_export", { managerId, title });
+/** Null when the Save As dialog was cancelled. */
+export function exportMemory(managerId: string, title: string): Promise<{ path: string } | null> {
+  return invoke<{ path: string } | null>("swarm_memory_export", { managerId, title });
 }
 
 export function importMemory(managerId: string, json: string): Promise<IngestSummary> {

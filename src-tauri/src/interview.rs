@@ -221,14 +221,14 @@ pub struct InterviewPrepExport {
     path: String,
 }
 
-/// Saves a prep room as Markdown, named for the company so several interviews in
-/// Downloads stay easy to tell apart.
+/// Saves a prep room as Markdown wherever the user picks, suggesting a name for the
+/// company so several interviews stay easy to tell apart.
 #[tauri::command]
 pub async fn save_interview_prep(
     app: AppHandle,
     markdown: String,
     company: String,
-) -> Result<InterviewPrepExport, String> {
+) -> Result<Option<InterviewPrepExport>, String> {
     let trimmed = markdown.trim();
     if trimmed.is_empty() || trimmed.len() > 64_000 {
         return Err("Interview prep is empty or too large.".to_string());
@@ -237,28 +237,17 @@ pub async fn save_interview_prep(
         &app,
         crate::security::Operation::StartInterviewHacker,
     )?;
-    let destination = app
-        .path()
-        .download_dir()
-        .map_err(|error| error.to_string())?
-        .join("Aura Interview Prep")
-        .join(format!("{}-prep-{}.md", file_slug(&company), crate::util::now_ms()));
-    let content = format!("{}\n", trimmed);
+    let suggested = format!("{}-prep.md", file_slug(&company));
+    let Some(destination) =
+        crate::save_dialog::ask_save_path(&app, &suggested, "Markdown", &["md"]).await?
+    else {
+        return Ok(None);
+    };
+    let content = format!("{}
+", trimmed);
     let output = destination.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let parent = output
-            .parent()
-            .ok_or("Interview prep path is invalid.".to_string())?;
-        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&output)
-            .map_err(|error| error.to_string())?;
-        use std::io::Write as _;
-        file.write_all(content.as_bytes())
-            .map_err(|error| error.to_string())?;
-        file.sync_all().map_err(|error| error.to_string())
+        crate::save_dialog::write_chosen(&output, content.as_bytes())
     })
     .await
     .map_err(|error| error.to_string())??;
@@ -267,9 +256,9 @@ pub async fn save_interview_prep(
         crate::security::Operation::StartInterviewHacker,
         &ticket,
     )?;
-    Ok(InterviewPrepExport {
+    Ok(Some(InterviewPrepExport {
         path: destination.to_string_lossy().to_string(),
-    })
+    }))
 }
 
 fn file_slug(value: &str) -> String {

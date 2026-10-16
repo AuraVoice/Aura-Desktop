@@ -25,6 +25,34 @@ export const SWARM_CAPABILITIES: Record<string, { done: string; doing: string }>
   "notion.recent": { done: "Checked Notion", doing: "Going through recent Notion pages" },
 };
 
+/** What a web step looked at (runner._step_target): the query and what it found, or the
+ * page it read. Steps from before the backend sent it, and every connector step, have
+ * none and render by their capability label alone. */
+export interface StepSource { id: string; url: string; title: string }
+export type StepTarget =
+  | { kind: "search"; query: string; results: StepSource[] }
+  | { kind: "read"; url: string; title: string };
+
+export function stepTarget(step: SwarmMessage): StepTarget | null {
+  const raw = step.data.target;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const target = raw as Record<string, unknown>;
+  const text = (key: string, from: Record<string, unknown> = target) => (typeof from[key] === "string" ? (from[key] as string) : "");
+  if (text("query")) {
+    const results = Array.isArray(target.results)
+      ? target.results.flatMap((item): StepSource[] => {
+          if (!item || typeof item !== "object") return [];
+          const source = item as Record<string, unknown>;
+          const url = text("url", source);
+          return url ? [{ id: text("id", source), url, title: text("title", source) }] : [];
+        })
+      : [];
+    return { kind: "search", query: text("query"), results };
+  }
+  if (text("url")) return { kind: "read", url: text("url"), title: text("title") };
+  return null;
+}
+
 const GOAL_MAX = 48;
 
 function shortGoal(goal: string): string {

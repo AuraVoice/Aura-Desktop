@@ -19,14 +19,20 @@ was started and read like commit subjects rather than release notes.
 ### Added
 
 - Press and hold the dictation pill, or just drag it, to pick it up as the Aura icon, then drop it on any edge of the screen. The notch moves to the same edge.
+- Every export asks where to save it: Swarm documents, meeting notes and transcripts, dictations, interview prep, a manager's memory, and recording bundles. A saved Swarm document also has Show in folder.
 
 ### Changed
 
 - The dictation pill is matte black instead of grey.
+- A Swarm manager's work names what it looked at: each web search shows its query and the pages it found, and each page it read shows its title and site icon. Click any of them to open it in your browser.
+- The Swarm message box has the same send button as chat, and while a manager is working that button becomes Stop. The box lifts with a soft shadow when you type instead of a grey outline.
+- Report sources show their site icons. Pages that couldn't be read are counted on the run's summary line and listed in its steps, so the report itself only lists what you can fix, like an account to grant.
+- A document a manager writes shows as a card with its name, a save button and Open. Open shows it as a formatted page you can also edit before saving as Word, PDF or text.
 - Each coding agent connection in Settings > Connectors is named with the time you made it, so you can tell which one to revoke.
 
 ### Fixed
 
+- The chat card you open with the shortcut no longer shows a shadow with square corners around its rounded edges.
 - Claude Code, Cursor and Codex can now connect with the setup line from Settings > Connectors. Before, the key was lost on the way and every connection was refused as unauthorized.
 - Interview research, briefs and prep rooms are saved to this device the moment they're ready, and the page says so. Leaving the Interview page, for example through a Swarm link, no longer loses a brief you just built.
 

@@ -2,8 +2,8 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Mic } from "lucide-react";
-import { openPath } from "@tauri-apps/plugin-opener";
 import { logError } from "../../lib/log";
+import { openSavedFile } from "../../lib/savedFiles";
 import {
   clearDictationHistory,
   deleteDictationEntry,
@@ -266,12 +266,12 @@ export function DictationPage() {
 
   async function runExport(
     entry: DictationHistoryEntry,
-    exporter: (uid: string, id: string) => Promise<string>,
+    exporter: (uid: string, id: string) => Promise<string | null>,
     failure: string,
   ) {
     if (!uid) return;
     setNotice(null);
-    let path: string;
+    let path: string | null;
     try {
       path = await exporter(uid, entry.id);
     } catch (err) {
@@ -279,11 +279,13 @@ export function DictationPage() {
       setNotice(failure);
       return;
     }
+    // A cancelled Save As is the user changing their mind, not a failure.
+    if (!path) return;
     // Writing the file and opening it are separate failures with separate
     // fixes. Collapsing them told the user the export failed when the file was
-    // sitting in Downloads the whole time, and only the opener scope refused.
+    // sitting where they saved it the whole time.
     try {
-      await openPath(path);
+      await openSavedFile(path);
     } catch (err) {
       logError("DictationPage: open export", err);
       setNotice(`Saved to ${path}, but Aura could not open it.`);

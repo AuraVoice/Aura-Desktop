@@ -1,18 +1,12 @@
 // Turns a Swarm document draft (markdown the report model wrote) into a real file on this
 // machine: Word through `docx`, PDF through `pdf-lib`, or plain text. Both libraries load
 // only when the user presses Save, so the dashboard bundle does not grow for anyone else.
-// The bytes go to save_swarm_document (swarm_documents.rs), which picks a name that never
-// overwrites anything in Downloads/Aura Documents.
+// The bytes go to save_swarm_document (swarm_documents.rs), which asks where to save them in
+// the operating system's Save As dialog.
 import { invoke } from "@tauri-apps/api/core";
 import { blobToBase64 } from "./chatAttachments";
 
 export type DocumentFormat = "docx" | "pdf" | "txt";
-
-export const FORMAT_LABEL: Record<DocumentFormat, string> = {
-  docx: "Word",
-  pdf: "PDF",
-  txt: "Text",
-};
 
 interface Run {
   text: string;
@@ -174,18 +168,19 @@ async function buildPdf(blocks: Block[]): Promise<Uint8Array> {
   return pdf.save();
 }
 
-/** Builds the file and writes it into Downloads/Aura Documents. Returns the saved path. */
-export async function saveDocumentDraft(title: string, markdown: string, format: DocumentFormat): Promise<string> {
+/** Builds the file and saves it where the user picks. Returns the saved path, or null when
+ *  the Save As dialog was cancelled. */
+export async function saveDocumentDraft(title: string, markdown: string, format: DocumentFormat): Promise<string | null> {
   const blocks = parseMarkdown(markdown);
   let blob: Blob;
   if (format === "docx") blob = await buildDocx(blocks);
   else if (format === "pdf") blob = new Blob([(await buildPdf(blocks)) as BlobPart], { type: "application/pdf" });
   else blob = new Blob([plainText(blocks)], { type: "text/plain" });
   const dataBase64 = await blobToBase64(blob);
-  const saved = await invoke<{ path: string }>("save_swarm_document", {
+  const saved = await invoke<{ path: string } | null>("save_swarm_document", {
     stem: title.trim() || "Aura document",
     extension: format,
     dataBase64,
   });
-  return saved.path;
+  return saved?.path ?? null;
 }

@@ -41,6 +41,8 @@ tauri-plugin-http = "2.5.9"
 tauri-plugin-autostart = "2.5.1"
 tauri-plugin-clipboard-manager = "2"
 tauri-plugin-notification = "2"
+# Save As for every export, opened from Rust (save_dialog.rs) so the webview never picks a path.
+tauri-plugin-dialog = "2"
 # time::sleep in updater.rs's re-check loop, plus rt/sync/macros for the
 # dictation ASR socket task (dictation/asr/deepgram.rs), which runs on tauri's
 # own async runtime and talks to the blocking dictation worker over channels.

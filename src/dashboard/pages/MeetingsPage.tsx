@@ -2,7 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode
 import { invoke } from "@tauri-apps/api/core";
 import { emitTo } from "@tauri-apps/api/event";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
-import { openPath } from "@tauri-apps/plugin-opener";
+import { openSavedFile, savedFolderName } from "../../lib/savedFiles";
 import { useSearchParams } from "react-router-dom";
 import {
   ArrowLeft,
@@ -981,6 +981,8 @@ function MeetingDetail({
           ? transcriptVtt(turns)
           : transcriptText(turns);
       const path = await saveMeetingFile(current.title || "Meeting notes", format, text);
+      // A cancelled Save As changes nothing and says nothing.
+      if (!path) return;
       setSaved({ path, format });
       trackEvent("meeting_exported", { format });
     } catch (err) {
@@ -1268,8 +1270,8 @@ function MeetingDetail({
                 onClick={() => {
                   const path = saved.path;
                   setSaved(null);
-                  void openPath(path).catch(() =>
-                    setStatus({ tone: "error", text: meetingNotes.openFailed("Downloads, Aura Documents") }),
+                  void openSavedFile(path).catch(() =>
+                    setStatus({ tone: "error", text: meetingNotes.openFailed(savedFolderName(path)) }),
                   );
                 }}
               >
@@ -1278,7 +1280,7 @@ function MeetingDetail({
             </>
           }
         >
-          <p>{meetingNotes.savedFile(fileName(saved.path), "Downloads, Aura Documents")}</p>
+          <p>{meetingNotes.savedFile(fileName(saved.path), savedFolderName(saved.path))}</p>
         </MeetingDialog>
       )}
 
@@ -1424,16 +1426,18 @@ function useLocalRecordingActions(
   const exportRecording = (recording: LocalRecording, includeAudio: boolean) =>
     run(async () => {
       try {
-        const result = await invoke<ExportResult>("export_local_recording", {
+        const result = await invoke<ExportResult | null>("export_local_recording", {
           meetingId: recording.meetingId,
           captureRunId: recording.captureRunId,
           includeAudio,
         });
+        // The folder picker was cancelled: nothing was exported.
+        if (!result) return;
         const done = includeAudio
           ? `Exported ${result.segmentCount} verified audio segment${result.segmentCount === 1 ? "" : "s"}`
           : "Exported a sanitized support bundle";
         try {
-          await openPath(result.path);
+          await openSavedFile(result.path);
           setNotice(`${done}.`);
         } catch (err) {
           logError("MeetingsPage: open exported local recording", err);

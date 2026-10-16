@@ -1,5 +1,8 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import type { SwarmDecision, SwarmDoc, SwarmManager, SwarmRoster, SwarmRoundView, SwarmRoutine, SwarmRoutineInput, SwarmSessionView } from "../../../lib/swarmApi";
+import { TERMINAL_SESSION_STATES } from "../../../lib/swarmApi";
+import { Paperclip, Send } from "lucide-react";
+import { StopSquareIcon } from "../../../overlay/icons";
 import { DOCUMENT_ACCEPT } from "../../../lib/documentText";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { IMAGE_ACCEPT, MAX_ATTACHMENTS } from "../../../lib/chatAttachments";
@@ -12,7 +15,6 @@ import {
   BuildGlyph,
   BurstGlyph,
   CellGlyph,
-  DartGlyph,
   DismissGlyph,
   DropGlyph,
   LatticeGlyph,
@@ -294,7 +296,7 @@ function AskEmbed({
           aria-label="Your answer"
         />
         <button type="submit" className="db-swarm-send is-small" disabled={busy || !freeAnswer.trim()} aria-label="Send answer">
-          <DartGlyph size={15} />
+          <Send aria-hidden="true" />
         </button>
       </form>
     </div>
@@ -731,7 +733,7 @@ export function SwarmStream(props: Props) {
                       session={props.sessions[item.sessionId]}
                       reported={reported.has(item.sessionId)}
                       stopping={props.stopping.has(item.sessionId)}
-                      onStop={() => live.current.onStop(item.sessionId)}
+                      onOpenSource={openSource}
                     />
                   )}
                   {item.kind === "question" && (
@@ -792,6 +794,18 @@ export function SwarmStream(props: Props) {
       );
     });
   }, [items, props.fresh, props.grants, props.routines, props.roster, props.sessions, props.stopping, props.rounds, props.openDrafts, props.freeAnswers, props.youName, props.docShelf, view, busy, openSource]);
+
+  // The DM's live run, if any: the send button becomes its Stop while the box is empty.
+  // A run parked on a question is not "running": the next thing typed is its answer.
+  const dmManagerId = view.kind === "manager" ? view.manager?.id ?? "" : "";
+  const running = useMemo(() => {
+    if (!dmManagerId || !props.working.has(dmManagerId)) return undefined;
+    return Object.values(props.sessions)
+      .filter((s) => s.managerId === dmManagerId && !TERMINAL_SESSION_STATES.has(s.state) && s.state !== "waiting_user")
+      .sort((a, b) => b.createdAt - a.createdAt)[0];
+  }, [dmManagerId, props.working, props.sessions]);
+  const stopRequested = Boolean(running && (running.cancelRequested || props.stopping.has(running.sessionId)));
+  const showStop = Boolean(running) && !readOnly && !text.trim();
 
   const placeholder = readOnly
     ? "Read only"
@@ -981,18 +995,6 @@ export function SwarmStream(props: Props) {
 
       <div className={`db-swarm-compose-box${readOnly ? " is-readonly" : ""}${busy ? " is-busy" : ""}`}>
       {!readOnly && mention.popover}
-      {!readOnly && (
-        <ComposerGrants
-          view={view}
-          roster={props.roster}
-          grants={props.grants}
-          grantable={props.grantable}
-          repoScopes={props.repoScopes}
-          pending={props.grantPending}
-          onToggleGrant={props.onToggleGrant}
-          onRepoScope={props.onRepoScope}
-        />
-      )}
       {!readOnly && props.attachments.length > 0 && (
         <div className="db-swarm-attachments" aria-label="Files for this message">
           {props.attachments.map((a) => (
@@ -1028,16 +1030,6 @@ export function SwarmStream(props: Props) {
                 if (files.length) props.onAttach(files);
               }}
             />
-            <button
-              type="button"
-              className="db-swarm-attach"
-              disabled={!canAttach}
-              onClick={() => fileRef.current?.click()}
-              aria-label="Attach a file or image"
-              title="Attach a PDF, Word, text file or image, or paste a screenshot. Files are read on this computer; images are read once in the cloud and not kept."
-            >
-              <SheetGlyph size={19} />
-            </button>
           </>
         )}
         <label htmlFor="swarm-message" className="db-swarm-sr">Message</label>
@@ -1073,10 +1065,58 @@ export function SwarmStream(props: Props) {
             aria-activedescendant={mention.activeId}
           />
         </span>
-        {!readOnly && text.length > messageMax - 400 && <span className="db-swarm-count">{messageMax - text.length}</span>}
-        <button type="submit" className="db-swarm-send" disabled={readOnly || busy || reading || !text.trim() || text.length > messageMax} aria-label="Send">
-          <DartGlyph size={18} />
-        </button>
+        {/* The toolbar under the field, the way a chat composer reads: attach and what the
+          * recipient may read on the left, the one action button on the right. */}
+        <div className="db-swarm-composer-bar">
+          {!readOnly && (
+            <button
+              type="button"
+              className="db-swarm-attach"
+              disabled={!canAttach}
+              onClick={() => fileRef.current?.click()}
+              aria-label="Attach a file or image"
+              title="Attach a PDF, Word, text file or image, or paste a screenshot. Files are read on this computer; images are read once in the cloud and not kept."
+            >
+              <Paperclip aria-hidden="true" />
+            </button>
+          )}
+          {!readOnly && (
+            <ComposerGrants
+              view={view}
+              roster={props.roster}
+              grants={props.grants}
+              grantable={props.grantable}
+              repoScopes={props.repoScopes}
+              pending={props.grantPending}
+              onToggleGrant={props.onToggleGrant}
+              onRepoScope={props.onRepoScope}
+            />
+          )}
+          <span className="db-swarm-composer-spacer" />
+          {!readOnly && text.length > messageMax - 400 && <span className="db-swarm-count">{messageMax - text.length}</span>}
+          {showStop && running ? (
+            <button
+              type="button"
+              className={`db-swarm-send is-stop${stopRequested ? " is-stopping" : ""}`}
+              onClick={() => props.onStop(running.sessionId)}
+              disabled={stopRequested}
+              aria-label={stopRequested ? `Stopping ${view.name}` : `Stop ${view.name}`}
+              title={stopRequested ? "Finishing the current step, then stopping" : `Stop ${view.name}`}
+            >
+              <StopSquareIcon />
+            </button>
+          ) : (
+            <button
+              type="submit"
+              className="db-swarm-send"
+              disabled={readOnly || busy || reading || !text.trim() || text.length > messageMax}
+              aria-label="Send message"
+              title="Send message"
+            >
+              <Send aria-hidden="true" />
+            </button>
+          )}
+        </div>
       </form>
       </div>
       {(readOnly || hasImage || props.attachments.length > 0) && (

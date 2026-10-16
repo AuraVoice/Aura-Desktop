@@ -9057,7 +9057,8 @@
   gap: 0;
   height: clamp(560px, calc(100vh - 176px), 1200px);
   border: 1px solid var(--sw-panel-border);
-  border-radius: 14px;
+  /* Concentric with the page card it sits in (.db-content: 28px corners, 6px padding). */
+  border-radius: 22px;
   background: var(--sw-panel-fill);
   box-shadow: var(--sw-panel-shadow);
   overflow: hidden;
@@ -9968,15 +9969,22 @@
 .db-swarm-error span { flex: 1; }
 .db-swarm-error button { border: 0; background: none; color: inherit; font: inherit; font-weight: 650; cursor: pointer; text-decoration: underline; }
 .db-swarm-compose-box {
-  margin: 12px 20px 14px;
-  border-radius: 24px;
-  border: 1px solid var(--sw-card-border);
+  /* Even 16px from the panel's edges, and less round than the panel's 22px corner, so
+     the gap reads even around the bend. The same grey hairline as every other outlined
+     thing in the thread; the white glass border read as a second, misaligned edge. */
+  margin: 12px 16px 16px;
+  border-radius: 18px;
+  border: 1px solid var(--sw-field-border);
   background: var(--sw-card-fill);
-  box-shadow: var(--sw-card-shadow);
-  transition: border-color 160ms var(--sw-out), box-shadow 160ms var(--sw-out);
+  /* Every shadow here stays inside the box's own margin: .db-swarm-stream clips at its
+     rounded edge, and a deeper shadow was cut off flat there, which read as square corners. */
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 1px 2px var(--sw-lift), 0 3px 10px -4px var(--sw-lift);
+  transition: box-shadow 200ms var(--sw-out);
 }
 .db-swarm-compose-box { position: relative; }
-.db-swarm-compose-box:focus-within { border-color: var(--sw-accent-ring); box-shadow: var(--sw-card-shadow), 0 0 0 4px var(--sw-accent-soft); }
+/* Focus lifts the box with a softer, slightly deeper shadow; no ring and no darker border,
+   which read as a thick grey outline on the glass. */
+.db-swarm-compose-box:focus-within { box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.94), 0 1px 3px var(--sw-lift), 0 4px 14px -4px var(--sw-lift); }
 /* What the recipient may read, as pills above the field: each granted connector
    (x revokes in a DM), then + for the rest of the connected accounts. Pills are fully
    round so they sit in the compose box's own 24px radius. GitHub's pill opens the
@@ -10174,23 +10182,27 @@
 /* The message just sent, before the server's copy arrives. */
 .db-swarm-msg.is-pending { opacity: 0.55; }
 .db-swarm-msg.is-pending:hover { background: transparent; }
-.db-swarm-compose-box.is-busy { border-color: color-mix(in srgb, var(--sw-sup-ring) 65%, transparent); }
+
 .db-swarm-compose-box.is-readonly { opacity: 0.6; }
+/* The field on top, a toolbar under it (attach, what the recipient may read, Send/Stop),
+   the shape of a chat composer. Tokens only, so the dark sheet needs no twin. */
 .db-swarm-composer {
-  display: flex;
-  align-items: flex-end;
-  gap: 8px;
+  display: grid;
+  gap: 2px;
   margin: 0;
-  padding: 6px 8px;
-  border-radius: 24px;
+  padding: 10px 10px 8px 18px;
+  border-radius: 18px;
   border: 0;
   background: transparent;
 }
+.db-swarm-composer-bar { display: flex; align-items: center; gap: 6px; min-height: 34px; margin-left: -8px; }
+.db-swarm-composer-bar .db-swarm-scope { padding: 0; }
+.db-swarm-composer-spacer { flex: 1; }
 .db-swarm-composer:focus-within {
   box-shadow: none;
 }
 .db-swarm-composer.is-busy { border-color: var(--sw-sup-ring); }
-.db-swarm-composer.is-readonly { padding-left: 16px; }
+.db-swarm-composer.is-readonly { padding-left: 18px; }
 .db-swarm-composer textarea {
   flex: 1;
   min-width: 0;
@@ -10221,7 +10233,22 @@
   cursor: pointer;
   transition: background 160ms var(--sw-out), opacity 160ms var(--sw-out);
 }
-.db-swarm-composer .db-swarm-send { border-radius: 24px; }
+.db-swarm-composer .db-swarm-send { width: 32px; height: 32px; border-radius: 999px; }
+.db-swarm-send > svg { width: 16px; height: 16px; }
+.db-swarm-send.is-small > svg { width: 15px; height: 15px; }
+/* Stop takes Send's place while the DM's manager runs and the box is empty. */
+.db-swarm-send.is-stop > svg { width: 12px; height: 12px; }
+.db-swarm-send.is-stop { animation: db-swarm-msg-in 180ms var(--sw-out) both; }
+.db-swarm-send.is-stopping:disabled { opacity: 1; filter: none; position: relative; }
+.db-swarm-send.is-stopping::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: 999px;
+  border: 2px solid transparent;
+  border-top-color: var(--sw-accent);
+  animation: db-swarm-spin 0.9s linear infinite;
+}
 .db-swarm-send svg { transition: transform 300ms var(--sw-spring); }
 .db-swarm-send:hover:not(:disabled) { background: var(--sw-accent-strong); }
 .db-swarm-send:hover:not(:disabled) svg { transform: none; }
@@ -10232,11 +10259,11 @@
 /* Files: the attach button, the chips waiting above the composer, and the chips on a sent
    message. Tokens only, so the dark sheet needs no twin. */
 .db-swarm-attach {
-  width: 38px;
-  height: 38px;
+  width: 32px;
+  height: 32px;
   flex: none;
   border: 0;
-  border-radius: 12px;
+  border-radius: 999px;
   display: grid;
   place-items: center;
   color: var(--sw-dim);
@@ -10244,7 +10271,8 @@
   cursor: pointer;
   transition: transform 260ms var(--sw-spring), background 160ms var(--sw-out), color 160ms var(--sw-out);
 }
-.db-swarm-attach:hover:not(:disabled) { background: var(--sw-hover); color: var(--sw-accent-strong); transform: translateY(-1px); }
+.db-swarm-attach:hover:not(:disabled) { background: var(--sw-hover); color: var(--sw-text); }
+.db-swarm-attach > svg { width: 17px; height: 17px; }
 .db-swarm-attach:active:not(:disabled) { transform: scale(0.92); }
 .db-swarm-attach:disabled { opacity: 0.4; cursor: default; }
 .db-swarm-attach:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--sw-accent-soft); }
@@ -10758,8 +10786,8 @@ button:hover > .sw-g-dismiss { transform: rotate(90deg); }
   to { background-position: 0 0; }
 }
 
-/* ── A live run ── one line that says what it is doing now (shimmer), the clock and a
-   quiet Stop; under it a plain list of what it has done, each row easing in as it lands.
+/* ── A live run ── one line that says what it is doing now (shimmer) and the clock (Stop
+   is the composer's send button); under it a plain list of what it has done, each row easing in as it lands.
    Finished, the same list sits inside the fold. */
 .db-swarm-run-head {
   display: flex;
@@ -10773,24 +10801,6 @@ button:hover > .sw-g-dismiss { transform: rotate(90deg); }
 .db-swarm-run-now { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .db-swarm-run.is-stopping .db-swarm-run-now { -webkit-text-fill-color: var(--sw-warn); animation: none; }
 .db-swarm-run-time { flex: none; font-size: var(--sw-fs-xs); color: var(--sw-mute); }
-.db-swarm-run-stop {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  margin-left: auto;
-  padding: 3px 8px;
-  border: 0;
-  border-radius: var(--sw-r-pill);
-  background: none;
-  font: inherit;
-  font-size: var(--sw-fs-xs);
-  color: var(--sw-mute);
-  cursor: pointer;
-  transition: color 160ms var(--sw-out), background 160ms var(--sw-out);
-}
-.db-swarm-run-stop:hover:not(:disabled) { color: var(--sw-text); background: var(--sw-hover); }
-.db-swarm-run-stop:focus-visible { outline: 2px solid var(--sw-accent-ring); outline-offset: 2px; }
-.db-swarm-run-stop:disabled { cursor: default; opacity: 0.7; }
 .db-swarm-run-dot {
   position: relative;
   width: 8px;
@@ -10839,6 +10849,72 @@ button:hover > .sw-g-dismiss { transform: rotate(90deg); }
 }
 .db-swarm-step-gap { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: var(--sw-fs-sm); color: var(--sw-warn); }
 .db-swarm-ledger.is-lanes { margin-top: 6px; }
+
+/* Named web steps (runner._step_target): the query it searched with what came back, and
+   each page by its favicon, title and site, the way a research trail reads. Tokens only. */
+.db-swarm-ledger { gap: 2px; }
+.db-swarm-step.is-search,
+.db-swarm-step.is-page { padding: 3px 0; }
+.db-swarm-step.is-page .db-swarm-step-node .db-site-icon { flex: none; }
+.db-swarm-step.is-gap.is-page .db-swarm-step-node { opacity: 0.55; }
+.db-swarm-step.is-note .db-swarm-step-head strong { font-weight: 400; color: var(--sw-mute); }
+.db-swarm-step-head { min-width: 0; }
+.db-swarm-step-verb { flex: none; color: var(--sw-mute); }
+.db-swarm-step-query {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--sw-text);
+  font-weight: 500;
+}
+.db-swarm-step-via { font-size: var(--sw-fs-xs); color: var(--sw-mute); }
+.db-swarm-step.is-gap .db-swarm-step-gap { color: var(--sw-warn); font-size: var(--sw-fs-xs); }
+
+.db-swarm-results { display: grid; gap: 1px; margin: 3px 0 2px -6px; }
+.db-swarm-results-more {
+  justify-self: start;
+  margin: 2px 0 0 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: var(--sw-fs-xs);
+  font-weight: 500;
+  color: var(--sw-mute);
+  cursor: pointer;
+}
+.db-swarm-results-more:hover { color: var(--sw-text); }
+.db-swarm-results-more:focus-visible { outline: 2px solid var(--sw-accent-ring); outline-offset: 2px; border-radius: 4px; }
+
+.db-swarm-srcline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 3px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  font: inherit;
+  font-size: var(--sw-fs-sm);
+  line-height: 20px;
+  text-align: left;
+  color: var(--sw-dim);
+  cursor: pointer;
+  transition: background 140ms var(--sw-out), color 140ms var(--sw-out);
+}
+.db-swarm-step-head .db-swarm-srcline { padding: 0 4px; margin: 0 -4px; flex: 0 1 auto; }
+.db-swarm-srcline:hover { background: var(--sw-hover); color: var(--sw-text); }
+.db-swarm-srcline:focus-visible { outline: 2px solid var(--sw-accent-ring); outline-offset: 1px; }
+.db-swarm-srcline-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--sw-text); }
+.db-swarm-step.is-gap .db-swarm-srcline-title { color: var(--sw-dim); }
+.db-swarm-srcline-host { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--sw-fs-xs); color: var(--sw-mute); }
+.db-swarm-srcline-go { flex: none; color: var(--sw-mute); opacity: 0; transition: opacity 140ms var(--sw-out); }
+.db-swarm-srcline:hover .db-swarm-srcline-go,
+.db-swarm-srcline:focus-visible .db-swarm-srcline-go { opacity: 1; }
 
 /* Subagent lanes, only when a run has more than one. */
 .db-swarm-lanes { list-style: none; margin: 10px 0 0; padding: 10px 0 0; display: grid; gap: 6px; border-top: 1px solid var(--sw-divider); }
@@ -10925,6 +11001,7 @@ button:hover > .sw-g-dismiss { transform: rotate(90deg); }
 .db-swarm-fold-line:focus-visible { outline: 2px solid var(--sw-accent-ring); outline-offset: 2px; }
 .db-swarm-fold-line > span { font-weight: 600; }
 .db-swarm-fold-sum { font-weight: 450; }
+.db-swarm-fold-miss { font-weight: 450; color: var(--sw-mute); }
 .db-swarm-fold-caret { transition: transform 200ms var(--sw-out); flex: none; }
 .db-swarm-fold.is-open .db-swarm-fold-caret { transform: rotate(90deg); }
 .db-swarm-fold-body { display: grid; gap: 2px; padding: 2px 0 4px 2px; animation: db-swarm-msg-in 200ms var(--sw-out) both; }
@@ -10980,11 +11057,11 @@ button:hover > .sw-g-dismiss { transform: rotate(90deg); }
 .db-swarm-report-status {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
-  margin: 0 0 6px;
-  font-size: var(--sw-fs-sm);
+  gap: 6px;
+  margin: 0 0 10px;
+  font-size: var(--sw-fs-xs);
   line-height: 1.45;
-  color: var(--sw-warn);
+  color: var(--sw-mute);
 }
 .db-swarm-report-status .sw-g { flex: none; margin-top: 1px; }
 .db-swarm-report.is-cancelled .db-swarm-report-status,
@@ -11048,6 +11125,8 @@ button:hover > .sw-g-dismiss { transform: rotate(90deg); }
   transition: background 160ms var(--sw-out), color 160ms var(--sw-out);
 }
 .db-swarm-src:hover { background: var(--sw-active); color: var(--sw-text); }
+button.db-swarm-src:not(.is-more) { display: inline-flex; align-items: center; gap: 5px; padding-left: 3px; }
+.db-swarm-src-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .db-swarm-src.is-static { cursor: default; }
 .db-swarm-src.is-static:hover { background: var(--sw-chip); color: var(--sw-dim); }
 .db-swarm-src.is-more { color: var(--sw-mute); }
@@ -11106,8 +11185,7 @@ button:hover > .sw-g-dismiss { transform: rotate(90deg); }
 .db-swarm-draft-card-body { margin: 8px 0 0; white-space: pre-wrap; font-size: var(--sw-fs-body); line-height: 1.55; color: var(--sw-text); }
 .db-swarm-act { display: grid; gap: 8px; margin-top: 12px; }
 .db-swarm-act-title { font-size: var(--sw-fs-sm); font-weight: 650; color: var(--sw-text); }
-.db-swarm-act textarea,
-.db-swarm-doc-edit {
+.db-swarm-act textarea {
   border: 1px solid var(--sw-field-border);
   background: var(--sw-field);
   color: var(--sw-text);
@@ -11118,13 +11196,9 @@ button:hover > .sw-g-dismiss { transform: rotate(90deg); }
   padding: 8px 10px;
   resize: none;
 }
-.db-swarm-doc-edit { resize: vertical; }
-.db-swarm-act textarea::-webkit-scrollbar,
-.db-swarm-doc-edit::-webkit-scrollbar { display: none; }
-.db-swarm-act textarea:focus,
-.db-swarm-doc-edit:focus { outline: none; border-color: var(--sw-accent); box-shadow: 0 0 0 3px var(--sw-accent-soft); }
-.db-swarm-act-preview,
-.db-swarm-doc-body {
+.db-swarm-act textarea::-webkit-scrollbar { display: none; }
+.db-swarm-act textarea:focus { outline: none; border-color: var(--sw-accent); box-shadow: 0 0 0 3px var(--sw-accent-soft); }
+.db-swarm-act-preview {
   margin: 0;
   padding: 10px 12px;
   border-radius: var(--sw-r-sm);
@@ -11135,7 +11209,6 @@ button:hover > .sw-g-dismiss { transform: rotate(90deg); }
   line-height: 1.55;
   color: var(--sw-text);
 }
-.db-swarm-doc-body.is-clipped { color: var(--sw-dim); }
 .db-swarm-act-fine { margin: 0; font-size: var(--sw-fs-xs); color: var(--sw-mute); }
 .db-swarm-act-fine.is-public { color: var(--sw-warn); font-weight: 600; }
 .db-swarm-act-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
@@ -11145,9 +11218,196 @@ button:hover > .sw-g-dismiss { transform: rotate(90deg); }
 .db-swarm-act-record { display: inline-flex; align-items: center; gap: 6px; font-size: var(--sw-fs-sm); color: var(--sw-dim); }
 .db-swarm-act-record.is-done { color: var(--sw-ok); font-weight: 600; }
 .db-swarm-act-record.is-done .sw-check { stroke-dasharray: 1; animation: db-swarm-g-draw 600ms var(--sw-out) both; }
-/* A document draft: saved on this computer, so Save buttons instead of an approval. */
-.db-swarm-doc { display: grid; gap: 8px; margin-top: 8px; }
-.db-swarm-doc-name { font-size: var(--sw-fs-body); font-weight: 700; color: var(--sw-text); }
+/* A document a manager wrote, as an artifact card (SwarmDocument.tsx): a page tile that
+   runs off the card's foot, the name, where it lives, then Save and Open. One hairline,
+   no fill or shadow, so it reads the same in light glass and matte dark. */
+.db-swarm-artifact {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 560px;
+  margin-top: 12px;
+  padding: 0 14px 0 18px;
+  border: 1px solid var(--sw-chip-border);
+  border-radius: 14px;
+  overflow: hidden;
+  contain: layout paint;
+}
+.db-swarm-artifact-main {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex: 1;
+  min-width: 0;
+  align-self: stretch;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: left;
+  color: inherit;
+  cursor: pointer;
+}
+.db-swarm-artifact-main:focus-visible { outline: 2px solid var(--sw-accent-ring); outline-offset: -2px; border-radius: 10px; }
+.db-swarm-artifact-tile {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 54px;
+  height: 60px;
+  margin-top: 18px;
+  align-self: flex-start;
+  border: 1px solid var(--sw-chip-border);
+  border-bottom: 0;
+  border-radius: 9px 9px 0 0;
+  background: var(--sw-chip);
+  color: var(--sw-dim);
+  transition: transform 200ms var(--sw-out);
+}
+.db-swarm-artifact-tile svg { width: 20px; height: 20px; margin-top: -10px; }
+.db-swarm-artifact-main:hover .db-swarm-artifact-tile { transform: translateY(-3px); }
+.db-swarm-artifact-text { display: grid; gap: 3px; min-width: 0; padding: 18px 0; }
+.db-swarm-artifact-text strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--sw-fs-md);
+  font-weight: 500;
+  color: var(--sw-text);
+}
+.db-swarm-artifact-meta { display: inline-flex; align-items: center; gap: 5px; font-size: var(--sw-fs-sm); color: var(--sw-mute); white-space: nowrap; overflow: hidden; }
+.db-swarm-artifact-meta svg { flex: none; width: 13px; height: 13px; }
+.db-swarm-artifact-actions { display: flex; align-items: center; gap: 8px; flex: none; }
+.db-swarm-artifact-error { margin: 6px 0 0; font-size: var(--sw-fs-xs); color: var(--sw-warn); }
+
+/* Shared by the card and the viewer. --db-* tokens, because the viewer is portaled into
+   .db-app, outside .db-swarm where the --sw-* tokens live; both flip in dark on their own. */
+.db-doc-icon-btn,
+.db-doc-open {
+  display: inline-grid;
+  place-items: center;
+  height: 36px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--db-hover);
+  color: var(--db-text);
+  font: inherit;
+  cursor: pointer;
+  transition: background 140ms var(--db-ease);
+}
+.db-doc-icon-btn { width: 36px; padding: 0; }
+.db-doc-icon-btn svg { width: 17px; height: 17px; }
+.db-doc-open { padding: 0 16px; font-size: 14px; font-weight: 500; }
+.db-doc-icon-btn:hover:not(:disabled),
+.db-doc-open:hover,
+.db-doc-icon-btn.is-on { background: color-mix(in srgb, var(--db-text) 12%, transparent); }
+.db-doc-icon-btn:disabled { opacity: 0.45; cursor: default; }
+.db-doc-icon-btn:focus-visible,
+.db-doc-open:focus-visible { outline: 2px solid var(--db-text-mute); outline-offset: 2px; }
+.db-doc-spinner {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 2px solid var(--db-border);
+  border-top-color: var(--db-text);
+  animation: db-swarm-spin 0.8s linear infinite;
+}
+.db-doc-save { position: relative; display: inline-flex; }
+.db-doc-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 200px;
+  padding: 5px;
+  border: 1px solid var(--db-border);
+  border-radius: 12px;
+  background: var(--db-surface);
+  box-shadow: var(--db-shadow-pop);
+  animation: db-popover-in 0.16s var(--db-ease) both;
+}
+.db-doc-menu-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  font: inherit;
+  font-size: 13.5px;
+  text-align: left;
+  color: var(--db-text);
+  cursor: pointer;
+}
+.db-doc-menu-row:hover,
+.db-doc-menu-row:focus-visible { background: var(--db-hover); outline: none; }
+.db-doc-menu-ext { font-size: 12px; color: var(--db-text-mute); font-variant-numeric: tabular-nums; }
+.db-doc-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--db-text-mute);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.db-doc-link:hover { text-decoration-color: currentColor; }
+
+/* The viewer: the document as a page, readable measure, real headings. */
+.db-modal-panel.db-doc-viewer { width: min(860px, 100%); max-height: 88vh; }
+.db-doc-viewer .db-modal-head-actions { gap: 6px; }
+.db-doc-viewer .db-modal-body { padding: 0; overflow-y: auto; }
+.db-doc-page {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 8px 40px 40px;
+  font-size: 15px;
+  line-height: 1.7;
+  color: var(--db-text);
+  overflow-wrap: anywhere;
+}
+.db-doc-page > :first-child { margin-top: 0; }
+.db-doc-page h1 { margin: 8px 0 18px; font-size: 26px; line-height: 1.25; font-weight: 600; letter-spacing: -0.01em; }
+.db-doc-page h2 { margin: 30px 0 10px; font-size: 19px; line-height: 1.35; font-weight: 600; }
+.db-doc-page h3 { margin: 22px 0 8px; font-size: 16px; font-weight: 600; }
+.db-doc-page h4 { margin: 18px 0 6px; font-size: 15px; font-weight: 600; }
+.db-doc-page p { margin: 0 0 12px; }
+.db-doc-page ul,
+.db-doc-page ol { margin: 0 0 14px; padding-left: 22px; }
+.db-doc-page li { margin: 4px 0; }
+.db-doc-page li::marker { color: var(--db-text-mute); }
+.db-doc-page strong { font-weight: 600; }
+.db-doc-page blockquote { margin: 0 0 14px; padding: 2px 0 2px 14px; border-left: 2px solid var(--db-border); color: var(--db-text-dim); }
+.db-doc-page hr { margin: 26px 0; border: 0; border-top: 1px solid var(--db-border); }
+.db-doc-page code { padding: 1px 5px; border-radius: 5px; background: var(--db-hover); font-size: 0.9em; }
+.db-doc-page pre { margin: 0 0 14px; padding: 12px 14px; border-radius: 10px; background: var(--db-hover); overflow-x: auto; }
+.db-doc-page pre code { padding: 0; background: none; }
+.db-doc-page table { width: 100%; margin: 0 0 16px; border-collapse: collapse; font-size: 14px; }
+.db-doc-page th,
+.db-doc-page td { padding: 7px 10px; border-bottom: 1px solid var(--db-border); text-align: left; vertical-align: top; }
+.db-doc-page th { font-weight: 600; }
+.db-doc-edit {
+  display: block;
+  width: 100%;
+  min-height: 60vh;
+  padding: 16px 40px 32px;
+  border: 0;
+  background: transparent;
+  color: var(--db-text);
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  font-size: 13.5px;
+  line-height: 1.65;
+  resize: none;
+  outline: none;
+}
+.db-doc-edit::-webkit-scrollbar { display: none; }
+.db-doc-foot { margin: 0; padding: 12px 40px 16px; border-top: 1px solid var(--db-border); font-size: 13px; color: var(--db-text-mute); }
+.db-doc-foot.is-error { color: #b4541a; }
 .db-swarm-gaps-label,
 .db-swarm-tools-label {
   display: block;

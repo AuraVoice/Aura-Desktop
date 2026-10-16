@@ -2870,3 +2870,27 @@ Justification: probe a hosted MCP endpoint with curl -i and no redirect-followin
 trusting a 401. A 307 whose location says http:// means every authenticated client loses its
 header, whatever the token.
 ================================================================================
+2026-10-16: Editing a Swarm document lost focus after one keystroke
+Problem: in the document viewer (DetailModal), Edit let Varun delete one character, then typing
+stopped and the Edit button turned black.
+Issue: two causes. (1) DetailModal's open effect lists onClose as a dependency, and the caller
+passed a fresh arrow each render. Every keystroke re-rendered, the effect cleaned up (restoring
+focus to the old element) and re-ran (focusing the panel), so the textarea lost focus after one
+character. (2) The button's on state used --db-active, which is #20232a, a near-black nav
+highlight, not a hover tint.
+Solution: SwarmDocument passes a useCallback onClose; the button hover and on state use a
+color-mix of --db-text at 12%.
+Justification: any DetailModal holding an input must pass a stable onClose, or typing breaks the
+same way. Check what a --db-* token actually resolves to before using it as a tint.
+================================================================================
+2026-10-16: The overlay chat card's shadow had square corners
+Problem: the hotkey chat card is rounded on all four corners, but its shadow showed square ones.
+Issue: the overlay window is cut to the card (380px wide, CARD_CROSS), and a transparent window
+can only paint inside its own rectangle. The light theme's outer drop shadow (0 10px 30px), and
+the history sheet's (0 22px 54px), had nowhere to go but the corners outside the rounding, so
+they filled them up to the square window edge.
+Solution: overlay chat card and history sheet keep only the inset highlight; the gradient
+hairline ring draws the edge.
+Justification: in an overlay window sized to its card, an outer box-shadow cannot work. Give the
+window margin to paint into, or use no outer shadow.
+================================================================================

@@ -72,7 +72,7 @@ use std::path::PathBuf;
 use log::warn;
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 use tauri_plugin_store::StoreExt;
 
 use crate::sealed_store::aad;
@@ -1139,16 +1139,18 @@ pub async fn dictation_history_export_audio(
     app: AppHandle,
     uid: String,
     id: String,
-) -> Result<String, String> {
+) -> Result<Option<String>, String> {
     if !ENCRYPTION_AVAILABLE || uid.is_empty() {
         return Err("dictation history is unavailable".to_string());
     }
-    tauri::async_runtime::spawn_blocking(move || {
-        let plain = read_clip(&app, &uid, &id)?;
-        write_export(&app, &uid, &id, "flac", &plain)
+    let reader = app.clone();
+    let (name, plain) = tauri::async_runtime::spawn_blocking(move || {
+        let plain = read_clip(&reader, &uid, &id)?;
+        Ok::<_, String>((export_name(&reader, &uid, &id, "flac"), plain))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    save_export(&app, &name, "FLAC audio", "flac", plain).await
 }
 
 #[tauri::command]
@@ -1156,14 +1158,15 @@ pub async fn dictation_history_export_text(
     app: AppHandle,
     uid: String,
     id: String,
-) -> Result<String, String> {
+) -> Result<Option<String>, String> {
     if !ENCRYPTION_AVAILABLE || uid.is_empty() {
         return Err("dictation history is unavailable".to_string());
     }
-    tauri::async_runtime::spawn_blocking(move || {
-        let key = load_or_create_key(&app)?;
+    let reader = app.clone();
+    let (name, text) = tauri::async_runtime::spawn_blocking(move || {
+        let key = load_or_create_key(&reader)?;
         let sealed: Vec<u8> = {
-            let conn = open(&app)?;
+            let conn = open(&reader)?;
             conn.query_row(
                 "SELECT text FROM transcripts WHERE uid = ?1 AND id = ?2",
                 params![uid, id],
@@ -1172,10 +1175,11 @@ pub async fn dictation_history_export_text(
             .map_err(|_| "that dictation is no longer stored".to_string())?
         };
         let text = unseal(&key, &sealed, &row_aad(&uid, &id, "text"))?;
-        write_export(&app, &uid, &id, "txt", text.as_bytes())
+        Ok::<_, String>((export_name(&reader, &uid, &id, "txt"), text))
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    save_export(&app, &name, "Text", "txt", text.into_bytes()).await
 }
 
 #[tauri::command]
@@ -1361,38 +1365,42 @@ pub fn purge_uid(app: &AppHandle, uid: &str) -> Result<(), String> {
 
 // ----------------------------------------------------------------- exports
 
-/// Writes a decrypted copy into the user's Downloads folder and returns its
-/// path, so React can hand it to `openPath`. Same shape as the meeting module's
-/// export: no file-picker plugin is a dependency, and adding one for a single
-/// save dialog is more surface than the established pattern.
-fn write_export(
-    app: &AppHandle,
-    uid: &str,
-    id: &str,
-    extension: &str,
-    bytes: &[u8],
-) -> Result<String, String> {
-    let recorded_at_ms: i64 = {
-        let conn = open(app)?;
-        conn.query_row(
-            "SELECT recorded_at_ms FROM transcripts WHERE uid = ?1 AND id = ?2",
-            params![uid, id],
-            |row| row.get(0),
-        )
-        .unwrap_or_else(|_| now_ms())
-    };
-    let dir = app
-        .path()
-        .download_dir()
-        .map_err(|e| e.to_string())?
-        .join("Aura Dictation");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+/// The name a Save As suggests: when it was said, then the row's id, so exports sort.
+fn export_name(app: &AppHandle, uid: &str, id: &str, extension: &str) -> String {
+    let recorded_at_ms: i64 = open(app)
+        .ok()
+        .and_then(|conn| {
+            conn.query_row(
+                "SELECT recorded_at_ms FROM transcripts WHERE uid = ?1 AND id = ?2",
+                params![uid, id],
+                |row| row.get(0),
+            )
+            .ok()
+        })
+        .unwrap_or_else(now_ms);
     // `id` arrives from the webview, so this must not be a byte slice: a short
     // or non-ASCII id would panic inside a command rather than fail cleanly.
     let short: String = id.chars().take(8).collect();
-    let path = dir.join(format!("{}-{}.{extension}", stamp(recorded_at_ms), short));
-    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
-    Ok(path.to_string_lossy().to_string())
+    format!("{}-{}.{extension}", stamp(recorded_at_ms), short)
+}
+
+/// Asks where to save a decrypted copy, then writes it there. `None` is a cancelled
+/// dialog; the returned path is one `save_dialog::open_saved_file` will open.
+async fn save_export(
+    app: &AppHandle,
+    name: &str,
+    label: &str,
+    extension: &str,
+    bytes: Vec<u8>,
+) -> Result<Option<String>, String> {
+    let Some(path) = crate::save_dialog::ask_save_path(app, name, label, &[extension]).await? else {
+        return Ok(None);
+    };
+    let target = path.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::save_dialog::write_chosen(&target, &bytes))
+        .await
+        .map_err(|e| e.to_string())??;
+    Ok(Some(path.to_string_lossy().to_string()))
 }
 
 /// `yyyy-mm-dd-hhmm` in UTC, so an exported filename sorts correctly and never

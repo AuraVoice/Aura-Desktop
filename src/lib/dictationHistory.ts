@@ -130,13 +130,14 @@ export function clearDictationHistory(uid: string): Promise<void> {
   return invoke("dictation_history_clear", { uid });
 }
 
-/** Writes a decrypted copy to Downloads and returns its path, for `openPath`. */
-export function exportDictationAudio(uid: string, id: string): Promise<string> {
-  return invoke<string>("dictation_history_export_audio", { uid, id });
+/** Saves a decrypted copy where the user picks (Save As) and returns its path, for
+ *  `openSavedFile`, or null when the dialog was cancelled. */
+export function exportDictationAudio(uid: string, id: string): Promise<string | null> {
+  return invoke<string | null>("dictation_history_export_audio", { uid, id });
 }
 
-export function exportDictationText(uid: string, id: string): Promise<string> {
-  return invoke<string>("dictation_history_export_text", { uid, id });
+export function exportDictationText(uid: string, id: string): Promise<string | null> {
+  return invoke<string | null>("dictation_history_export_text", { uid, id });
 }
 
 export function loadDictationHistorySettings(uid: string): Promise<DictationHistorySettings> {

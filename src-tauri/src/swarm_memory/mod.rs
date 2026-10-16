@@ -18,16 +18,14 @@ pub mod recall;
 pub mod store;
 
 use std::collections::HashMap;
-use std::io::Write as _;
 
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 use crate::security::{self, Operation};
 use crate::util::now_ms;
 use store::{IngestSummary, Learning, RowType, RowView};
 
-const EXPORT_FOLDER: &str = "Aura Documents";
 const EXPORT_VERSION: u8 = 1;
 const MAX_IMPORT_BYTES: usize = 4 * 1024 * 1024;
 
@@ -245,17 +243,16 @@ pub async fn swarm_memory_delete_manager(app: AppHandle, manager_id: String) -> 
 }
 
 #[tauri::command]
-pub async fn swarm_memory_export(app: AppHandle, manager_id: String, title: String) -> Result<ExportedFile, String> {
+pub async fn swarm_memory_export(app: AppHandle, manager_id: String, title: String) -> Result<Option<ExportedFile>, String> {
     let uid = uid(&app)?;
     let ticket = security::authorize(&app, Operation::SaveDocument)?;
-    let folder = app
-        .path()
-        .download_dir()
-        .map_err(|error| error.to_string())?
-        .join(EXPORT_FOLDER);
     let stem = format!("{} memory", crate::swarm_documents::safe_stem(&title));
+    let Some(path) = crate::save_dialog::ask_save_path(&app, &format!("{stem}.json"), "JSON", &["json"]).await? else {
+        return Ok(None);
+    };
+    let target = path.clone();
     let app_for_rows = app.clone();
-    let path = tauri::async_runtime::spawn_blocking(move || -> Result<std::path::PathBuf, String> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<(), String> {
         let key = store::key(&app_for_rows)?;
         let conn = store::open(&app_for_rows)?;
         let rows = store::live_rows(&conn, &key, &uid, &manager_id, true)?
@@ -277,27 +274,13 @@ pub async fn swarm_memory_export(app: AppHandle, manager_id: String, title: Stri
             rows,
         };
         let bytes = serde_json::to_vec_pretty(&file).map_err(|e| e.to_string())?;
-        std::fs::create_dir_all(&folder).map_err(|error| error.to_string())?;
-        for n in 1..=99 {
-            let name = if n == 1 { format!("{stem}.json") } else { format!("{stem} ({n}).json") };
-            let candidate = folder.join(name);
-            match std::fs::OpenOptions::new().write(true).create_new(true).open(&candidate) {
-                Ok(mut file) => {
-                    file.write_all(&bytes).map_err(|error| error.to_string())?;
-                    file.sync_all().map_err(|error| error.to_string())?;
-                    return Ok(candidate);
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(error) => return Err(error.to_string()),
-            }
-        }
-        Err("There are too many files with that name in Aura Documents.".to_string())
+        crate::save_dialog::write_chosen(&target, &bytes)
     })
     .await
     .map_err(|error| error.to_string())??;
     security::recheck(&app, Operation::SaveDocument, &ticket)?;
     log::info!("swarm_memory: exported bytes={}", path.metadata().map(|m| m.len()).unwrap_or(0));
-    Ok(ExportedFile { path: path.to_string_lossy().to_string() })
+    Ok(Some(ExportedFile { path: path.to_string_lossy().to_string() }))
 }
 
 #[tauri::command]

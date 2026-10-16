@@ -651,8 +651,8 @@ export function MemoryList({
     setBusy(true);
     setNote("");
     try {
-      const { path } = await exportMemory(manager.id, displayName(manager));
-      setNote(`Saved to ${path}`);
+      const saved = await exportMemory(manager.id, displayName(manager));
+      if (saved) setNote(`Saved to ${saved.path}`);
     } catch (err) {
       setNote(typeof err === "string" ? err : "Aura couldn't save the file.");
     } finally {

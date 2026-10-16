@@ -5,21 +5,21 @@ import { meetingNotes } from "./meetingCopy";
 
 export type MeetingExportFormat = "md" | "txt" | "vtt";
 
-/** Writes the text into Downloads/Aura Documents (never overwriting) through
- *  the same command Swarm documents use. Returns the saved path. Rejects with
- *  the command's own message string. */
+/** Asks where to save the text (a Save As dialog) through the same command
+ *  Swarm documents use. Returns the saved path, or null when the user cancelled.
+ *  Rejects with the command's own message string. */
 export async function saveMeetingFile(
   title: string,
   format: MeetingExportFormat,
   text: string,
-): Promise<string> {
+): Promise<string | null> {
   const dataBase64 = await blobToBase64(new Blob([text], { type: "text/plain" }));
-  const saved = await invoke<{ path: string }>("save_swarm_document", {
+  const saved = await invoke<{ path: string } | null>("save_swarm_document", {
     stem: title.trim() || "Meeting notes",
     extension: format,
     dataBase64,
   });
-  return saved.path;
+  return saved?.path ?? null;
 }
 
 /** The sections a reader sees: the user's edit when there is one, else the
