@@ -16,6 +16,14 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+### Changed
+
+- Each coding agent connection in Settings > Connectors is named with the time you made it, so you can tell which one to revoke.
+
+### Fixed
+
+- Claude Code, Cursor and Codex can now connect with the setup line from Settings > Connectors. Before, the key was lost on the way and every connection was refused as unauthorized.
+
 ## [0.20.3] - 2026-10-15
 
 ### Added

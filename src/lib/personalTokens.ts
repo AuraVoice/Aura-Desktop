@@ -7,7 +7,9 @@ import { API_BASE_URL, authFetchWithTimeout } from "./api";
  * once, at mint, and only its hash is stored.
  */
 
-export const USER_MCP_URL = `${API_BASE_URL}/user-mcp`;
+// The trailing slash matters: the bare path 307-redirects, and agents drop the
+// Authorization header when following a redirect.
+export const USER_MCP_URL = `${API_BASE_URL}/user-mcp/`;
 
 export interface PersonalToken {
   id: string;

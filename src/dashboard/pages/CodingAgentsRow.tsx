@@ -59,7 +59,9 @@ export function CodingAgentsRow() {
     setBusy(true);
     setError("");
     try {
-      const minted = await mintPersonalToken("Coding agent");
+      // The time tells two same-day connections apart, so Revoke hits the right one.
+      const madeAt = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(new Date());
+      const minted = await mintPersonalToken(`Coding agent · ${madeAt}`);
       setFresh(minted.token);
       setAgent(0);
       trackEvent("coding_agent_token_created", {});

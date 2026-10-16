@@ -2,6 +2,8 @@
 
 Tauri v2 + React 19 + TypeScript desktop companion app, a from-scratch rewrite of the sibling Flutter app (`../Aura`, "Buddy") for better UI performance and maintainability. Windows ships today; macOS is a work in progress (see "Platform support" below). The desktop client talks to the same backend (`juno-backend` on Cloud Run) and Firebase project (`juno-2ea45`) as the Flutter app.
 
+Positioning is set in [`../Aura/CLAUDE.md`](../Aura/CLAUDE.md): Aura is an agent platform you talk to. Describe it by its agents first (Swarm, the Background Browser Agent, the Desktop Operator, Research), never as a reminder, calendar or email assistant.
+
 This file is working instructions for Claude Code in this repo. For the full architecture - diagrams, the IPC surface, session flows - see [`README.md`](./README.md). For the incident log behind the rules below, see [`lessons-learnt.txt`](./lessons-learnt.txt).
 
 ## Cross-repo ecosystem map

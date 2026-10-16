@@ -2853,3 +2853,20 @@ polls the same command while blocked, and its button opens the pane.
 Justification: a permission gate must be reachable from a path that does not itself need the
 permission. Check every Mac-only grant for a prompt that sits behind the feature it unlocks.
 ================================================================================
+2026-10-15: Coding agents could never connect to /user-mcp
+Problem: the Claude Code line from Settings > Connectors got 401 Unauthorized, so the agent looked
+like it had a bad key.
+Issue: two causes stacked. (1) The setup URL was /user-mcp with no slash; Starlette 307s it to
+/user-mcp/, and uvicorn built that redirect as http:// because it ran without
+--forwarded-allow-ips, so it ignored Cloud Run's X-Forwarded-Proto. An https to http hop is a
+new origin, so the client dropped the Authorization header and the middleware saw no token.
+(2) The specific token Varun tested had been revoked: its hash was missing from
+personal_token_index. Revoke deletes the rows, so a revoked token and one that never existed look
+the same in Firestore, and every token was labelled "Coding agent" with the same date, so the
+wrong one was easy to revoke.
+Solution: USER_MCP_URL ends in a slash; Dockerfile.api runs uvicorn with --proxy-headers
+--forwarded-allow-ips="*"; mint labels carry the time.
+Justification: probe a hosted MCP endpoint with curl -i and no redirect-following before
+trusting a 401. A 307 whose location says http:// means every authenticated client loses its
+header, whatever the token.
+================================================================================
