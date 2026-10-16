@@ -30,6 +30,8 @@ pub const AURA_TOGGLE: &str = "aura-toggle";
 // dictation
 pub const DICTATION_UPDATE: &str = "dictation-update";
 pub const DICTATION_LEVEL: &str = "dictation-level";
+/// The resting pill's edge move ended (dropped, cancelled, or cut short by a hold).
+pub const DICTATION_EDGE_MOVE_ENDED: &str = "dictation-edge-move-ended";
 pub const DICTATION_STATUS_CHANGED: &str = "dictation-status-changed";
 /// Final transcript for a hold aimed at the chat composer. Payload is the text.
 pub const DICTATION_COMPOSER_INSERT: &str = "dictation-composer-insert";

@@ -2367,6 +2367,30 @@ pub fn dictation_companion_drag_end(app: tauri::AppHandle) {
     hud::end_drag(&app);
 }
 
+/// Long-press on the resting pill: the HUD takes its display so the pill can be
+/// carried to another edge.
+#[tauri::command]
+pub async fn dictation_edge_move_begin(app: tauri::AppHandle) -> Result<(), String> {
+    hud::begin_edge_move(&app)
+}
+
+/// The carried pill was dropped. Docks the shared notch edge there.
+#[tauri::command]
+pub async fn dictation_edge_move_commit(
+    app: tauri::AppHandle,
+    edge: crate::overlay::NotchEdge,
+) -> Result<(), String> {
+    hud::end_edge_move(&app, Some(edge));
+    Ok(())
+}
+
+/// The carry was cancelled (right-click). The pill goes back where it was.
+#[tauri::command]
+pub async fn dictation_edge_move_cancel(app: tauri::AppHandle) -> Result<(), String> {
+    hud::end_edge_move(&app, None);
+    Ok(())
+}
+
 /// Opens or closes the click menu beside Bolt at rest.
 #[tauri::command]
 pub fn dictation_companion_menu(app: tauri::AppHandle, open: bool) {

@@ -31,6 +31,8 @@ export const AURA_TOGGLE = "aura-toggle";
 // dictation
 export const DICTATION_UPDATE = "dictation-update";
 export const DICTATION_LEVEL = "dictation-level";
+// The resting pill's edge move ended (dropped, cancelled, or cut short by a hold).
+export const DICTATION_EDGE_MOVE_ENDED = "dictation-edge-move-ended";
 export const DICTATION_STATUS_CHANGED = "dictation-status-changed";
 // Final transcript for a hold aimed at the chat composer. Payload is the text.
 export const DICTATION_COMPOSER_INSERT = "dictation-composer-insert";

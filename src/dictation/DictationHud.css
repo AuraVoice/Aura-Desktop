@@ -28,20 +28,55 @@ body,
   width: 100%;
   height: 100%;
   place-items: center;
-  cursor: default;
+  cursor: grab;
+}
+
+/* The resting pill being carried to another edge (long-press). The window
+   covers the display, so this is the whole surface; only the icon is drawn. */
+.dictation-edge-move {
+  position: fixed;
+  inset: 0;
+  cursor: grabbing;
+}
+
+.dictation-edge-move__icon {
+  position: absolute;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  filter: drop-shadow(0 6px 16px rgba(0, 0, 0, 0.35));
+  animation: dictation-edge-pickup 160ms ease-out;
+}
+
+@keyframes dictation-edge-pickup {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.6);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dictation-edge-move__icon {
+    animation: none;
+  }
 }
 
 .dictation-launcher__surface {
   width: 100%;
   height: 100%;
   border-radius: 999px;
-  background: rgba(20, 22, 23, 0.94);
+  /* Matte black (Varun's call, 2026-10-16). Opaque, so the desktop never tints
+     it grey; the hairline below only keeps it findable on a black screen. */
+  background: #000;
   box-shadow: none;
 }
 
 .dictation-launcher__surface::after {
   padding: 1px;
-  background: rgba(151, 155, 157, 0.82);
+  /* Thin but visible: at 0.1 the pill vanished on a dark screen. */
+  background: rgba(255, 255, 255, 0.38);
 }
 
 .dictation-launcher__hover {
@@ -76,7 +111,7 @@ body,
   height: 31px;
   padding: 0 12px;
   border-radius: 999px;
-  background: rgba(0, 0, 0, 0.96);
+  background: #000;
   font-family:
     "Segoe UI Variable Text",
     "Segoe UI",
@@ -100,12 +135,12 @@ body,
   /* 46px must agree with HOVER_SIDE_HEIGHT in hud.rs. */
   height: 46px;
   border-radius: 999px;
-  background: rgba(49, 49, 49, 0.98);
+  background: #000;
 }
 
 .dictation-launcher__mic::after,
 .dictation-launcher__hint::after {
-  background: rgba(151, 155, 157, 0.58);
+  background: rgba(255, 255, 255, 0.38);
 }
 
 .dictation-launcher__mic svg {

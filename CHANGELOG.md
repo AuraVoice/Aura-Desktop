@@ -16,8 +16,13 @@ was started and read like commit subjects rather than release notes.
 
 ## [Unreleased]
 
+### Added
+
+- Press and hold the dictation pill, or just drag it, to pick it up as the Aura icon, then drop it on any edge of the screen. The notch moves to the same edge.
+
 ### Changed
 
+- The dictation pill is matte black instead of grey.
 - Each coding agent connection in Settings > Connectors is named with the time you made it, so you can tell which one to revoke.
 
 ### Fixed

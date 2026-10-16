@@ -6,16 +6,17 @@ import {
   type ReactNode,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { cursorPosition, getCurrentWindow } from "@tauri-apps/api/window";
 import { useTauriEvent } from "../lib/useTauriEvent";
-import { DICTATION_LEVEL, DICTATION_UPDATE } from "../lib/ipcEvents";
+import { DICTATION_EDGE_MOVE_ENDED, DICTATION_LEVEL, DICTATION_UPDATE } from "../lib/ipcEvents";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { GlassSurface } from "../overlay/GlassSurface";
 import { BuddyAvatar, type BuddyMove } from "../components/BuddyAvatar";
 import { dictationConsent } from "../lib/copy";
 import { subscribeGeneralSettings } from "../lib/generalSettings";
 import { logError, logInfo } from "../lib/log";
-import type { NotchEdge } from "../overlay/notchEdge";
+import { nearestEdge, type NotchEdge } from "../overlay/notchEdge";
+import iconUrl from "../assets/icons/Aura-Icon.png";
 import { isRightCorner, type CompanionCorner } from "./companionCorner";
 import { useDictationLevels } from "./useDictationLevels";
 import { useDictationSounds } from "./useDictationSounds";
@@ -59,7 +60,14 @@ interface DictationUpdate {
 interface DictationLauncherProps {
   hotkey: string;
   edge: NotchEdge;
+  onPickUp: () => void;
 }
+
+/// The resting pill lifts off as the Aura icon once it has been held this
+/// long, or as soon as a held pointer drags past the slop, whichever comes
+/// first. A hover or a plain click never moves it.
+const LONG_PRESS_MS = 200;
+const LONG_PRESS_SLOP_PX = 4;
 
 const IDLE: DictationUpdate = {
   phase: "idle",
@@ -254,8 +262,9 @@ function CompanionCarry({
   );
 }
 
-function DictationLauncher({ hotkey, edge }: DictationLauncherProps) {
+function DictationLauncher({ hotkey, edge, onPickUp }: DictationLauncherProps) {
   const [hovered, setHovered] = useState(false);
+  const press = useRef<{ x: number; y: number; timer: number } | null>(null);
 
   const updateHover = (next: boolean) => {
     setHovered(next);
@@ -264,12 +273,51 @@ function DictationLauncher({ hotkey, edge }: DictationLauncherProps) {
     });
   };
 
+  const releasePress = () => {
+    if (press.current) window.clearTimeout(press.current.timer);
+    press.current = null;
+  };
+  useEffect(() => releasePress, []);
+
+  const pickUp = () => {
+    releasePress();
+    onPickUp();
+  };
+
+  // Screen coordinates, never client ones: hovering widens this window and
+  // moves its origin, so clientX jumps with no hand movement at all. Measured
+  // in client space, that jump cancelled the press and the pill would only
+  // lift on a second, longer try.
+  const startPress = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    releasePress();
+    // Keeps the press alive through the hover resize, which would otherwise
+    // fire a leave under a pointer that never moved.
+    event.currentTarget.setPointerCapture(event.pointerId);
+    press.current = {
+      x: event.screenX,
+      y: event.screenY,
+      timer: window.setTimeout(pickUp, LONG_PRESS_MS),
+    };
+  };
+
+  const trackPress = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const start = press.current;
+    if (start && Math.hypot(event.screenX - start.x, event.screenY - start.y) >= LONG_PRESS_SLOP_PX) {
+      pickUp();
+    }
+  };
+
   const label = hotkey ? `Dictate with ${hotkey}` : "Dictate";
   return (
     <div
       className={`dictation-launcher dictation-launcher-${edge}`}
       onPointerEnter={() => updateHover(true)}
       onPointerLeave={() => updateHover(false)}
+      onPointerDown={startPress}
+      onPointerMove={trackPress}
+      onPointerUp={releasePress}
+      onPointerCancel={releasePress}
       role="status"
       aria-label={label}
     >
@@ -290,6 +338,83 @@ function DictationLauncher({ hotkey, edge }: DictationLauncherProps) {
         <GlassSurface className="dictation-launcher__surface" draggable={false}>
           {null}
         </GlassSurface>
+      )}
+    </div>
+  );
+}
+
+/// The resting pill being carried. Rust has grown this window over the whole
+/// display, so this draws only the Aura icon under the cursor and tracks the
+/// nearest edge; release docks the pill (and the notch) there, a right click
+/// puts it back. A later click also drops it, in case the pointer capture did
+/// not survive the native resize. There is no Escape: this window never takes
+/// keyboard focus.
+function DictationEdgeMove() {
+  const [ghost, setGhost] = useState<{ x: number; y: number } | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    let moved = false;
+    let ended = false;
+    let target: NotchEdge | null = null;
+
+    const place = (x: number, y: number) => {
+      target = nearestEdge(x / (window.innerWidth || 1), y / (window.innerHeight || 1));
+      setGhost({ x, y });
+    };
+
+    // The window just grew to the display, so the cursor's old coordinates mean
+    // nothing; put the icon under it before the first move arrives.
+    const current = getCurrentWindow();
+    void Promise.all([cursorPosition(), current.outerPosition(), current.scaleFactor()])
+      .then(([cursor, origin, scale]) => {
+        if (live && !moved) place((cursor.x - origin.x) / scale, (cursor.y - origin.y) / scale);
+      })
+      .catch((error) => logError("DictationHud: edge move cursor", error));
+
+    const finish = (edge: NotchEdge | null) => {
+      if (ended) return;
+      ended = true;
+      const call = edge
+        ? invoke("dictation_edge_move_commit", { edge })
+        : invoke("dictation_edge_move_cancel");
+      call.catch((error) => logError("DictationHud: edge move end", error));
+    };
+    const onMove = (event: PointerEvent) => {
+      moved = true;
+      place(event.clientX, event.clientY);
+    };
+    const onUp = (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      place(event.clientX, event.clientY);
+      finish(target);
+    };
+    const onContextMenu = (event: Event) => {
+      event.preventDefault();
+      finish(null);
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("contextmenu", onContextMenu);
+    return () => {
+      live = false;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("contextmenu", onContextMenu);
+    };
+  }, []);
+
+  return (
+    <div className="dictation-edge-move">
+      {ghost && (
+        <img
+          className="dictation-edge-move__icon"
+          src={iconUrl}
+          alt=""
+          draggable={false}
+          style={{ left: ghost.x, top: ghost.y }}
+        />
       )}
     </div>
   );
@@ -489,6 +614,16 @@ export function DictationHud() {
 
   useTauriEvent<DictationUpdate>(DICTATION_UPDATE, setUpdate);
 
+  // True while the resting pill is carried to another edge. Rust says when the
+  // carry is over, including when a hold or the overlay cut it short.
+  const [edgeMoving, setEdgeMoving] = useState(false);
+  useTauriEvent<null>(DICTATION_EDGE_MOVE_ENDED, () => setEdgeMoving(false));
+  const pickUp = () => {
+    void invoke("dictation_edge_move_begin")
+      .then(() => setEdgeMoving(true))
+      .catch((error) => logError("DictationHud: edge move begin", error));
+  };
+
   // Bolt's ears and pupils follow the same level the waveform draws from. A
   // ref, never state: it arrives twenty times a second and nothing here needs
   // a re-render for it.
@@ -582,7 +717,8 @@ export function DictationHud() {
     companion ? <CompanionCarry corner={corner}>{card}</CompanionCarry> : card;
 
   if (update.phase === "idle") {
-    return <DictationLauncher hotkey={update.chordLabel} edge={update.edge} />;
+    if (edgeMoving) return <DictationEdgeMove />;
+    return <DictationLauncher hotkey={update.chordLabel} edge={update.edge} onPickUp={pickUp} />;
   }
 
   if (update.phase === "consent") {

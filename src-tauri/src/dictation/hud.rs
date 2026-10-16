@@ -398,6 +398,75 @@ fn companion_dropped(app: &AppHandle) {
     set_companion_corner(app, corner);
 }
 
+/// True while the resting pill is being carried to another edge. The window
+/// covers its whole display for the length of the carry so React can follow
+/// the cursor anywhere on it, and `place_window` stands down so no refresh
+/// shrinks it back mid-drag. The pill shares the notch's edge, so a drop moves
+/// both (Varun's call, 2026-10-16).
+static MOVING: AtomicBool = AtomicBool::new(false);
+
+/// A long-press on the resting pill: take the display it sits on. Only the
+/// plain Idle pill can be carried; a hold, a card, Bolt, or a pill the overlay
+/// is hiding cannot.
+pub fn begin_edge_move(app: &AppHandle) -> Result<(), String> {
+    if last_update().phase != HudPhase::Idle
+        || last_update().companion
+        || SUPPRESSED_BY_OVERLAY.load(Ordering::Relaxed)
+    {
+        return Err("the dictation pill can only be moved at rest".to_string());
+    }
+    let window = app
+        .get_webview_window(DICTATION_WINDOW)
+        .ok_or_else(|| "dictation pill window unavailable".to_string())?;
+    let monitor = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten())
+        .ok_or_else(|| "no display for the dictation pill".to_string())?;
+    if MOVING.swap(true, Ordering::Relaxed) {
+        return Ok(());
+    }
+    IDLE_HOVERED.store(false, Ordering::Relaxed);
+    let result = window
+        .set_size(*monitor.size())
+        .and_then(|_| window.set_position(*monitor.position()))
+        .and_then(|_| window.set_ignore_cursor_events(false));
+    if let Err(e) = result {
+        // Never strand a display-sized transparent window: back to the pill.
+        end_edge_move(app, None);
+        return Err(format!("failed to take the display for the pill move: {e}"));
+    }
+    Ok(())
+}
+
+/// The drop (`Some(edge)`) or a cancel (`None`). Docking moves the shared edge,
+/// which persists it; the refresh after puts the pill back at rest either way.
+pub fn end_edge_move(app: &AppHandle, edge: Option<NotchEdge>) {
+    if !MOVING.swap(false, Ordering::Relaxed) {
+        return;
+    }
+    emit_edge_move_ended(app);
+    if let Some(edge) = edge {
+        overlay::set_notch_edge(app, edge);
+    }
+    refresh_placement(app);
+}
+
+/// Dictation or the overlay needs the window back mid-carry. Drops the move
+/// without placing anything: the caller places for its own phase right after.
+fn abort_edge_move(app: &AppHandle) {
+    if MOVING.swap(false, Ordering::Relaxed) {
+        emit_edge_move_ended(app);
+    }
+}
+
+fn emit_edge_move_ended(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(DICTATION_WINDOW) {
+        let _ = window.emit(crate::events::DICTATION_EDGE_MOVE_ENDED, ());
+    }
+}
+
 /// What the HUD is currently telling the user. Every caption is derived from
 /// one of these; the chord itself is always rendered from
 /// `DICTATION_CHORD.label()`, never a hardcoded string.
@@ -927,6 +996,9 @@ fn voice_notch_shares_display(
 /// cache that outlives one failed resize is exactly the desync that froze the
 /// sibling app's overlay (see CLAUDE.md).
 fn place_window(app: &AppHandle, window: &tauri::WebviewWindow, target: isize, phase: HudPhase, has_caption: bool) {
+    if MOVING.load(Ordering::Relaxed) {
+        return;
+    }
     let edge = overlay::snapshot(app).notch_edge;
     // The stamped value React is rendering, never a fresh read: hover and the
     // overlay un-suppress place without emitting, so a live read that flipped
@@ -993,6 +1065,8 @@ fn place_window(app: &AppHandle, window: &tauri::WebviewWindow, target: isize, p
 /// never pays for a second webview, and ordinary Ctrl or Win presses do not
 /// silently create one.
 pub fn show(app: &AppHandle, target: isize) {
+    // A hold always wins over a pill being carried.
+    abort_edge_move(app);
     LAST_TARGET.store(target, Ordering::Relaxed);
     // An open chat slot (or a focused composer) also counts as "our own
     // window": the hold is aimed at the chat box, so the overlay must stay up
@@ -1118,6 +1192,9 @@ pub fn publish(app: &AppHandle, mut update: HudUpdate) {
     update.own_target =
         update.phase != HudPhase::Idle && TARGET_IS_SELF.load(Ordering::Relaxed);
     let phase = update.phase;
+    if phase != HudPhase::Idle {
+        abort_edge_move(app);
+    }
     let has_caption = !update.text.is_empty();
     *LAST_UPDATE.lock().unwrap_or_else(|e| e.into_inner()) = Some(update.clone());
     // After LAST_UPDATE is written: lifting the suppression places and shows
@@ -1162,6 +1239,9 @@ pub fn publish(app: &AppHandle, mut update: HudUpdate) {
 /// dictation), so summoning the overlay never creates one.
 pub fn set_overlay_suppressed(app: &AppHandle, suppressed: bool) {
     SUPPRESSED_BY_OVERLAY.store(suppressed, Ordering::Relaxed);
+    if suppressed {
+        abort_edge_move(app);
+    }
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
         let Some(window) = handle.get_webview_window(DICTATION_WINDOW) else {
